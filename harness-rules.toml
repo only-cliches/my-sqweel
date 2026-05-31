@@ -1,0 +1,333 @@
+# harness-rules.toml — policy for what the AI agent can do in this project.
+# Commit this file to your repository. harness-hat reads it but never pushes
+# changes back during workspace sync.
+#
+# Agents/LLMs are not permitted to edit this file directly. Harness Hat monitors
+# this policy file and will notify the user if an agent attempts to modify it.
+#
+# Preferred place for *human/LLM instructions*:
+# llm_instructions = """
+# Environment:
+# - You are operating inside a Linux Docker container managed by harness-hat.
+# - Your workspace is mounted into the container; edits usually persist to the host.
+# - Do not assume host tools, credentials, or services are directly available in the container.
+#
+# Host-side commands:
+# - Use `hostdo run ...` when you need host-side build/package tooling such as cargo,
+#   npm, pnpm, yarn, go, make, pytest, or similar commands.
+# - Examples: `hostdo run cargo test`, `hostdo run npm install`, `hostdo run go test ./...`.
+# - Only use `hostdo run --image <docker-image> ...` when the user explicitly asks
+#   you to run against a Docker image or containerized runner.
+# - Use `hostdo run --timeout <seconds> ...` when the user explicitly asks for a
+#   longer or shorter host-side command timeout, or when a command exits before
+#   finishing and clearly needs more time than the default rule allows.
+# - Examples: `hostdo run --timeout 120 cargo test`,
+#   `hostdo run --timeout 1800 npm run build`.
+# - `hostdo run --image` runs a command in a short-lived Docker runner instead of
+#   directly on the host.
+# - Examples: `hostdo run --image node:20 npm test`,
+#   `hostdo run --image rust:1.88 cargo test`.
+# - Use `hostdo run ...` when command output needs to remain available after
+#   launch, when you need to check status separately, or when you expect to
+#   interact with the command over stdin.
+# - `hostdo run ...` waits for approval and command startup, then prints a job
+#   id. Use `hostdo status <job-id>`, `hostdo tail <job-id>`, and
+#   `hostdo stop <job-id>` to inspect or stop it.
+# - Use `hostdo tail <job-id> --rows <lines>` to inspect recent output, and
+#   add `--stdout` or `--stderr` to select one stream.
+# - Use `hostdo tail <job-id> --all` to read full captured output.
+# - Use `hostdo send <job-id> "text"` to send one input line, or pipe data into
+#   `hostdo send <job-id>` to forward stdin as-is.
+# - Use `hostdo list` to see tracked jobs for this workspace.
+# - Use `hostdo list --running` to show only currently running jobs.
+# - `hostdo` requests are policy checked against the `[hostdo]` rules below and may
+#   prompt the developer.
+# - Prefer existing auto-approved `hostdo` commands or `hostdo.command_aliases`
+#   before asking for a new host command approval.
+#
+# Subagents:
+# - Run `agentctl list` first to see the configured subagent profiles available
+#   in this environment. Use the profile name from the first column; do not
+#   guess hardcoded names such as `codex`, `claude`, or `qwen`.
+# - Use `agentctl spawn <profile> [--name <child>]` to start a same-workspace
+#   subagent from one of those configured container profiles.
+# - After spawning, give the child a task with
+#   `agentctl send <child> "task prompt" --enter`.
+# - A typical sequence is `agentctl list`, `agentctl spawn <profile> --name review`,
+#   `agentctl status review`, `agentctl tail review --rows 30`, then
+#   `agentctl send review "inspect the failing test" --enter`.
+# - Use `agentctl spawn-many <profile> <count> --prefix <name>` for larger
+#   batches; launches are paced by `[agentctl].spawn_delay_ms` and never below
+#   100ms between spawn requests.
+# - Codex subagent launches additionally wait for the previous Codex launch to
+#   fail MCP startup, clear MCP startup, sit waiting without MCP diagnostics for
+#   a short stable window, or reach the 35s diagnostic timeout.
+# - `[agentctl].max_subagents` caps live descendants under a single top-level
+#   agent, including subagents, sub-subagents, and deeper descendants.
+# - Use `agentctl status <child>`, `agentctl tail <child> --rows 30`,
+#   `agentctl tail <child> --all`, `agentctl send <child> "text" --enter`,
+#   `agentctl send <child> --key enter`, and `agentctl stop <child>` to inspect
+#   and control direct child agents.
+# - If `agentctl list` reports `image-missing`, the profile exists but its
+#   Docker image must be built or pulled before `agentctl spawn` will work.
+# - Subagent names are scoped to the parent that created them; duplicate names
+#   may exist elsewhere in the tree.
+#
+# Container lifecycle:
+# - Use `killme` only when the user explicitly asks you to end this container.
+# """
+#
+# ── Hostdo (host-side command execution) ─────────────────────────────────────
+#
+# default_policy: what happens when a command doesn't match any rule below.
+#   auto   — run without prompting (use with caution)
+#   prompt — ask the developer in the TUI (default)
+#   deny   — reject silently
+#
+# Passthrough command (exact argv match, auto-approved):
+#   [[hostdo.commands]]
+#   argv = ["cargo", "test"] # run inside container with `hostdo run cargo test`
+#   cwd = "$WORKSPACE"         # execution cwd only, not part of approval matching
+#   timeout_secs = 60
+#   approval_mode = "auto"
+#
+# Short-lived Docker runner (exact argv + image match, auto-approved):
+#   [[hostdo.commands]]
+#   argv = ["npm", "test"]     # run with `hostdo run --image node:20 npm test`
+#   image = "node:20"
+#   cwd = "$WORKSPACE"
+#   timeout_secs = 60
+#   approval_mode = "auto"
+#
+# Command alias (agent sends `hostdo run tests`, expands server-side):
+#   [hostdo.command_aliases]
+#   tests = "cargo test" # run inside container with `hostdo run tests`
+#   build = { cmd = "cargo build --release", cwd = "$WORKSPACE" }
+#
+# $WORKSPACE = workspace path on the host.
+#
+# ── Agentctl helper defaults ────────────────────────────────────────────────
+#
+# `agentctl spawn` and `spawn-many` read this value from the workspace rules file
+# when `--delay-ms` is omitted. The effective delay is clamped to at least 100ms.
+# `max_subagents` limits live descendants under a single top-level agent.
+#   [agentctl]
+#   spawn_delay_ms = 500
+#   max_subagents = 10
+
+# ── Network (HTTP/HTTPS proxy policy) ────────────────────────────────────────
+#
+# Coder-style network rules. Deny matches win over allow matches; if no rule
+# matches, request is prompted.
+# Rule format:
+#   method=GET,POST domain=api.example.com path=/v1/*,/health port=443,8443
+#
+# Use [network].allowlist for permanent allows and [network].denylist for
+# permanent denies.
+#
+# Domain matching:
+# - `domain=example.com` exact only
+# - `domain=*.example.com` subdomains only (not the apex)
+#
+# Path matching:
+# - exact (`/v1/users`)
+# - wildcard (`/v1/*`)
+#
+# Port matching:
+# - omitted port matches normal HTTP/HTTPS requests on any port
+# - CONNECT allow rules without `port=` only auto-approve port 443
+# - raw CONNECT to other ports requires an explicit `port=...` allow rule
+
+version = 1
+
+[agentctl]
+spawn_delay_ms = 500
+max_subagents = 10
+
+[hostdo]
+default_policy = "prompt"
+
+[[hostdo.commands]]
+argv = [
+    "cargo",
+    "check",
+]
+cwd = "$WORKSPACE"
+timeout_secs = 60
+concurrency = "queue"
+approval_mode = "auto"
+
+[[hostdo.commands]]
+argv = [
+    "cargo",
+    "test",
+]
+cwd = "$WORKSPACE"
+timeout_secs = 60
+concurrency = "queue"
+approval_mode = "auto"
+
+[[hostdo.commands]]
+argv = [
+    "cargo",
+    "fmt",
+]
+cwd = "$WORKSPACE"
+timeout_secs = 60
+concurrency = "queue"
+approval_mode = "auto"
+
+[[hostdo.commands]]
+argv = [
+    "npm",
+    "--version",
+]
+cwd = "$WORKSPACE"
+timeout_secs = 60
+concurrency = "queue"
+approval_mode = "auto"
+
+[[hostdo.commands]]
+argv = [
+    "npm",
+    "install",
+]
+cwd = "$WORKSPACE"
+timeout_secs = 60
+concurrency = "queue"
+approval_mode = "auto"
+
+[[hostdo.commands]]
+argv = [
+    "cargo",
+    "run",
+]
+cwd = "$WORKSPACE"
+timeout_secs = 180
+concurrency = "queue"
+approval_mode = "auto"
+
+[[hostdo.commands]]
+argv = [
+    "npm",
+    "run",
+    "test:mysql2",
+]
+cwd = "$WORKSPACE"
+timeout_secs = 60
+concurrency = "queue"
+approval_mode = "auto"
+
+[[hostdo.commands]]
+argv = [
+    "npm",
+    "run",
+    "test:drizzle",
+]
+cwd = "$WORKSPACE"
+timeout_secs = 60
+concurrency = "queue"
+approval_mode = "auto"
+
+[[hostdo.commands]]
+argv = [
+    "cargo",
+    "test",
+    "--test",
+    "v2_features",
+]
+cwd = "$WORKSPACE"
+timeout_secs = 60
+concurrency = "queue"
+approval_mode = "auto"
+
+[[hostdo.commands]]
+argv = [
+    "cargo",
+    "test",
+    "--test",
+    "mysql_parity",
+]
+cwd = "$WORKSPACE"
+timeout_secs = 60
+concurrency = "queue"
+approval_mode = "auto"
+
+[[hostdo.commands]]
+argv = [
+    "cargo",
+    "clippy",
+]
+cwd = "$WORKSPACE"
+timeout_secs = 60
+concurrency = "queue"
+approval_mode = "auto"
+
+[[hostdo.commands]]
+argv = [
+    "cargo",
+    "clippy",
+    "--",
+    "-D",
+    "warnings",
+]
+cwd = "$WORKSPACE"
+timeout_secs = 60
+concurrency = "queue"
+approval_mode = "auto"
+
+[[hostdo.commands]]
+argv = [
+    "cargo",
+    "test",
+    "--test",
+    "schema_metadata",
+    "permissive_schema_ddl_infers_missing_metadata_and_noops_unknown_drops",
+    "--",
+    "--nocapture",
+]
+cwd = "$WORKSPACE"
+timeout_secs = 60
+concurrency = "queue"
+approval_mode = "auto"
+
+[[hostdo.commands]]
+argv = [
+    "npm",
+    "run",
+    "test:drizzle:compat",
+]
+cwd = "$WORKSPACE"
+timeout_secs = 60
+concurrency = "queue"
+approval_mode = "auto"
+
+[hostdo.command_aliases.fmt]
+cmd = "cargo fmt"
+cwd = "$WORKSPACE"
+
+[hostdo.command_aliases.lint]
+cmd = "cargo clippy"
+cwd = "$WORKSPACE"
+
+[hostdo.command_aliases.test]
+cmd = "cargo test"
+cwd = "$WORKSPACE"
+
+[hostdo.command_aliases.check]
+cmd = "cargo check"
+cwd = "$WORKSPACE"
+
+[hostdo.command_aliases.build]
+cmd = "cargo build"
+cwd = "$WORKSPACE"
+
+[network]
+allowlist = [
+    "domain=raw.githubusercontent.com",
+    "domain=github.com",
+    "domain=chatgpt.com",
+    "domain=ab.chatgpt.com",
+    "domain=api.github.com",
+    "domain=registry.npmjs.org",
+]

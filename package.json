@@ -1,0 +1,17 @@
+{
+  "name": "my-sqweelt",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:mysql2": "node tests/node/mysql2-smoke.mjs",
+    "test:drizzle": "node tests/node/drizzle-smoke.mjs",
+    "test:drizzle:compat": "node tests/node/drizzle-compat.mjs"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.44.0",
+    "mysql2": "^3.15.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0"
+  }
+}
