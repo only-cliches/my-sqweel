@@ -2,6 +2,20 @@
 name = "my-sqweel"
 version = "0.1.0"
 edition = "2024"
+description = "A schema-drift-tolerant, development-only MySQL facade for fast local iteration."
+license = "MIT"
+repository = "https://github.com/only-cliches/my-squeel"
+readme = "README.md"
+include = [
+    "/Cargo.lock",
+    "/Cargo.toml",
+    "/CHANGELOG.md",
+    "/LICENSE",
+    "/README.md",
+    "/logo.png",
+    "/src/**",
+    "/tests/**",
+]
 
 [lib]
 name = "my_sqweel"
@@ -14,23 +28,28 @@ path = "src/bin/sqwl.rs"
 [dependencies]
 anyhow = "1.0"
 axum = "0.8"
+base64 = "0.22"
 bytes = "1.10"
 chrono = { version = "0.4", features = ["serde"] }
 dashmap = "6.1"
 fs2 = "0.4"
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
+hashbrown = "0.14"
+mlua = { version = "0.10", features = ["lua54", "vendored"] }
 msql-srv = "0.11"
+ordered-float = "4"
 parking_lot = "0.12"
+rmp = "0.8"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+sha1_smol = "1"
 sqlparser = "0.53"
 thiserror = "2.0"
-tokio = { version = "1.48", features = ["macros", "rt-multi-thread", "net", "signal"] }
+tokio = { version = "1.48", features = ["full"] }
+tokio-tungstenite = "0.24"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 uuid = { version = "1.18", features = ["serde", "v4"] }
-
-# Lux embedded API target from requested branch.
-lux = { git = "https://github.com/only-cliches/lux", branch = "embedded-api" }
 
 [dev-dependencies]
 mysql = "26.0"

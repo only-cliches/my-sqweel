@@ -10,6 +10,8 @@ use anyhow::{Result, anyhow};
 use bytes::Bytes;
 use fs2::FileExt;
 
+use crate::vendor::lux;
+
 /// Minimal Redis command surface MySqweel uses for durable table storage.
 pub trait RedisStore: Send + Sync {
     fn hset(&self, key: &str, field: &str, value: &str) -> Result<()>;
@@ -224,6 +226,7 @@ fn acquire_file_lock(data_dir: &str) -> Result<FileLockGuard> {
         .read(true)
         .write(true)
         .create(true)
+        .truncate(true)
         .open(&lock_path)
         .with_cleanup(&data_dir)?;
 
@@ -237,7 +240,6 @@ fn acquire_file_lock(data_dir: &str) -> Result<FileLockGuard> {
         ));
     }
 
-    file.set_len(0).with_cleanup(&data_dir)?;
     writeln!(file, "pid={}", std::process::id()).with_cleanup(&data_dir)?;
     Ok(FileLockGuard { data_dir, file })
 }

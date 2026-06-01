@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "export:source": "node copy-source-to-md.mjs",
     "test:mysql2": "node tests/node/mysql2-smoke.mjs",
     "test:drizzle": "node tests/node/drizzle-smoke.mjs",
     "test:drizzle:compat": "node tests/node/drizzle-compat.mjs"

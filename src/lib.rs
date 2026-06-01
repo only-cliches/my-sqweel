@@ -15,6 +15,7 @@ pub mod schema;
 pub mod server;
 pub mod sql;
 pub mod storage;
+pub(crate) mod vendor;
 
 pub async fn run_cli() -> Result<()> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();

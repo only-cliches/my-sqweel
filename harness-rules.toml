@@ -302,12 +302,31 @@ timeout_secs = 60
 concurrency = "queue"
 approval_mode = "auto"
 
+[[hostdo.commands]]
+argv = [
+    "cargo",
+    "publish",
+    "--dry-run",
+    "--allow-dirty",
+]
+cwd = "$WORKSPACE"
+timeout_secs = 60
+concurrency = "queue"
+approval_mode = "auto"
+
+[[hostdo.commands]]
+argv = [
+    "npm",
+    "run",
+    "export:source",
+]
+cwd = "$WORKSPACE"
+timeout_secs = 60
+concurrency = "queue"
+approval_mode = "auto"
+
 [hostdo.command_aliases.fmt]
 cmd = "cargo fmt"
-cwd = "$WORKSPACE"
-
-[hostdo.command_aliases.lint]
-cmd = "cargo clippy"
 cwd = "$WORKSPACE"
 
 [hostdo.command_aliases.test]
@@ -316,6 +335,10 @@ cwd = "$WORKSPACE"
 
 [hostdo.command_aliases.check]
 cmd = "cargo check"
+cwd = "$WORKSPACE"
+
+[hostdo.command_aliases.lint]
+cmd = "cargo clippy"
 cwd = "$WORKSPACE"
 
 [hostdo.command_aliases.build]
