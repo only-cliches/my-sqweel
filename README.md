@@ -23,6 +23,8 @@ Instead of dropping your dev database every time your schema changes, point your
 
 ## Installation
 
+**Requirements:** Install the Rust toolchain from [https://rust-lang.org/learn/get-started/](https://rust-lang.org/learn/get-started/) before building or running.
+
 Install from crates.io:
 
 ```bash
