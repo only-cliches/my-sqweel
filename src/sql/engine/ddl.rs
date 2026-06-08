@@ -64,11 +64,12 @@ impl Engine {
     ) -> Result<()> {
         match op {
             sqlparser::ast::AlterTableOperation::AddColumn { column_def, .. } => {
-                add_schema_column(
-                    schema,
-                    column_def.name.value.clone(),
-                    column_hint_from_def(&column_def),
-                );
+                let column_name = column_def.name.value.clone();
+                let column_hint = column_hint_from_def(&column_def);
+                add_schema_column(schema, column_name.clone(), column_hint.clone());
+                if column_hint.primary_key {
+                    add_primary_key_metadata(schema, vec![column_name]);
+                }
             }
             other => apply_alter_operation_fallback(table, schema, other)?,
         }
@@ -273,14 +274,7 @@ pub(super) fn table_schema_from_create(
 
     if !hint.primary_key.is_empty() {
         let primary_key = hint.primary_key.clone();
-        add_index_metadata(
-            &mut hint,
-            IndexHint {
-                name: "PRIMARY".to_string(),
-                columns: primary_key,
-                unique: true,
-            },
-        );
+        add_primary_key_metadata(&mut hint, primary_key);
     }
     hint.updated_at = Some(Utc::now());
     hint
@@ -405,6 +399,12 @@ pub(super) fn apply_alter_operation_fallback(
         if let Some(foreign_key) = parse_foreign_key_hint(&schema.table, &text) {
             add_foreign_key_metadata(schema, foreign_key);
         }
+    } else if upper.starts_with("ADD PRIMARY KEY")
+        || (upper.starts_with("ADD CONSTRAINT") && upper.contains("PRIMARY KEY"))
+    {
+        if let Some(cols) = columns_inside_parentheses(&text) {
+            add_primary_key_metadata(schema, cols);
+        }
     } else if upper.starts_with("ADD UNIQUE") || upper.starts_with("ADD CONSTRAINT") {
         if let Some(cols) = columns_inside_parentheses(&text) {
             add_unique_metadata(schema, cols);
@@ -428,6 +428,8 @@ pub(super) fn apply_alter_operation_fallback(
         if let Some(index) = tokens.get(2) {
             drop_unique_metadata(schema, index);
         }
+    } else if upper.starts_with("DROP PRIMARY KEY") {
+        drop_primary_key_metadata(schema);
     } else if upper.starts_with("DROP CONSTRAINT ") {
         if let Some(name) = tokens.get(2) {
             drop_unique_metadata(schema, name);
@@ -609,6 +611,30 @@ pub(super) fn add_unique_metadata(schema: &mut TableSchemaHint, cols: Vec<String
             },
         );
     }
+}
+
+pub(super) fn add_primary_key_metadata(schema: &mut TableSchemaHint, cols: Vec<String>) {
+    for col in cols {
+        if !schema.primary_key.iter().any(|existing| existing == &col) {
+            schema.primary_key.push(col);
+        }
+    }
+    schema.indexes.retain(|index| index.name != "PRIMARY");
+    if !schema.primary_key.is_empty() {
+        add_index_metadata(
+            schema,
+            IndexHint {
+                name: "PRIMARY".to_string(),
+                columns: schema.primary_key.clone(),
+                unique: true,
+            },
+        );
+    }
+}
+
+pub(super) fn drop_primary_key_metadata(schema: &mut TableSchemaHint) {
+    schema.primary_key.clear();
+    schema.indexes.retain(|index| index.name != "PRIMARY");
 }
 
 pub(super) fn drop_unique_metadata(schema: &mut TableSchemaHint, index_name: &str) {

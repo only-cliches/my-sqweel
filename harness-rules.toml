@@ -325,10 +325,6 @@ timeout_secs = 60
 concurrency = "queue"
 approval_mode = "auto"
 
-[hostdo.command_aliases.fmt]
-cmd = "cargo fmt"
-cwd = "$WORKSPACE"
-
 [hostdo.command_aliases.test]
 cmd = "cargo test"
 cwd = "$WORKSPACE"
@@ -337,12 +333,16 @@ cwd = "$WORKSPACE"
 cmd = "cargo check"
 cwd = "$WORKSPACE"
 
-[hostdo.command_aliases.lint]
-cmd = "cargo clippy"
+[hostdo.command_aliases.fmt]
+cmd = "cargo fmt"
 cwd = "$WORKSPACE"
 
 [hostdo.command_aliases.build]
 cmd = "cargo build"
+cwd = "$WORKSPACE"
+
+[hostdo.command_aliases.lint]
+cmd = "cargo clippy"
 cwd = "$WORKSPACE"
 
 [network]
@@ -353,4 +353,5 @@ allowlist = [
     "domain=ab.chatgpt.com",
     "domain=api.github.com",
     "domain=registry.npmjs.org",
+    "domain=oauth2.googleapis.com",
 ]

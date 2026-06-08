@@ -440,6 +440,52 @@ fn captures_advisory_foreign_key_metadata() {
 }
 
 #[test]
+fn captures_primary_key_metadata_added_via_alter_table() {
+    let _guard = test_lock();
+    let engine = Engine::default();
+    engine
+        .execute_sql("CREATE TABLE users (email TEXT);")
+        .unwrap();
+    engine
+        .execute_sql("ALTER TABLE users ADD COLUMN id BIGINT PRIMARY KEY AUTO_INCREMENT;")
+        .unwrap();
+
+    let constraints = engine
+        .execute_sql("SELECT table_name, constraint_name, constraint_type FROM information_schema.table_constraints WHERE table_name = 'users' AND constraint_name = 'PRIMARY'")
+        .unwrap();
+    assert_eq!(constraints[0].rows.len(), 1);
+    assert_eq!(
+        constraints[0].rows[0]
+            .get("constraint_type")
+            .and_then(|v| v.as_str()),
+        Some("PRIMARY KEY")
+    );
+
+    let usage = engine
+        .execute_sql("SELECT column_name, constraint_name FROM information_schema.key_column_usage WHERE table_name = 'users' AND constraint_name = 'PRIMARY'")
+        .unwrap();
+    assert_eq!(usage[0].rows.len(), 1);
+    assert_eq!(
+        usage[0].rows[0].get("column_name").and_then(|v| v.as_str()),
+        Some("id")
+    );
+
+    let columns = engine
+        .execute_sql("SELECT column_name, column_key, extra FROM information_schema.columns WHERE table_name = 'users'")
+        .unwrap();
+    let id = columns[0]
+        .rows
+        .iter()
+        .find(|row| row.get("column_name").and_then(|v| v.as_str()) == Some("id"))
+        .expect("id column");
+    assert_eq!(id.get("column_key").and_then(|v| v.as_str()), Some("PRI"));
+    assert_eq!(
+        id.get("extra").and_then(|v| v.as_str()),
+        Some("auto_increment")
+    );
+}
+
+#[test]
 fn applies_type_defaults_and_null_semantics() {
     let _guard = test_lock();
     let engine = Engine::default();
