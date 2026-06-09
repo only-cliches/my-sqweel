@@ -659,3 +659,491 @@ fn supports_alter_table_metadata_expansion_and_more_introspection() {
             .any(|row| { row.get("Tables_in_app").and_then(|v| v.as_str()) == Some("users") })
     );
 }
+
+// -------------------------------------------------------------------------
+// information_schema coverage
+//
+// These tests pin the column set and row shape every supported view emits.
+// Any drift from the documented MySQL surface (renames, dropped columns,
+// missing NULLs, missing rows for UNIQUE/composite-PK/composite-FK) should
+// surface here rather than in the Docker parity suite, which only runs when
+// MYSQL_COMPARE_URL is set or Docker is available.
+// -------------------------------------------------------------------------
+
+fn engine_with_full_schema() -> Engine {
+    let engine = Engine::default();
+    engine
+        .execute_sql(
+            "CREATE TABLE parents (id BIGINT PRIMARY KEY AUTO_INCREMENT, code VARCHAR(32) UNIQUE NOT NULL);",
+        )
+        .unwrap();
+    engine
+        .execute_sql(
+            "CREATE TABLE children (\
+                parent_id BIGINT NOT NULL,\
+                slot BIGINT NOT NULL,\
+                email VARCHAR(255) NOT NULL,\
+                note TEXT,\
+                PRIMARY KEY (parent_id, slot),\
+                UNIQUE (email),\
+                CONSTRAINT fk_children_parents FOREIGN KEY (parent_id) REFERENCES parents (id) ON DELETE CASCADE ON UPDATE RESTRICT\
+            );",
+        )
+        .unwrap();
+    engine
+        .execute_sql("CREATE INDEX idx_children_note ON children (note)")
+        .unwrap();
+    engine
+}
+
+#[test]
+fn information_schema_tables_lists_every_user_table() {
+    let _guard = test_lock();
+    let engine = engine_with_full_schema();
+    let rows = engine
+        .execute_sql(
+            "SELECT table_schema, table_name FROM information_schema.tables ORDER BY table_name",
+        )
+        .unwrap();
+    let names: Vec<&str> = rows[0]
+        .rows
+        .iter()
+        .map(|row| row.get("table_name").and_then(|v| v.as_str()).unwrap())
+        .collect();
+    assert!(names.contains(&"parents"));
+    assert!(names.contains(&"children"));
+    for row in &rows[0].rows {
+        assert_eq!(
+            row.get("table_schema").and_then(|v| v.as_str()),
+            Some("app"),
+            "every row should report the app schema"
+        );
+    }
+}
+
+#[test]
+fn information_schema_schemata_returns_app_with_utf8mb4_defaults() {
+    let _guard = test_lock();
+    let engine = Engine::default();
+    let rows = engine
+        .execute_sql(
+            "SELECT catalog_name, schema_name, default_character_set_name, default_collation_name \
+             FROM information_schema.schemata WHERE schema_name = 'app'",
+        )
+        .unwrap();
+    assert_eq!(rows[0].rows.len(), 1);
+    let row = &rows[0].rows[0];
+    assert_eq!(row.get("catalog_name").and_then(|v| v.as_str()), Some("def"));
+    assert_eq!(row.get("schema_name").and_then(|v| v.as_str()), Some("app"));
+    assert_eq!(
+        row.get("default_character_set_name").and_then(|v| v.as_str()),
+        Some("utf8mb4")
+    );
+    assert_eq!(
+        row.get("default_collation_name").and_then(|v| v.as_str()),
+        Some("utf8mb4_general_ci")
+    );
+}
+
+#[test]
+fn information_schema_columns_reports_all_documented_columns() {
+    let _guard = test_lock();
+    let engine = engine_with_full_schema();
+    let rows = engine
+        .execute_sql(
+            "SELECT table_schema, table_name, column_name, ordinal_position, is_nullable, \
+                column_default, column_type, data_type, column_key, extra \
+             FROM information_schema.columns WHERE table_name = 'children' \
+             ORDER BY ordinal_position",
+        )
+        .unwrap();
+    let column_names: Vec<&str> = rows[0]
+        .rows
+        .iter()
+        .map(|row| row.get("column_name").and_then(|v| v.as_str()).unwrap())
+        .collect();
+    assert!(column_names.contains(&"parent_id"));
+    assert!(column_names.contains(&"slot"));
+    assert!(column_names.contains(&"email"));
+    assert!(column_names.contains(&"note"));
+
+    let parent_id = rows[0]
+        .rows
+        .iter()
+        .find(|row| row.get("column_name").and_then(|v| v.as_str()) == Some("parent_id"))
+        .expect("parent_id row");
+    assert_eq!(
+        parent_id.get("is_nullable").and_then(|v| v.as_str()),
+        Some("NO")
+    );
+    assert_eq!(parent_id.get("column_key").and_then(|v| v.as_str()), Some("PRI"));
+
+    let email = rows[0]
+        .rows
+        .iter()
+        .find(|row| row.get("column_name").and_then(|v| v.as_str()) == Some("email"))
+        .expect("email row");
+    assert_eq!(email.get("column_key").and_then(|v| v.as_str()), Some("UNI"));
+    assert_eq!(email.get("is_nullable").and_then(|v| v.as_str()), Some("NO"));
+
+    let note = rows[0]
+        .rows
+        .iter()
+        .find(|row| row.get("column_name").and_then(|v| v.as_str()) == Some("note"))
+        .expect("note row");
+    assert_eq!(note.get("column_key").and_then(|v| v.as_str()), Some(""));
+    assert_eq!(
+        note.get("table_schema").and_then(|v| v.as_str()),
+        Some("app")
+    );
+}
+
+#[test]
+fn information_schema_table_constraints_includes_pk_unique_and_fk() {
+    let _guard = test_lock();
+    let engine = engine_with_full_schema();
+    let rows = engine
+        .execute_sql(
+            "SELECT constraint_schema, table_schema, table_name, constraint_name, constraint_type \
+             FROM information_schema.table_constraints WHERE table_name = 'children'",
+        )
+        .unwrap();
+    let types: Vec<(&str, &str)> = rows[0]
+        .rows
+        .iter()
+        .map(|row| {
+            (
+                row.get("constraint_name").and_then(|v| v.as_str()).unwrap(),
+                row.get("constraint_type").and_then(|v| v.as_str()).unwrap(),
+            )
+        })
+        .collect();
+    assert!(
+        types.iter().any(|(name, kind)| *name == "PRIMARY" && *kind == "PRIMARY KEY"),
+        "expected PRIMARY/PRIMARY KEY row, saw {types:?}"
+    );
+    assert!(
+        types.iter().any(|(_, kind)| *kind == "UNIQUE"),
+        "expected at least one UNIQUE row, saw {types:?}"
+    );
+    assert!(
+        types.iter().any(|(name, kind)| *name == "fk_children_parents" && *kind == "FOREIGN KEY"),
+        "expected fk_children_parents/FOREIGN KEY row, saw {types:?}"
+    );
+    for row in &rows[0].rows {
+        assert_eq!(
+            row.get("constraint_schema").and_then(|v| v.as_str()),
+            Some("app")
+        );
+        assert_eq!(
+            row.get("table_schema").and_then(|v| v.as_str()),
+            Some("app")
+        );
+    }
+}
+
+#[test]
+fn information_schema_statistics_orders_composite_index_columns() {
+    let _guard = test_lock();
+    let engine = engine_with_full_schema();
+    let rows = engine
+        .execute_sql(
+            "SELECT table_schema, table_name, index_name, column_name, seq_in_index, non_unique \
+             FROM information_schema.statistics WHERE table_name = 'children' \
+             ORDER BY index_name, seq_in_index",
+        )
+        .unwrap();
+    let primary: Vec<(&str, u64, u64)> = rows[0]
+        .rows
+        .iter()
+        .filter(|row| row.get("index_name").and_then(|v| v.as_str()) == Some("PRIMARY"))
+        .map(|row| {
+            (
+                row.get("column_name").and_then(|v| v.as_str()).unwrap(),
+                row.get("seq_in_index").and_then(|v| v.as_u64()).unwrap(),
+                row.get("non_unique").and_then(|v| v.as_u64()).unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        primary,
+        vec![("parent_id", 1, 0), ("slot", 2, 0)],
+        "PRIMARY index should be 2 cols, seq_in_index 1/2, non_unique 0"
+    );
+
+    let secondary = rows[0]
+        .rows
+        .iter()
+        .find(|row| row.get("index_name").and_then(|v| v.as_str()) == Some("idx_children_note"))
+        .expect("non-unique secondary index row");
+    assert_eq!(
+        secondary.get("non_unique").and_then(|v| v.as_u64()),
+        Some(1),
+        "secondary index should be non_unique=1"
+    );
+    assert_eq!(
+        secondary.get("seq_in_index").and_then(|v| v.as_u64()),
+        Some(1)
+    );
+}
+
+#[test]
+fn information_schema_key_column_usage_emits_pk_unique_and_fk_rows() {
+    let _guard = test_lock();
+    let engine = engine_with_full_schema();
+    let rows = engine
+        .execute_sql(
+            "SELECT constraint_catalog, constraint_schema, constraint_name, table_catalog, table_schema, \
+                table_name, column_name, ordinal_position, position_in_unique_constraint, \
+                referenced_table_schema, referenced_table_name, referenced_column_name \
+             FROM information_schema.key_column_usage WHERE table_name = 'children'",
+        )
+        .unwrap();
+
+    // Composite PK should produce two rows with ordinal_position 1 and 2.
+    let mut pk_rows: Vec<_> = rows[0]
+        .rows
+        .iter()
+        .filter(|row| row.get("constraint_name").and_then(|v| v.as_str()) == Some("PRIMARY"))
+        .collect();
+    pk_rows.sort_by_key(|row| row.get("ordinal_position").and_then(|v| v.as_u64()).unwrap());
+    assert_eq!(pk_rows.len(), 2, "composite PK should produce 2 rows");
+    assert_eq!(
+        pk_rows[0].get("column_name").and_then(|v| v.as_str()),
+        Some("parent_id")
+    );
+    assert_eq!(
+        pk_rows[1].get("column_name").and_then(|v| v.as_str()),
+        Some("slot")
+    );
+    for pk_row in &pk_rows {
+        assert_eq!(
+            pk_row.get("constraint_catalog").and_then(|v| v.as_str()),
+            Some("def")
+        );
+        assert_eq!(
+            pk_row.get("table_catalog").and_then(|v| v.as_str()),
+            Some("def")
+        );
+        assert!(
+            pk_row
+                .get("position_in_unique_constraint")
+                .map(|v| v.is_null())
+                .unwrap_or(false),
+            "PK rows must have NULL position_in_unique_constraint"
+        );
+        assert!(
+            pk_row
+                .get("referenced_table_name")
+                .map(|v| v.is_null())
+                .unwrap_or(false),
+            "PK rows must have NULL referenced_table_name"
+        );
+    }
+
+    // UNIQUE constraint should also appear in key_column_usage.
+    let unique_rows: Vec<_> = rows[0]
+        .rows
+        .iter()
+        .filter(|row| {
+            row.get("constraint_name")
+                .and_then(|v| v.as_str())
+                .map(|name| name.contains("email") && name.ends_with("_uniq"))
+                .unwrap_or(false)
+        })
+        .collect();
+    assert_eq!(
+        unique_rows.len(),
+        1,
+        "UNIQUE(email) on children should produce exactly one key_column_usage row"
+    );
+    let unique = unique_rows[0];
+    assert_eq!(
+        unique.get("column_name").and_then(|v| v.as_str()),
+        Some("email")
+    );
+    assert!(
+        unique
+            .get("position_in_unique_constraint")
+            .map(|v| v.is_null())
+            .unwrap_or(false),
+        "UNIQUE rows must have NULL position_in_unique_constraint"
+    );
+    assert!(
+        unique
+            .get("referenced_table_name")
+            .map(|v| v.is_null())
+            .unwrap_or(false),
+        "UNIQUE rows must have NULL referenced_table_name"
+    );
+
+    // Foreign key row must populate referenced_* AND position_in_unique_constraint.
+    let fk = rows[0]
+        .rows
+        .iter()
+        .find(|row| {
+            row.get("constraint_name").and_then(|v| v.as_str()) == Some("fk_children_parents")
+        })
+        .expect("fk_children_parents row");
+    assert_eq!(
+        fk.get("column_name").and_then(|v| v.as_str()),
+        Some("parent_id")
+    );
+    assert_eq!(
+        fk.get("ordinal_position").and_then(|v| v.as_u64()),
+        Some(1)
+    );
+    assert_eq!(
+        fk.get("position_in_unique_constraint")
+            .and_then(|v| v.as_u64()),
+        Some(1),
+        "FK rows must report a 1-based position into the referenced unique constraint"
+    );
+    assert_eq!(
+        fk.get("referenced_table_schema").and_then(|v| v.as_str()),
+        Some("app")
+    );
+    assert_eq!(
+        fk.get("referenced_table_name").and_then(|v| v.as_str()),
+        Some("parents")
+    );
+    assert_eq!(
+        fk.get("referenced_column_name").and_then(|v| v.as_str()),
+        Some("id")
+    );
+}
+
+#[test]
+fn information_schema_key_column_usage_handles_pk_added_via_alter_table() {
+    let _guard = test_lock();
+    let engine = Engine::default();
+    engine
+        .execute_sql("CREATE TABLE late_pk (email TEXT);")
+        .unwrap();
+    engine
+        .execute_sql("ALTER TABLE late_pk ADD COLUMN id BIGINT PRIMARY KEY AUTO_INCREMENT;")
+        .unwrap();
+
+    let rows = engine
+        .execute_sql(
+            "SELECT column_name, ordinal_position, constraint_name \
+             FROM information_schema.key_column_usage \
+             WHERE table_name = 'late_pk' AND constraint_name = 'PRIMARY'",
+        )
+        .unwrap();
+    assert_eq!(rows[0].rows.len(), 1, "ALTER-added PK should populate key_column_usage");
+    assert_eq!(
+        rows[0].rows[0].get("column_name").and_then(|v| v.as_str()),
+        Some("id")
+    );
+    assert_eq!(
+        rows[0].rows[0]
+            .get("ordinal_position")
+            .and_then(|v| v.as_u64()),
+        Some(1)
+    );
+}
+
+#[test]
+fn information_schema_referential_constraints_includes_full_fk_metadata() {
+    let _guard = test_lock();
+    let engine = engine_with_full_schema();
+    let rows = engine
+        .execute_sql(
+            "SELECT constraint_catalog, constraint_schema, constraint_name, \
+                unique_constraint_catalog, unique_constraint_schema, unique_constraint_name, \
+                match_option, update_rule, delete_rule, table_name, referenced_table_name \
+             FROM information_schema.referential_constraints \
+             WHERE constraint_name = 'fk_children_parents'",
+        )
+        .unwrap();
+    assert_eq!(rows[0].rows.len(), 1);
+    let row = &rows[0].rows[0];
+    assert_eq!(row.get("constraint_catalog").and_then(|v| v.as_str()), Some("def"));
+    assert_eq!(row.get("constraint_schema").and_then(|v| v.as_str()), Some("app"));
+    assert_eq!(
+        row.get("unique_constraint_catalog").and_then(|v| v.as_str()),
+        Some("def")
+    );
+    assert_eq!(
+        row.get("unique_constraint_schema").and_then(|v| v.as_str()),
+        Some("app")
+    );
+    assert_eq!(
+        row.get("unique_constraint_name").and_then(|v| v.as_str()),
+        Some("PRIMARY")
+    );
+    assert_eq!(row.get("match_option").and_then(|v| v.as_str()), Some("NONE"));
+    assert_eq!(row.get("update_rule").and_then(|v| v.as_str()), Some("RESTRICT"));
+    assert_eq!(row.get("delete_rule").and_then(|v| v.as_str()), Some("CASCADE"));
+    assert_eq!(row.get("table_name").and_then(|v| v.as_str()), Some("children"));
+    assert_eq!(
+        row.get("referenced_table_name").and_then(|v| v.as_str()),
+        Some("parents")
+    );
+}
+
+#[test]
+fn information_schema_character_sets_lists_common_charsets() {
+    let _guard = test_lock();
+    let engine = Engine::default();
+    let rows = engine
+        .execute_sql(
+            "SELECT character_set_name, default_collate_name, description, maxlen \
+             FROM information_schema.character_sets",
+        )
+        .unwrap();
+    let names: Vec<&str> = rows[0]
+        .rows
+        .iter()
+        .map(|row| row.get("character_set_name").and_then(|v| v.as_str()).unwrap())
+        .collect();
+    assert!(names.contains(&"utf8mb4"));
+    assert!(names.contains(&"ascii"));
+    let utf8mb4 = rows[0]
+        .rows
+        .iter()
+        .find(|row| row.get("character_set_name").and_then(|v| v.as_str()) == Some("utf8mb4"))
+        .expect("utf8mb4 row");
+    assert_eq!(
+        utf8mb4.get("default_collate_name").and_then(|v| v.as_str()),
+        Some("utf8mb4_general_ci")
+    );
+    assert_eq!(utf8mb4.get("maxlen").and_then(|v| v.as_u64()), Some(4));
+}
+
+#[test]
+fn information_schema_collations_lists_common_collations() {
+    let _guard = test_lock();
+    let engine = Engine::default();
+    let rows = engine
+        .execute_sql(
+            "SELECT collation_name, character_set_name, id, is_default, is_compiled, sortlen \
+             FROM information_schema.collations WHERE collation_name = 'utf8mb4_general_ci'",
+        )
+        .unwrap();
+    assert_eq!(rows[0].rows.len(), 1);
+    let row = &rows[0].rows[0];
+    assert_eq!(
+        row.get("character_set_name").and_then(|v| v.as_str()),
+        Some("utf8mb4")
+    );
+    assert_eq!(row.get("is_default").and_then(|v| v.as_str()), Some("Yes"));
+    assert_eq!(row.get("is_compiled").and_then(|v| v.as_str()), Some("Yes"));
+    assert_eq!(row.get("sortlen").and_then(|v| v.as_u64()), Some(1));
+}
+
+#[test]
+fn information_schema_views_and_routines_are_empty_but_queryable() {
+    let _guard = test_lock();
+    let engine = engine_with_full_schema();
+    let views = engine
+        .execute_sql("SELECT table_name FROM information_schema.views")
+        .unwrap();
+    assert!(views[0].rows.is_empty(), "no views defined");
+
+    let routines = engine
+        .execute_sql("SELECT routine_name FROM information_schema.routines")
+        .unwrap();
+    assert!(routines[0].rows.is_empty(), "no routines defined");
+}

@@ -779,6 +779,252 @@ fn parity_with_mysql_for_supported_semantics() {
     );
 }
 
+/// Verify per-column row-by-row parity against real MySQL for every
+/// `information_schema` view my-sqweel claims to support. Catches the kind of
+/// regression that recently caused `KEY_COLUMN_USAGE` to be unreliable: missing
+/// PK rows after ALTER, missing UNIQUE rows, dropped or renamed columns.
+///
+/// Skipped silently if no MySQL is reachable (same gating as the broader parity
+/// test above).
+#[test]
+fn parity_with_mysql_for_information_schema() {
+    let Some(mysql_target) = mysql_compare_target() else {
+        return;
+    };
+    let mysql_url = mysql_target.url();
+    let whatever_url = start_whatever_server();
+
+    let mysql_pool = Pool::new(Opts::from_url(mysql_url).expect("valid MySQL compare URL"))
+        .expect("connect to mysql");
+    let whatever_pool = Pool::new(Opts::from_url(&whatever_url).expect("valid MySqweel URL"))
+        .expect("connect to my-sqweel");
+
+    let mut mysql_conn = mysql_pool.get_conn().expect("mysql conn");
+    let mut whatever_conn = whatever_pool.get_conn().expect("whatever conn");
+
+    let pid = std::process::id();
+    let parents = format!("wdb_info_parents_{pid}");
+    let children = format!("wdb_info_children_{pid}");
+    let composite = format!("wdb_info_composite_{pid}");
+    let late_pk = format!("wdb_info_late_pk_{pid}");
+
+    for sql in [
+        format!("DROP TABLE IF EXISTS {children}"),
+        format!("DROP TABLE IF EXISTS {composite}"),
+        format!("DROP TABLE IF EXISTS {parents}"),
+        format!("DROP TABLE IF EXISTS {late_pk}"),
+    ] {
+        let _ = mysql_conn.query_drop(&sql);
+        let _ = whatever_conn.query_drop(&sql);
+    }
+
+    // Fixture: parent table with PK + UNIQUE, child table with composite PK
+    // and multi-column FK, a separate composite-PK table, and a table whose PK
+    // is added via ALTER (regression coverage for the recent KCU bug).
+    assert_exec_parity(
+        &mut mysql_conn,
+        &mut whatever_conn,
+        &format!(
+            "CREATE TABLE {parents} (id BIGINT PRIMARY KEY AUTO_INCREMENT, code VARCHAR(32) NOT NULL UNIQUE)"
+        ),
+    );
+    assert_exec_parity(
+        &mut mysql_conn,
+        &mut whatever_conn,
+        &format!(
+            "CREATE TABLE {children} (\
+                parent_id BIGINT NOT NULL,\
+                slot BIGINT NOT NULL,\
+                email VARCHAR(255) NOT NULL,\
+                note TEXT,\
+                PRIMARY KEY (parent_id, slot),\
+                CONSTRAINT fk_children_parents FOREIGN KEY (parent_id) REFERENCES {parents} (id) ON DELETE CASCADE ON UPDATE RESTRICT\
+            )"
+        ),
+    );
+    assert_exec_parity(
+        &mut mysql_conn,
+        &mut whatever_conn,
+        &format!(
+            "CREATE TABLE {composite} (a BIGINT NOT NULL, b BIGINT NOT NULL, c TEXT, PRIMARY KEY (a, b))"
+        ),
+    );
+    assert_exec_parity(
+        &mut mysql_conn,
+        &mut whatever_conn,
+        &format!("CREATE TABLE {late_pk} (email VARCHAR(255))"),
+    );
+    assert_exec_parity(
+        &mut mysql_conn,
+        &mut whatever_conn,
+        &format!("ALTER TABLE {late_pk} ADD COLUMN id BIGINT PRIMARY KEY AUTO_INCREMENT"),
+    );
+    assert_exec_parity(
+        &mut mysql_conn,
+        &mut whatever_conn,
+        &format!("CREATE INDEX idx_{children}_note ON {children} (note)"),
+    );
+
+    // information_schema.tables — table_name parity. table_schema differs
+    // (my-sqweel reports 'app', MySQL reports the connection DB), so we don't
+    // project it here; the engine unit tests pin that value.
+    assert_query_parity_unordered(
+        &mut mysql_conn,
+        &mut whatever_conn,
+        &format!(
+            "SELECT table_name FROM information_schema.tables \
+             WHERE table_name IN ('{parents}', '{children}', '{composite}', '{late_pk}') \
+             ORDER BY table_name"
+        ),
+    );
+
+    // information_schema.columns — full populated surface, ordered by
+    // ordinal_position so multi-column PK ordering is verified too.
+    for table in [&parents, &children, &composite, &late_pk] {
+        assert_query_parity_unordered(
+            &mut mysql_conn,
+            &mut whatever_conn,
+            &format!(
+                "SELECT table_name, column_name, ordinal_position, is_nullable, column_default, \
+                    column_type, data_type, column_key, extra \
+                 FROM information_schema.columns WHERE table_name = '{table}' \
+                 ORDER BY ordinal_position"
+            ),
+        );
+    }
+
+    // information_schema.statistics — every index column. Use composite PK to
+    // exercise seq_in_index ordering and a secondary non-unique index.
+    for table in [&children, &composite] {
+        assert_query_parity_unordered(
+            &mut mysql_conn,
+            &mut whatever_conn,
+            &format!(
+                "SELECT table_name, index_name, column_name, seq_in_index, non_unique \
+                 FROM information_schema.statistics WHERE table_name = '{table}' \
+                 ORDER BY index_name, seq_in_index"
+            ),
+        );
+    }
+
+    // information_schema.table_constraints — PK + FK rows. UNIQUE rows are
+    // omitted from parity because MySQL and my-sqweel auto-name UNIQUE
+    // constraints differently; the engine unit tests cover that they exist.
+    assert_query_parity_unordered(
+        &mut mysql_conn,
+        &mut whatever_conn,
+        &format!(
+            "SELECT table_name, constraint_name, constraint_type \
+             FROM information_schema.table_constraints \
+             WHERE table_name IN ('{parents}', '{children}', '{composite}', '{late_pk}') \
+                AND constraint_type IN ('PRIMARY KEY', 'FOREIGN KEY') \
+             ORDER BY table_name, constraint_type, constraint_name"
+        ),
+    );
+
+    // information_schema.key_column_usage — PK rows (including composite PK
+    // and PK added via ALTER) plus FK rows with full referenced_* and
+    // position_in_unique_constraint. UNIQUE constraint rows excluded for the
+    // same auto-naming reason as above.
+    assert_query_parity_unordered(
+        &mut mysql_conn,
+        &mut whatever_conn,
+        &format!(
+            "SELECT table_name, constraint_name, column_name, ordinal_position, \
+                position_in_unique_constraint, referenced_table_name, referenced_column_name \
+             FROM information_schema.key_column_usage \
+             WHERE table_name IN ('{parents}', '{children}', '{composite}', '{late_pk}') \
+                AND (constraint_name = 'PRIMARY' OR constraint_name = 'fk_children_parents') \
+             ORDER BY table_name, constraint_name, ordinal_position"
+        ),
+    );
+
+    // Regression pin for the recent KEY_COLUMN_USAGE issue: PRIMARY added via
+    // ALTER TABLE must show up.
+    assert_query_parity_unordered(
+        &mut mysql_conn,
+        &mut whatever_conn,
+        &format!(
+            "SELECT table_name, constraint_name, column_name, ordinal_position \
+             FROM information_schema.key_column_usage \
+             WHERE table_name = '{late_pk}' AND constraint_name = 'PRIMARY'"
+        ),
+    );
+
+    // information_schema.referential_constraints — full FK metadata.
+    assert_query_parity_unordered(
+        &mut mysql_conn,
+        &mut whatever_conn,
+        &format!(
+            "SELECT constraint_name, unique_constraint_name, match_option, update_rule, \
+                delete_rule, table_name, referenced_table_name \
+             FROM information_schema.referential_constraints \
+             WHERE constraint_name = 'fk_children_parents'"
+        ),
+    );
+
+    // information_schema.schemata — projecting columns shared between
+    // backends. catalog_name = 'def' and utf8mb4 defaults are stable. The
+    // schema name itself differs (app vs the connection DB), so we filter
+    // by whatever names exist on each side.
+    assert_query_parity_unordered(
+        &mut mysql_conn,
+        &mut whatever_conn,
+        "SELECT catalog_name, default_character_set_name FROM information_schema.schemata \
+         WHERE default_character_set_name = 'utf8mb4' AND catalog_name = 'def' LIMIT 1",
+    );
+
+    // information_schema.character_sets — utf8mb4 row must exist with the
+    // same maxlen on both backends. default_collate_name is excluded because
+    // MySQL 8.0 changed it to utf8mb4_0900_ai_ci; both still report maxlen 4.
+    assert_query_parity_unordered(
+        &mut mysql_conn,
+        &mut whatever_conn,
+        "SELECT character_set_name, maxlen \
+         FROM information_schema.character_sets WHERE character_set_name = 'utf8mb4'",
+    );
+
+    // information_schema.collations — pin character_set_name and is_compiled
+    // for utf8mb4_general_ci. is_default is excluded because MySQL 8.0 made
+    // utf8mb4_0900_ai_ci the default collation for utf8mb4.
+    assert_query_parity_unordered(
+        &mut mysql_conn,
+        &mut whatever_conn,
+        "SELECT collation_name, character_set_name, is_compiled \
+         FROM information_schema.collations WHERE collation_name = 'utf8mb4_general_ci'",
+    );
+
+    // information_schema.views / routines — neither test fixture defines any,
+    // so both should return zero rows for the test-specific filter.
+    assert_query_parity_unordered(
+        &mut mysql_conn,
+        &mut whatever_conn,
+        &format!(
+            "SELECT table_name FROM information_schema.views \
+             WHERE table_name IN ('{parents}', '{children}', '{composite}', '{late_pk}')"
+        ),
+    );
+    assert_query_parity_unordered(
+        &mut mysql_conn,
+        &mut whatever_conn,
+        &format!(
+            "SELECT routine_name FROM information_schema.routines \
+             WHERE routine_name IN ('{parents}', '{children}', '{composite}', '{late_pk}')"
+        ),
+    );
+
+    // Teardown.
+    for sql in [
+        format!("DROP TABLE IF EXISTS {children}"),
+        format!("DROP TABLE IF EXISTS {composite}"),
+        format!("DROP TABLE IF EXISTS {parents}"),
+        format!("DROP TABLE IF EXISTS {late_pk}"),
+    ] {
+        let _ = mysql_conn.query_drop(&sql);
+        let _ = whatever_conn.query_drop(&sql);
+    }
+}
+
 #[test]
 fn unsupported_queries_return_mysql_errors() {
     let whatever_url = start_whatever_server();

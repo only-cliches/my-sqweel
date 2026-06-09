@@ -110,6 +110,18 @@ impl Engine {
         if root_name_full.eq_ignore_ascii_case("information_schema.referential_constraints") {
             return self.select_information_schema_referential_constraints(&select);
         }
+        if root_name_full.eq_ignore_ascii_case("information_schema.character_sets") {
+            return self.select_information_schema_character_sets(&select);
+        }
+        if root_name_full.eq_ignore_ascii_case("information_schema.collations") {
+            return self.select_information_schema_collations(&select);
+        }
+        if root_name_full.eq_ignore_ascii_case("information_schema.views") {
+            return self.select_information_schema_views(&select);
+        }
+        if root_name_full.eq_ignore_ascii_case("information_schema.routines") {
+            return self.select_information_schema_routines(&select);
+        }
 
         let mut rows = if root.joins.is_empty() {
             self.select_single_table(&select, root)?
@@ -704,67 +716,39 @@ impl Engine {
         let mut rows = Vec::new();
         for schema in self.schemas.iter() {
             for (idx, col) in schema.primary_key.iter().enumerate() {
-                let mut row = Map::new();
-                row.insert("table_schema".to_string(), Value::String("app".to_string()));
-                row.insert(
-                    "constraint_schema".to_string(),
-                    Value::String("app".to_string()),
-                );
-                row.insert(
-                    "table_name".to_string(),
-                    Value::String(schema.table.clone()),
-                );
-                row.insert("column_name".to_string(), Value::String(col.clone()));
-                row.insert(
-                    "constraint_name".to_string(),
-                    Value::String("PRIMARY".to_string()),
-                );
-                row.insert(
-                    "ordinal_position".to_string(),
-                    Value::Number(Number::from(idx + 1)),
-                );
-                rows.push(row);
+                rows.push(key_column_usage_row(
+                    &schema.table,
+                    "PRIMARY",
+                    col,
+                    idx + 1,
+                    None,
+                    None,
+                ));
+            }
+            for unique in &schema.unique {
+                let constraint_name = format!("{}_{}_uniq", schema.table, unique.join("_"));
+                for (idx, col) in unique.iter().enumerate() {
+                    rows.push(key_column_usage_row(
+                        &schema.table,
+                        &constraint_name,
+                        col,
+                        idx + 1,
+                        None,
+                        None,
+                    ));
+                }
             }
             for foreign_key in &schema.foreign_keys {
                 for (idx, col) in foreign_key.columns.iter().enumerate() {
-                    let mut row = Map::new();
-                    row.insert("table_schema".to_string(), Value::String("app".to_string()));
-                    row.insert(
-                        "constraint_schema".to_string(),
-                        Value::String("app".to_string()),
-                    );
-                    row.insert(
-                        "table_name".to_string(),
-                        Value::String(schema.table.clone()),
-                    );
-                    row.insert("column_name".to_string(), Value::String(col.clone()));
-                    row.insert(
-                        "constraint_name".to_string(),
-                        Value::String(foreign_key.name.clone()),
-                    );
-                    row.insert(
-                        "ordinal_position".to_string(),
-                        Value::Number(Number::from(idx + 1)),
-                    );
-                    row.insert(
-                        "referenced_table_schema".to_string(),
-                        Value::String("app".to_string()),
-                    );
-                    row.insert(
-                        "referenced_table_name".to_string(),
-                        Value::String(foreign_key.referenced_table.clone()),
-                    );
-                    row.insert(
-                        "referenced_column_name".to_string(),
-                        Value::String(
-                            foreign_key
-                                .referenced_columns
-                                .get(idx)
-                                .cloned()
-                                .unwrap_or_default(),
-                        ),
-                    );
-                    rows.push(row);
+                    let referenced = foreign_key.referenced_columns.get(idx).cloned();
+                    rows.push(key_column_usage_row(
+                        &schema.table,
+                        &foreign_key.name,
+                        col,
+                        idx + 1,
+                        Some(idx + 1),
+                        Some((foreign_key.referenced_table.clone(), referenced)),
+                    ));
                 }
             }
         }
@@ -837,6 +821,94 @@ impl Engine {
             }
         }
         virtual_select_result(select, rows)
+    }
+
+    pub(super) fn select_information_schema_character_sets(
+        &self,
+        select: &Select,
+    ) -> Result<QueryResult> {
+        let rows = [
+            ("utf8mb4", "utf8mb4_general_ci", "UTF-8 Unicode", 4),
+            ("utf8mb3", "utf8mb3_general_ci", "UTF-8 Unicode", 3),
+            ("latin1", "latin1_swedish_ci", "cp1252 West European", 1),
+            ("ascii", "ascii_general_ci", "US ASCII", 1),
+            ("binary", "binary", "Binary pseudo charset", 1),
+        ]
+        .iter()
+        .map(|(name, default_collation, description, maxlen)| {
+            let mut row = Map::new();
+            row.insert(
+                "character_set_name".to_string(),
+                Value::String((*name).to_string()),
+            );
+            row.insert(
+                "default_collate_name".to_string(),
+                Value::String((*default_collation).to_string()),
+            );
+            row.insert(
+                "description".to_string(),
+                Value::String((*description).to_string()),
+            );
+            row.insert("maxlen".to_string(), Value::Number(Number::from(*maxlen)));
+            row
+        })
+        .collect();
+        virtual_select_result(select, rows)
+    }
+
+    pub(super) fn select_information_schema_collations(
+        &self,
+        select: &Select,
+    ) -> Result<QueryResult> {
+        let rows = [
+            ("utf8mb4_general_ci", "utf8mb4", 45, "Yes", "Yes", 1),
+            ("utf8mb4_bin", "utf8mb4", 46, "", "Yes", 1),
+            ("utf8mb3_general_ci", "utf8mb3", 33, "Yes", "Yes", 1),
+            ("latin1_swedish_ci", "latin1", 8, "Yes", "Yes", 1),
+            ("ascii_general_ci", "ascii", 11, "Yes", "Yes", 1),
+            ("binary", "binary", 63, "Yes", "Yes", 1),
+        ]
+        .iter()
+        .map(
+            |(name, charset, id, is_default, is_compiled, sortlen)| {
+                let mut row = Map::new();
+                row.insert(
+                    "collation_name".to_string(),
+                    Value::String((*name).to_string()),
+                );
+                row.insert(
+                    "character_set_name".to_string(),
+                    Value::String((*charset).to_string()),
+                );
+                row.insert("id".to_string(), Value::Number(Number::from(*id)));
+                row.insert(
+                    "is_default".to_string(),
+                    Value::String((*is_default).to_string()),
+                );
+                row.insert(
+                    "is_compiled".to_string(),
+                    Value::String((*is_compiled).to_string()),
+                );
+                row.insert("sortlen".to_string(), Value::Number(Number::from(*sortlen)));
+                row
+            },
+        )
+        .collect();
+        virtual_select_result(select, rows)
+    }
+
+    pub(super) fn select_information_schema_views(
+        &self,
+        select: &Select,
+    ) -> Result<QueryResult> {
+        virtual_select_result(select, Vec::new())
+    }
+
+    pub(super) fn select_information_schema_routines(
+        &self,
+        select: &Select,
+    ) -> Result<QueryResult> {
+        virtual_select_result(select, Vec::new())
     }
 
     pub(super) fn show_tables(&self) -> QueryResult {
@@ -1063,4 +1135,59 @@ impl Engine {
         }
         Ok(QueryResult::default())
     }
+}
+
+fn key_column_usage_row(
+    table: &str,
+    constraint_name: &str,
+    column_name: &str,
+    ordinal_position: usize,
+    position_in_unique_constraint: Option<usize>,
+    referenced: Option<(String, Option<String>)>,
+) -> Map<String, Value> {
+    let mut row = Map::new();
+    row.insert(
+        "constraint_catalog".to_string(),
+        Value::String("def".to_string()),
+    );
+    row.insert(
+        "constraint_schema".to_string(),
+        Value::String("app".to_string()),
+    );
+    row.insert(
+        "constraint_name".to_string(),
+        Value::String(constraint_name.to_string()),
+    );
+    row.insert(
+        "table_catalog".to_string(),
+        Value::String("def".to_string()),
+    );
+    row.insert("table_schema".to_string(), Value::String("app".to_string()));
+    row.insert("table_name".to_string(), Value::String(table.to_string()));
+    row.insert(
+        "column_name".to_string(),
+        Value::String(column_name.to_string()),
+    );
+    row.insert(
+        "ordinal_position".to_string(),
+        Value::Number(Number::from(ordinal_position)),
+    );
+    row.insert(
+        "position_in_unique_constraint".to_string(),
+        position_in_unique_constraint
+            .map(|pos| Value::Number(Number::from(pos)))
+            .unwrap_or(Value::Null),
+    );
+    let (ref_schema, ref_table, ref_column) = match referenced {
+        Some((table, column)) => (
+            Value::String("app".to_string()),
+            Value::String(table),
+            column.map(Value::String).unwrap_or(Value::Null),
+        ),
+        None => (Value::Null, Value::Null, Value::Null),
+    };
+    row.insert("referenced_table_schema".to_string(), ref_schema);
+    row.insert("referenced_table_name".to_string(), ref_table);
+    row.insert("referenced_column_name".to_string(), ref_column);
+    row
 }
