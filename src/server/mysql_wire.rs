@@ -66,6 +66,10 @@ impl WireServer {
     fn spawn_session(&self, stream: std::net::TcpStream) {
         let backend = Backend::new(self.engine.clone());
         std::thread::spawn(move || {
+            if let Err(err) = stream.set_nonblocking(false) {
+                tracing::warn!(error = %err, "failed setting mysql session stream to blocking mode");
+                return;
+            }
             if let Err(err) = MysqlIntermediary::run_on_tcp(backend, stream) {
                 tracing::warn!(error = %err, "mysql session ended with error");
             }

@@ -5,7 +5,7 @@ All notable changes to MySqweel will be documented in this file.
 ## 0.2.0 - Future
 
 - Fixed primary key metadata reporting so `information_schema.key_column_usage` and related introspection stay consistent after `ALTER TABLE` operations.
-
+- Fixed an issue with spawning connection sessions.
 
 ## 0.1.0 - May 31, 2026
 
