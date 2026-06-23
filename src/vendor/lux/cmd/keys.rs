@@ -52,7 +52,12 @@ pub fn cmd_keys(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Instant)
         resp::write_error(out, "ERR wrong number of arguments for 'keys' command");
         return CmdResult::Written;
     }
-    let keys = store.keys(args[1], now);
+    // Hide the internal table-storage namespace from enumeration.
+    let keys: Vec<String> = store
+        .keys(args[1], now)
+        .into_iter()
+        .filter(|k| !k.starts_with("_t:"))
+        .collect();
     resp::write_bulk_array(out, &keys);
     CmdResult::Written
 }
@@ -93,14 +98,14 @@ pub fn cmd_scan(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Instant)
         }
     }
     let (next_cursor, all_keys) = store.scan(cursor, pattern, count, now);
-    let keys: Vec<String> = if let Some(tf) = type_filter {
-        all_keys
-            .into_iter()
-            .filter(|k| store.get_entry_type(k.as_bytes(), now) == Some(tf))
-            .collect()
-    } else {
-        all_keys
-    };
+    // Hide the internal table-storage namespace; apply any TYPE filter too.
+    let keys: Vec<String> = all_keys
+        .into_iter()
+        .filter(|k| !k.starts_with("_t:"))
+        .filter(|k| {
+            type_filter.is_none_or(|tf| store.get_entry_type(k.as_bytes(), now) == Some(tf))
+        })
+        .collect();
     resp::write_array_header(out, 2);
     resp::write_bulk(out, &next_cursor.to_string());
     resp::write_bulk_array(out, &keys);
@@ -354,7 +359,7 @@ pub fn cmd_object(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Instan
         let key = args[2];
         let idx = store.shard_for_key(key);
         let shard = store.lock_read_shard(idx);
-        let ks = arg_str(key);
+        let ks = key;
         match shard.data.get(ks) {
             Some(entry) if !entry.is_expired_at(now) => {
                 let enc = match &entry.value {
@@ -436,7 +441,7 @@ pub fn cmd_memory(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Instan
         let key = args[2];
         let idx = store.shard_for_key(key);
         let shard = store.lock_read_shard(idx);
-        let ks = arg_str(key);
+        let ks = key;
         match shard.data.get(ks) {
             Some(entry) if !entry.is_expired_at(now) => {
                 let size = ks.len()

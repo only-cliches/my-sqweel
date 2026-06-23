@@ -20,6 +20,12 @@ use crate::vendor::lux::{CommandExecutor, CommandSession, LuxError};
 
 const WEBSOCKET_ACCEPT_GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
+enum HttpAuthContext {
+    Anonymous,
+    Operator,
+    User(crate::vendor::lux::auth::AuthPrincipal),
+}
+
 /// Constant-time byte comparison to prevent timing attacks on auth tokens.
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
@@ -176,7 +182,7 @@ async fn handle_request(
         let response = "HTTP/1.1 204 No Content\r\n\
              Access-Control-Allow-Origin: *\r\n\
              Access-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS\r\n\
-             Access-Control-Allow-Headers: Authorization, Content-Type, Prefer\r\n\
+             Access-Control-Allow-Headers: Authorization, Content-Type, Prefer, apikey\r\n\
              Content-Length: 0\r\n\r\n"
             .to_string();
         socket.write_all(response.as_bytes()).await?;
@@ -189,35 +195,76 @@ async fn handle_request(
     };
     let params = parse_query_string(&query_string);
 
-    let password = &store.config().password;
-    if !password.is_empty() {
-        let auth = headers
-            .iter()
-            .find(|(k, _)| k.eq_ignore_ascii_case("authorization"))
-            .map(|(_, v)| v.as_str())
-            .unwrap_or("");
+    if path.starts_with("/auth/v1") {
+        let response = crate::vendor::lux::auth::route_http_response(
+            &method, &path, &body, &params, &headers, store, cache,
+        )
+        .await;
+        return send_auth_response(socket, response).await;
+    }
 
-        let bearer = auth.strip_prefix("Bearer ").unwrap_or("");
-        let query_token = if path == "/live" {
-            get_param(&params, "token").unwrap_or("")
-        } else {
-            ""
-        };
-        if !constant_time_eq(bearer.as_bytes(), password.as_bytes())
-            && !constant_time_eq(query_token.as_bytes(), password.as_bytes())
-        {
+    let password = &store.config().password;
+    let bearer = headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("authorization"))
+        .map(|(_, v)| v.as_str())
+        .and_then(|auth| auth.strip_prefix("Bearer "))
+        .unwrap_or("");
+    let query_token = if path == "/live" {
+        get_param(&params, "token").unwrap_or("")
+    } else {
+        ""
+    };
+    let query_access_token = if path == "/live" {
+        get_param(&params, "access_token")
+            .or_else(|| get_param(&params, "jwt"))
+            .unwrap_or("")
+    } else {
+        ""
+    };
+    let password_ok = !password.is_empty()
+        && (constant_time_eq(bearer.as_bytes(), password.as_bytes())
+            || constant_time_eq(query_token.as_bytes(), password.as_bytes()));
+    let user_token = if !bearer.is_empty() {
+        bearer
+    } else {
+        query_access_token
+    };
+    let auth_context = if password_ok {
+        HttpAuthContext::Operator
+    } else if store.config().auth.enabled && !user_token.is_empty() {
+        match crate::vendor::lux::auth::authenticate_access_token(user_token, store, cache) {
+            Ok(principal) => HttpAuthContext::User(principal),
+            Err(e) => {
+                let body = format!(r#"{{"error":"{}"}}"#, escape_json(&e));
+                return send_json(socket, 401, "Unauthorized", &body).await;
+            }
+        }
+    } else {
+        HttpAuthContext::Anonymous
+    };
+    if !password.is_empty() {
+        if !password_ok && !matches!(auth_context, HttpAuthContext::User(_)) {
             let body = r#"{"error":"unauthorized"}"#;
             return send_json(socket, 401, "Unauthorized", body).await;
         }
+    } else if path == "/live"
+        && store.config().auth.enabled
+        && !matches!(auth_context, HttpAuthContext::User(_))
+    {
+        let body = r#"{"error":"unauthorized"}"#;
+        return send_json(socket, 401, "Unauthorized", body).await;
     }
 
     if method == "GET" && path == "/live" {
         return handle_live_upgrade(
             socket,
             &headers,
+            &params,
             store.clone(),
             broker.clone(),
             cache.clone(),
+            live_auth_principal(&auth_context),
         )
         .await;
     }
@@ -225,26 +272,105 @@ async fn handle_request(
     // Fast path: table GET queries stream JSON directly without building
     // the full response string in memory first.
     let segments: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+
+    // Full-instance restore. The raw request body is a lux.dat dump; read it
+    // straight from the buffer to avoid the lossy String conversion. Operator-
+    // only. On success the process exits so the container restart reloads from
+    // the restored dump via the standard startup path.
+    if method == "POST" && matches!(segments.as_slice(), ["v1", "restore"] | ["restore"]) {
+        let password_set = !store.config().password.is_empty();
+        if password_set && !matches!(auth_context, HttpAuthContext::Operator) {
+            let body = r#"{"error":"restore requires operator credentials"}"#;
+            return send_json(socket, 403, "Forbidden", body).await;
+        }
+        let end = (header_end + content_length).min(data.len());
+        let dump = &data[header_end..end];
+        match crate::vendor::lux::snapshot::restore_to_disk(store, dump) {
+            Ok(()) => {
+                let _ = send_json(socket, 200, "OK", r#"{"restored":true}"#).await;
+                let _ = socket.flush().await;
+                tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+                std::process::exit(0);
+            }
+            Err(e) => {
+                let body = format!(
+                    r#"{{"error":"restore failed: {}"}}"#,
+                    escape_json(&e.to_string())
+                );
+                return send_json(socket, 500, "Internal Server Error", &body).await;
+            }
+        }
+    }
+
     if method == "GET" {
         match segments.as_slice() {
+            ["v1", "snapshot"] | ["snapshot"] => {
+                // Full-instance backup. Streams a consistent dump out over HTTP
+                // so the control plane never needs a shell in the container.
+                // Operator-only when a password is set (it exposes all data).
+                let password_set = !store.config().password.is_empty();
+                if password_set && !matches!(auth_context, HttpAuthContext::Operator) {
+                    let body = r#"{"error":"snapshot requires operator credentials"}"#;
+                    return send_json(socket, 403, "Forbidden", body).await;
+                }
+                return stream_snapshot(socket, store).await;
+            }
             ["v1", "tables", table] => {
+                let filter = match enforce_table_read(store, cache, &auth_context, table) {
+                    Ok(f) => f,
+                    Err((status, status_text, body)) => {
+                        return send_json(socket, status, status_text, &body).await;
+                    }
+                };
+                if let Some(err) = crate::vendor::lux::auth::reserved_table_access_error(table) {
+                    let body = format!(r#"{{"error":"{}"}}"#, escape_json(&err));
+                    return send_json(socket, 403, "Forbidden", &body).await;
+                }
                 let prefer = headers
                     .iter()
                     .find(|(k, _)| k.eq_ignore_ascii_case("prefer"))
                     .map(|(_, v)| v.as_str())
                     .unwrap_or("");
-                return stream_table_query(socket, table, &params, prefer, store, cache, max_rows)
+                // Inject the grant filter (RLS USING) into the query's WHERE.
+                let where_clause = get_param(&params, "where").unwrap_or("");
+                let combined = combine_where(where_clause, filter.as_deref().unwrap_or(""));
+                let scoped = params_with_where(&params, &combined);
+                return stream_table_query(socket, table, &scoped, prefer, store, cache, max_rows)
                     .await;
             }
             ["v1", "tables", table, "count"] => {
+                let filter = match enforce_table_read(store, cache, &auth_context, table) {
+                    Ok(f) => f,
+                    Err((status, status_text, body)) => {
+                        return send_json(socket, status, status_text, &body).await;
+                    }
+                };
+                if let Some(err) = crate::vendor::lux::auth::reserved_table_access_error(table) {
+                    let body = format!(r#"{{"error":"{}"}}"#, escape_json(&err));
+                    return send_json(socket, 403, "Forbidden", &body).await;
+                }
                 let now = std::time::Instant::now();
-                let body = match crate::vendor::lux::tables::table_count(store, cache, table, now) {
+                let scope = filter.as_deref().unwrap_or("");
+                let body = match crate::vendor::lux::tables::table_count_filtered(
+                    store, cache, table, scope, now,
+                ) {
                     Ok(n) => format!(r#"{{"result":{n}}}"#),
                     Err(e) => format!(r#"{{"error":"{}"}}"#, escape_json(&e)),
                 };
                 return send_json(socket, 200, "OK", &body).await;
             }
             ["v1", "tables", table, "schema"] => {
+                // Schema is table-shape metadata, not rows: a read grant of any
+                // scope is sufficient (gate only, no row filter).
+                if let Err((status, status_text, body)) =
+                    enforce_table_read(store, cache, &auth_context, table)
+                {
+                    return send_json(socket, status, status_text, &body).await;
+                }
+                if let Some(err) = crate::vendor::lux::auth::reserved_table_access_error(table) {
+                    let body = format!(r#"{{"error":"{}"}}"#, escape_json(&err));
+                    return send_json(socket, 403, "Forbidden", &body).await;
+                }
                 let now = std::time::Instant::now();
                 let body = match crate::vendor::lux::tables::table_schema(store, cache, table, now)
                 {
@@ -260,13 +386,30 @@ async fn handle_request(
                 return send_json(socket, 200, "OK", &body).await;
             }
             ["v1", "tables", table, id] if *id != "count" && *id != "schema" => {
+                let filter = match enforce_table_read(store, cache, &auth_context, table) {
+                    Ok(f) => f,
+                    Err((status, status_text, body)) => {
+                        return send_json(socket, status, status_text, &body).await;
+                    }
+                };
+                if let Some(err) = crate::vendor::lux::auth::reserved_table_access_error(table) {
+                    let body = format!(r#"{{"error":"{}"}}"#, escape_json(&err));
+                    return send_json(socket, 403, "Forbidden", &body).await;
+                }
                 let now = std::time::Instant::now();
+                let scope = filter.as_deref().unwrap_or("");
                 let body = match id.parse::<i64>() {
                     Ok(id_i64) => {
-                        match crate::vendor::lux::tables::table_get(
-                            store, cache, table, id_i64, now,
+                        match crate::vendor::lux::tables::table_get_filtered(
+                            store, cache, table, id_i64, scope, now,
                         ) {
-                            Ok(row) => row_to_json_object(&row),
+                            // A row that exists but is out of grant scope reads as
+                            // not-found, so we don't leak that it exists.
+                            Ok(Some(row)) => row_to_json_object(
+                                &row,
+                                &render_columns(store, cache, table, Instant::now()),
+                            ),
+                            Ok(None) => r#"{"error":"row not found"}"#.to_string(),
                             Err(e) => format!(r#"{{"error":"{}"}}"#, escape_json(&e)),
                         }
                     }
@@ -284,7 +427,8 @@ async fn handle_request(
         cache,
         script_engine,
     };
-    let (status, status_text, result) = route_request(&method, &path, &body, &params, deps);
+    let (status, status_text, result) =
+        route_request_with_auth(&method, &path, &body, &params, deps, &auth_context);
 
     send_json(socket, status, status_text, &result).await
 }
@@ -292,6 +436,60 @@ async fn handle_request(
 /// Stream a table query response using chunked transfer encoding.
 /// Writes rows directly to the socket as they come out of table_select,
 /// without ever building the full JSON string in memory.
+/// Stream a complete, consistent snapshot to the caller. Triggers the same save
+/// the background timer runs (full dump incl. tiered cold data + WAL truncate),
+/// then streams the resulting `lux.dat`. The blocking save runs off the async
+/// runtime via `spawn_blocking`. Caller enforces operator auth.
+async fn stream_snapshot(
+    socket: &mut tokio::net::TcpStream,
+    store: &Arc<Store>,
+) -> std::io::Result<bool> {
+    let store = store.clone();
+    let path = match tokio::task::spawn_blocking(move || {
+        crate::vendor::lux::snapshot::snapshot_for_backup(&store)
+    })
+    .await
+    {
+        Ok(Ok(p)) => p,
+        Ok(Err(e)) => {
+            let body = format!(
+                r#"{{"error":"snapshot failed: {}"}}"#,
+                escape_json(&e.to_string())
+            );
+            return send_json(socket, 500, "Internal Server Error", &body).await;
+        }
+        Err(e) => {
+            let body = format!(
+                r#"{{"error":"snapshot task panicked: {}"}}"#,
+                escape_json(&e.to_string())
+            );
+            return send_json(socket, 500, "Internal Server Error", &body).await;
+        }
+    };
+
+    let mut file = match tokio::fs::File::open(&path).await {
+        Ok(f) => f,
+        Err(e) => {
+            let body = format!(
+                r#"{{"error":"snapshot open failed: {}"}}"#,
+                escape_json(&e.to_string())
+            );
+            return send_json(socket, 500, "Internal Server Error", &body).await;
+        }
+    };
+    let len = file.metadata().await?.len();
+    let header = format!(
+        "HTTP/1.1 200 OK\r\n\
+         Content-Type: application/octet-stream\r\n\
+         Content-Disposition: attachment; filename=\"lux.dat\"\r\n\
+         Access-Control-Allow-Origin: *\r\n\
+         Content-Length: {len}\r\n\r\n"
+    );
+    socket.write_all(header.as_bytes()).await?;
+    tokio::io::copy(&mut file, socket).await?;
+    Ok(true)
+}
+
 async fn stream_table_query(
     socket: &mut tokio::net::TcpStream,
     table: &str,
@@ -349,6 +547,8 @@ async fn stream_table_query(
             return send_json(socket, 200, "OK", &body).await;
         }
         Ok(crate::vendor::lux::tables::SelectResult::Rows(rows)) => {
+            // Type-aware JSON encoding (JSON/ARRAY raw, VECTOR as array, etc.).
+            let cols = render_columns(store, cache, table, now);
             let returned = rows.len();
             let range_end = if returned == 0 {
                 offset
@@ -423,16 +623,7 @@ async fn stream_table_query(
                         buf.push(',');
                     }
                     first_col = false;
-                    buf.push('"');
-                    push_escaped(&mut buf, k);
-                    buf.push_str(r#"":"#);
-                    if looks_numeric(v) || v == "true" || v == "false" {
-                        buf.push_str(v);
-                    } else {
-                        buf.push('"');
-                        push_escaped(&mut buf, v);
-                        buf.push('"');
-                    }
+                    push_field_value(&mut buf, k, v, &cols);
                 }
                 buf.push('}');
 
@@ -479,6 +670,32 @@ async fn send_json(
         body
     );
     socket.write_all(response.as_bytes()).await?;
+    Ok(true)
+}
+
+async fn send_auth_response(
+    socket: &mut tokio::net::TcpStream,
+    response: crate::vendor::lux::auth::AuthHttpResponse,
+) -> std::io::Result<bool> {
+    let mut head = format!(
+        "HTTP/1.1 {} {}\r\n\
+         Content-Type: {}\r\n\
+         Access-Control-Allow-Origin: *\r\n\
+         Content-Length: {}\r\n",
+        response.status,
+        response.status_text,
+        response.content_type,
+        response.body.len()
+    );
+    for (key, value) in response.headers {
+        head.push_str(&key);
+        head.push_str(": ");
+        head.push_str(&value.replace(['\r', '\n'], ""));
+        head.push_str("\r\n");
+    }
+    head.push_str("\r\n");
+    head.push_str(&response.body);
+    socket.write_all(head.as_bytes()).await?;
     Ok(true)
 }
 
@@ -548,14 +765,271 @@ fn get_param<'a>(params: &'a [(String, String)], key: &str) -> Option<&'a str> {
         .map(|(_, v)| v.as_str())
 }
 
+fn live_auth_principal(auth: &HttpAuthContext) -> Option<crate::vendor::lux::auth::AuthPrincipal> {
+    match auth {
+        HttpAuthContext::User(principal) => Some(principal.clone()),
+        HttpAuthContext::Anonymous | HttpAuthContext::Operator => None,
+    }
+}
+
+/// Enforce a READ grant on a table query. When end-user auth is off, the
+/// operator/service-key model applies and everything is allowed (`Ok(None)`).
+/// A token user with a `read` grant gets `Ok(Some(filter))` — a WHERE fragment
+/// the caller ANDs onto the query so only their permitted rows are returned
+/// (RLS `USING`). No grant -> 403 (deny-by-default).
+fn enforce_table_read(
+    store: &Arc<Store>,
+    cache: &SharedSchemaCache,
+    auth: &HttpAuthContext,
+    table: &str,
+) -> Result<Option<String>, (u16, &'static str, String)> {
+    if !store.config().auth.enabled {
+        return Ok(None);
+    }
+    match auth {
+        HttpAuthContext::Operator => Ok(None),
+        HttpAuthContext::Anonymous => Err((
+            401,
+            "Unauthorized",
+            r#"{"error":"unauthorized"}"#.to_string(),
+        )),
+        HttpAuthContext::User(principal) => {
+            crate::vendor::lux::auth::read_filter(store, cache, principal, table, Instant::now())
+                .map(Some)
+                .map_err(|e| {
+                    (
+                        403,
+                        "Forbidden",
+                        format!(r#"{{"error":"{}"}}"#, escape_json(&e)),
+                    )
+                })
+        }
+    }
+}
+
+/// Enforce a write grant on an INSERT: the row being written must satisfy the
+/// table's write grant (WITH CHECK). Operators bypass; anonymous is rejected;
+/// auth-disabled instances are open.
+fn enforce_table_insert(
+    store: &Arc<Store>,
+    cache: &SharedSchemaCache,
+    auth: &HttpAuthContext,
+    table: &str,
+    row: &serde_json::Map<String, serde_json::Value>,
+) -> Result<(), (u16, &'static str, String)> {
+    if !store.config().auth.enabled {
+        return Ok(());
+    }
+    match auth {
+        HttpAuthContext::Operator => Ok(()),
+        HttpAuthContext::Anonymous => Err((
+            401,
+            "Unauthorized",
+            r#"{"error":"unauthorized"}"#.to_string(),
+        )),
+        HttpAuthContext::User(principal) => {
+            let lookup = |col: &str| {
+                row.get(col).map(|v| match v {
+                    serde_json::Value::String(s) => s.clone(),
+                    serde_json::Value::Null => String::new(),
+                    other => other.to_string(),
+                })
+            };
+            crate::vendor::lux::auth::check_write_row(
+                store,
+                cache,
+                principal,
+                table,
+                lookup,
+                Instant::now(),
+            )
+            .map_err(|e| {
+                (
+                    403,
+                    "Forbidden",
+                    format!(r#"{{"error":"{}"}}"#, escape_json(&e)),
+                )
+            })
+        }
+    }
+}
+
+/// Enforce a write grant on an UPDATE/DELETE. Returns `Ok(Some(filter))` for a
+/// token user with a write grant — a WHERE fragment the caller ANDs onto the
+/// statement so only in-scope rows are touched (RLS `USING`). Operator / auth-
+/// off -> `Ok(None)`; no grant -> 403.
+fn enforce_table_write_where(
+    store: &Arc<Store>,
+    cache: &SharedSchemaCache,
+    auth: &HttpAuthContext,
+    table: &str,
+) -> Result<Option<String>, (u16, &'static str, String)> {
+    if !store.config().auth.enabled {
+        return Ok(None);
+    }
+    match auth {
+        HttpAuthContext::Operator => Ok(None),
+        HttpAuthContext::Anonymous => Err((
+            401,
+            "Unauthorized",
+            r#"{"error":"unauthorized"}"#.to_string(),
+        )),
+        HttpAuthContext::User(principal) => {
+            crate::vendor::lux::auth::write_filter(store, cache, principal, table, Instant::now())
+                .map(Some)
+                .map_err(|e| {
+                    (
+                        403,
+                        "Forbidden",
+                        format!(r#"{{"error":"{}"}}"#, escape_json(&e)),
+                    )
+                })
+        }
+    }
+}
+
+/// WITH CHECK on UPDATE: reject a SET whose values would move a row out of the
+/// caller's write grant (e.g. changing `owner` away from the caller). Operator /
+/// auth-off bypass; anonymous is already blocked by `enforce_table_write_where`.
+fn enforce_table_update_check(
+    store: &Arc<Store>,
+    cache: &SharedSchemaCache,
+    auth: &HttpAuthContext,
+    table: &str,
+    set_fields: &[(&str, &str)],
+) -> Result<(), (u16, &'static str, String)> {
+    if !store.config().auth.enabled {
+        return Ok(());
+    }
+    match auth {
+        HttpAuthContext::Operator => Ok(()),
+        HttpAuthContext::Anonymous => Err((
+            401,
+            "Unauthorized",
+            r#"{"error":"unauthorized"}"#.to_string(),
+        )),
+        HttpAuthContext::User(principal) => crate::vendor::lux::auth::check_update_set(
+            store,
+            cache,
+            principal,
+            table,
+            set_fields,
+            Instant::now(),
+        )
+        .map_err(|e| {
+            (
+                403,
+                "Forbidden",
+                format!(r#"{{"error":"{}"}}"#, escape_json(&e)),
+            )
+        }),
+    }
+}
+
+/// AND a grant filter onto a user-supplied WHERE clause. Either side may be
+/// empty. Both are flat AND-chains of `col op value`, so plain concatenation is
+/// safe (no OR-precedence concerns).
+fn combine_where(user: &str, grant: &str) -> String {
+    match (user.trim().is_empty(), grant.trim().is_empty()) {
+        (true, _) => grant.trim().to_string(),
+        (_, true) => user.trim().to_string(),
+        _ => format!("{} AND {}", user.trim(), grant.trim()),
+    }
+}
+
+/// Clone `params` with the `where` value replaced by `where_value` (used to
+/// inject a grant filter before a read handler parses the query).
+fn params_with_where(params: &[(String, String)], where_value: &str) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = params
+        .iter()
+        .filter(|(k, _)| k != "where")
+        .cloned()
+        .collect();
+    if !where_value.is_empty() {
+        out.push(("where".to_string(), where_value.to_string()));
+    }
+    out
+}
+
+/// Gate an operator-only route. Under the grant model, token principals have no
+/// access to privileged routes (raw KV, exec, catalog, etc.); only an operator
+/// credential passes. Auth-disabled instances are open.
+fn require_operator(
+    store: &Arc<Store>,
+    auth: &HttpAuthContext,
+) -> Result<(), (u16, &'static str, String)> {
+    if !store.config().auth.enabled {
+        return Ok(());
+    }
+    match auth {
+        HttpAuthContext::Operator => Ok(()),
+        HttpAuthContext::Anonymous => Err((
+            401,
+            "Unauthorized",
+            r#"{"error":"unauthorized"}"#.to_string(),
+        )),
+        HttpAuthContext::User(_) => Err((
+            403,
+            "Forbidden",
+            r#"{"error":"operator credentials required"}"#.to_string(),
+        )),
+    }
+}
+
+/// Gate a non-table live subscription (raw key, channel, pubsub, vector). These
+/// are operator-only under the grant model: a token principal may only subscribe
+/// to table queries (gated by its read grant). `None` is the operator / no-auth
+/// path and passes.
+fn require_live_operator(
+    store: &Arc<Store>,
+    principal: Option<&crate::vendor::lux::auth::AuthPrincipal>,
+) -> Result<(), Value> {
+    if !store.config().auth.enabled {
+        return Ok(());
+    }
+    match principal {
+        None => Ok(()),
+        Some(_) => Err(live_error(
+            "FORBIDDEN",
+            "token principals may only subscribe to table queries",
+        )),
+    }
+}
+
 #[derive(Clone)]
 struct LiveTableSpec {
     table: String,
     select: String,
-    where_conditions: Vec<(String, String, Value)>,
+    where_conditions: LiveTableWhereConditions,
+    joins: Vec<LiveTableJoin>,
+    principal: Option<crate::vendor::lux::auth::AuthPrincipal>,
+    auth_dependencies: Vec<String>,
+    near: Option<LiveTableNearSpec>,
     order_by: Option<(String, String)>,
     limit: Option<usize>,
     offset: Option<usize>,
+    /// Explicit deny used by internal callers/tests. Dynamic grant membership
+    /// is reevaluated by `fetch_live_table_rows` for every snapshot and diff.
+    deny_all: bool,
+}
+
+type LiveTableWhereConditions = Vec<(String, String, Value)>;
+
+#[derive(Clone)]
+struct LiveTableJoin {
+    join_type: crate::vendor::lux::tables::JoinType,
+    table: String,
+    alias: String,
+    left_col: String,
+    right_col: String,
+}
+
+#[derive(Clone)]
+struct LiveTableNearSpec {
+    field: String,
+    vector: Vec<f32>,
+    k: usize,
+    threshold: Option<f32>,
 }
 
 #[derive(Clone)]
@@ -569,6 +1043,10 @@ struct LiveVectorNearSpec {
 struct LiveQueryState {
     query: Value,
     rows: HashMap<String, Value>,
+    /// Column that identifies a row for diffing. Resolved from the table's
+    /// primary key so `.live()` works for any PK name, not just `id`. `None`
+    /// for non-table queries (vector/raw), which fall back to `id`/`key`.
+    pk_field: Option<String>,
 }
 
 enum LiveSubscription {
@@ -585,7 +1063,7 @@ enum LiveSubscription {
         receiver: broadcast::Receiver<crate::vendor::lux::pubsub::Message>,
     },
     Table {
-        spec: LiveTableSpec,
+        spec: Box<LiveTableSpec>,
         state: LiveQueryState,
         receivers: Vec<broadcast::Receiver<crate::vendor::lux::pubsub::Message>>,
     },
@@ -629,9 +1107,11 @@ fn live_broker_event_from_message(
 async fn handle_live_upgrade(
     socket: &mut tokio::net::TcpStream,
     headers: &[(String, String)],
+    _params: &[(String, String)],
     store: Arc<Store>,
     broker: Broker,
     cache: SharedSchemaCache,
+    principal: Option<crate::vendor::lux::auth::AuthPrincipal>,
 ) -> std::io::Result<bool> {
     let Some(key) = header_value(headers, "sec-websocket-key") else {
         return send_json(
@@ -653,7 +1133,7 @@ async fn handle_live_upgrade(
     socket.write_all(response.as_bytes()).await?;
 
     let ws = WebSocketStream::from_raw_socket(socket, Role::Server, None).await;
-    run_live_socket(ws, store, broker, cache).await?;
+    run_live_socket(ws, store, broker, cache, principal).await?;
     Ok(false)
 }
 
@@ -662,6 +1142,7 @@ async fn run_live_socket<S>(
     store: Arc<Store>,
     broker: Broker,
     cache: SharedSchemaCache,
+    principal: Option<crate::vendor::lux::auth::AuthPrincipal>,
 ) -> std::io::Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -686,6 +1167,7 @@ where
                             &broker,
                             &store,
                             &cache,
+                            principal.as_ref(),
                             &text,
                         ).await?;
                     }
@@ -711,6 +1193,7 @@ async fn handle_live_client_message<S>(
     broker: &Broker,
     store: &Arc<Store>,
     cache: &SharedSchemaCache,
+    principal: Option<&crate::vendor::lux::auth::AuthPrincipal>,
     text: &str,
 ) -> std::io::Result<()>
 where
@@ -756,7 +1239,7 @@ where
         return Ok(());
     };
 
-    match build_live_subscription(spec, broker, store, cache).await {
+    match build_live_subscription(spec, broker, store, cache, principal).await {
         Ok((subscription, initial_events)) => {
             subscriptions.insert(id.clone(), subscription);
             send_live_json(ws, json!({"type":"live.subscribed","id":id})).await?;
@@ -777,11 +1260,13 @@ async fn build_live_subscription(
     broker: &Broker,
     store: &Arc<Store>,
     cache: &SharedSchemaCache,
+    principal: Option<&crate::vendor::lux::auth::AuthPrincipal>,
 ) -> Result<(LiveSubscription, Vec<Value>), Value> {
     if let Some(pattern) = spec
         .as_str()
         .or_else(|| spec.get("key").and_then(Value::as_str))
     {
+        require_live_operator(store, principal)?;
         return Ok((
             LiveSubscription::Key {
                 pattern: pattern.to_string(),
@@ -794,6 +1279,7 @@ async fn build_live_subscription(
     let kind = spec.get("kind").and_then(Value::as_str).unwrap_or("");
     if kind == "key" {
         let pattern = required_str(spec, "pattern")?;
+        require_live_operator(store, principal)?;
         return Ok((
             LiveSubscription::Key {
                 pattern: pattern.to_string(),
@@ -804,6 +1290,7 @@ async fn build_live_subscription(
     }
     if kind == "channel" || spec.get("channel").is_some() {
         let channel = required_str(spec, "channel")?;
+        require_live_operator(store, principal)?;
         return Ok((
             LiveSubscription::Channel {
                 channel: channel.to_string(),
@@ -823,6 +1310,7 @@ async fn build_live_subscription(
                     "pubsubPattern subscription requires pattern",
                 )
             })?;
+        require_live_operator(store, principal)?;
         return Ok((
             LiveSubscription::PubSubPattern {
                 pattern: pattern.to_string(),
@@ -832,20 +1320,60 @@ async fn build_live_subscription(
         ));
     }
     if kind == "table" || spec.get("table").is_some() {
-        let table_spec = parse_live_table_spec(spec)?;
-        let receivers = vec![
-            broker.ksubscribe(&table_spec.table),
-            broker.ksubscribe(&format!("_t:{}:row:*", table_spec.table)),
-        ];
+        let mut table_spec = parse_live_table_spec(spec)?;
+        if let Some(err) = crate::vendor::lux::auth::reserved_table_access_error(&table_spec.table)
+        {
+            return Err(live_error("FORBIDDEN", &err));
+        }
+        // Enforce the READ grant as RLS USING: resolve the grant filter and AND
+        // its conditions into the subscription's own WHERE. Because both the
+        // initial snapshot and every streamed diff re-run `fetch_live_table_rows`
+        // off this spec, the caller only ever sees rows the grant covers. No
+        // read grant -> deny (operator / no-auth bypasses).
+        if store.config().auth.enabled {
+            if let Some(p) = principal {
+                // Validate access at subscribe time, but do not freeze the
+                // resolved conditions here: membership subqueries can change
+                // while the socket remains open.
+                crate::vendor::lux::auth::read_filter_conds(
+                    store,
+                    cache,
+                    p,
+                    &table_spec.table,
+                    Instant::now(),
+                )
+                .map_err(|e| live_error("FORBIDDEN", &e))?;
+                table_spec.auth_dependencies = crate::vendor::lux::auth::read_filter_dependencies(
+                    store,
+                    cache,
+                    p,
+                    &table_spec.table,
+                    Instant::now(),
+                )
+                .map_err(|e| live_error("FORBIDDEN", &e))?;
+                table_spec.principal = Some(p.clone());
+            }
+        }
+        let receivers = live_table_dependencies(&table_spec)
+            .into_iter()
+            .flat_map(|table| {
+                [
+                    broker.ksubscribe(&table),
+                    broker.ksubscribe(&format!("_t:{table}:row:*")),
+                ]
+            })
+            .collect();
         let rows = fetch_live_table_rows(store, cache, &table_spec)?;
+        let pk_field = live_table_pk_field(store, cache, &table_spec.table);
         let query = json!({"type":"table","table":table_spec.table});
         let state = LiveQueryState {
             query: query.clone(),
-            rows: index_live_rows(rows.clone()),
+            rows: index_live_rows(rows.clone(), pk_field.as_deref()),
+            pk_field,
         };
         return Ok((
             LiveSubscription::Table {
-                spec: table_spec,
+                spec: Box::new(table_spec),
                 state,
                 receivers,
             },
@@ -854,12 +1382,14 @@ async fn build_live_subscription(
     }
     if kind == "vector.near" {
         let vector_spec = parse_live_vector_near_spec(spec)?;
+        require_live_operator(store, principal)?;
         let rows = fetch_live_vector_rows(store, &vector_spec);
         let query =
             json!({"type":"vector.near","k":vector_spec.k,"threshold":vector_spec.threshold});
         let state = LiveQueryState {
             query: query.clone(),
-            rows: index_live_rows(rows.clone()),
+            rows: index_live_rows(rows.clone(), None),
+            pk_field: None,
         };
         return Ok((
             LiveSubscription::VectorNear {
@@ -973,13 +1503,13 @@ where
                 LiveSubscription::Table { spec, state, .. },
                 LiveBrokerEvent::Key { key, operation, .. },
             ) => {
-                if key == &spec.table || key.starts_with(&format!("_t:{}:row:", spec.table)) {
+                if let Some(changed_table) = live_table_for_key(spec, key) {
                     let next = fetch_live_table_rows(store, cache, spec).unwrap_or_default();
                     outgoing.extend(diff_live_query(
                         id,
                         state,
                         next,
-                        Some(json!({"kind":table_cause_kind(operation),"table":spec.table,"operation":operation,"raw":{"pattern":format!("_t:{}:row:*", spec.table),"key":key,"operation":operation}})),
+                        Some(json!({"kind":table_cause_kind(operation),"table":changed_table,"operation":operation,"raw":{"pattern":format!("_t:{changed_table}:row:*"),"key":key,"operation":operation}})),
                     ));
                 }
             }
@@ -1018,8 +1548,10 @@ fn stop_live_subscription(
         LiveSubscription::Channel { channel, .. } => broker.unsubscribe_channel(&channel),
         LiveSubscription::PubSubPattern { pattern, .. } => broker.punsubscribe_pattern(&pattern),
         LiveSubscription::Table { spec, .. } => {
-            broker.kunsub(&spec.table);
-            broker.kunsub(&format!("_t:{}:row:*", spec.table));
+            for table in live_table_dependencies(&spec) {
+                broker.kunsub(&table);
+                broker.kunsub(&format!("_t:{table}:row:*"));
+            }
         }
         LiveSubscription::VectorNear { .. } => broker.kunsub("*"),
     }
@@ -1032,7 +1564,7 @@ fn diff_live_query(
     cause: Option<Value>,
 ) -> Vec<(String, Value)> {
     let previous = std::mem::take(&mut state.rows);
-    let next = index_live_rows(next_rows);
+    let next = index_live_rows(next_rows, state.pk_field.as_deref());
     let mut events = Vec::new();
 
     for (pk, row) in &next {
@@ -1089,6 +1621,31 @@ fn parse_live_table_spec(spec: &Value) -> Result<LiveTableSpec, Value> {
             }
         }
     }
+    let mut joins = Vec::new();
+    if let Some(join_values) = spec.get("joins") {
+        let join_values = join_values
+            .as_array()
+            .ok_or_else(|| live_error("INVALID_SPEC", "table joins must be an array"))?;
+        for join in join_values {
+            let join_type = match join.get("type").and_then(Value::as_str).unwrap_or("inner") {
+                "inner" => crate::vendor::lux::tables::JoinType::Inner,
+                "left" => crate::vendor::lux::tables::JoinType::Left,
+                _ => {
+                    return Err(live_error(
+                        "INVALID_SPEC",
+                        "table join type must be 'inner' or 'left'",
+                    ));
+                }
+            };
+            joins.push(LiveTableJoin {
+                join_type,
+                table: required_str(join, "table")?.to_string(),
+                alias: required_str(join, "alias")?.to_string(),
+                left_col: required_str(join, "onLeft")?.to_string(),
+                right_col: required_str(join, "onRight")?.to_string(),
+            });
+        }
+    }
     let order_by = spec.get("orderBy").and_then(|value| {
         Some((
             value.get("field")?.as_str()?.to_string(),
@@ -1099,6 +1656,10 @@ fn parse_live_table_spec(spec: &Value) -> Result<LiveTableSpec, Value> {
                 .to_string(),
         ))
     });
+    let near = match spec.get("near") {
+        Some(value) => Some(parse_live_table_near_spec(value)?),
+        None => None,
+    };
     let limit = spec
         .get("limit")
         .and_then(Value::as_u64)
@@ -1111,9 +1672,37 @@ fn parse_live_table_spec(spec: &Value) -> Result<LiveTableSpec, Value> {
         table,
         select,
         where_conditions,
+        joins,
+        principal: None,
+        auth_dependencies: Vec::new(),
+        near,
         order_by,
         limit,
         offset,
+        deny_all: false,
+    })
+}
+
+fn parse_live_table_near_spec(value: &Value) -> Result<LiveTableNearSpec, Value> {
+    let field = required_str(value, "field")?.to_string();
+    let vector = value
+        .get("vector")
+        .and_then(Value::as_array)
+        .ok_or_else(|| live_error("INVALID_SPEC", "table near requires vector"))?
+        .iter()
+        .map(|value| value.as_f64().map(|n| n as f32))
+        .collect::<Option<Vec<f32>>>()
+        .ok_or_else(|| live_error("INVALID_SPEC", "table near vector must contain numbers"))?;
+    let k = value.get("k").and_then(Value::as_u64).unwrap_or(10) as usize;
+    let threshold = value
+        .get("threshold")
+        .and_then(Value::as_f64)
+        .map(|n| n as f32);
+    Ok(LiveTableNearSpec {
+        field,
+        vector,
+        k,
+        threshold,
     })
 }
 
@@ -1122,16 +1711,83 @@ fn fetch_live_table_rows(
     cache: &SharedSchemaCache,
     spec: &LiveTableSpec,
 ) -> Result<Vec<Value>, Value> {
+    // An empty positive membership set: the subscriber sees no rows at all.
+    if spec.deny_all {
+        return Ok(Vec::new());
+    }
+    let Some(where_conditions) = live_table_where_conditions(store, cache, spec)? else {
+        return Ok(Vec::new());
+    };
     let mut tokens = vec![spec.select.clone(), "FROM".to_string(), spec.table.clone()];
-    if !spec.where_conditions.is_empty() {
+    for join in &spec.joins {
+        if join.join_type == crate::vendor::lux::tables::JoinType::Left {
+            tokens.push("LEFT".to_string());
+        }
+        tokens.extend([
+            "JOIN".to_string(),
+            join.table.clone(),
+            join.alias.clone(),
+            "ON".to_string(),
+            join.left_col.clone(),
+            "=".to_string(),
+            if join.right_col.contains('.') {
+                join.right_col.clone()
+            } else {
+                format!("{}.{}", join.alias, join.right_col)
+            },
+        ]);
+    }
+    if !where_conditions.is_empty() {
         tokens.push("WHERE".to_string());
-        for (index, (field, op, value)) in spec.where_conditions.iter().enumerate() {
+        for (index, (field, op, value)) in where_conditions.iter().enumerate() {
             if index > 0 {
                 tokens.push("AND".to_string());
             }
             tokens.push(field.clone());
-            tokens.push(op.clone());
-            tokens.push(live_value_to_token(value));
+            let op_upper = op.to_ascii_uppercase();
+            if op_upper == "IN" || op_upper == "NOT IN" {
+                if op_upper == "NOT IN" {
+                    tokens.push("NOT".to_string());
+                }
+                tokens.push("IN".to_string());
+                tokens.push("(".to_string());
+                match value.as_array() {
+                    Some(arr) => {
+                        for v in arr {
+                            tokens.push(live_value_to_token(v));
+                        }
+                    }
+                    None => tokens.push(live_value_to_token(value)),
+                }
+                tokens.push(")".to_string());
+            } else if op_upper == "IS VALID" || op_upper == "IS NOT VALID" {
+                tokens.push("IS".to_string());
+                if op_upper == "IS NOT VALID" {
+                    tokens.push("NOT".to_string());
+                }
+                tokens.push("VALID".to_string());
+            } else {
+                tokens.push(op.clone());
+                tokens.push(live_value_to_token(value));
+            }
+        }
+    }
+    if let Some(near) = &spec.near {
+        tokens.push("NEAR".to_string());
+        tokens.push(near.field.clone());
+        tokens.push(format!(
+            "[{}]",
+            near.vector
+                .iter()
+                .map(|value| value.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+        ));
+        tokens.push("K".to_string());
+        tokens.push(near.k.to_string());
+        if let Some(threshold) = near.threshold {
+            tokens.push("THRESHOLD".to_string());
+            tokens.push(threshold.to_string());
         }
     }
     if let Some((field, dir)) = &spec.order_by {
@@ -1151,6 +1807,9 @@ fn fetch_live_table_rows(
     let refs: Vec<&str> = tokens.iter().map(String::as_str).collect();
     let plan = crate::vendor::lux::tables::parse_select(&refs)
         .map_err(|e| live_error("TSELECT_ERROR", &e))?;
+    if let Some(err) = crate::vendor::lux::auth::reserved_plan_access_error(&plan) {
+        return Err(live_error("FORBIDDEN", &err));
+    }
     match crate::vendor::lux::tables::table_select(store, cache, &plan, Instant::now())
         .map_err(|e| live_error("TSELECT_ERROR", &e))?
     {
@@ -1161,6 +1820,87 @@ fn fetch_live_table_rows(
             Ok(vec![table_row_to_value(row)])
         }
     }
+}
+
+fn live_table_where_conditions(
+    store: &Arc<Store>,
+    cache: &SharedSchemaCache,
+    spec: &LiveTableSpec,
+) -> Result<Option<LiveTableWhereConditions>, Value> {
+    let mut conditions = spec.where_conditions.clone();
+    let Some(principal) = &spec.principal else {
+        return Ok(Some(conditions));
+    };
+    let grant_conds = crate::vendor::lux::auth::read_filter_conds(
+        store,
+        cache,
+        principal,
+        &spec.table,
+        Instant::now(),
+    )
+    .map_err(|e| live_error("FORBIDDEN", &e))?;
+    for condition in grant_conds {
+        match condition {
+            crate::vendor::lux::grants::EnforcedCondition::Cmp(rc) => {
+                conditions.push((rc.column, rc.op, Value::String(rc.value)));
+            }
+            crate::vendor::lux::grants::EnforcedCondition::InSet {
+                column,
+                negated,
+                values,
+            } => {
+                if values.is_empty() {
+                    if !negated {
+                        return Ok(None);
+                    }
+                } else {
+                    conditions.push((
+                        column,
+                        if negated { "NOT IN" } else { "IN" }.to_string(),
+                        Value::Array(values.into_iter().map(Value::String).collect()),
+                    ));
+                }
+            }
+        }
+    }
+    Ok(Some(conditions))
+}
+
+fn live_table_dependencies(spec: &LiveTableSpec) -> Vec<String> {
+    let mut tables = vec![spec.table.clone()];
+    for table in spec
+        .joins
+        .iter()
+        .map(|join| &join.table)
+        .chain(spec.auth_dependencies.iter())
+    {
+        if !tables.iter().any(|existing| existing == table) {
+            tables.push(table.clone());
+        }
+    }
+    tables
+}
+
+fn live_table_for_key<'a>(spec: &'a LiveTableSpec, key: &str) -> Option<&'a str> {
+    live_table_dependencies(spec)
+        .into_iter()
+        .find(|table| key == table || key.starts_with(&format!("_t:{table}:row:")))
+        .and_then(|matched| {
+            if matched == spec.table {
+                Some(spec.table.as_str())
+            } else {
+                spec.joins
+                    .iter()
+                    .find(|join| join.table == matched)
+                    .map(|join| join.table.as_str())
+                    .or_else(|| {
+                        spec.auth_dependencies
+                            .iter()
+                            .find(|table| **table == matched)
+                            .map(String::as_str)
+                    })
+            }
+        })
 }
 
 fn parse_live_vector_near_spec(spec: &Value) -> Result<LiveVectorNearSpec, Value> {
@@ -1322,19 +2062,40 @@ fn live_value_to_token(value: &Value) -> String {
     }
 }
 
-fn index_live_rows(rows: Vec<Value>) -> HashMap<String, Value> {
+/// Resolve a table's primary key column so live diffs can identify rows. Falls
+/// back to `None` (the `id`/`key` default) when the schema can't be loaded.
+fn live_table_pk_field(
+    store: &Arc<Store>,
+    cache: &SharedSchemaCache,
+    table: &str,
+) -> Option<String> {
+    crate::vendor::lux::tables::load_schema(store, cache, table, Instant::now())
+        .ok()?
+        .into_iter()
+        .find(|f| f.primary_key)
+        .map(|f| f.name)
+}
+
+fn index_live_rows(rows: Vec<Value>, pk_field: Option<&str>) -> HashMap<String, Value> {
     let mut indexed = HashMap::new();
     for row in rows {
-        let Some(id) = row.get("id").or_else(|| row.get("key")).and_then(|value| {
-            value
-                .as_str()
-                .map(String::from)
-                .or_else(|| value.as_i64().map(|n| n.to_string()))
-                .or_else(|| value.as_u64().map(|n| n.to_string()))
-        }) else {
+        // Key by the table's actual PK column when known, else fall back to
+        // `id`/`key` (vector and raw-key subscriptions).
+        let key = pk_field
+            .and_then(|f| row.get(f))
+            .or_else(|| row.get("id"))
+            .or_else(|| row.get("key"))
+            .and_then(|value| {
+                value
+                    .as_str()
+                    .map(String::from)
+                    .or_else(|| value.as_i64().map(|n| n.to_string()))
+                    .or_else(|| value.as_u64().map(|n| n.to_string()))
+            });
+        let Some(key) = key else {
             continue;
         };
-        indexed.insert(id, row);
+        indexed.insert(key, row);
     }
     indexed
 }
@@ -1356,6 +2117,7 @@ fn changed_json_fields(previous: &Value, next: &Value) -> Vec<String> {
         .collect()
 }
 
+#[derive(Debug)]
 struct HttpTableQueryParams {
     has_where: bool,
     where_tokens: Vec<String>,
@@ -1363,12 +2125,187 @@ struct HttpTableQueryParams {
 }
 
 fn parse_http_where_tokens(where_clause: &str) -> Result<Vec<String>, String> {
-    let tokens: Vec<String> = where_clause
+    let tokens = tokenize_where(where_clause)?;
+    if tokens.is_empty() {
+        return Err("invalid where parameter".to_string());
+    }
+    Ok(tokens)
+}
+
+/// Split a WHERE string into tokens. Whitespace separates tokens, a single-quoted
+/// span stays ONE token so values may contain spaces/keywords/newlines (e.g.
+/// `name = 'New York'`), and a glued comparison operator (`=`, `!=`, `>`, `<`,
+/// `>=`, `<=`) is split out so the natural `col=value` form works the same as the
+/// spaced `col = value` form. Inside quotes, `\'` is a literal quote and `\\` a
+/// literal backslash. (A value that must contain a raw operator char should be
+/// single-quoted, the same rule as values with spaces.)
+fn tokenize_where(s: &str) -> Result<Vec<String>, String> {
+    let mut tokens = Vec::new();
+    let mut cur = String::new();
+    let mut building = false;
+    let mut in_quote = false;
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if in_quote {
+            match c {
+                '\\' => match chars.next() {
+                    Some('\'') => cur.push('\''),
+                    Some('\\') => cur.push('\\'),
+                    Some(other) => {
+                        cur.push('\\');
+                        cur.push(other);
+                    }
+                    None => return Err("unterminated escape in where value".to_string()),
+                },
+                '\'' => in_quote = false,
+                _ => cur.push(c),
+            }
+        } else if c == '\'' && !building {
+            // A quote only opens at a token boundary, so a mid-token apostrophe
+            // stays literal (`O'Brien` is one token). This keeps unquoted values
+            // that worked before working; only whitespace values need quoting.
+            in_quote = true;
+            building = true;
+        } else if matches!(c, '=' | '<' | '>') || (c == '!' && chars.peek() == Some(&'=')) {
+            // A comparison operator at any position ends the current token (the
+            // field/value) and becomes its own token, so `col=value`,
+            // `col>=value`, `col != value` all tokenize uniformly.
+            if building {
+                tokens.push(std::mem::take(&mut cur));
+                building = false;
+            }
+            let mut op = String::from(c);
+            if c == '!' {
+                chars.next(); // consume '=' (peeked above)
+                op.push('=');
+            } else if (c == '<' || c == '>') && chars.peek() == Some(&'=') {
+                chars.next();
+                op.push('=');
+            }
+            tokens.push(op);
+        } else if c.is_whitespace() {
+            if building {
+                tokens.push(std::mem::take(&mut cur));
+                building = false;
+            }
+        } else {
+            cur.push(c);
+            building = true;
+        }
+    }
+    if in_quote {
+        return Err("unterminated quote in where value".to_string());
+    }
+    if building {
+        tokens.push(cur);
+    }
+    Ok(tokens)
+}
+
+fn parse_http_join_tokens(join_clause: &str) -> Result<Vec<String>, String> {
+    if join_clause.split_whitespace().count() > 1 {
+        return Ok(join_clause
+            .split_whitespace()
+            .map(ToString::to_string)
+            .collect());
+    }
+
+    let parts: Vec<&str> = join_clause.split(':').collect();
+    let (table, alias, join_type, on_part) = match parts.as_slice() {
+        [table, alias, on] => (*table, *alias, None, *on),
+        [table, alias, kind, on] if kind.eq_ignore_ascii_case("left") => {
+            (*table, *alias, Some("LEFT"), *on)
+        }
+        _ => {
+            return Err(
+                "invalid join parameter, expected table:alias:on(left=right) or table:alias:left:on(left=right)"
+                    .to_string(),
+            )
+        }
+    };
+
+    if !on_part.starts_with("on(") || !on_part.ends_with(')') {
+        return Err("invalid join parameter, expected on(left=right)".to_string());
+    }
+    let inner = &on_part[3..on_part.len() - 1];
+    let (left, right) = inner
+        .split_once('=')
+        .ok_or_else(|| "invalid join parameter, expected on(left=right)".to_string())?;
+    if table.is_empty() || alias.is_empty() || left.is_empty() || right.is_empty() {
+        return Err(
+            "invalid join parameter, table, alias, and join columns are required".to_string(),
+        );
+    }
+
+    let right_col = if right.contains('.') {
+        right.to_string()
+    } else {
+        format!("{}.{}", alias, right)
+    };
+    let mut tokens = Vec::new();
+    if join_type == Some("LEFT") {
+        tokens.push("LEFT".to_string());
+    }
+    tokens.extend([
+        "JOIN".to_string(),
+        table.to_string(),
+        alias.to_string(),
+        "ON".to_string(),
+        left.to_string(),
+        "=".to_string(),
+        right_col,
+    ]);
+    Ok(tokens)
+}
+
+fn parse_http_near_tokens(params: &[(String, String)]) -> Result<Vec<String>, String> {
+    if let Some(raw) = get_param(params, "near") {
+        let tokens: Vec<String> = raw.split_whitespace().map(ToString::to_string).collect();
+        if tokens.len() < 4 {
+            return Err("invalid near parameter, expected '<field> <vector> K <n>'".to_string());
+        }
+        return Ok(tokens);
+    }
+
+    let Some(field) = get_param(params, "near_field") else {
+        return Ok(Vec::new());
+    };
+    let vector = get_param(params, "near_vector")
+        .ok_or_else(|| "near_vector is required when near_field is provided".to_string())?;
+    let k = get_param(params, "near_k").unwrap_or("10");
+    let mut tokens = vec![
+        field.to_string(),
+        vector.to_string(),
+        "K".to_string(),
+        k.to_string(),
+    ];
+    if let Some(threshold) = get_param(params, "near_threshold") {
+        tokens.push("THRESHOLD".to_string());
+        tokens.push(threshold.to_string());
+    }
+    Ok(tokens)
+}
+
+fn parse_http_group_tokens(group_clause: &str) -> Result<Vec<String>, String> {
+    let tokens: Vec<String> = group_clause
+        .split([',', ' '])
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .map(ToString::to_string)
+        .collect();
+    if tokens.is_empty() {
+        return Err("invalid group parameter".to_string());
+    }
+    Ok(tokens)
+}
+
+fn parse_http_having_tokens(having_clause: &str) -> Result<Vec<String>, String> {
+    let tokens: Vec<String> = having_clause
         .split_whitespace()
         .map(ToString::to_string)
         .collect();
     if tokens.is_empty() {
-        return Err("invalid where parameter".to_string());
+        return Err("invalid having parameter".to_string());
     }
     Ok(tokens)
 }
@@ -1415,14 +2352,28 @@ fn parse_http_table_query(
         (None, None) => None,
     };
 
-    let mut tokens: Vec<String> = vec!["*".to_string(), "FROM".to_string(), table.to_string()];
+    let select = get_param(params, "select").unwrap_or("*");
+    let mut tokens: Vec<String> = vec![select.to_string(), "FROM".to_string(), table.to_string()];
     if !where_tokens.is_empty() {
         tokens.push("WHERE".to_string());
         tokens.extend(where_tokens.iter().cloned());
     }
-    if let Some(join) = get_param(params, "join") {
-        tokens.push("JOIN".to_string());
-        tokens.push(join.to_string());
+    for (_, join) in params.iter().filter(|(k, _)| k == "join") {
+        tokens.extend(parse_http_join_tokens(join)?);
+    }
+    if let Some(group) = get_param(params, "group") {
+        tokens.push("GROUP".to_string());
+        tokens.push("BY".to_string());
+        tokens.extend(parse_http_group_tokens(group)?);
+    }
+    if let Some(having) = get_param(params, "having") {
+        tokens.push("HAVING".to_string());
+        tokens.extend(parse_http_having_tokens(having)?);
+    }
+    let near_tokens = parse_http_near_tokens(params)?;
+    if !near_tokens.is_empty() {
+        tokens.push("NEAR".to_string());
+        tokens.extend(near_tokens);
     }
     if !order_tokens.is_empty() {
         tokens.push("ORDER".to_string());
@@ -1440,6 +2391,9 @@ fn parse_http_table_query(
 
     let refs: Vec<&str> = tokens.iter().map(|s| s.as_str()).collect();
     let plan = crate::vendor::lux::tables::parse_select(&refs)?;
+    if let Some(err) = crate::vendor::lux::auth::reserved_plan_access_error(&plan) {
+        return Err(err);
+    }
     Ok((
         HttpTableQueryParams {
             has_where,
@@ -1457,12 +2411,13 @@ struct RouteDeps<'a> {
     script_engine: &'a Arc<lua::ScriptEngine>,
 }
 
-fn route_request(
+fn route_request_with_auth(
     method: &str,
     path: &str,
     body: &str,
     params: &[(String, String)],
     deps: RouteDeps<'_>,
+    auth: &HttpAuthContext,
 ) -> (u16, &'static str, String) {
     let RouteDeps {
         store,
@@ -1486,6 +2441,12 @@ fn route_request(
     } else {
         &segments[..]
     };
+
+    if route_requires_operator(method, base) {
+        if let Err(response) = require_operator(store, auth) {
+            return response;
+        }
+    }
 
     match (method, base) {
         // ── exec (escape hatch) ──
@@ -1593,8 +2554,27 @@ fn route_request(
         // ── Table routes (PostgREST-style) ──
         ("GET", ["tables"]) => ok(exec_json(store, broker, cache, script_engine, &["TLIST"])),
         ("POST", ["tables"]) => route_table_create(body, store, broker, cache, script_engine),
-        ("GET", ["tables", table]) => route_table_query(table, params, store, broker, cache),
+        ("GET", ["tables", table]) => {
+            let filter = match enforce_table_read(store, cache, auth, table) {
+                Ok(f) => f,
+                Err(resp) => return resp,
+            };
+            let where_clause = get_param(params, "where").unwrap_or("");
+            let combined = combine_where(where_clause, filter.as_deref().unwrap_or(""));
+            let scoped = params_with_where(params, &combined);
+            route_table_query(table, &scoped, store, broker, cache)
+        }
         ("GET", ["tables", table, "schema"]) => {
+            if let Err(resp) = enforce_table_read(store, cache, auth, table) {
+                return resp;
+            }
+            if let Some(err) = crate::vendor::lux::auth::reserved_table_access_error(table) {
+                return (
+                    403,
+                    "Forbidden",
+                    format!(r#"{{"error":"{}"}}"#, escape_json(&err)),
+                );
+            }
             let now = std::time::Instant::now();
             match crate::vendor::lux::tables::table_schema(store, cache, table, now) {
                 Ok(fields) => {
@@ -1612,8 +2592,21 @@ fn route_request(
             }
         }
         ("GET", ["tables", table, "count"]) => {
+            let filter = match enforce_table_read(store, cache, auth, table) {
+                Ok(f) => f,
+                Err(resp) => return resp,
+            };
+            if let Some(err) = crate::vendor::lux::auth::reserved_table_access_error(table) {
+                return (
+                    403,
+                    "Forbidden",
+                    format!(r#"{{"error":"{}"}}"#, escape_json(&err)),
+                );
+            }
             let now = std::time::Instant::now();
-            match crate::vendor::lux::tables::table_count(store, cache, table, now) {
+            let scope = filter.as_deref().unwrap_or("");
+            match crate::vendor::lux::tables::table_count_filtered(store, cache, table, scope, now)
+            {
                 Ok(n) => ok(format!(r#"{{"result":{n}}}"#)),
                 Err(e) => (
                     400,
@@ -1622,14 +2615,23 @@ fn route_request(
                 ),
             }
         }
-        ("POST", ["tables", table]) => route_table_insert(table, body, store, broker, cache),
-        // Bulk update via PATCH (requires where parameter for safety)
-        ("PATCH", ["tables", table]) => {
-            route_table_update(table, params, body, store, broker, cache, script_engine)
+        ("POST", ["tables", table]) => {
+            route_table_insert(table, params, body, store, broker, cache, auth)
         }
+        // Bulk update via PATCH (requires where parameter for safety)
+        ("PATCH", ["tables", table]) => route_table_update(
+            table,
+            params,
+            body,
+            store,
+            broker,
+            cache,
+            script_engine,
+            auth,
+        ),
         // Bulk delete via DELETE with where parameter (TDROP is separate)
         ("DELETE", ["tables", table]) => {
-            route_table_delete(table, params, store, broker, cache, script_engine)
+            route_table_delete(table, params, store, broker, cache, script_engine, auth)
         }
 
         // ── Time Series routes ──
@@ -1762,6 +2764,39 @@ fn route_request(
     }
 }
 
+/// Routes that are operator-only under the grant model. Token (end-user)
+/// principals reach the database *only* through per-table data routes, which are
+/// gated inline by their read/write grants; everything privileged below (raw KV,
+/// exec, time-series, vectors, table catalog) is off-limits to them. Per-table
+/// data routes (`/tables/{table}` GET/POST/PATCH/DELETE) deliberately return
+/// `false` here so the generic gate defers to the inline grant check.
+fn route_requires_operator(method: &str, base: &[&str]) -> bool {
+    matches!(
+        (method, base),
+        ("POST", ["exec"])
+            | ("GET", ["dbsize"])
+            | ("GET", ["keys"])
+            | ("GET", ["keys", _])
+            | ("GET", ["kv", ..])
+            | ("GET", ["get", _])
+            | ("GET", ["hgetall", _])
+            | ("PUT", ["kv", _])
+            | ("DELETE", ["kv", _])
+            | ("POST", ["kv", ..])
+            | ("POST", ["set", _])
+            | ("POST", ["del", _])
+            | ("POST", ["incr", _])
+            | ("POST", ["decr", _])
+            | ("GET", ["tables"])
+            | ("POST", ["tables"])
+            | ("GET", ["ts", ..])
+            | ("POST", ["ts", _])
+            | ("GET", ["vectors", ..])
+            | ("POST", ["vectors", ..])
+            | ("DELETE", ["vectors", _])
+    )
+}
+
 fn ok(result: String) -> (u16, &'static str, String) {
     (200, "OK", result)
 }
@@ -1863,11 +2898,20 @@ fn route_table_query(
     _broker: &Broker,
     cache: &SharedSchemaCache,
 ) -> (u16, &'static str, String) {
+    if let Some(err) = crate::vendor::lux::auth::reserved_table_access_error(table) {
+        return (
+            403,
+            "Forbidden",
+            format!(r#"{{"error":"{}"}}"#, escape_json(&err)),
+        );
+    }
+
     let now = std::time::Instant::now();
 
+    let cols = render_columns(store, cache, table, now);
     match parse_http_table_query(params, table, None) {
         Ok((_, plan)) => match crate::vendor::lux::tables::table_select(store, cache, &plan, now) {
-            Ok(result) => ok(select_result_to_json(result)),
+            Ok(result) => ok(select_result_to_json(result, &cols)),
             Err(e) => (
                 400,
                 "Bad Request",
@@ -1882,12 +2926,41 @@ fn route_table_query(
     }
 }
 
+/// Flatten a JSON object into the (column, value) string pairs TINSERT expects.
+fn json_obj_to_pairs(obj: &serde_json::Map<String, serde_json::Value>) -> Vec<(String, String)> {
+    obj.iter()
+        .map(|(k, v)| {
+            let val = match v {
+                serde_json::Value::String(s) => s.clone(),
+                serde_json::Value::Number(n) => n.to_string(),
+                serde_json::Value::Bool(b) => b.to_string(),
+                serde_json::Value::Null => String::new(),
+                _ => v.to_string(),
+            };
+            (k.clone(), val)
+        })
+        .collect()
+}
+
+/// Parse `?ttl=<secs>` into a row-TTL op. Absent => `None` (inherit existing);
+/// `0` => clear; positive => set/refresh to now + secs.
+fn parse_ttl_param(params: &[(String, String)]) -> Option<crate::vendor::lux::tables::TtlOp> {
+    let secs = get_param(params, "ttl")?.parse::<u64>().ok()?;
+    Some(if secs == 0 {
+        crate::vendor::lux::tables::TtlOp::Clear
+    } else {
+        crate::vendor::lux::tables::TtlOp::Set(secs)
+    })
+}
+
 fn route_table_insert(
     table: &str,
+    params: &[(String, String)],
     body: &str,
     store: &Arc<Store>,
-    _broker: &Broker,
+    broker: &Broker,
     cache: &SharedSchemaCache,
+    auth: &HttpAuthContext,
 ) -> (u16, &'static str, String) {
     let parsed: serde_json::Value = match serde_json::from_str(body) {
         Ok(v) => v,
@@ -1899,41 +2972,98 @@ fn route_table_insert(
             );
         }
     };
+    let now = Instant::now();
+    // `?on_conflict=col` (or `?upsert=true`) turns this into an upsert keyed on
+    // that column (default: the primary key).
+    let conflict = get_param(params, "on_conflict");
+    let is_upsert = conflict.is_some() || get_param(params, "upsert") == Some("true");
+    let ttl = parse_ttl_param(params);
 
-    let obj = match parsed.as_object() {
-        Some(o) => o,
-        None => {
-            return (
-                400,
-                "Bad Request",
-                r#"{"error":"expected json object"}"#.to_string(),
-            );
+    let write_one = |obj: &serde_json::Map<String, serde_json::Value>| {
+        let pairs = json_obj_to_pairs(obj);
+        let fv: Vec<(&str, &str)> = pairs
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        if is_upsert {
+            crate::vendor::lux::tables::table_upsert_returning_ttl(
+                store, cache, table, &fv, conflict, ttl, now,
+            )
+        } else {
+            crate::vendor::lux::tables::table_insert_returning_ttl(
+                store, cache, table, &fv, ttl, now,
+            )
         }
     };
 
-    // Build field-value pairs directly - avoids RESP encode/decode round-trip through exec_simple
-    let val_strings: Vec<(String, String)> = obj
-        .iter()
-        .map(|(k, v)| {
-            let val = match v {
-                serde_json::Value::String(s) => s.clone(),
-                serde_json::Value::Number(n) => n.to_string(),
-                serde_json::Value::Bool(b) => b.to_string(),
-                serde_json::Value::Null => String::new(),
-                _ => v.to_string(),
+    // Array body: bulk insert/upsert, returning the affected rows as an array.
+    if let Some(arr) = parsed.as_array() {
+        let mut rows_in: Vec<Vec<(String, String)>> = Vec::with_capacity(arr.len());
+        for item in arr {
+            let Some(obj) = item.as_object() else {
+                return (
+                    400,
+                    "Bad Request",
+                    r#"{"error":"expected json object in array"}"#.to_string(),
+                );
             };
-            (k.clone(), val)
-        })
-        .collect();
+            if let Err(resp) = enforce_table_insert(store, cache, auth, table, obj) {
+                return resp;
+            }
+            rows_in.push(json_obj_to_pairs(obj));
+        }
+        let result = if is_upsert {
+            rows_in
+                .iter()
+                .map(|pairs| {
+                    let fv: Vec<(&str, &str)> = pairs
+                        .iter()
+                        .map(|(k, v)| (k.as_str(), v.as_str()))
+                        .collect();
+                    crate::vendor::lux::tables::table_upsert_returning_ttl(
+                        store, cache, table, &fv, conflict, ttl, now,
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()
+        } else {
+            crate::vendor::lux::tables::table_insert_many_returning_ttl(
+                store, cache, table, &rows_in, ttl, now,
+            )
+        };
+        return match result {
+            Ok(rows) => {
+                broker.enqueue_key_event(table.as_bytes(), b"TINSERT");
+                ok(rows_to_json_array(
+                    &rows,
+                    &render_columns(store, cache, table, Instant::now()),
+                ))
+            }
+            Err(e) => (
+                400,
+                "Bad Request",
+                format!(r#"{{"error":"{}"}}"#, escape_json(&e)),
+            ),
+        };
+    }
 
-    let field_values: Vec<(&str, &str)> = val_strings
-        .iter()
-        .map(|(k, v)| (k.as_str(), v.as_str()))
-        .collect();
-
-    let now = Instant::now();
-    match crate::vendor::lux::tables::table_insert(store, cache, table, &field_values, now) {
-        Ok(id) => ok(format!(r#"{{"result":{}}}"#, id)),
+    let Some(obj) = parsed.as_object() else {
+        return (
+            400,
+            "Bad Request",
+            r#"{"error":"expected json object"}"#.to_string(),
+        );
+    };
+    if let Err(resp) = enforce_table_insert(store, cache, auth, table, obj) {
+        return resp;
+    }
+    match write_one(obj) {
+        Ok(row) => {
+            broker.enqueue_key_event(table.as_bytes(), b"TINSERT");
+            ok(row_to_json_object(
+                &row,
+                &render_columns(store, cache, table, Instant::now()),
+            ))
+        }
         Err(e) => (
             400,
             "Bad Request",
@@ -1942,6 +3072,7 @@ fn route_table_insert(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn route_table_update(
     table: &str,
     params: &[(String, String)],
@@ -1949,7 +3080,8 @@ fn route_table_update(
     store: &Arc<Store>,
     broker: &Broker,
     cache: &SharedSchemaCache,
-    script_engine: &Arc<lua::ScriptEngine>,
+    _script_engine: &Arc<lua::ScriptEngine>,
+    auth: &HttpAuthContext,
 ) -> (u16, &'static str, String) {
     // Require where parameter for safety (prevents accidental full table updates)
     let where_clause = match get_param(params, "where") {
@@ -1963,6 +3095,14 @@ fn route_table_update(
         }
     };
 
+    let filter = match enforce_table_write_where(store, cache, auth, table) {
+        Ok(f) => f,
+        Err((status, status_text, body)) => return (status, status_text, body),
+    };
+    // RLS USING: AND the grant filter onto the caller's WHERE so an UPDATE only
+    // touches rows the grant covers (narrowing, never widening).
+    let effective_where = combine_where(where_clause, filter.as_deref().unwrap_or(""));
+
     let parsed: serde_json::Value = match serde_json::from_str(body) {
         Ok(v) => v,
         Err(_) => {
@@ -1985,19 +3125,33 @@ fn route_table_update(
         }
     };
 
-    // Build TUPDATE command: TUPDATE <table> SET <col> <val> ... WHERE <conditions>
-    let mut args: Vec<String> = vec!["TUPDATE".to_string(), table.to_string(), "SET".to_string()];
-    for (k, v) in obj {
-        args.push(k.clone());
-        match v {
-            serde_json::Value::String(s) => args.push(s.clone()),
-            serde_json::Value::Number(n) => args.push(n.to_string()),
-            serde_json::Value::Bool(b) => args.push(b.to_string()),
-            _ => args.push(v.to_string()),
-        }
+    let val_strings: Vec<(String, String)> = obj
+        .iter()
+        .map(|(k, v)| {
+            let val = match v {
+                serde_json::Value::String(s) => s.clone(),
+                serde_json::Value::Number(n) => n.to_string(),
+                serde_json::Value::Bool(b) => b.to_string(),
+                serde_json::Value::Null => String::new(),
+                _ => v.to_string(),
+            };
+            (k.clone(), val)
+        })
+        .collect();
+    let field_values: Vec<(&str, &str)> = val_strings
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+
+    // WITH CHECK: a token user may only set values that keep the row inside its
+    // write grant (USING above already restricts which rows can be touched).
+    if let Err((status, status_text, body)) =
+        enforce_table_update_check(store, cache, auth, table, &field_values)
+    {
+        return (status, status_text, body);
     }
-    args.push("WHERE".to_string());
-    let where_tokens = match parse_http_where_tokens(where_clause) {
+
+    let where_tokens = match parse_http_where_tokens(&effective_where) {
         Ok(tokens) => tokens,
         Err(e) => {
             return (
@@ -2007,10 +3161,32 @@ fn route_table_update(
             );
         }
     };
-    args.extend(where_tokens);
+    let where_args: Vec<&str> = where_tokens.iter().map(|s| s.as_str()).collect();
 
-    let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    ok(exec_json(store, broker, cache, script_engine, &refs))
+    let now = Instant::now();
+    let ttl = parse_ttl_param(params);
+    match crate::vendor::lux::tables::table_update_where_returning_ttl(
+        store,
+        cache,
+        table,
+        &field_values,
+        &where_args,
+        ttl,
+        now,
+    ) {
+        Ok(rows) => {
+            broker.enqueue_key_event(table.as_bytes(), b"TUPDATE");
+            ok(rows_to_json_array(
+                &rows,
+                &render_columns(store, cache, table, Instant::now()),
+            ))
+        }
+        Err(e) => (
+            400,
+            "Bad Request",
+            format!(r#"{{"error":"{}"}}"#, escape_json(&e)),
+        ),
+    }
 }
 
 fn route_table_delete(
@@ -2020,10 +3196,15 @@ fn route_table_delete(
     broker: &Broker,
     cache: &SharedSchemaCache,
     script_engine: &Arc<lua::ScriptEngine>,
+    auth: &HttpAuthContext,
 ) -> (u16, &'static str, String) {
-    // Check for drop=true parameter to distinguish from delete
+    // Check for drop=true parameter to distinguish from delete. Dropping a table
+    // is a schema operation, not row access: operator-only.
     if let Some(val) = get_param(params, "drop") {
         if val == "true" {
+            if let Err((status, status_text, body)) = require_operator(store, auth) {
+                return (status, status_text, body);
+            }
             return ok(exec_json(
                 store,
                 broker,
@@ -2046,10 +3227,15 @@ fn route_table_delete(
             ),
         };
 
-    // Build TDELETE command: TDELETE FROM <table> WHERE <conditions>
-    let mut args: Vec<String> = vec!["TDELETE".to_string(), "FROM".to_string(), table.to_string()];
-    args.push("WHERE".to_string());
-    let where_tokens = match parse_http_where_tokens(where_clause) {
+    let filter = match enforce_table_write_where(store, cache, auth, table) {
+        Ok(f) => f,
+        Err((status, status_text, body)) => return (status, status_text, body),
+    };
+    // RLS USING: AND the grant filter onto the caller's WHERE so a DELETE only
+    // removes rows the grant covers (narrowing, never widening).
+    let effective_where = combine_where(where_clause, filter.as_deref().unwrap_or(""));
+
+    let where_tokens = match parse_http_where_tokens(&effective_where) {
         Ok(tokens) => tokens,
         Err(e) => {
             return (
@@ -2059,10 +3245,29 @@ fn route_table_delete(
             );
         }
     };
-    args.extend(where_tokens);
+    let where_args: Vec<&str> = where_tokens.iter().map(|s| s.as_str()).collect();
 
-    let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    ok(exec_json(store, broker, cache, script_engine, &refs))
+    let now = Instant::now();
+    match crate::vendor::lux::tables::table_delete_where_returning(
+        store,
+        cache,
+        table,
+        &where_args,
+        now,
+    ) {
+        Ok(rows) => {
+            broker.enqueue_key_event(table.as_bytes(), b"TDELETE");
+            ok(rows_to_json_array(
+                &rows,
+                &render_columns(store, cache, table, Instant::now()),
+            ))
+        }
+        Err(e) => (
+            400,
+            "Bad Request",
+            format!(r#"{{"error":"{}"}}"#, escape_json(&e)),
+        ),
+    }
 }
 
 // ── Time Series handlers ──
@@ -2293,8 +3498,76 @@ fn handle_exec(
 // Direct JSON serialization - bypasses RESP entirely
 // ---------------------------------------------------------------------------
 
-/// Serialize a SelectResult straight to JSON without touching RESP.
-fn select_result_to_json(result: crate::vendor::lux::tables::SelectResult) -> String {
+/// Columns whose stored string needs non-default JSON encoding on output:
+/// JSON/ARRAY values are already canonical JSON text (emit raw), and VECTOR
+/// values are stored comma-joined (`1,2,3`) but must read back as a JSON array
+/// (`[1,2,3]`) to match the `number[]` type the SDK generates.
+#[derive(Default)]
+struct RenderCols {
+    json: std::collections::HashSet<String>,
+    vector: std::collections::HashSet<String>,
+}
+
+fn render_columns(
+    store: &Store,
+    cache: &SharedSchemaCache,
+    table: &str,
+    now: std::time::Instant,
+) -> RenderCols {
+    let mut cols = RenderCols::default();
+    if let Ok(fields) = crate::vendor::lux::tables::load_schema(store, cache, table, now) {
+        for f in fields {
+            match f.field_type {
+                crate::vendor::lux::tables::FieldType::Json
+                | crate::vendor::lux::tables::FieldType::Array => {
+                    cols.json.insert(f.name);
+                }
+                crate::vendor::lux::tables::FieldType::Vector(_) => {
+                    cols.vector.insert(f.name);
+                }
+                _ => {}
+            }
+        }
+    }
+    cols
+}
+
+/// Append `"key":value` to a JSON object with type-correct encoding: VECTOR as a
+/// numeric array, JSON/ARRAY raw, numbers/bools bare, everything else a quoted
+/// string. The single source of truth for table-row JSON across the read,
+/// streaming, and write-RETURNING paths.
+fn push_field_value(out: &mut String, key: &str, v: &str, cols: &RenderCols) {
+    out.push('"');
+    push_escaped(out, key);
+    out.push_str(r#"":"#);
+    if cols.vector.contains(key) {
+        // Stored as comma-joined finite floats -> a bracket makes a JSON array.
+        if v.is_empty() {
+            out.push_str("null");
+        } else {
+            out.push('[');
+            out.push_str(v);
+            out.push(']');
+        }
+    } else if cols.json.contains(key) {
+        if v.is_empty() {
+            out.push_str("null");
+        } else {
+            out.push_str(v);
+        }
+    } else if looks_numeric(v) || v == "true" || v == "false" {
+        out.push_str(v);
+    } else {
+        out.push('"');
+        push_escaped(out, v);
+        out.push('"');
+    }
+}
+
+fn select_result_to_json(
+    result: crate::vendor::lux::tables::SelectResult,
+    cols: &RenderCols,
+) -> String {
     match result {
         crate::vendor::lux::tables::SelectResult::Rows(rows) => {
             // Estimate ~80 bytes per field, 4 fields avg per row - better than 64 flat
@@ -2314,17 +3587,7 @@ fn select_result_to_json(result: crate::vendor::lux::tables::SelectResult) -> St
                         out.push(',');
                     }
                     first_col = false;
-                    out.push('"');
-                    push_escaped(&mut out, k);
-                    out.push_str(r#"":"#);
-                    // Try to emit numbers unquoted, everything else quoted
-                    if looks_numeric(v) || v == "true" || v == "false" {
-                        out.push_str(v);
-                    } else {
-                        out.push('"');
-                        push_escaped(&mut out, v);
-                        out.push('"');
-                    }
+                    push_field_value(&mut out, k, v, cols);
                 }
                 out.push('}');
             }
@@ -2358,27 +3621,39 @@ fn select_result_to_json(result: crate::vendor::lux::tables::SelectResult) -> St
 }
 
 /// Serialize a single row (from table_get) as a JSON object.
-fn row_to_json_object(row: &[(String, String)]) -> String {
-    let mut out = String::with_capacity(row.len() * 32);
-    out.push_str(r#"{"result":{"#);
+/// Append a single row as a bare JSON object `{...}` (no `result` wrapper).
+fn push_row_object(out: &mut String, row: &[(String, String)], cols: &RenderCols) {
+    out.push('{');
     let mut first = true;
     for (k, v) in row {
         if !first {
             out.push(',');
         }
         first = false;
-        out.push('"');
-        push_escaped(&mut out, k);
-        out.push_str(r#"":"#);
-        if looks_numeric(v) || v == "true" || v == "false" {
-            out.push_str(v);
-        } else {
-            out.push('"');
-            push_escaped(&mut out, v);
-            out.push('"');
-        }
+        push_field_value(out, k, v, cols);
     }
-    out.push_str("}}");
+    out.push('}');
+}
+
+fn row_to_json_object(row: &[(String, String)], cols: &RenderCols) -> String {
+    let mut out = String::with_capacity(row.len() * 32 + 12);
+    out.push_str(r#"{"result":"#);
+    push_row_object(&mut out, row, cols);
+    out.push('}');
+    out
+}
+
+/// `{"result":[{...},{...}]}` for the rows affected by an insert/update/delete.
+fn rows_to_json_array(rows: &[Vec<(String, String)>], cols: &RenderCols) -> String {
+    let mut out = String::with_capacity(rows.len() * 64 + 12);
+    out.push_str(r#"{"result":["#);
+    for (i, row) in rows.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        push_row_object(&mut out, row, cols);
+    }
+    out.push_str("]}");
     out
 }
 
@@ -2617,4 +3892,979 @@ fn escape_json(s: &str) -> String {
         .replace('\n', "\\n")
         .replace('\r', "\\r")
         .replace('\t', "\\t")
+}
+
+#[cfg(any())]
+mod tests {
+    use super::*;
+    use crate::vendor::lux::tables::JoinType;
+
+    #[test]
+    fn json_columns_emit_raw_str_columns_quoted() {
+        let rows = vec![vec![
+            ("id".to_string(), "1".to_string()),
+            ("payload".to_string(), r#"{"a":1}"#.to_string()),
+            ("tags".to_string(), "[1,2]".to_string()),
+            // A STR column whose value happens to look like JSON must stay quoted.
+            ("note".to_string(), r#"{"x":"y"}"#.to_string()),
+        ]];
+        let mut cols = RenderCols::default();
+        cols.json.insert("payload".to_string());
+        cols.json.insert("tags".to_string());
+        let out =
+            select_result_to_json(crate::vendor::lux::tables::SelectResult::Rows(rows), &cols);
+        assert!(out.contains(r#""payload":{"a":1}"#), "json raw: {out}");
+        assert!(out.contains(r#""tags":[1,2]"#), "array raw: {out}");
+        assert!(
+            out.contains(r#""note":"{\"x\":\"y\"}""#),
+            "str quoted: {out}"
+        );
+    }
+
+    // The insert/update RETURNING echo must render JSON/ARRAY columns the same
+    // way SELECT does -- raw objects/arrays, not quoted strings -- so a row reads
+    // back identically no matter which operation returned it.
+    #[test]
+    fn json_array_columns_same_shape_in_returning_path() {
+        let mut cols = RenderCols::default();
+        cols.json.insert("payload".to_string());
+        cols.json.insert("tags".to_string());
+        let rows = vec![vec![
+            ("id".to_string(), "1".to_string()),
+            ("payload".to_string(), r#"{"a":1}"#.to_string()),
+            ("tags".to_string(), "[1,2]".to_string()),
+        ]];
+        // RETURNING-array path (insert/update/delete returning).
+        let arr = rows_to_json_array(&rows, &cols);
+        assert!(
+            arr.contains(r#""payload":{"a":1}"#),
+            "returning json raw: {arr}"
+        );
+        assert!(
+            arr.contains(r#""tags":[1,2]"#),
+            "returning array raw: {arr}"
+        );
+        // Single-row RETURNING path (insert one / get by pk).
+        let one = row_to_json_object(&rows[0], &cols);
+        assert!(
+            one.contains(r#""payload":{"a":1}"#),
+            "single-row json raw: {one}"
+        );
+    }
+
+    // A VECTOR column is stored comma-joined but must read back as a JSON array
+    // (the SDK types it `number[]`), via both the SELECT and RETURNING renderers.
+    #[test]
+    fn vector_columns_render_as_json_array() {
+        let mut cols = RenderCols::default();
+        cols.vector.insert("embedding".to_string());
+
+        let rows = vec![vec![
+            ("id".to_string(), "1".to_string()),
+            ("embedding".to_string(), "0.1,0.2,0.3".to_string()),
+            ("empty_vec".to_string(), String::new()),
+        ]];
+        cols.vector.insert("empty_vec".to_string());
+        let out = select_result_to_json(
+            crate::vendor::lux::tables::SelectResult::Rows(rows.clone()),
+            &cols,
+        );
+        assert!(
+            out.contains(r#""embedding":[0.1,0.2,0.3]"#),
+            "select: {out}"
+        );
+        assert!(
+            out.contains(r#""empty_vec":null"#),
+            "empty vector -> null: {out}"
+        );
+
+        // Same shape through the insert/update RETURNING path.
+        let out = rows_to_json_array(&rows, &cols);
+        assert!(
+            out.contains(r#""embedding":[0.1,0.2,0.3]"#),
+            "returning: {out}"
+        );
+    }
+
+    #[test]
+    fn per_table_data_routes_are_not_operator_only() {
+        // Token principals reach the DB only through these; they must defer to
+        // the inline grant check, never the operator gate.
+        for (m, base) in [
+            ("GET", vec!["tables", "messages"]),
+            ("GET", vec!["tables", "messages", "count"]),
+            ("GET", vec!["tables", "messages", "schema"]),
+            ("GET", vec!["tables", "messages", "42"]),
+            ("POST", vec!["tables", "messages"]),
+            ("PATCH", vec!["tables", "messages"]),
+            ("DELETE", vec!["tables", "messages"]),
+        ] {
+            assert!(
+                !route_requires_operator(m, &base),
+                "{m} /{} should be grant-gated, not operator-only",
+                base.join("/")
+            );
+        }
+    }
+
+    #[test]
+    fn privileged_routes_are_operator_only() {
+        // A bug here hands token users raw KV / exec / catalog. Lock it down.
+        for (m, base) in [
+            ("POST", vec!["exec"]),
+            ("GET", vec!["dbsize"]),
+            ("GET", vec!["keys"]),
+            ("GET", vec!["kv", "secret"]),
+            ("PUT", vec!["kv", "secret"]),
+            ("DELETE", vec!["kv", "secret"]),
+            ("POST", vec!["set", "secret"]),
+            ("GET", vec!["tables"]),
+            ("POST", vec!["tables"]),
+            ("GET", vec!["ts", "metric"]),
+            ("POST", vec!["ts", "metric"]),
+            ("GET", vec!["vectors", "idx"]),
+            ("POST", vec!["vectors", "idx"]),
+            ("DELETE", vec!["vectors", "idx"]),
+        ] {
+            assert!(
+                route_requires_operator(m, &base),
+                "{m} /{} must be operator-only",
+                base.join("/")
+            );
+        }
+    }
+
+    #[test]
+    fn parse_http_table_query_supports_structured_left_join() {
+        let params = vec![
+            (
+                "join".to_string(),
+                "users:u:left:on(user_id=id)".to_string(),
+            ),
+            ("limit".to_string(), "25".to_string()),
+        ];
+
+        let (_, plan) = parse_http_table_query(&params, "orders", None).unwrap();
+
+        assert_eq!(plan.joins.len(), 1);
+        assert_eq!(plan.joins[0].join_type, JoinType::Left);
+        assert_eq!(plan.joins[0].table, "users");
+        assert_eq!(plan.joins[0].alias, "u");
+        assert_eq!(plan.joins[0].left_col, "user_id");
+        assert_eq!(plan.joins[0].right_col, "u.id");
+        assert_eq!(plan.limit, Some(25));
+    }
+
+    #[test]
+    fn parse_http_table_query_rejects_reserved_base_table() {
+        let err = parse_http_table_query(&[], "auth.users", None).unwrap_err();
+        assert!(
+            err.contains("Lux Auth"),
+            "expected auth rejection, got: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_http_table_query_rejects_join_onto_auth_tables() {
+        // A join onto a Lux Auth managed table must be refused so a caller can't
+        // pull auth.users columns (e.g. encrypted_password) through the join.
+        let params = vec![(
+            "join".to_string(),
+            "auth.users:u:on(user_id=id)".to_string(),
+        )];
+        let err = parse_http_table_query(&params, "orders", None).unwrap_err();
+        assert!(
+            err.contains("Lux Auth"),
+            "expected auth rejection, got: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_http_table_query_supports_select_and_near_params() {
+        let params = vec![
+            ("select".to_string(), "id,body,_similarity".to_string()),
+            ("near_field".to_string(), "embedding".to_string()),
+            ("near_vector".to_string(), "[1,0]".to_string()),
+            ("near_k".to_string(), "5".to_string()),
+            ("near_threshold".to_string(), "0.8".to_string()),
+        ];
+
+        let (_, plan) = parse_http_table_query(&params, "messages", None).unwrap();
+
+        assert_eq!(plan.projections.len(), 3);
+        let near = plan.near.unwrap();
+        assert_eq!(near.field, "embedding");
+        assert_eq!(near.vector, vec![1.0, 0.0]);
+        assert_eq!(near.k, 5);
+        assert_eq!(near.threshold, Some(0.8));
+    }
+
+    #[test]
+    fn parse_http_table_query_supports_group_having_and_inner_join() {
+        let params = vec![
+            (
+                "select".to_string(),
+                "team_id,COUNT(*) AS count".to_string(),
+            ),
+            ("join".to_string(), "teams:t:on(team_id=id)".to_string()),
+            ("group".to_string(), "team_id".to_string()),
+            ("having".to_string(), "count > 1".to_string()),
+        ];
+
+        let (_, plan) = parse_http_table_query(&params, "members", None).unwrap();
+
+        assert_eq!(plan.joins.len(), 1);
+        assert_eq!(plan.group_by, vec!["team_id"]);
+        assert_eq!(plan.having.len(), 1);
+        assert_eq!(plan.having[0].field, "count");
+    }
+
+    // ── WHERE tokenizer (quoted values) ──
+
+    #[test]
+    fn tokenize_where_keeps_quoted_spans_whole() {
+        assert_eq!(tokenize_where("a = 1").unwrap(), vec!["a", "=", "1"]);
+        // value with a space stays one token
+        assert_eq!(
+            tokenize_where("name = 'New York'").unwrap(),
+            vec!["name", "=", "New York"]
+        );
+        // quoted value containing a SQL keyword is not re-tokenized
+        assert_eq!(
+            tokenize_where("title = 'a OR b' AND n > 5").unwrap(),
+            vec!["title", "=", "a OR b", "AND", "n", ">", "5"]
+        );
+        // a mid-token apostrophe stays literal when UNQUOTED (back-compat: this
+        // worked before and must keep working without the SDK quoting it)
+        assert_eq!(
+            tokenize_where("name = O'Brien").unwrap(),
+            vec!["name", "=", "O'Brien"]
+        );
+        // escapes inside an opened quote: \' -> ' and \\ -> \
+        assert_eq!(
+            tokenize_where(r"name = 'O\'Brien'").unwrap(),
+            vec!["name", "=", "O'Brien"]
+        );
+        // quoted empty string is a present (empty) token
+        assert_eq!(tokenize_where("x = ''").unwrap(), vec!["x", "=", ""]);
+        // newline inside quotes is preserved
+        assert_eq!(
+            tokenize_where("b = 'l1\nl2'").unwrap(),
+            vec!["b", "=", "l1\nl2"]
+        );
+    }
+
+    #[test]
+    fn tokenize_where_splits_glued_operators() {
+        // The natural `col=value` form tokenizes like the spaced form.
+        assert_eq!(
+            tokenize_where("status=active").unwrap(),
+            vec!["status", "=", "active"]
+        );
+        assert_eq!(tokenize_where("qty>=5").unwrap(), vec!["qty", ">=", "5"]);
+        assert_eq!(tokenize_where("qty<=5").unwrap(), vec!["qty", "<=", "5"]);
+        assert_eq!(tokenize_where("a!=b").unwrap(), vec!["a", "!=", "b"]);
+        assert_eq!(tokenize_where("a>b").unwrap(), vec!["a", ">", "b"]);
+        // glued conditions joined by AND
+        assert_eq!(
+            tokenize_where("status=active AND qty>=5").unwrap(),
+            vec!["status", "=", "active", "AND", "qty", ">=", "5"]
+        );
+        // negative numbers survive (only =,<,>,! are operators)
+        assert_eq!(tokenize_where("qty=-5").unwrap(), vec!["qty", "=", "-5"]);
+        // a lone '!' in an unquoted value is preserved (only != is an operator)
+        assert_eq!(
+            tokenize_where("msg = hi!").unwrap(),
+            vec!["msg", "=", "hi!"]
+        );
+        // an operator char inside a quoted value is NOT split
+        assert_eq!(
+            tokenize_where("expr = 'a=b'").unwrap(),
+            vec!["expr", "=", "a=b"]
+        );
+    }
+
+    #[test]
+    fn tokenize_where_rejects_unterminated_quote() {
+        assert!(tokenize_where("name = 'unclosed").is_err());
+    }
+
+    // ── RLS auto-filter (USING) helpers ──
+
+    #[test]
+    fn combine_where_ands_both_sides() {
+        assert_eq!(combine_where("", ""), "");
+        assert_eq!(combine_where("a = 1", ""), "a = 1");
+        assert_eq!(combine_where("", "user_id = u1"), "user_id = u1");
+        assert_eq!(
+            combine_where("status = active", "user_id = u1"),
+            "status = active AND user_id = u1"
+        );
+        // Whitespace-only sides are treated as empty.
+        assert_eq!(combine_where("   ", "user_id = u1"), "user_id = u1");
+    }
+
+    #[test]
+    fn params_with_where_replaces_existing_where() {
+        let params = vec![
+            ("select".to_string(), "*".to_string()),
+            ("where".to_string(), "old = 1".to_string()),
+        ];
+        let out = params_with_where(&params, "user_id = u1");
+        // The old `where` is dropped, the new one appended, other params kept.
+        assert_eq!(get_param(&out, "select"), Some("*"));
+        assert_eq!(get_param(&out, "where"), Some("user_id = u1"));
+        assert_eq!(out.iter().filter(|(k, _)| k == "where").count(), 1);
+    }
+
+    #[test]
+    fn params_with_where_omits_empty_filter() {
+        let params = vec![("where".to_string(), "old = 1".to_string())];
+        let out = params_with_where(&params, "");
+        assert_eq!(get_param(&out, "where"), None);
+    }
+
+    // ── RLS auto-filter end-to-end through the table routes ──
+
+    fn rls_fixture() -> (
+        Arc<Store>,
+        Broker,
+        SharedSchemaCache,
+        Arc<lua::ScriptEngine>,
+    ) {
+        let config = Arc::new(crate::vendor::lux::ServerConfig {
+            auth: crate::vendor::lux::AuthConfig {
+                enabled: true,
+                ..crate::vendor::lux::AuthConfig::default()
+            },
+            ..crate::vendor::lux::ServerConfig::default()
+        });
+        let store = Arc::new(Store::new_with_config(config));
+        let cache: SharedSchemaCache = Arc::new(parking_lot::RwLock::new(
+            crate::vendor::lux::tables::SchemaCache::new(),
+        ));
+        let broker = Broker::new();
+        let script_engine = Arc::new(lua::ScriptEngine::new());
+        let now = Instant::now();
+
+        // messages(id int pk, user_id str, body str); rows for two users.
+        crate::vendor::lux::tables::table_create(
+            &store,
+            &cache,
+            "messages",
+            &[
+                "id", "INT", "PRIMARY", "KEY,", "user_id", "STR,", "body", "STR",
+            ],
+            now,
+        )
+        .unwrap();
+        for (id, uid, body) in [
+            ("1", "alice", "a1"),
+            ("2", "alice", "a2"),
+            ("3", "bob", "b1"),
+        ] {
+            crate::vendor::lux::tables::table_insert(
+                &store,
+                &cache,
+                "messages",
+                &[("id", id), ("user_id", uid), ("body", body)],
+                now,
+            )
+            .unwrap();
+        }
+        (store, broker, cache, script_engine)
+    }
+
+    fn user_ctx(uid: &str) -> HttpAuthContext {
+        HttpAuthContext::User(crate::vendor::lux::auth::AuthPrincipal {
+            user_id: uid.to_string(),
+            email: format!("{uid}@x.dev"),
+            session_id: "sess".to_string(),
+            role: "authenticated".to_string(),
+        })
+    }
+
+    fn put_read_write_grant(store: &Store, cache: &SharedSchemaCache) {
+        let now = Instant::now();
+        let g = crate::vendor::lux::grants::parse_grant(&[
+            "read,",
+            "write",
+            "ON",
+            "messages",
+            "WHERE",
+            "user_id",
+            "=",
+            "auth.uid()",
+        ])
+        .unwrap();
+        crate::vendor::lux::auth::put_grant(store, cache, &g, now).unwrap();
+    }
+
+    #[test]
+    fn rls_read_returns_only_callers_rows() {
+        let (store, broker, cache, _se) = rls_fixture();
+        put_read_write_grant(&store, &cache);
+        let alice = user_ctx("alice");
+
+        // Bare select -> auto-filtered to alice's rows only.
+        let filter = enforce_table_read(&store, &cache, &alice, "messages").unwrap();
+        let combined = combine_where("", filter.as_deref().unwrap_or(""));
+        let scoped = params_with_where(&[], &combined);
+        let (status, _, body) = route_table_query("messages", &scoped, &store, &broker, &cache);
+        assert_eq!(status, 200, "{body}");
+        assert!(body.contains("\"a1\"") && body.contains("\"a2\""), "{body}");
+        assert!(!body.contains("\"b1\""), "bob's row leaked: {body}");
+    }
+
+    #[test]
+    fn rls_read_intersects_caller_where_with_grant() {
+        let (store, broker, cache, _se) = rls_fixture();
+        put_read_write_grant(&store, &cache);
+        let alice = user_ctx("alice");
+
+        // Caller asks for body = a1; grant narrows to alice. Both must hold.
+        let filter = enforce_table_read(&store, &cache, &alice, "messages").unwrap();
+        let combined = combine_where("body = a1", filter.as_deref().unwrap_or(""));
+        let scoped = params_with_where(&[], &combined);
+        let (status, _, body) = route_table_query("messages", &scoped, &store, &broker, &cache);
+        assert_eq!(status, 200, "{body}");
+        assert!(body.contains("\"a1\""), "{body}");
+        assert!(
+            !body.contains("\"a2\"") && !body.contains("\"b1\""),
+            "{body}"
+        );
+    }
+
+    #[test]
+    fn rls_no_grant_denies_read() {
+        let (store, broker, cache, _se) = rls_fixture();
+        // No grant put -> deny-by-default.
+        let alice = user_ctx("alice");
+        let err = enforce_table_read(&store, &cache, &alice, "messages").unwrap_err();
+        assert_eq!(err.0, 403);
+        // Operator bypasses entirely (no filter, full table).
+        let filter =
+            enforce_table_read(&store, &cache, &HttpAuthContext::Operator, "messages").unwrap();
+        assert!(filter.is_none());
+        let (status, _, body) = route_table_query("messages", &[], &store, &broker, &cache);
+        assert_eq!(status, 200, "{body}");
+        assert!(
+            body.contains("\"b1\""),
+            "operator should see all rows: {body}"
+        );
+    }
+
+    // ── Membership (subquery) grants: messages gated by junction `members` ──
+
+    fn membership_fixture() -> (Arc<Store>, Broker, SharedSchemaCache) {
+        let config = std::sync::Arc::new(crate::vendor::lux::ServerConfig {
+            auth: crate::vendor::lux::AuthConfig {
+                enabled: true,
+                ..crate::vendor::lux::AuthConfig::default()
+            },
+            ..crate::vendor::lux::ServerConfig::default()
+        });
+        let store = Arc::new(Store::new_with_config(config));
+        let cache: SharedSchemaCache = Arc::new(parking_lot::RwLock::new(
+            crate::vendor::lux::tables::SchemaCache::new(),
+        ));
+        let broker = Broker::new();
+        let now = Instant::now();
+
+        // messages(id pk, workspace_id, body)
+        crate::vendor::lux::tables::table_create(
+            &store,
+            &cache,
+            "messages",
+            &[
+                "id",
+                "INT",
+                "PRIMARY",
+                "KEY,",
+                "workspace_id",
+                "STR,",
+                "body",
+                "STR",
+            ],
+            now,
+        )
+        .unwrap();
+        for (id, ws, body) in [
+            ("1", "w1", "m1"),
+            ("2", "w2", "m2"),
+            ("3", "w3", "m3"),
+            ("4", "w1", "m4"),
+        ] {
+            crate::vendor::lux::tables::table_insert(
+                &store,
+                &cache,
+                "messages",
+                &[("id", id), ("workspace_id", ws), ("body", body)],
+                now,
+            )
+            .unwrap();
+        }
+
+        // members(id pk, user_id, workspace_id): alice in w1+w3, bob in w2.
+        crate::vendor::lux::tables::table_create(
+            &store,
+            &cache,
+            "members",
+            &[
+                "id",
+                "INT",
+                "PRIMARY",
+                "KEY,",
+                "user_id",
+                "STR,",
+                "workspace_id",
+                "STR",
+            ],
+            now,
+        )
+        .unwrap();
+        for (id, uid, ws) in [
+            ("1", "alice", "w1"),
+            ("2", "alice", "w3"),
+            ("3", "bob", "w2"),
+        ] {
+            crate::vendor::lux::tables::table_insert(
+                &store,
+                &cache,
+                "members",
+                &[("id", id), ("user_id", uid), ("workspace_id", ws)],
+                now,
+            )
+            .unwrap();
+        }
+
+        let g = crate::vendor::lux::grants::parse_grant(&[
+            "read,",
+            "write",
+            "ON",
+            "messages",
+            "WHERE",
+            "workspace_id",
+            "IN",
+            "(",
+            "SELECT",
+            "workspace_id",
+            "FROM",
+            "members",
+            "WHERE",
+            "user_id",
+            "=",
+            "auth.uid()",
+            ")",
+        ])
+        .unwrap();
+        crate::vendor::lux::auth::put_grant(&store, &cache, &g, Instant::now()).unwrap();
+        (store, broker, cache)
+    }
+
+    fn read_messages(
+        store: &Arc<Store>,
+        cache: &SharedSchemaCache,
+        broker: &Broker,
+        ctx: &HttpAuthContext,
+    ) -> (u16, String) {
+        let filter = enforce_table_read(store, cache, ctx, "messages").unwrap();
+        let combined = combine_where("", filter.as_deref().unwrap_or(""));
+        let scoped = params_with_where(&[], &combined);
+        let (status, _, body) = route_table_query("messages", &scoped, store, broker, cache);
+        (status, body)
+    }
+
+    #[test]
+    fn membership_read_scopes_to_member_workspaces() {
+        let (store, broker, cache) = membership_fixture();
+        // alice is in w1 + w3 -> sees m1, m4 (w1) and m3 (w3), not m2 (w2).
+        let (status, body) = read_messages(&store, &cache, &broker, &user_ctx("alice"));
+        assert_eq!(status, 200, "{body}");
+        assert!(
+            body.contains("\"m1\"") && body.contains("\"m4\"") && body.contains("\"m3\""),
+            "alice should see her workspaces' messages: {body}"
+        );
+        assert!(
+            !body.contains("\"m2\""),
+            "w2 message leaked to alice: {body}"
+        );
+        // bob is in w2 only -> sees m2 only.
+        let (status, body) = read_messages(&store, &cache, &broker, &user_ctx("bob"));
+        assert_eq!(status, 200, "{body}");
+        assert!(body.contains("\"m2\""), "{body}");
+        assert!(
+            !body.contains("\"m1\"") && !body.contains("\"m3\"") && !body.contains("\"m4\""),
+            "other workspaces leaked to bob: {body}"
+        );
+    }
+
+    #[test]
+    fn membership_read_empty_for_non_member() {
+        let (store, broker, cache) = membership_fixture();
+        // carol is in no workspace -> empty membership -> sees nothing (200, no rows).
+        let (status, body) = read_messages(&store, &cache, &broker, &user_ctx("carol"));
+        assert_eq!(status, 200, "{body}");
+        assert!(
+            !body.contains("\"m1\"")
+                && !body.contains("\"m2\"")
+                && !body.contains("\"m3\"")
+                && !body.contains("\"m4\""),
+            "non-member must see no rows: {body}"
+        );
+    }
+
+    #[test]
+    fn membership_write_check_gates_by_membership() {
+        let (store, _broker, cache) = membership_fixture();
+        let alice = user_ctx("alice");
+        let row = |ws: &str| {
+            let mut m = serde_json::Map::new();
+            m.insert("id".into(), serde_json::Value::from(9));
+            m.insert("workspace_id".into(), serde_json::Value::from(ws));
+            m.insert("body".into(), serde_json::Value::from("x"));
+            m
+        };
+        // alice may insert into a workspace she belongs to (w1), not one she doesn't (w2).
+        assert!(enforce_table_insert(&store, &cache, &alice, "messages", &row("w1")).is_ok());
+        let err = enforce_table_insert(&store, &cache, &alice, "messages", &row("w2")).unwrap_err();
+        assert_eq!(
+            err.0, 403,
+            "insert into non-member workspace must be denied"
+        );
+    }
+
+    #[test]
+    fn membership_live_snapshot_is_scoped_and_deny_all_is_empty() {
+        let (store, _broker, cache) = membership_fixture();
+        // A live spec carrying the resolved membership IN-set (alice: w1, w3).
+        let spec = LiveTableSpec {
+            table: "messages".to_string(),
+            select: "*".to_string(),
+            where_conditions: vec![(
+                "workspace_id".to_string(),
+                "IN".to_string(),
+                Value::Array(vec![Value::from("w1"), Value::from("w3")]),
+            )],
+            joins: vec![],
+            principal: None,
+            auth_dependencies: vec![],
+            near: None,
+            order_by: None,
+            limit: None,
+            offset: None,
+            deny_all: false,
+        };
+        let rows = fetch_live_table_rows(&store, &cache, &spec).unwrap();
+        let body = serde_json::to_string(&rows).unwrap();
+        assert!(
+            body.contains("\"m1\"") && body.contains("\"m4\"") && body.contains("\"m3\""),
+            "{body}"
+        );
+        assert!(
+            !body.contains("\"m2\""),
+            "w2 leaked into live snapshot: {body}"
+        );
+
+        // deny_all -> empty snapshot regardless of the table contents.
+        let denied = LiveTableSpec {
+            deny_all: true,
+            where_conditions: Vec::new(),
+            ..spec
+        };
+        let rows = fetch_live_table_rows(&store, &cache, &denied).unwrap();
+        assert!(rows.is_empty(), "deny_all must yield no rows");
+    }
+
+    #[test]
+    fn membership_live_grant_refreshes_after_membership_insert() {
+        let (store, _broker, cache) = membership_fixture();
+        let principal = match user_ctx("alice") {
+            HttpAuthContext::User(principal) => principal,
+            _ => unreachable!(),
+        };
+        let spec = LiveTableSpec {
+            table: "messages".to_string(),
+            select: "*".to_string(),
+            where_conditions: vec![],
+            joins: vec![],
+            principal: Some(principal),
+            auth_dependencies: vec!["members".to_string()],
+            near: None,
+            order_by: None,
+            limit: None,
+            offset: None,
+            deny_all: false,
+        };
+
+        crate::vendor::lux::tables::table_insert(
+            &store,
+            &cache,
+            "messages",
+            &[("id", "5"), ("workspace_id", "w4"), ("body", "new-team")],
+            Instant::now(),
+        )
+        .unwrap();
+        let before = fetch_live_table_rows(&store, &cache, &spec).unwrap();
+        assert!(
+            !serde_json::to_string(&before).unwrap().contains("new-team"),
+            "row must stay hidden before membership exists"
+        );
+
+        crate::vendor::lux::tables::table_insert(
+            &store,
+            &cache,
+            "members",
+            &[("id", "4"), ("user_id", "alice"), ("workspace_id", "w4")],
+            Instant::now(),
+        )
+        .unwrap();
+        let after = fetch_live_table_rows(&store, &cache, &spec).unwrap();
+        assert!(
+            serde_json::to_string(&after).unwrap().contains("new-team"),
+            "live grant must include membership added after subscription"
+        );
+        assert_eq!(
+            live_table_for_key(&spec, "_t:members:row:4"),
+            Some("members"),
+            "grant dependency changes must wake the live query"
+        );
+    }
+
+    #[test]
+    fn membership_update_cannot_move_row_out_of_membership() {
+        let (store, _broker, cache) = membership_fixture();
+        let alice = user_ctx("alice");
+        // moving a message's workspace_id to one alice isn't in -> denied.
+        let err = enforce_table_update_check(
+            &store,
+            &cache,
+            &alice,
+            "messages",
+            &[("workspace_id", "w2")],
+        )
+        .unwrap_err();
+        assert_eq!(err.0, 403);
+        // staying within her membership (w3) -> allowed.
+        assert!(
+            enforce_table_update_check(
+                &store,
+                &cache,
+                &alice,
+                "messages",
+                &[("workspace_id", "w3")]
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn rls_update_touches_only_callers_rows() {
+        let (store, broker, cache, se) = rls_fixture();
+        put_read_write_grant(&store, &cache);
+        let bob = user_ctx("bob");
+
+        // Bob tries to update message id=1 (alice's). Grant filter AND id=1 -> 0 rows.
+        let params = vec![("where".to_string(), "id = 1".to_string())];
+        let (status, _, body) = route_table_update(
+            "messages",
+            &params,
+            r#"{"body":"hacked"}"#,
+            &store,
+            &broker,
+            &cache,
+            &se,
+            &bob,
+        );
+        assert_eq!(status, 200, "{body}");
+        // No rows returned (id=1 is not bob's), and alice's row is intact.
+        assert!(!body.contains("hacked"), "bob updated alice's row: {body}");
+        let now = Instant::now();
+        let row =
+            crate::vendor::lux::tables::table_get(&store, &cache, "messages", 1, now).unwrap();
+        let body_val = row
+            .iter()
+            .find(|(k, _)| k == "body")
+            .map(|(_, v)| v.as_str());
+        assert_eq!(body_val, Some("a1"));
+
+        // Bob updating his own row (id=3) succeeds.
+        let params = vec![("where".to_string(), "id = 3".to_string())];
+        let (status, _, body) = route_table_update(
+            "messages",
+            &params,
+            r#"{"body":"bobupdated"}"#,
+            &store,
+            &broker,
+            &cache,
+            &se,
+            &bob,
+        );
+        assert_eq!(status, 200, "{body}");
+        assert!(body.contains("bobupdated"), "{body}");
+    }
+
+    #[test]
+    fn rls_update_with_check_blocks_ownership_change() {
+        let (store, broker, cache, se) = rls_fixture();
+        put_read_write_grant(&store, &cache); // GRANT ... WHERE user_id = auth.uid()
+        let bob = user_ctx("bob");
+        let now = Instant::now();
+
+        // Bob owns row id=3. He may NOT update it to set user_id=alice (that would
+        // move the row outside his write grant) -> WITH CHECK rejects with 403.
+        let params = vec![("where".to_string(), "id = 3".to_string())];
+        let (status, _, body) = route_table_update(
+            "messages",
+            &params,
+            r#"{"user_id":"alice"}"#,
+            &store,
+            &broker,
+            &cache,
+            &se,
+            &bob,
+        );
+        assert_eq!(status, 403, "ownership change must be rejected: {body}");
+        // The row is untouched (still bob's).
+        let row =
+            crate::vendor::lux::tables::table_get(&store, &cache, "messages", 3, now).unwrap();
+        let owner = row
+            .iter()
+            .find(|(k, _)| k == "user_id")
+            .map(|(_, v)| v.as_str());
+        assert_eq!(owner, Some("bob"), "row owner must be unchanged");
+
+        // But setting a non-grant column (body) on his own row still works.
+        let (status, _, body) = route_table_update(
+            "messages",
+            &params,
+            r#"{"body":"edited"}"#,
+            &store,
+            &broker,
+            &cache,
+            &se,
+            &bob,
+        );
+        assert_eq!(status, 200, "{body}");
+        // And re-asserting his own ownership (user_id=bob) is fine.
+        let (status, _, _) = route_table_update(
+            "messages",
+            &params,
+            r#"{"user_id":"bob"}"#,
+            &store,
+            &broker,
+            &cache,
+            &se,
+            &bob,
+        );
+        assert_eq!(status, 200);
+    }
+
+    #[test]
+    fn rls_delete_touches_only_callers_rows() {
+        let (store, broker, cache, se) = rls_fixture();
+        put_read_write_grant(&store, &cache);
+        let bob = user_ctx("bob");
+
+        // Bob tries to delete alice's row id=1 -> filtered out, alice's row survives.
+        let params = vec![("where".to_string(), "id = 1".to_string())];
+        let (status, _, body) =
+            route_table_delete("messages", &params, &store, &broker, &cache, &se, &bob);
+        assert_eq!(status, 200, "{body}");
+        let now = Instant::now();
+        assert!(
+            crate::vendor::lux::tables::table_get(&store, &cache, "messages", 1, now).is_ok(),
+            "alice's row was deleted by bob"
+        );
+
+        // Bob deletes his own row id=3 -> gone.
+        let params = vec![("where".to_string(), "id = 3".to_string())];
+        let (status, _, _) =
+            route_table_delete("messages", &params, &store, &broker, &cache, &se, &bob);
+        assert_eq!(status, 200);
+        assert!(crate::vendor::lux::tables::table_get(&store, &cache, "messages", 3, now).is_err());
+    }
+
+    #[test]
+    fn rls_insert_with_check_blocks_foreign_owner() {
+        let (store, _broker, cache, _se) = rls_fixture();
+        put_read_write_grant(&store, &cache);
+        let bob = user_ctx("bob");
+
+        // WITH CHECK: bob can insert a row he owns...
+        let mut own = serde_json::Map::new();
+        own.insert("id".to_string(), serde_json::json!("4"));
+        own.insert("user_id".to_string(), serde_json::json!("bob"));
+        assert!(enforce_table_insert(&store, &cache, &bob, "messages", &own).is_ok());
+        // ...but not a row owned by alice.
+        let mut foreign = serde_json::Map::new();
+        foreign.insert("id".to_string(), serde_json::json!("5"));
+        foreign.insert("user_id".to_string(), serde_json::json!("alice"));
+        let err = enforce_table_insert(&store, &cache, &bob, "messages", &foreign).unwrap_err();
+        assert_eq!(err.0, 403);
+    }
+
+    #[test]
+    fn rls_count_respects_row_scoped_grant() {
+        let (store, _broker, cache, _se) = rls_fixture();
+        put_read_write_grant(&store, &cache);
+        // messages fixture: 2 alice rows + 1 bob row.
+        let alice = user_ctx("alice");
+        let now = Instant::now();
+
+        // Operator counts the whole table.
+        let op_filter =
+            enforce_table_read(&store, &cache, &HttpAuthContext::Operator, "messages").unwrap();
+        assert_eq!(
+            crate::vendor::lux::tables::table_count_filtered(
+                &store,
+                &cache,
+                "messages",
+                op_filter.as_deref().unwrap_or(""),
+                now
+            )
+            .unwrap(),
+            3
+        );
+
+        // A row-scoped token user counts only their own rows (no more 403).
+        let filter = enforce_table_read(&store, &cache, &alice, "messages").unwrap();
+        assert_eq!(
+            crate::vendor::lux::tables::table_count_filtered(
+                &store,
+                &cache,
+                "messages",
+                filter.as_deref().unwrap_or(""),
+                now
+            )
+            .unwrap(),
+            2
+        );
+    }
+
+    #[test]
+    fn rls_by_id_hides_out_of_scope_rows() {
+        let (store, _broker, cache, _se) = rls_fixture();
+        put_read_write_grant(&store, &cache);
+        let alice = user_ctx("alice");
+        let now = Instant::now();
+        let filter = enforce_table_read(&store, &cache, &alice, "messages").unwrap();
+        let scope = filter.as_deref().unwrap_or("");
+
+        // id=1 is alice's -> visible; id=3 is bob's -> reads as not-found.
+        assert!(
+            crate::vendor::lux::tables::table_get_filtered(
+                &store, &cache, "messages", 1, scope, now
+            )
+            .unwrap()
+            .is_some()
+        );
+        assert!(
+            crate::vendor::lux::tables::table_get_filtered(
+                &store, &cache, "messages", 3, scope, now
+            )
+            .unwrap()
+            .is_none()
+        );
+    }
 }

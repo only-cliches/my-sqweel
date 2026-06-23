@@ -277,6 +277,7 @@ enum AggregateKind {
     Avg,
     Min,
     Max,
+    GroupConcat,
 }
 
 #[derive(Debug, Clone)]
@@ -294,6 +295,7 @@ fn aggregate_call(expr: &Expr) -> Option<AggregateCall> {
         "AVG" => AggregateKind::Avg,
         "MIN" => AggregateKind::Min,
         "MAX" => AggregateKind::Max,
+        "GROUP_CONCAT" => AggregateKind::GroupConcat,
         _ => return None,
     };
     let mut arg = args.first().cloned();
@@ -302,7 +304,7 @@ fn aggregate_call(expr: &Expr) -> Option<AggregateCall> {
         let trimmed = raw.trim();
         if trimmed.to_ascii_uppercase().starts_with("DISTINCT ") {
             distinct = true;
-            arg = Some(trimmed[8..].trim().to_string());
+            arg = Some(trimmed[9..].trim().to_string());
         }
     }
 
@@ -361,6 +363,16 @@ fn eval_aggregate_call(
             .into_iter()
             .max_by(compare_json_values)
             .unwrap_or(Value::Null)),
+        AggregateKind::GroupConcat => {
+            if values.is_empty() {
+                return Ok(Value::Null);
+            }
+            let strs: Vec<String> = values
+                .into_iter()
+                .map(|v| json_scalar_to_string(&v))
+                .collect();
+            Ok(Value::String(strs.join(",")))
+        }
     }
 }
 
@@ -727,7 +739,7 @@ pub(super) fn like_match(target: &str, pattern: &str) -> bool {
         }
     }
 
-    let target = target.chars().collect::<Vec<_>>();
+    let target = target.to_ascii_lowercase().chars().collect::<Vec<_>>();
     let mut reachable = BTreeSet::from([(0usize, 0usize)]);
     while let Some((pattern_idx, target_idx)) = reachable.pop_first() {
         if pattern_idx == tokens.len() {
@@ -750,7 +762,7 @@ pub(super) fn like_match(target: &str, pattern: &str) -> bool {
                 }
             }
             LikeToken::Literal(ch) => {
-                if target.get(target_idx) == Some(&ch) {
+                if target.get(target_idx).map(|c| c.to_ascii_lowercase()) == Some(ch.to_ascii_lowercase()) {
                     reachable.insert((pattern_idx + 1, target_idx + 1));
                 }
             }
@@ -864,6 +876,42 @@ pub(super) fn eval_expr(
             let target = eval_expr(expr, data, last_insert_id)?;
             let pattern = eval_expr(pattern, data, last_insert_id)?;
             Ok(eval_like_values(target, pattern, *negated))
+        }
+        Expr::Between {
+            expr,
+            negated,
+            low,
+            high,
+        } => {
+            let v = eval_expr(expr, data, last_insert_id)?;
+            let lo = eval_expr(low, data, last_insert_id)?;
+            let hi = eval_expr(high, data, last_insert_id)?;
+            let hit = !compare_predicate_values(v.clone(), lo, |a, b| a < b)
+                && !compare_predicate_values(v, hi, |a, b| a > b);
+            Ok(Value::Bool(if *negated { !hit } else { hit }))
+        }
+        Expr::Case {
+            operand,
+            conditions,
+            results,
+            else_result,
+        } => {
+            for (cond, result) in conditions.iter().zip(results.iter()) {
+                let matches = match operand {
+                    Some(op) => mysql_eq(
+                        &eval_expr(op, data, last_insert_id)?,
+                        &eval_expr(cond, data, last_insert_id)?,
+                    ),
+                    None => value_truthy(&eval_expr(cond, data, last_insert_id)?),
+                };
+                if matches {
+                    return eval_expr(result, data, last_insert_id);
+                }
+            }
+            match else_result {
+                Some(e) => eval_expr(e, data, last_insert_id),
+                None => Ok(Value::Null),
+            }
         }
         Expr::Function(func) => eval_function_text(&func.to_string(), data, last_insert_id),
         Expr::Cast {
@@ -1131,6 +1179,145 @@ pub(super) fn eval_function_text(
         "YEAR" => extract_date_component(args.first(), data, last_insert_id, 0..4),
         "MONTH" => extract_date_component(args.first(), data, last_insert_id, 5..7),
         "DAY" | "DAYOFMONTH" => extract_date_component(args.first(), data, last_insert_id, 8..10),
+        "SUBSTRING" | "SUBSTR" => {
+            let s = args
+                .first()
+                .map(|arg| eval_scalar_text(arg, data, last_insert_id))
+                .transpose()?
+                .unwrap_or(Value::Null);
+            if s == Value::Null {
+                return Ok(Value::Null);
+            }
+            let pos = args
+                .get(1)
+                .map(|arg| eval_scalar_text(arg, data, last_insert_id))
+                .transpose()?
+                .and_then(|v| v.as_i64())
+                .unwrap_or(1);
+            let len = args
+                .get(2)
+                .map(|arg| eval_scalar_text(arg, data, last_insert_id))
+                .transpose()?
+                .and_then(|v| v.as_i64());
+            let s = json_scalar_to_string(&s);
+            let chars: Vec<char> = s.chars().collect();
+            let start = if pos < 0 {
+                std::cmp::max(0, (chars.len() as i64) + pos) as usize
+            } else {
+                std::cmp::max(0, pos - 1) as usize
+            };
+            if start >= chars.len() {
+                Ok(Value::String(String::new()))
+            } else {
+                let end = if let Some(l) = len {
+                    std::cmp::min(chars.len(), start + (l as usize))
+                } else {
+                    chars.len()
+                };
+                Ok(Value::String(chars[start..end].iter().collect()))
+            }
+        }
+        "FLOOR" => {
+            let value = args
+                .first()
+                .map(|arg| eval_scalar_text(arg, data, last_insert_id))
+                .transpose()?
+                .unwrap_or(Value::Null);
+            Ok(number_from_f64(json_to_f64_lossy(&value)?.floor()))
+        }
+        "CEIL" | "CEILING" => {
+            let value = args
+                .first()
+                .map(|arg| eval_scalar_text(arg, data, last_insert_id))
+                .transpose()?
+                .unwrap_or(Value::Null);
+            Ok(number_from_f64(json_to_f64_lossy(&value)?.ceil()))
+        }
+        "POW" | "POWER" => {
+            let base = args
+                .first()
+                .map(|arg| eval_scalar_text(arg, data, last_insert_id))
+                .transpose()?
+                .unwrap_or(Value::Null);
+            let exp = args
+                .get(1)
+                .map(|arg| eval_scalar_text(arg, data, last_insert_id))
+                .transpose()?
+                .unwrap_or(Value::Null);
+            if base == Value::Null || exp == Value::Null {
+                Ok(Value::Null)
+            } else {
+                Ok(number_from_f64(
+                    json_to_f64_lossy(&base)?.powf(json_to_f64_lossy(&exp)?),
+                ))
+            }
+        }
+        "REPLACE" => {
+            let s = args
+                .first()
+                .map(|arg| eval_scalar_text(arg, data, last_insert_id))
+                .transpose()?
+                .unwrap_or(Value::Null);
+            let from = args
+                .get(1)
+                .map(|arg| eval_scalar_text(arg, data, last_insert_id))
+                .transpose()?
+                .unwrap_or(Value::Null);
+            let to = args
+                .get(2)
+                .map(|arg| eval_scalar_text(arg, data, last_insert_id))
+                .transpose()?
+                .unwrap_or(Value::Null);
+            if s == Value::Null || from == Value::Null || to == Value::Null {
+                Ok(Value::Null)
+            } else {
+                Ok(Value::String(
+                    json_scalar_to_string(&s)
+                        .replace(&json_scalar_to_string(&from), &json_scalar_to_string(&to)),
+                ))
+            }
+        }
+        "DATE_FORMAT" => {
+            let s = args
+                .first()
+                .map(|arg| eval_scalar_text(arg, data, last_insert_id))
+                .transpose()?
+                .unwrap_or(Value::Null);
+            let fmt = args
+                .get(1)
+                .map(|arg| eval_scalar_text(arg, data, last_insert_id))
+                .transpose()?
+                .unwrap_or(Value::Null);
+            if s == Value::Null || fmt == Value::Null {
+                return Ok(Value::Null);
+            }
+            let date_str = json_scalar_to_string(&s);
+            let fmt_str = json_scalar_to_string(&fmt);
+            let date_part = date_str.split([' ', 'T']).next().unwrap_or_default();
+            let date_parts: Vec<&str> = date_part.split('-').collect();
+            let time_part = date_str.split(' ').nth(1).unwrap_or_default();
+            let time_parts: Vec<&str> = time_part.split(':').collect();
+            let mut result = fmt_str;
+            if date_parts.len() >= 1 {
+                result = result.replace("%Y", date_parts[0]);
+            }
+            if date_parts.len() >= 2 {
+                result = result.replace("%m", date_parts[1]);
+            }
+            if date_parts.len() >= 3 {
+                result = result.replace("%d", date_parts[2]);
+            }
+            if time_parts.len() >= 1 {
+                result = result.replace("%H", time_parts[0]);
+            }
+            if time_parts.len() >= 2 {
+                result = result.replace("%i", time_parts[1]);
+            }
+            if time_parts.len() >= 3 {
+                result = result.replace("%s", time_parts[2].split('.').next().unwrap_or(""));
+            }
+            Ok(Value::String(result))
+        }
         _ => Ok(Value::Null),
     }
 }

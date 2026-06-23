@@ -184,6 +184,14 @@ pub(super) fn decode_stored_row(fields: &BTreeMap<String, String>) -> Result<Sto
     })
 }
 
+pub(super) fn encode_json_row(row: &Map<String, Value>) -> String {
+    let mut parts = Vec::new();
+    for (_, value) in row {
+        parts.push(encode_json_value(value));
+    }
+    parts.join("\u{1d}")
+}
+
 pub(super) fn encode_json_value(value: &Value) -> String {
     match value {
         Value::Null => "n:".to_string(),

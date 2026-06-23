@@ -8,18 +8,24 @@
 //! callers cannot mutate state outside the normal command, WAL, and snapshot
 //! pipeline.
 
+mod auth;
 mod cmd;
 mod command;
 mod disk;
 mod embedded;
 mod eviction;
+#[cfg(feature = "fuzzing")]
+pub mod fuzz_api;
 mod geo;
+mod grants;
 mod hll;
 mod hnsw;
 mod http;
+mod jsonb;
 mod lua;
 mod pubsub;
 mod resp;
+mod shard_exec;
 mod snapshot;
 mod store;
 mod tables;
@@ -28,6 +34,7 @@ use self::cmd::CmdResult;
 use self::command::{Command, CommandKind, CommandOutput, PubSubCommand, SetOption};
 use self::pubsub::Broker;
 use self::resp::Parser;
+use self::shard_exec::{ShardExecutionError, ShardExecutor, ShardPipelineCommand};
 use self::store::Store;
 use self::tables::SharedSchemaCache;
 use bytes::BytesMut;
@@ -49,7 +56,6 @@ pub use self::eviction::{
 };
 
 const SUB_MODE_BATCH_MAX: usize = 64;
-
 #[derive(Debug, Clone)]
 pub enum LuxError {
     Command(String),
@@ -76,6 +82,63 @@ impl std::fmt::Display for LuxError {
 }
 
 impl std::error::Error for LuxError {}
+
+/// Runtime configuration for per-project Lux Auth.
+#[derive(Clone)]
+pub struct AuthConfig {
+    /// Enables app-user auth, reserved auth tables, and `/auth/v1/*`.
+    pub enabled: bool,
+    /// Issuer used in access tokens.
+    pub issuer: String,
+    /// Access-token lifetime.
+    pub access_token_ttl: Duration,
+    /// Refresh-token lifetime.
+    pub refresh_token_ttl: Duration,
+    /// Enables native email/password signup and sign-in.
+    pub email_password_enabled: bool,
+    /// Enables accountless `signInAnonymously` sessions.
+    pub anonymous_enabled: bool,
+    /// Optional initial publishable key material for local/bootstrap use.
+    pub initial_publishable_key: Option<String>,
+    /// Optional initial secret key material for local/bootstrap use.
+    pub initial_secret_key: Option<String>,
+}
+
+impl std::fmt::Debug for AuthConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AuthConfig")
+            .field("enabled", &self.enabled)
+            .field("issuer", &self.issuer)
+            .field("access_token_ttl", &self.access_token_ttl)
+            .field("refresh_token_ttl", &self.refresh_token_ttl)
+            .field("email_password_enabled", &self.email_password_enabled)
+            .field("anonymous_enabled", &self.anonymous_enabled)
+            .field(
+                "initial_publishable_key",
+                &self.initial_publishable_key.as_ref().map(|_| "<redacted>"),
+            )
+            .field(
+                "initial_secret_key",
+                &self.initial_secret_key.as_ref().map(|_| "<redacted>"),
+            )
+            .finish()
+    }
+}
+
+impl Default for AuthConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            issuer: "http://localhost:7379/auth/v1".to_string(),
+            access_token_ttl: Duration::from_secs(3600),
+            refresh_token_ttl: Duration::from_secs(30 * 24 * 60 * 60),
+            email_password_enabled: true,
+            anonymous_enabled: true,
+            initial_publishable_key: None,
+            initial_secret_key: None,
+        }
+    }
+}
 
 /// Runtime configuration for an embedded Lux server.
 ///
@@ -117,6 +180,8 @@ pub struct ServerConfig {
     pub storage: StorageConfig,
     /// Memory pressure eviction configuration.
     pub eviction: EvictionConfig,
+    /// Per-project application auth configuration.
+    pub auth: AuthConfig,
     /// Enables the RESP listener. Use this instead of overloading `port = 0`.
     pub enable_resp: bool,
     /// Optional informational event sink. Library mode is silent when unset.
@@ -145,6 +210,7 @@ impl std::fmt::Debug for ServerConfig {
             .field("save_interval", &self.save_interval)
             .field("storage", &self.storage)
             .field("eviction", &self.eviction)
+            .field("auth", &self.auth)
             .field("enable_resp", &self.enable_resp)
             .field("on_info", &self.on_info.as_ref().map(|_| "<callback>"))
             .field("on_warn", &self.on_warn.as_ref().map(|_| "<callback>"))
@@ -171,6 +237,7 @@ impl Default for ServerConfig {
             save_interval: Duration::from_secs(60),
             storage: StorageConfig::default(),
             eviction: EvictionConfig::default(),
+            auth: AuthConfig::default(),
             enable_resp: true,
             on_info: None,
             on_warn: None,
@@ -307,6 +374,50 @@ fn validate_listener_security(config: &ServerConfig) -> std::io::Result<()> {
     Ok(())
 }
 
+fn validate_auth_config(config: &ServerConfig) -> std::io::Result<()> {
+    if !config.auth.enabled {
+        return Ok(());
+    }
+    if config.auth.issuer.trim().is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "auth issuer must not be empty when auth is enabled",
+        ));
+    }
+    if config.auth.access_token_ttl.is_zero() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "auth access token ttl must be greater than zero",
+        ));
+    }
+    if config.auth.refresh_token_ttl.is_zero() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "auth refresh token ttl must be greater than zero",
+        ));
+    }
+    Ok(())
+}
+
+/// Reject shard counts that would crash or misbehave at runtime: zero shards
+/// makes the `fx_hash(key) % shards.len()` routing divide by zero, and an
+/// absurdly large count wastes memory on per-shard locks for no benefit.
+fn validate_shard_count(config: &ServerConfig) -> std::io::Result<()> {
+    if config.shards == 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "shard count must be greater than zero",
+        ));
+    }
+    if config.shards > 65_536 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "shard count must not exceed 65536",
+        ));
+    }
+    Ok(())
+}
+
 pub struct ServerHandle {
     #[allow(dead_code)]
     runtime: Arc<Runtime>,
@@ -373,6 +484,7 @@ enum EmbeddedSubscriptionKind {
 struct Runtime {
     store: Arc<Store>,
     broker: Broker,
+    shard_executor: ShardExecutor,
     schema_cache: SharedSchemaCache,
     script_engine: Arc<lua::ScriptEngine>,
     config: Arc<ServerConfig>,
@@ -700,16 +812,9 @@ impl EmbeddedClient {
             }
         }
 
-        for (shard_idx, pairs) in pairs_by_shard.into_iter().enumerate() {
-            if pairs.is_empty() {
-                continue;
-            }
-            let mut shard = store.lock_write_shard(shard_idx);
-            shard.version += 1;
-            for (key, value) in pairs {
-                store.set_on_shard(&mut shard.data, key, value, None, now);
-            }
-        }
+        self.runtime
+            .shard_executor
+            .apply_mset_batches(pairs_by_shard, now);
 
         if emit_key_events {
             for key in event_keys {
@@ -1935,7 +2040,7 @@ fn optional_score_output(value: Option<f64>) -> CommandOutput {
 }
 
 fn geopos_output_from_shard(
-    data: &hashbrown::HashMap<String, store::Entry, store::FxBuildHasher>,
+    data: &store::ShardData,
     key: &[u8],
     members: &[&[u8]],
     now: Instant,
@@ -1957,7 +2062,7 @@ fn geopos_output_from_shard(
 }
 
 fn geodist_output_from_shard(
-    data: &hashbrown::HashMap<String, store::Entry, store::FxBuildHasher>,
+    data: &store::ShardData,
     key: &[u8],
     member_a: &[u8],
     member_b: &[u8],
@@ -2723,6 +2828,8 @@ pub async fn run() -> std::io::Result<()> {
 /// has completed, and configured listeners have bound successfully.
 pub async fn run_with_config(config: ServerConfig) -> std::io::Result<ServerHandle> {
     validate_listener_security(&config)?;
+    validate_auth_config(&config)?;
+    validate_shard_count(&config)?;
     let listener = if config.enable_resp {
         let addr = config.listen_addr();
         Some(TcpListener::bind(&addr).await?)
@@ -2827,11 +2934,13 @@ impl Runtime {
         let schema_cache: SharedSchemaCache =
             std::sync::Arc::new(parking_lot::RwLock::new(tables::SchemaCache::new()));
         let broker = Broker::new();
+        let shard_executor = ShardExecutor::new(store.clone(), broker.clone());
         let script_engine = Arc::new(lua::ScriptEngine::new());
 
         let runtime = Arc::new(Self {
             store,
             broker,
+            shard_executor,
             schema_cache,
             script_engine,
             config,
@@ -2846,6 +2955,24 @@ impl Runtime {
             );
         }
 
+        runtime
+            .store
+            .wal_suppress
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        if runtime.config.auth.enabled {
+            if let Err(e) =
+                auth::bootstrap(&runtime.store, &runtime.schema_cache, &runtime.config.auth)
+            {
+                runtime
+                    .store
+                    .wal_suppress
+                    .store(false, std::sync::atomic::Ordering::Relaxed);
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("auth bootstrap failed: {e}"),
+                ));
+            }
+        }
         runtime
             .store
             .wal_suppress
@@ -2865,6 +2992,36 @@ impl Runtime {
             .wal_suppress
             .store(false, std::sync::atomic::Ordering::Relaxed);
         runtime.store.replay_wal(&runtime.broker);
+        if runtime.config.auth.enabled {
+            runtime
+                .store
+                .wal_suppress
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+            if let Err(e) =
+                auth::bootstrap(&runtime.store, &runtime.schema_cache, &runtime.config.auth)
+            {
+                runtime
+                    .store
+                    .wal_suppress
+                    .store(false, std::sync::atomic::Ordering::Relaxed);
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("auth bootstrap failed: {e}"),
+                ));
+            }
+            runtime
+                .store
+                .wal_suppress
+                .store(false, std::sync::atomic::Ordering::Relaxed);
+            if let Err(e) =
+                auth::bootstrap_runtime(&runtime.store, &runtime.schema_cache, &runtime.config.auth)
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("auth runtime bootstrap failed: {e}"),
+                ));
+            }
+        }
 
         background_tasks.spawn(snapshot::background_save_loop(runtime.store.clone()));
 
@@ -2880,6 +3037,23 @@ impl Runtime {
                     // should not depend on other embedded instances.
                     store.set_lru_clock(secs & 0x00FF_FFFF);
                     store.expire_sweep(now);
+                }
+            });
+        }
+
+        // Table-row TTL sweep: expire due rows (full delete bookkeeping) and fire
+        // one `.live()` key-event per affected table so subscribers get a delete.
+        {
+            let store = runtime.store.clone();
+            let cache = runtime.schema_cache.clone();
+            let broker = runtime.broker.clone();
+            background_tasks.spawn(async move {
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    let now = Instant::now();
+                    for table in tables::expire_due_rows(&store, &cache, now) {
+                        broker.enqueue_key_event(table.as_bytes(), b"TEXPIRE");
+                    }
                 }
             });
         }
@@ -2994,6 +3168,16 @@ fn fire_key_events_slow(broker: &Broker, args: &[&[u8]]) {
     } else if cmd_eq_fast(cmd, b"RENAME") && args.len() >= 3 {
         broker.enqueue_key_event(args[1], cmd);
         broker.enqueue_key_event(args[2], cmd);
+    } else if cmd_eq_fast(cmd, b"TDELETE") {
+        // `TDELETE FROM <table> WHERE ...` puts the literal FROM at args[1], so
+        // the keyed entity is args[2]. Without this, table .live() subscribers
+        // never wake on a delete (the event fires on key "FROM").
+        let table = if args.len() >= 3 && cmd_eq_fast(args[1], b"FROM") {
+            args[2]
+        } else {
+            args[1]
+        };
+        broker.enqueue_key_event(table, cmd);
     } else {
         broker.enqueue_key_event(args[1], cmd);
     }
@@ -3251,6 +3435,7 @@ impl<'a> ArgvSlice for resp::CommandArgs<'a> {
 pub(crate) struct CommandExecutor {
     store: Arc<Store>,
     broker: Broker,
+    shard_executor: ShardExecutor,
     script_engine: Arc<lua::ScriptEngine>,
     schema_cache: SharedSchemaCache,
 }
@@ -3262,9 +3447,11 @@ impl CommandExecutor {
         script_engine: Arc<lua::ScriptEngine>,
         schema_cache: SharedSchemaCache,
     ) -> Self {
+        let shard_executor = ShardExecutor::new(store.clone(), broker.clone());
         Self {
             store,
             broker,
+            shard_executor,
             script_engine,
             schema_cache,
         }
@@ -3287,6 +3474,20 @@ impl CommandExecutor {
             return None;
         }
 
+        // Reserve the internal table-storage namespace ("_t:") from direct command
+        // access. This is the universal entry for both the read fast-path below
+        // and the slow path (cmd::execute), so the guard must live here -- the
+        // cmd::execute guard alone misses fast-path reads like GET. KEYS/SCAN take
+        // a pattern and are filtered in their handlers instead.
+        if !args[0].eq_ignore_ascii_case(b"KEYS") && !args[0].eq_ignore_ascii_case(b"SCAN") {
+            for arg in &args[1..] {
+                if arg.starts_with(b"_t:") {
+                    resp::write_error(write_buf, "ERR '_t:' is a reserved internal namespace");
+                    return None;
+                }
+            }
+        }
+
         if handle_tx_cmd(
             args,
             &mut session.in_multi,
@@ -3301,6 +3502,21 @@ impl CommandExecutor {
             now,
         ) {
             return None;
+        }
+
+        if !cmd::is_pipeline_special_command(args[0]) {
+            let access = cmd::pipeline_access_for_args(args);
+            if access == cmd::PipelineAccess::Read {
+                let command = [ShardPipelineCommand { args, access }];
+                let shard_idx = self.store.shard_for_key(args[1]);
+                if let Err(err) = self
+                    .shard_executor
+                    .execute_pipeline_batch(shard_idx, &command, write_buf, now)
+                {
+                    write_shard_execution_error(write_buf, err);
+                }
+                return None;
+            }
         }
 
         let cmd_result = {
@@ -3365,6 +3581,16 @@ impl CommandExecutor {
             if cmd::is_pipeline_special_command(cmd) {
                 has_special = true;
                 break;
+            }
+            // Force commands touching the reserved "_t:" namespace onto the slow
+            // path, where cmd::execute's guard rejects them. The fast batch path
+            // below bypasses that guard. KEYS/SCAN take a pattern and are handled
+            // (filtered) on the slow path.
+            if !cmd.eq_ignore_ascii_case(b"KEYS")
+                && !cmd.eq_ignore_ascii_case(b"SCAN")
+                && args[1..].iter().any(|a| a.starts_with(b"_t:"))
+            {
+                all_single_key_rw = false;
             }
             let access = cmd::pipeline_access_for_args(args);
             flags.push(access);
@@ -3433,60 +3659,15 @@ impl CommandExecutor {
                 batch_end += 1;
             }
 
-            let batch_flags = &flags[i..batch_end];
-            if batch_flags.contains(&cmd::PipelineAccess::Write) {
-                let eviction_enabled = crate::vendor::lux::eviction::eviction_enabled(&self.store);
-                for command in &commands[i..batch_end] {
-                    let args = command.argv();
-                    self.store.try_promote(args[1], now);
-                    if crate::vendor::lux::eviction::is_write_command(args[0]) {
-                        if eviction_enabled {
-                            if let Err(e) =
-                                crate::vendor::lux::eviction::evict_if_needed(&self.store)
-                            {
-                                resp::write_error(write_buf, e);
-                                return None;
-                            }
-                        }
-                        if let Err(e) = self.store.wal_log_command(args) {
-                            resp::write_error(write_buf, &format!("ERR WAL append failed: {e}"));
-                            return None;
-                        }
-                    } else {
-                        continue;
-                    }
-                }
-
-                {
-                    let mut shard = self.store.lock_write_shard(shard_idx);
-                    shard.version += 1;
-                    for command in &commands[i..batch_end] {
-                        let args = command.argv();
-                        cmd::execute_on_shard(
-                            &mut shard,
-                            &self.store,
-                            &self.broker,
-                            args,
-                            write_buf,
-                            now,
-                        );
-                    }
-                }
-
-                if self.broker.has_key_subs() {
-                    for (offset, command) in commands[i..batch_end].iter().enumerate() {
-                        if batch_flags[offset] == cmd::PipelineAccess::Write {
-                            let args = command.argv();
-                            self.broker.enqueue_key_event(args[1], args[0]);
-                        }
-                    }
-                }
-            } else {
-                let shard = self.store.lock_read_shard(shard_idx);
-                for command in &commands[i..batch_end] {
-                    let args = command.argv();
-                    cmd::execute_on_shard_read(&shard.data, args, write_buf, now);
-                }
+            if let Err(err) = self.shard_executor.execute_argv_pipeline_batch(
+                shard_idx,
+                &commands[i..batch_end],
+                &flags[i..batch_end],
+                write_buf,
+                now,
+            ) {
+                write_shard_execution_error(write_buf, err);
+                return None;
             }
 
             i = batch_end;
@@ -3594,6 +3775,16 @@ impl CommandExecutor {
                 handle_script_op(write_buf, &self.script_engine, &refs);
                 None
             }
+        }
+    }
+}
+
+fn write_shard_execution_error(write_buf: &mut BytesMut, err: ShardExecutionError) {
+    match err {
+        ShardExecutionError::Command(message) => resp::write_error(write_buf, &message),
+        ShardExecutionError::Eviction(message) => resp::write_error(write_buf, message),
+        ShardExecutionError::Wal(message) => {
+            resp::write_error(write_buf, &format!("ERR WAL append failed: {message}"))
         }
     }
 }
@@ -3844,56 +4035,45 @@ async fn handle_connection(
                 socket.write_all(&write_buf).await?;
                 return Ok(());
             }
-            let execution_result = (|| {
-                let now = Instant::now();
-                let mut parser = Parser::with_max_bulk_len(&pending, max_resp_request);
-
-                let mut commands: Vec<resp::CommandArgs<'_>> = Vec::new();
-                loop {
-                    match parser.parse_command_args() {
-                        Ok(Some(args)) => {
-                            if !args.is_empty() {
-                                commands.push(args);
-                            }
-                        }
-                        Ok(None) => break,
-                        Err(e) => {
-                            resp::write_error(&mut write_buf, e);
-                            return Err(());
+            let now = Instant::now();
+            let mut parser = Parser::with_max_bulk_len(&pending, max_resp_request);
+            let mut commands: Vec<resp::CommandArgs<'_>> = Vec::new();
+            loop {
+                match parser.parse_command_args() {
+                    Ok(Some(args)) => {
+                        if !args.is_empty() {
+                            commands.push(args);
                         }
                     }
-                }
-                let consumed = parser.pos();
-
-                let mut deferred_action: Option<CmdResult> = None;
-
-                if commands.len() <= 1 {
-                    for command in &commands {
-                        let args = command.argv();
-                        store.add_total_commands(1);
-                        if let Some(action) =
-                            executor.execute_command(args, &mut session, &mut write_buf, now)
-                        {
-                            deferred_action = Some(action);
-                            break;
-                        }
+                    Ok(None) => break,
+                    Err(e) => {
+                        resp::write_error(&mut write_buf, e);
+                        socket.write_all(&write_buf).await?;
+                        return Ok(());
                     }
-                } else {
-                    deferred_action =
-                        executor.execute_pipeline(&commands, &mut session, &mut write_buf, now);
                 }
+            }
+            let consumed = parser.pos();
 
-                drop(commands);
-                Ok((consumed, deferred_action))
-            })();
+            let mut deferred_action: Option<CmdResult> = None;
 
-            let (consumed, deferred_action) = match execution_result {
-                Ok(result) => result,
-                Err(()) => {
-                    socket.write_all(&write_buf).await?;
-                    return Ok(());
+            if commands.len() <= 1 {
+                for command in &commands {
+                    let args = command.argv();
+                    store.add_total_commands(1);
+                    if let Some(action) =
+                        executor.execute_command(args, &mut session, &mut write_buf, now)
+                    {
+                        deferred_action = Some(action);
+                        break;
+                    }
                 }
-            };
+            } else {
+                deferred_action =
+                    executor.execute_pipeline(&commands, &mut session, &mut write_buf, now);
+            }
+
+            drop(commands);
             let _ = pending.split_to(consumed);
 
             if !write_buf.is_empty() {
@@ -4269,6 +4449,31 @@ fn handle_script_op(out: &mut BytesMut, script_engine: &lua::ScriptEngine, args:
 #[cfg(any())]
 mod tx_tests {
     use super::*;
+
+    fn test_executor() -> (CommandExecutor, CommandSession) {
+        let store = Arc::new(Store::new());
+        let broker = Broker::new();
+        let schema_cache: SharedSchemaCache =
+            Arc::new(parking_lot::RwLock::new(tables::SchemaCache::new()));
+        let executor = CommandExecutor::new(
+            store,
+            broker,
+            Arc::new(lua::ScriptEngine::new()),
+            schema_cache,
+        );
+        (executor, CommandSession::new(false))
+    }
+
+    #[test]
+    fn single_key_reads_route_through_shard_executor() {
+        let (executor, mut session) = test_executor();
+        let mut out = BytesMut::new();
+
+        executor.store.set(b"k", b"v", None, Instant::now());
+        executor.execute_command(&[b"GET", b"k"], &mut session, &mut out, Instant::now());
+
+        assert_eq!(&out[..], b"$1\r\nv\r\n");
+    }
 
     #[test]
     fn pubsub_commands_are_rejected_inside_multi() {

@@ -6,7 +6,21 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const HEADER_V1: &[u8; 4] = b"LUX\x01";
-const HEADER: &[u8; 4] = b"LUX\x02";
+const HEADER_V2: &[u8; 4] = b"LUX\x02";
+// V3 persists key TTLs as ABSOLUTE epoch-ms deadlines instead of relative
+// remaining-ms. V2 rebased the remaining time to load-time, so a key with N ms
+// left at save time got a full fresh N ms on restart -- TTLs paused across
+// downtime and keys that should have expired while down resurrected. V3 subtracts
+// elapsed wall-clock on load so deadlines are honored across restarts.
+const HEADER: &[u8; 4] = b"LUX\x03";
+
+/// Wall-clock now in epoch milliseconds (for absolute TTL deadlines).
+fn now_epoch_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
 
 fn snapshot_path(store: &Store) -> String {
     let dir = &store.config().data_dir;
@@ -34,11 +48,58 @@ fn write_f64(w: &mut impl Write, v: f64) -> io::Result<()> {
     w.write_all(&v.to_le_bytes())
 }
 
+// Fail-closed bounds for snapshot loading: a corrupt or hostile snapshot must
+// not be able to drive a huge up-front allocation (OOM) from an attacker-chosen
+// length prefix. These cap a single byte string and a single collection's item
+// count; loads that exceed them are rejected as InvalidData (no panic, no OOM).
+const MAX_SNAPSHOT_BYTES: usize = 512 * 1024 * 1024;
+const MAX_SNAPSHOT_ITEMS: usize = 64 * 1024 * 1024;
+
+// Upper bound on how many elements we pre-allocate from an untrusted collection
+// count. The count is validated as a loop bound, but a corrupt snapshot can
+// *claim* tens of millions of items in a few bytes; pre-allocating that count
+// times the element size is a multi-GB OOM. Reserve modestly and let the vec
+// grow as real elements are actually read (a short/corrupt input hits EOF and
+// errors long before the vec grows).
+const SNAPSHOT_PREALLOC_CAP: usize = 64 * 1024;
+
 fn read_bytes(r: &mut impl Read) -> io::Result<Vec<u8>> {
     let len = read_u32(r)? as usize;
+    if len > MAX_SNAPSHOT_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "snapshot byte string length exceeds maximum",
+        ));
+    }
     let mut buf = vec![0u8; len];
     r.read_exact(&mut buf)?;
     Ok(buf)
+}
+
+/// Read a u32 collection length, bounded so a corrupt count can't drive a huge
+/// `Vec::with_capacity`. `label` names the collection for the error message.
+fn read_count(r: &mut impl Read, label: &str) -> io::Result<usize> {
+    let count = read_u32(r)? as usize;
+    if count > MAX_SNAPSHOT_ITEMS {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("snapshot {label} count exceeds maximum"),
+        ));
+    }
+    Ok(count)
+}
+
+/// Like `read_count` but also caps `count * item_size` against the byte budget,
+/// for collections of fixed-size elements (vectors, HLL registers, TS samples).
+fn read_sized_count(r: &mut impl Read, label: &str, item_size: usize) -> io::Result<usize> {
+    let count = read_count(r, label)?;
+    if count.saturating_mul(item_size) > MAX_SNAPSHOT_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("snapshot {label} byte size exceeds maximum"),
+        ));
+    }
+    Ok(count)
 }
 
 fn read_u32(r: &mut impl Read) -> io::Result<u32> {
@@ -91,6 +152,78 @@ pub(crate) fn save_and_truncate_wal_consistent(store: &Store) -> io::Result<usiz
     })
 }
 
+/// Produce a consistent on-disk snapshot for an out-of-band backup and return
+/// its path. Runs the same consistent save the background timer performs (full
+/// dump including tiered cold data, then WAL truncation), so the file is a
+/// complete point-in-time image of the instance. Used by `GET /v1/snapshot`,
+/// which lets the control plane back an instance up over its own HTTP port
+/// without needing a shell inside the (distroless) container.
+pub fn snapshot_for_backup(store: &Store) -> io::Result<String> {
+    save_and_truncate_wal_consistent(store)?;
+    Ok(snapshot_path(store))
+}
+
+/// Lay a restored snapshot down on disk: write `dump` as lux.dat and remove the
+/// per-shard WAL + tiered data dirs so a restart reloads purely from the dump,
+/// with no stale WAL replaying post-snapshot writes over it. The caller restarts
+/// the process so the standard startup load reconstructs state from the dump.
+/// Used by `POST /v1/restore`.
+pub fn restore_to_disk(store: &Store, dump: &[u8]) -> io::Result<()> {
+    let header_ok = dump.len() >= 4
+        && [HEADER, HEADER_V2, HEADER_V1]
+            .iter()
+            .any(|h| &dump[..4] == *h);
+    if !header_ok {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "restore payload is not a lux snapshot",
+        ));
+    }
+
+    let path = snapshot_path(store);
+    if let Some(parent) = Path::new(&path).parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let tmp = format!("{path}.restore.{}.tmp", std::process::id());
+    {
+        let file = fs::File::create(&tmp)?;
+        let mut w = BufWriter::new(file);
+        w.write_all(dump)?;
+        w.into_inner().map_err(io::Error::other)?.sync_all()?;
+    }
+    fs::rename(&tmp, &path)?;
+
+    // Drop the Lux-owned per-shard dirs (WAL + cold data) so startup loads only
+    // lux.dat, with no WAL replaying post-snapshot writes over the restore. Only
+    // remove `shard_*` dirs we own, never the whole storage dir: in production
+    // storage.dir is a subdir of data_dir, but a misconfigured storage.dir that
+    // overlaps data_dir must never take lux.dat down with it.
+    let storage_dir = store.config().storage.dir.clone();
+    purge_lux_storage_shards(Path::new(&storage_dir))?;
+    Ok(())
+}
+
+/// Remove only the `shard_*` directories Lux owns under `storage_dir`, leaving the
+/// directory itself and any unrelated contents intact. Missing dir is not an error.
+fn purge_lux_storage_shards(storage_dir: &Path) -> io::Result<()> {
+    let entries = match fs::read_dir(storage_dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
+    };
+    for entry in entries {
+        let entry = entry?;
+        let file_name = entry.file_name();
+        let Some(name) = file_name.to_str() else {
+            continue;
+        };
+        if name.starts_with("shard_") && entry.file_type()?.is_dir() {
+            fs::remove_dir_all(entry.path())?;
+        }
+    }
+    Ok(())
+}
+
 fn save_binary(
     w: &mut impl Write,
     entries: &[crate::vendor::lux::store::DumpEntry],
@@ -110,7 +243,14 @@ fn save_binary(
         };
         w.write_all(&[type_byte])?;
         write_bytes(w, entry.key.as_bytes())?;
-        let ttl = if entry.ttl_ms > 0 { entry.ttl_ms } else { -1 };
+        // `entry.ttl_ms` is relative remaining-ms (computed at dump time, a few ms
+        // ago). Persist an ABSOLUTE epoch-ms deadline so load can subtract elapsed
+        // downtime; `-1` means no expiry.
+        let ttl = if entry.ttl_ms > 0 {
+            now_epoch_ms().saturating_add(entry.ttl_ms as u64) as i64
+        } else {
+            -1
+        };
         write_i64(w, ttl)?;
 
         match &entry.value {
@@ -225,16 +365,25 @@ fn load_from_reader(store: &Store, mut file: fs::File) -> io::Result<usize> {
     let mut header = [0u8; 4];
     let n = file.read(&mut header)?;
     if n == 4 && &header == HEADER {
-        load_binary(store, &mut io::BufReader::new(file), true)
+        // V3: absolute-deadline TTLs, stream groups present.
+        load_binary(store, &mut io::BufReader::new(file), true, true)
+    } else if n == 4 && &header == HEADER_V2 {
+        // V2: relative remaining-ms TTLs (legacy; rebased to now on load).
+        load_binary(store, &mut io::BufReader::new(file), true, false)
     } else if n == 4 && &header == HEADER_V1 {
-        load_binary(store, &mut io::BufReader::new(file), false)
+        load_binary(store, &mut io::BufReader::new(file), false, false)
     } else {
         file.seek(SeekFrom::Start(0))?;
         load_legacy(store, file)
     }
 }
 
-fn load_binary(store: &Store, r: &mut impl Read, stream_groups: bool) -> io::Result<usize> {
+pub(crate) fn load_binary(
+    store: &Store,
+    r: &mut impl Read,
+    stream_groups: bool,
+    absolute_ttl: bool,
+) -> io::Result<usize> {
     let mut count = 0;
     loop {
         let mut type_buf = [0u8; 1];
@@ -246,25 +395,35 @@ fn load_binary(store: &Store, r: &mut impl Read, stream_groups: bool) -> io::Res
 
         let key = read_string(r)?;
         let ttl_ms = read_i64(r)?;
-        let ttl = if ttl_ms > 0 {
-            Some(Duration::from_millis(ttl_ms as u64))
+        // V3 stores an absolute epoch-ms deadline: subtract elapsed wall-clock so
+        // downtime counts (a key whose deadline already passed is dropped, not
+        // resurrected). V2/V1 stored relative remaining-ms (legacy rebase).
+        let (ttl, expired) = if ttl_ms <= 0 {
+            (None, false)
+        } else if absolute_ttl {
+            let remaining = ttl_ms.saturating_sub(now_epoch_ms() as i64);
+            if remaining <= 0 {
+                (None, true)
+            } else {
+                (Some(Duration::from_millis(remaining as u64)), false)
+            }
         } else {
-            None
+            (Some(Duration::from_millis(ttl_ms as u64)), false)
         };
 
         let value = match type_buf[0] {
             b'S' => DumpValue::Str(read_bytes(r)?),
             b'L' => {
-                let len = read_u32(r)? as usize;
-                let mut items = Vec::with_capacity(len);
+                let len = read_count(r, "list item")?;
+                let mut items = Vec::with_capacity(len.min(SNAPSHOT_PREALLOC_CAP));
                 for _ in 0..len {
                     items.push(read_bytes(r)?);
                 }
                 DumpValue::List(items)
             }
             b'H' => {
-                let len = read_u32(r)? as usize;
-                let mut pairs = Vec::with_capacity(len);
+                let len = read_count(r, "hash field")?;
+                let mut pairs = Vec::with_capacity(len.min(SNAPSHOT_PREALLOC_CAP));
                 for _ in 0..len {
                     let k = read_string(r)?;
                     let v = read_bytes(r)?;
@@ -273,16 +432,16 @@ fn load_binary(store: &Store, r: &mut impl Read, stream_groups: bool) -> io::Res
                 DumpValue::Hash(pairs)
             }
             b'T' => {
-                let len = read_u32(r)? as usize;
-                let mut members = Vec::with_capacity(len);
+                let len = read_count(r, "set member")?;
+                let mut members = Vec::with_capacity(len.min(SNAPSHOT_PREALLOC_CAP));
                 for _ in 0..len {
                     members.push(read_string(r)?);
                 }
                 DumpValue::Set(members)
             }
             b'Z' => {
-                let len = read_u32(r)? as usize;
-                let mut members = Vec::with_capacity(len);
+                let len = read_count(r, "sorted set member")?;
+                let mut members = Vec::with_capacity(len.min(SNAPSHOT_PREALLOC_CAP));
                 for _ in 0..len {
                     let m = read_string(r)?;
                     let s = read_f64(r)?;
@@ -292,12 +451,12 @@ fn load_binary(store: &Store, r: &mut impl Read, stream_groups: bool) -> io::Res
             }
             b'X' => {
                 let last_id = read_string(r)?;
-                let entry_count = read_u32(r)? as usize;
-                let mut entries = Vec::with_capacity(entry_count);
+                let entry_count = read_count(r, "stream entry")?;
+                let mut entries = Vec::with_capacity(entry_count.min(SNAPSHOT_PREALLOC_CAP));
                 for _ in 0..entry_count {
                     let id = read_string(r)?;
-                    let field_count = read_u32(r)? as usize;
-                    let mut fields = Vec::with_capacity(field_count);
+                    let field_count = read_count(r, "stream field")?;
+                    let mut fields = Vec::with_capacity(field_count.min(SNAPSHOT_PREALLOC_CAP));
                     for _ in 0..field_count {
                         let k = read_string(r)?;
                         let v = read_bytes(r)?;
@@ -307,24 +466,27 @@ fn load_binary(store: &Store, r: &mut impl Read, stream_groups: bool) -> io::Res
                 }
                 let mut groups = Vec::new();
                 if stream_groups {
-                    let group_count = read_u32(r)? as usize;
-                    groups.reserve(group_count);
+                    let group_count = read_count(r, "stream group")?;
+                    groups.reserve(group_count.min(SNAPSHOT_PREALLOC_CAP));
                     for _ in 0..group_count {
                         let name = read_string(r)?;
                         let last_delivered_id = read_string(r)?;
-                        let consumer_count = read_u32(r)? as usize;
-                        let mut consumers = Vec::with_capacity(consumer_count);
+                        let consumer_count = read_count(r, "stream consumer")?;
+                        let mut consumers =
+                            Vec::with_capacity(consumer_count.min(SNAPSHOT_PREALLOC_CAP));
                         for _ in 0..consumer_count {
                             let consumer = read_string(r)?;
-                            let pending_count = read_u32(r)? as usize;
-                            let mut pending_ids = Vec::with_capacity(pending_count);
+                            let pending_count = read_count(r, "stream consumer pending")?;
+                            let mut pending_ids =
+                                Vec::with_capacity(pending_count.min(SNAPSHOT_PREALLOC_CAP));
                             for _ in 0..pending_count {
                                 pending_ids.push(read_string(r)?);
                             }
                             consumers.push((consumer, pending_ids));
                         }
-                        let pending_count = read_u32(r)? as usize;
-                        let mut pending = Vec::with_capacity(pending_count);
+                        let pending_count = read_count(r, "stream group pending")?;
+                        let mut pending =
+                            Vec::with_capacity(pending_count.min(SNAPSHOT_PREALLOC_CAP));
                         for _ in 0..pending_count {
                             let id = read_string(r)?;
                             let consumer = read_string(r)?;
@@ -337,8 +499,8 @@ fn load_binary(store: &Store, r: &mut impl Read, stream_groups: bool) -> io::Res
                 DumpValue::Stream(entries, last_id, groups)
             }
             b'V' => {
-                let dims = read_u32(r)? as usize;
-                let mut data = Vec::with_capacity(dims);
+                let dims = read_sized_count(r, "vector dimension", std::mem::size_of::<f32>())?;
+                let mut data = Vec::with_capacity(dims.min(SNAPSHOT_PREALLOC_CAP));
                 for _ in 0..dims {
                     let mut buf = [0u8; 4];
                     r.read_exact(&mut buf)?;
@@ -354,23 +516,27 @@ fn load_binary(store: &Store, r: &mut impl Read, stream_groups: bool) -> io::Res
                 DumpValue::Vector(data, metadata)
             }
             b'P' => {
-                let len = read_u32(r)? as usize;
+                let len = read_sized_count(r, "hyperloglog register", 1)?;
                 let mut regs = vec![0u8; len];
                 r.read_exact(&mut regs)?;
                 let cached = crate::vendor::lux::hll::hll_count(&regs);
                 DumpValue::HyperLogLog(regs, cached)
             }
             b'I' => {
-                let sample_count = read_u32(r)? as usize;
-                let mut samples = Vec::with_capacity(sample_count);
+                let sample_count = read_sized_count(
+                    r,
+                    "timeseries sample",
+                    std::mem::size_of::<i64>() + std::mem::size_of::<f64>(),
+                )?;
+                let mut samples = Vec::with_capacity(sample_count.min(SNAPSHOT_PREALLOC_CAP));
                 for _ in 0..sample_count {
                     let ts = read_i64(r)?;
                     let val = read_f64(r)?;
                     samples.push((ts, val));
                 }
                 let retention = read_i64(r)? as u64;
-                let label_count = read_u32(r)? as usize;
-                let mut labels = Vec::with_capacity(label_count);
+                let label_count = read_count(r, "timeseries label")?;
+                let mut labels = Vec::with_capacity(label_count.min(SNAPSHOT_PREALLOC_CAP));
                 for _ in 0..label_count {
                     let k = read_string(r)?;
                     let v = read_string(r)?;
@@ -386,8 +552,12 @@ fn load_binary(store: &Store, r: &mut impl Read, stream_groups: bool) -> io::Res
             }
         };
 
-        store.load_entry(key, value, ttl);
-        count += 1;
+        // The value bytes were read above to advance the stream; only store the
+        // entry if its absolute deadline hasn't already passed during downtime.
+        if !expired {
+            store.load_entry(key, value, ttl);
+            count += 1;
+        }
     }
     Ok(count)
 }
@@ -969,5 +1139,136 @@ mod tests {
         let n = Instant::now();
         assert_eq!(store2.get(b"key1", n).unwrap(), &b"col1\tcol2\tcol3"[..]);
         assert_eq!(store2.get(b"key2", n).unwrap(), &b"safe"[..]);
+    }
+
+    // A corrupt/hostile snapshot with an attacker-chosen huge length prefix must
+    // fail closed (InvalidData), not OOM or panic trying to pre-allocate.
+    #[test]
+    fn malformed_snapshot_huge_lengths_fail_closed() {
+        use std::io::Cursor;
+
+        let mut huge_count = Vec::new();
+        huge_count.push(b'L');
+        huge_count.extend_from_slice(&3u32.to_le_bytes());
+        huge_count.extend_from_slice(b"abc");
+        huge_count.extend_from_slice(&(-1i64).to_le_bytes()); // ttl: none
+        huge_count.extend_from_slice(&u32::MAX.to_le_bytes()); // list count: huge
+        let store = Store::new();
+        let err = load_binary(&store, &mut Cursor::new(huge_count.as_slice()), true, true)
+            .expect_err("huge list count must be rejected");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+
+        let mut huge_bytes = Vec::new();
+        huge_bytes.push(b'S');
+        huge_bytes.extend_from_slice(&3u32.to_le_bytes());
+        huge_bytes.extend_from_slice(b"abc");
+        huge_bytes.extend_from_slice(&(-1i64).to_le_bytes());
+        huge_bytes.extend_from_slice(&u32::MAX.to_le_bytes()); // str byte len: huge
+        let store = Store::new();
+        let err = load_binary(&store, &mut Cursor::new(huge_bytes.as_slice()), true, true)
+            .expect_err("huge byte string length must be rejected");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    // Found by the fuzzer: a hash entry whose pair count is ~50M (under the item
+    // cap) drove Vec::with_capacity(count) into a 2.4GB allocation, OOMing on a
+    // 24-byte input. Pre-allocation must be bounded, so this returns an error
+    // (EOF) without a giant up-front malloc.
+    #[test]
+    fn malformed_snapshot_large_count_does_not_oom() {
+        let data = [
+            0x48u8, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x61, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0xf5, 0xff, 0x02, 0x00, 0xff, 0xff, 0xff,
+        ];
+        let store = Store::new();
+        let result = load_binary(&store, &mut std::io::Cursor::new(&data[..]), true, true);
+        assert!(
+            result.is_err(),
+            "truncated huge-count hash must error, not OOM"
+        );
+    }
+
+    fn store_in_temp_dir() -> (Arc<Store>, std::path::PathBuf, impl Drop) {
+        let id = TEST_ID.fetch_add(1, Ordering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("lux_restore_test_{}_{}", std::process::id(), id));
+        let storage_dir = dir.join("storage");
+        fs::create_dir_all(&storage_dir).unwrap();
+        let cfg = crate::vendor::lux::ServerConfig {
+            data_dir: dir.to_str().unwrap().to_string(),
+            storage: crate::vendor::lux::StorageConfig {
+                dir: storage_dir.to_str().unwrap().to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let store = Arc::new(Store::new_with_config(Arc::new(cfg)));
+        struct Cleanup(std::path::PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        (store, dir.clone(), Cleanup(dir))
+    }
+
+    // Every snapshot header version we have ever written must be restorable. The
+    // guard once accepted only V1 and V3, silently rejecting V2 backups.
+    #[test]
+    fn restore_accepts_all_known_headers_rejects_junk() {
+        for header in [HEADER_V1, HEADER_V2, HEADER] {
+            let (store, dir, _g) = store_in_temp_dir();
+            let mut dump = header.to_vec();
+            dump.extend_from_slice(b"trailing-body-bytes");
+            restore_to_disk(&store, &dump)
+                .unwrap_or_else(|e| panic!("header {header:?} should restore: {e}"));
+            assert!(
+                dir.join("lux.dat").exists(),
+                "lux.dat written for {header:?}"
+            );
+        }
+
+        let (store, _dir, _g) = store_in_temp_dir();
+        let err = restore_to_disk(&store, b"XXXXnot-a-snapshot")
+            .expect_err("junk header must be rejected");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    // Restore must drop only the shard_* dirs Lux owns, never sibling files: a
+    // misconfigured storage.dir overlapping data_dir must not take lux.dat down.
+    #[test]
+    fn restore_purges_only_owned_shard_dirs() {
+        let (store, _dir, _g) = store_in_temp_dir();
+        let storage_dir = std::path::PathBuf::from(&store.config().storage.dir);
+        fs::create_dir_all(storage_dir.join("shard_0")).unwrap();
+        fs::create_dir_all(storage_dir.join("shard_1")).unwrap();
+        fs::write(storage_dir.join("shard_0").join("wal.log"), b"x").unwrap();
+        fs::write(storage_dir.join("keep.txt"), b"keep").unwrap();
+
+        let mut dump = HEADER.to_vec();
+        dump.extend_from_slice(b"body");
+        restore_to_disk(&store, &dump).unwrap();
+
+        assert!(!storage_dir.join("shard_0").exists(), "shard_0 purged");
+        assert!(!storage_dir.join("shard_1").exists(), "shard_1 purged");
+        assert!(storage_dir.join("keep.txt").exists(), "unrelated file kept");
+        assert!(storage_dir.exists(), "storage dir itself kept");
+    }
+
+    // Fuzz: arbitrary bytes fed to the binary snapshot loader must never panic
+    // or OOM -- only return cleanly (Ok or InvalidData). Guards the fail-closed
+    // length/count bounds against attacker-chosen prefixes.
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(2000))]
+
+        #[test]
+        fn fuzz_snapshot_load_no_panic(
+            data in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..4096)
+        ) {
+            let store = Store::new();
+            let _ = load_binary(&store, &mut std::io::Cursor::new(&data), true, true);
+            let store2 = Store::new();
+            let _ = load_binary(&store2, &mut std::io::Cursor::new(&data), false, false);
+        }
     }
 }

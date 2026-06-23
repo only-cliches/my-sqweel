@@ -14,22 +14,55 @@ impl Engine {
             Some(_) | None => Vec::new(),
         };
 
-        let values = match *query.body {
-            SetExpr::Values(v) => v.rows,
-            _ => return Err(anyhow!("only VALUES insert is supported")),
-        };
-
-        let columns = self.resolve_insert_columns(&table, explicit_columns, &values)?;
-
         let mut prepared_rows = Vec::new();
-        for row in values {
-            let mut data = Map::new();
-            for (idx, expr) in row.into_iter().enumerate() {
-                if let Some(col) = columns.get(idx) {
-                    data.insert(col.clone(), self.eval_expr_ctx(&expr, &Map::new(), 0)?);
+
+        match *query.body {
+            SetExpr::Values(v) => {
+                let values = v.rows;
+                let columns = self.resolve_insert_columns(&table, explicit_columns, &values)?;
+                for row in values {
+                    let mut data = Map::new();
+                    for (idx, expr) in row.into_iter().enumerate() {
+                        if let Some(col) = columns.get(idx) {
+                            data.insert(col.clone(), self.eval_expr_ctx(&expr, &Map::new(), 0)?);
+                        }
+                    }
+                    prepared_rows.push(data);
                 }
             }
-            prepared_rows.push(data);
+            SetExpr::Select(_) => {
+                let select_query = Query {
+                    body: query.body.clone(),
+                    order_by: None,
+                    limit: None,
+                    offset: None,
+                    fetch: None,
+                    locks: vec![],
+                    with: None,
+                    for_clause: None,
+                    format_clause: None,
+                    limit_by: vec![],
+                    settings: None,
+                };
+                let select_result = self.select_query(select_query)?;
+                let columns = if explicit_columns.is_empty() {
+                    select_result.columns.clone()
+                } else {
+                    explicit_columns
+                };
+                for row in select_result.rows {
+                    let mut data = Map::new();
+                    for (idx, col) in columns.iter().enumerate() {
+                        let value = select_result.columns
+                            .get(idx)
+                            .and_then(|src_col| row.get(src_col).cloned())
+                            .unwrap_or(Value::Null);
+                        data.insert(col.clone(), value);
+                    }
+                    prepared_rows.push(data);
+                }
+            }
+            _ => return Err(anyhow!("only VALUES and SELECT insert are supported")),
         }
 
         self.insert_prepared_rows(

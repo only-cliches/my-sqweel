@@ -25,8 +25,12 @@ path = "src/lib.rs"
 name = "sqwl"
 path = "src/bin/sqwl.rs"
 
+[features]
+fuzzing = []
+
 [dependencies]
 anyhow = "1.0"
+argon2 = "0.5"
 axum = "0.8"
 base64 = "0.22"
 bytes = "1.10"
@@ -35,14 +39,19 @@ dashmap = "6.1"
 fs2 = "0.4"
 futures-util = { version = "0.3", default-features = false, features = ["sink"] }
 hashbrown = "0.14"
+jsonwebtoken = { version = "10", features = ["rust_crypto"] }
 mlua = { version = "0.10", features = ["lua54", "vendored"] }
 msql-srv = "0.11"
 ordered-float = "4"
 parking_lot = "0.12"
+rand_core = { version = "0.6", features = ["getrandom"] }
+rayon = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rmp = "0.8"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha1_smol = "1"
+sha2 = "0.10"
 sqlparser = "0.53"
 thiserror = "2.0"
 tokio = { version = "1.48", features = ["full"] }

@@ -941,7 +941,11 @@ const COMMAND_SPECS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: b"TINSERT",
-        min_arity: 4,
+        min_arity: 2,
+    },
+    CommandSpec {
+        name: b"TUPSERT",
+        min_arity: 2,
     },
     CommandSpec {
         name: b"TUPDATE",
@@ -954,6 +958,22 @@ const COMMAND_SPECS: &[CommandSpec] = &[
     CommandSpec {
         name: b"TDROP",
         min_arity: 2,
+    },
+    CommandSpec {
+        name: b"TINDEX",
+        min_arity: 4,
+    },
+    CommandSpec {
+        name: b"TDROPINDEX",
+        min_arity: 3,
+    },
+    CommandSpec {
+        name: b"GRANT",
+        min_arity: 4,
+    },
+    CommandSpec {
+        name: b"REVOKE",
+        min_arity: 4,
     },
     CommandSpec {
         name: b"TCOUNT",
@@ -1091,7 +1111,7 @@ pub(crate) fn pipeline_access(cmd: &[u8]) -> PipelineAccess {
             if cmd_eq(cmd, b"PTTL") {
                 return PipelineAccess::Read;
             }
-            if cmd_eq(cmd, b"PERSIST") || cmd_eq(cmd, b"PSETEX") {
+            if cmd_eq(cmd, b"PERSIST") {
                 return PipelineAccess::Write;
             }
         }
@@ -1156,6 +1176,13 @@ pub(crate) fn pipeline_access_for_args(args: &[&[u8]]) -> PipelineAccess {
     }
 
     let cmd = args[0];
+    if args.len() == 2 && cmd_eq(cmd, b"GET") {
+        return PipelineAccess::Read;
+    }
+    if args.len() == 3 && cmd_eq(cmd, b"SET") {
+        return PipelineAccess::Write;
+    }
+
     if cmd[0].eq_ignore_ascii_case(&b'Z') {
         if cmd_eq(cmd, b"ZCARD") {
             return if args.len() == 2 {
@@ -1239,7 +1266,6 @@ fn pipeline_fast_path_arity(args: &[&[u8]]) -> bool {
         b'P' => {
             (cmd_eq(cmd, b"PTTL") && args.len() == 2)
                 || (cmd_eq(cmd, b"PERSIST") && args.len() == 2)
-                || (cmd_eq(cmd, b"PSETEX") && args.len() == 4)
         }
         b'R' => {
             (cmd_eq(cmd, b"RPOP") && args.len() == 2) || (cmd_eq(cmd, b"RPUSH") && args.len() >= 3)
@@ -1250,12 +1276,11 @@ fn pipeline_fast_path_arity(args: &[&[u8]]) -> bool {
                 || (cmd_eq(cmd, b"SMEMBERS") && args.len() == 2)
                 || (cmd_eq(cmd, b"SISMEMBER") && args.len() == 3)
                 || (cmd_eq(cmd, b"SRANDMEMBER") && args.len() == 2)
-                || (cmd_eq(cmd, b"SET") && args.len() >= 3)
+                || (cmd_eq(cmd, b"SET") && set_pipeline_fast_path_arity(args))
                 || (cmd_eq(cmd, b"SETNX") && args.len() == 3)
-                || (cmd_eq(cmd, b"SETEX") && args.len() == 4)
                 || (cmd_eq(cmd, b"SADD") && args.len() >= 3)
                 || (cmd_eq(cmd, b"SREM") && args.len() >= 3)
-                || (cmd_eq(cmd, b"SPOP") && args.len() >= 2)
+                || (cmd_eq(cmd, b"SPOP") && args.len() == 2)
         }
         b'T' => (cmd_eq(cmd, b"TTL") || cmd_eq(cmd, b"TYPE")) && args.len() == 2,
         b'X' => {
@@ -1271,11 +1296,23 @@ fn pipeline_fast_path_arity(args: &[&[u8]]) -> bool {
                 || (cmd_eq(cmd, b"ZADD") && args.len() >= 4)
                 || (cmd_eq(cmd, b"ZINCRBY") && args.len() == 4)
                 || (cmd_eq(cmd, b"ZREM") && args.len() >= 3)
-                || (cmd_eq(cmd, b"ZPOPMIN") && args.len() >= 2)
-                || (cmd_eq(cmd, b"ZPOPMAX") && args.len() >= 2)
+                || (cmd_eq(cmd, b"ZPOPMIN") && args.len() == 2)
+                || (cmd_eq(cmd, b"ZPOPMAX") && args.len() == 2)
         }
         _ => false,
     }
+}
+
+fn set_pipeline_fast_path_arity(args: &[&[u8]]) -> bool {
+    if args.len() == 3 {
+        return true;
+    }
+    if args.len() < 4 {
+        return false;
+    }
+    args[3..]
+        .iter()
+        .all(|arg| cmd_eq(arg, b"NX") || cmd_eq(arg, b"XX"))
 }
 
 #[inline(always)]
@@ -1361,6 +1398,47 @@ fn format_geo_coord(v: f64) -> String {
     s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
+/// Table data/DDL commands that tolerate a trailing `;` statement terminator.
+fn is_table_terminator_command(cmd: &[u8]) -> bool {
+    const TABLE_CMDS: &[&[u8]] = &[
+        b"TSELECT",
+        b"TINSERT",
+        b"TUPSERT",
+        b"TUPDATE",
+        b"TDELETE",
+        b"TCREATE",
+        b"TDROP",
+        b"TINDEX",
+        b"TDROPINDEX",
+        b"TCOUNT",
+        b"TSCHEMA",
+        b"TALTER",
+        b"TLIST",
+        b"GRANT",
+        b"REVOKE",
+    ];
+    TABLE_CMDS.iter().any(|c| cmd_eq(cmd, c))
+}
+
+/// Drop a trailing `;` statement terminator from a table-command argv: either a
+/// standalone `;` token or a `;` suffix on the final token. Borrows the original
+/// bytes (no copy of token contents). Quoted values are unaffected because their
+/// final byte is the closing quote, not `;`.
+fn strip_trailing_terminator<'a>(args: &[&'a [u8]]) -> Vec<&'a [u8]> {
+    match args.split_last() {
+        Some((last, head)) if **last == *b";" => head.to_vec(),
+        Some((last, head)) if last.last() == Some(&b';') => {
+            let mut v = head.to_vec();
+            let trimmed: &'a [u8] = &last[..last.len() - 1];
+            if !trimmed.is_empty() {
+                v.push(trimmed);
+            }
+            v
+        }
+        _ => args.to_vec(),
+    }
+}
+
 pub fn execute(
     store: &Store,
     cache: &SharedSchemaCache,
@@ -1376,8 +1454,40 @@ pub fn execute(
 
     let cmd = args[0];
 
+    // Tolerate a trailing `;` statement terminator on table commands, so SQL-style
+    // statements pasted into the console or written across lines in a migration
+    // file work (`TSELECT ... FROM t;`). RESP/argv clients never include one; this
+    // only normalizes the text frontends that tokenize a raw line. Scoped to table
+    // commands so KV value semantics (`SET k v;`) are untouched. Only allocates
+    // when a terminator is actually present.
+    let stripped_args;
+    let args: &[&[u8]] = if is_table_terminator_command(cmd)
+        && args.last().is_some_and(|t| t.last() == Some(&b';'))
+    {
+        stripped_args = strip_trailing_terminator(args);
+        &stripped_args
+    } else {
+        args
+    };
+
     if cmd_eq(cmd, b"AUTH") {
         return server::cmd_auth(args, store, out, now);
+    }
+
+    // Reserve the internal table-storage namespace ("_t:") from direct command
+    // access. Table + Lux Auth data lives under `_t:<table>:...` keys; the table
+    // API and internal ops reach them through the store directly, never through
+    // command dispatch, so rejecting `_t:` args here closes the raw-KV bypass of
+    // the reserved-table guard without touching tables/auth. (KEYS/SCAN take a
+    // pattern and are filtered in their handlers instead.) Tradeoff: user values
+    // cannot start with the 3-char reserved prefix `_t:`.
+    if !cmd_eq(cmd, b"KEYS") && !cmd_eq(cmd, b"SCAN") {
+        for arg in &args[1..] {
+            if arg.starts_with(b"_t:") {
+                resp::write_error(out, "ERR '_t:' is a reserved internal namespace");
+                return CmdResult::Written;
+            }
+        }
     }
 
     if (cmd_eq(cmd, b"KEYS")
@@ -1551,6 +1661,9 @@ pub fn execute(
             }
             if cmd_eq(cmd, b"GEOSEARCH_RO") {
                 return geo::cmd_geosearch(args, store, out, now);
+            }
+            if cmd_eq(cmd, b"GRANT") {
+                return tables::cmd_grant(args, store, cache, out, now);
             }
         }
         b'H' => {
@@ -1766,6 +1879,9 @@ pub fn execute(
             if cmd_eq(cmd, b"RESET") {
                 return server::cmd_noop_ok(args, store, out, now);
             }
+            if cmd_eq(cmd, b"REVOKE") {
+                return tables::cmd_revoke(args, store, cache, out, now);
+            }
         }
         b'S' => {
             if cmd_eq(cmd, b"SET") {
@@ -1896,6 +2012,9 @@ pub fn execute(
             if cmd_eq(cmd, b"TINSERT") {
                 return tables::cmd_tinsert(args, store, cache, out, now);
             }
+            if cmd_eq(cmd, b"TUPSERT") {
+                return tables::cmd_tupsert(args, store, cache, out, now);
+            }
             if cmd_eq(cmd, b"TUPDATE") {
                 return tables::cmd_tupdate(args, store, cache, out, now);
             }
@@ -1904,6 +2023,12 @@ pub fn execute(
             }
             if cmd_eq(cmd, b"TDROP") {
                 return tables::cmd_tdrop(args, store, cache, out, now);
+            }
+            if cmd_eq(cmd, b"TINDEX") {
+                return tables::cmd_tindex(args, store, cache, out, now);
+            }
+            if cmd_eq(cmd, b"TDROPINDEX") {
+                return tables::cmd_tdropindex(args, store, cache, out, now);
             }
             if cmd_eq(cmd, b"TCOUNT") {
                 return tables::cmd_tcount(args, store, cache, out, now);
@@ -2093,17 +2218,47 @@ pub fn execute_with_wal(
     now: Instant,
 ) -> CmdResult {
     if !args.is_empty() && crate::vendor::lux::eviction::is_write_command(args[0]) {
-        if let Err(e) = store.wal_log_command(args) {
-            resp::write_error(out, &format!("ERR WAL append failed: {e}"));
+        if let Some(err) = crate::vendor::lux::auth::reserved_table_mutation_error(args, store) {
+            resp::write_error(out, &err);
             return CmdResult::Written;
+        }
+        if let Some(err) = crate::vendor::lux::auth::reserved_key_mutation_error(args, store) {
+            resp::write_error(out, &err);
+            return CmdResult::Written;
+        }
+        // Table data/schema writes log their own RESOLVED command from the table
+        // layer (for crash determinism + so HTTP table writes, which never reach
+        // this function, are durable). Raw-logging them here too would apply the
+        // row twice on replay, so skip them.
+        if !command_self_logs_wal(args[0]) {
+            if let Err(e) = store.wal_log_command(args) {
+                resp::write_error(out, &format!("ERR WAL append failed: {e}"));
+                return CmdResult::Written;
+            }
         }
     }
     execute(store, cache, broker, args, out, now)
 }
 
+/// Table writes that append their own resolved command to the WAL from the table
+/// layer; `execute_with_wal` must not also raw-log them.
+fn command_self_logs_wal(cmd: &[u8]) -> bool {
+    let mut up = [0u8; 8];
+    if cmd.len() > up.len() {
+        return false;
+    }
+    for (i, b) in cmd.iter().enumerate() {
+        up[i] = b.to_ascii_uppercase();
+    }
+    let c = &up[..cmd.len()];
+    matches!(
+        c,
+        b"TINSERT" | b"TUPSERT" | b"TUPDATE" | b"TDELETE" | b"TCREATE" | b"TDROP"
+    )
+}
+
 #[allow(dead_code)]
-pub(crate) type ShardData =
-    hashbrown::HashMap<String, Entry, crate::vendor::lux::store::FxBuildHasher>;
+pub(crate) type ShardData = crate::vendor::lux::store::ShardData;
 
 #[allow(dead_code)]
 pub(crate) fn execute_on_shard(
@@ -2120,7 +2275,7 @@ pub(crate) fn execute_on_shard(
     }
     let cmd = args[0];
     let key = args[1];
-    let ks = arg_str(key);
+    let ks = key;
 
     if cmd_eq(cmd, b"SET") && args.len() >= 3 {
         let mut ttl = None;
@@ -2486,7 +2641,7 @@ pub(crate) fn execute_on_shard_read(
     }
     let cmd = args[0];
     let key = args[1];
-    let ks = arg_str(key);
+    let ks = key;
 
     if cmd[0].eq_ignore_ascii_case(&b'Z') {
         if cmd_eq(cmd, b"ZCARD") {
@@ -2939,7 +3094,7 @@ fn shard_incr_fast(
     now: Instant,
     out: &mut BytesMut,
 ) {
-    let ks = arg_str(key);
+    let ks = key;
     if let Some(entry) = data.get_mut(ks) {
         if entry.is_expired_at(now) {
             match 0i64.checked_add(delta) {
@@ -2988,7 +3143,7 @@ fn shard_incr_fast(
     match 0i64.checked_add(delta) {
         Some(new_val) => {
             data.insert(
-                ks.to_string(),
+                ks.to_vec(),
                 Entry {
                     value: StoreValue::Str(Bytes::from(new_val.to_string())),
                     expires_at: None,
@@ -3010,7 +3165,7 @@ fn shard_list_push_fast(
     now: Instant,
     out: &mut BytesMut,
 ) {
-    let ks = arg_str(key).to_string();
+    let ks = crate::vendor::lux::store::key_bytes(key);
     let entry = data.entry(ks).or_insert_with(|| Entry {
         value: StoreValue::List(std::collections::VecDeque::new()),
         expires_at: None,
@@ -3046,7 +3201,7 @@ fn shard_sadd_fast(
     now: Instant,
     out: &mut BytesMut,
 ) {
-    let ks = arg_str(key).to_string();
+    let ks = crate::vendor::lux::store::key_bytes(key);
     let entry = data.entry(ks).or_insert_with(|| Entry {
         value: StoreValue::Set(crate::vendor::lux::store::SetData::new()),
         expires_at: None,
@@ -3094,7 +3249,7 @@ fn shard_srem(
     now: Instant,
     out: &mut BytesMut,
 ) {
-    let ks = arg_str(key);
+    let ks = key;
     match data.get_mut(ks) {
         Some(entry) if !entry.is_expired_at(now) => match &mut entry.value {
             StoreValue::Set(set) => {
@@ -3123,7 +3278,7 @@ fn shard_hdel(
     now: Instant,
     out: &mut BytesMut,
 ) {
-    let ks = arg_str(key);
+    let ks = key;
     match data.get_mut(ks) {
         Some(entry) if !entry.is_expired_at(now) => match &mut entry.value {
             StoreValue::Hash(map) => {
@@ -3236,7 +3391,7 @@ fn shard_zrem(
     now: Instant,
     out: &mut BytesMut,
 ) {
-    let ks = arg_str(key);
+    let ks = key;
     match data.get_mut(ks) {
         Some(entry) if !entry.is_expired_at(now) => match &mut entry.value {
             StoreValue::SortedSet(tree, scores) => {
@@ -3325,7 +3480,7 @@ fn shard_zpop(
     now: Instant,
     out: &mut BytesMut,
 ) {
-    let ks = arg_str(key);
+    let ks = key;
     match data.get_mut(ks) {
         Some(entry) if !entry.is_expired_at(now) => match &mut entry.value {
             StoreValue::SortedSet(tree, scores) => {
@@ -3421,6 +3576,48 @@ mod tests {
     }
 
     #[test]
+    fn strip_terminator_suffix_on_last_token() {
+        let stripped = strip_trailing_terminator(&[b"TSELECT", b"*", b"FROM", b"workspaces;"]);
+        assert_eq!(stripped.len(), 4);
+        assert_eq!(stripped[3], b"workspaces".as_slice());
+    }
+
+    #[test]
+    fn strip_terminator_standalone_token() {
+        let stripped = strip_trailing_terminator(&[b"TSELECT", b"*", b"FROM", b"t", b";"]);
+        assert_eq!(stripped.len(), 4);
+        assert_eq!(stripped[3], b"t".as_slice());
+    }
+
+    #[test]
+    fn strip_terminator_noop_without_terminator() {
+        let stripped = strip_trailing_terminator(&[b"TSELECT", b"*", b"FROM", b"t"]);
+        assert_eq!(stripped.len(), 4);
+        assert_eq!(stripped[3], b"t".as_slice());
+    }
+
+    #[test]
+    fn tselect_trailing_semicolon_not_in_table_name() {
+        let store = Store::new();
+        // The terminator must not leak into the table name lookup.
+        let out = exec_str(&store, &[b"TSELECT", b"*", b"FROM", b"ghost;"]);
+        assert!(out.contains("ghost"), "got: {out}");
+        assert!(
+            !out.contains("ghost;"),
+            "terminator leaked into name: {out}"
+        );
+    }
+
+    #[test]
+    fn tselect_trailing_semicolon_succeeds_on_real_table() {
+        let store = Store::new();
+        exec(&store, &[b"TCREATE", b"widgets", b"id", b"int"]);
+        let out = exec_str(&store, &[b"TSELECT", b"*", b"FROM", b"widgets;"]);
+        assert!(!out.contains("does not exist"), "got: {out}");
+        assert!(!out.to_lowercase().contains("err"), "got: {out}");
+    }
+
+    #[test]
     fn set_wrong_arg_count() {
         let store = Store::new();
         let out = exec_str(&store, &[b"SET", b"key"]);
@@ -3475,6 +3672,34 @@ mod tests {
     }
 
     #[test]
+    fn string_growth_commands_respect_max_size() {
+        // Small ceiling so the cap is cheap to hit; the byte-string growth paths
+        // (APPEND/SETRANGE/SETBIT) must all reject growth past it.
+        let cfg = crate::vendor::lux::ServerConfig {
+            max_resp_request: 16,
+            ..Default::default()
+        };
+        let store = Store::new_with_config(std::sync::Arc::new(cfg));
+
+        // SETRANGE at a large offset.
+        let out = exec_str(&store, &[b"SETRANGE", b"k", b"1000", b"x"]);
+        assert!(out.contains("string exceeds maximum"), "setrange: {out}");
+
+        // SETBIT at a large bit offset.
+        let out = exec_str(&store, &[b"SETBIT", b"b", b"100000", b"1"]);
+        assert!(out.contains("string exceeds maximum"), "setbit: {out}");
+
+        // APPEND past the ceiling in steps: the running total is what matters.
+        exec(&store, &[b"SET", b"a", b"0123456789"]); // 10 bytes, under 16
+        let out = exec_str(&store, &[b"APPEND", b"a", b"0123456789"]); // would be 20
+        assert!(out.contains("string exceeds maximum"), "append: {out}");
+
+        // A small write within the ceiling still works.
+        let out = exec_str(&store, &[b"SETRANGE", b"ok", b"0", b"hi"]);
+        assert!(out.contains(":2"), "small setrange should succeed: {out}");
+    }
+
+    #[test]
     fn command_specs_cover_dispatched_commands() {
         for cmd in [
             b"GEOADD" as &[u8],
@@ -3525,6 +3750,46 @@ mod tests {
         assert_eq!(
             pipeline_access_for_args(&[b"EXISTS" as &[u8], b"a"]),
             PipelineAccess::Read
+        );
+        assert_eq!(
+            pipeline_access_for_args(&[b"SET" as &[u8], b"k", b"v"]),
+            PipelineAccess::Write
+        );
+        assert_eq!(
+            pipeline_access_for_args(&[b"SET" as &[u8], b"k", b"v", b"NX"]),
+            PipelineAccess::Write
+        );
+        assert_eq!(
+            pipeline_access_for_args(&[b"SET" as &[u8], b"k", b"v", b"BAD"]),
+            PipelineAccess::General
+        );
+        assert_eq!(
+            pipeline_access_for_args(&[b"SET" as &[u8], b"k", b"v", b"EX", b"10"]),
+            PipelineAccess::General
+        );
+        assert_eq!(
+            pipeline_access_for_args(&[b"SETEX" as &[u8], b"k", b"10", b"v"]),
+            PipelineAccess::General
+        );
+        assert_eq!(
+            pipeline_access_for_args(&[b"PSETEX" as &[u8], b"k", b"10", b"v"]),
+            PipelineAccess::General
+        );
+        assert_eq!(
+            pipeline_access_for_args(&[b"SPOP" as &[u8], b"k"]),
+            PipelineAccess::Write
+        );
+        assert_eq!(
+            pipeline_access_for_args(&[b"SPOP" as &[u8], b"k", b"2"]),
+            PipelineAccess::General
+        );
+        assert_eq!(
+            pipeline_access_for_args(&[b"ZPOPMIN" as &[u8], b"k"]),
+            PipelineAccess::Write
+        );
+        assert_eq!(
+            pipeline_access_for_args(&[b"ZPOPMIN" as &[u8], b"k", b"2"]),
+            PipelineAccess::General
         );
     }
 
@@ -4052,6 +4317,34 @@ mod tests {
                 "cmd {:?} should be unknown: {out}",
                 std::str::from_utf8(cmd[0])
             );
+        }
+    }
+
+    // Fuzz: arbitrary argument vectors through the command dispatch/lowering must
+    // never panic. Uses an in-memory store (no disk) and skips commands with side
+    // effects or that block, so the fuzzer can't write files or hang.
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(2000))]
+
+        #[test]
+        fn fuzz_command_execute_no_panic(
+            argv in proptest::collection::vec(
+                proptest::collection::vec(proptest::prelude::any::<u8>(), 0..12),
+                1..6,
+            )
+        ) {
+            const SKIP: &[&[u8]] = &[
+                b"SAVE", b"BGSAVE", b"BGREWRITEAOF", b"FLUSHALL", b"FLUSHDB", b"DEBUG",
+                b"SHUTDOWN", b"BLPOP", b"BRPOP", b"BLMOVE", b"BRPOPLPUSH", b"BLMPOP",
+                b"BZPOPMIN", b"BZPOPMAX", b"BZMPOP", b"WAIT", b"SUBSCRIBE", b"PSUBSCRIBE",
+                b"MONITOR",
+            ];
+            let first_upper: Vec<u8> = argv[0].iter().map(u8::to_ascii_uppercase).collect();
+            if !SKIP.contains(&first_upper.as_slice()) {
+                let refs: Vec<&[u8]> = argv.iter().map(Vec::as_slice).collect();
+                let store = Store::new();
+                let _ = exec(&store, &refs);
+            }
         }
     }
 }
