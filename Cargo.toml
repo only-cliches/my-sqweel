@@ -1,10 +1,10 @@
 [package]
 name = "my-sqweel"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "A schema-drift-tolerant, development-only MySQL facade for fast local iteration."
 license = "MIT"
-repository = "https://github.com/only-cliches/my-squeel"
+repository = "https://github.com/only-cliches/my-sqweel"
 readme = "README.md"
 include = [
     "/Cargo.lock",

@@ -2,7 +2,7 @@
 
 All notable changes to MySqweel will be documented in this file.
 
-## 0.2.0 - Future
+## 0.2.0 - Jun 25, 2026
 
 - Added an always-on Meilisearch-compatible HTTP API on the debug HTTP port.
   - Meilisearch indexes map to MySqweel/MySQL tables.
