@@ -4,6 +4,36 @@ All notable changes to MySqweel will be documented in this file.
 
 ## 0.2.0 - Future
 
+- Added an always-on Meilisearch-compatible HTTP API on the debug HTTP port.
+  - Meilisearch indexes map to MySqweel/MySQL tables.
+  - Meilisearch documents map to stored rows.
+  - The MySQL/table engine remains the source of truth.
+- Added synchronous Tantivy-backed text search for the Meilisearch-compatible API.
+  - Document and table mutations rebuild the derived search index before reporting task success.
+  - Search falls back to row-scan compatibility for edge cases where Tantivy produces no candidates.
+- Added Meilisearch-compatible index, document, search, multi-search, settings, task, key, stats, and swap-index endpoints.
+- Added support for Meilisearch search options including filters, sort, pagination, `attributesToRetrieve`, `attributesToSearchOn`, `showRankingScore`, and `showRankingScoreDetails`.
+- Added facet support for Meilisearch search responses, including `facetDistribution`, numeric `facetStats`, array facet values, and `facets: ["*"]`.
+- Added a 90/10 Meilisearch compatibility pass for previously missing feature areas:
+  - query-time synonym and typo-tolerance fallback matching
+  - highlighting, cropping, and match-position metadata in search hits
+  - `POST /indexes/:uid/facet-search`
+  - synchronous in-memory dump status/download endpoints
+  - webhook CRUD compatibility endpoints
+  - permissive bearer/API-key handling for tenant-token-shaped local client requests
+- Added task compatibility improvements:
+  - write APIs return Meilisearch-shaped tasks
+  - tasks include both `taskUid` and `uid`
+  - task durations are serialized as strings
+  - task listing supports `uids`, `types`, `statuses`, `indexUids`, ranges, pagination, `from`, and `next`
+- Added official Meilisearch JavaScript client compatibility coverage via `tests/node/meili-js-client-compat.mjs` and `cargo test --test meili_js_client`.
+- Added optional official Meilisearch Python client compatibility coverage via `tests/python/meili_client_compat.py` and `cargo test --test meili_python_client`.
+- Added direct Meilisearch handler coverage for synonyms, typo tolerance, formatting, facet search, dumps, and webhooks.
+- Added `npm run test:meili` and `requirements-dev.txt` for running SDK compatibility smoke tests outside Cargo.
+- Fixed `sqwl serve` panic caused by nesting Tokio runtimes inside the synchronous server path.
+- Fixed Meilisearch filter handling for multi-value `IN` and `NOT IN` expressions.
+- Fixed Meilisearch ranking score metadata being stripped by `attributesToRetrieve`.
+- Fixed fallback text search so `searchableAttributes` and `attributesToSearchOn` are respected consistently.
 - Fixed primary key metadata reporting so `information_schema.key_column_usage` and related introspection stay consistent after `ALTER TABLE` operations.
 - Fixed an issue with spawning connection sessions.
 - Added more information_schema coverage to the backend with associated tests.

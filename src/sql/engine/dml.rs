@@ -53,7 +53,8 @@ impl Engine {
                 for row in select_result.rows {
                     let mut data = Map::new();
                     for (idx, col) in columns.iter().enumerate() {
-                        let value = select_result.columns
+                        let value = select_result
+                            .columns
                             .get(idx)
                             .and_then(|src_col| row.get(src_col).cloned())
                             .unwrap_or(Value::Null);

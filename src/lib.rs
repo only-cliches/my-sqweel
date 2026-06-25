@@ -17,7 +17,7 @@ pub mod sql;
 pub mod storage;
 pub(crate) mod vendor;
 
-pub async fn run_cli() -> Result<()> {
+pub fn run_cli() -> Result<()> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     let (app, command) = parse_cli(&args)?;
     init_tracing(&app.log_filter);
@@ -104,7 +104,6 @@ enum ReplInput {
 
 fn parse_cli(args: &[String]) -> Result<(AppConfig, Command)> {
     let mut app = AppConfig::default();
-    let mut debug_http = false;
     let mut idx = 0;
 
     while idx < args.len() {
@@ -137,13 +136,12 @@ fn parse_cli(args: &[String]) -> Result<(AppConfig, Command)> {
             continue;
         }
         if arg == "--debug-http" {
-            debug_http = true;
+            // Backward-compatible no-op: debug HTTP API is always enabled by default.
             idx += 1;
             continue;
         }
         if let Some(value) = option_value(args, &mut idx, "--debug-bind")? {
             app.server.debug_addr = Some(parse_socket_addr("--debug-bind", &value)?);
-            debug_http = true;
             idx += 1;
             continue;
         }
@@ -181,7 +179,7 @@ fn parse_cli(args: &[String]) -> Result<(AppConfig, Command)> {
         break;
     }
 
-    if debug_http && app.server.debug_addr.is_none() {
+    if app.server.debug_addr.is_none() {
         app.server.debug_addr = Some(SocketAddr::new(
             app.server.bind_addr.ip(),
             app.server.bind_addr.port().saturating_add(100),
@@ -490,7 +488,7 @@ fn status_json(app: &AppConfig, engine: &Engine, server_running: bool) -> Value 
             "running": server_running,
             "bind": app.server.bind_addr.to_string(),
             "allowRemote": app.server.allow_remote,
-            "debugBind": app.server.debug_addr.map(|addr| addr.to_string()),
+            "debugBind": app.server.effective_debug_addr().to_string(),
         },
         "storage": {
             "mode": if app.server.data_dir.is_some() { "directory" } else { "memory" },
@@ -653,9 +651,26 @@ fn delete_tables(delete: &sqlparser::ast::Delete) -> Vec<String> {
 }
 
 fn print_help() {
-    println!(
-        "MySqweel usage:\n  sqwl [options] serve [--repl]\n  sqwl [options] repl\n  sqwl explain <sql>\n\nOptions:\n  --bind <addr>                 MySQL bind address (default 127.0.0.1:3307)\n  --data-dir <dir>              locked Lux-backed data directory\n  --allow-remote                allow non-loopback bind addresses\n  --unique-mode <mode>          overwrite or enforce (default overwrite)\n  --debug-http                  enable debug HTTP endpoints\n  --debug-bind <addr>           debug HTTP bind address (enables debug HTTP)\n  --query-delay-ms <n>          add fixed latency per SQL statement\n  --fail-read-every <n>         fail every Nth read statement\n  --fail-write-every <n>        fail every Nth write statement\n  --snapshot-dir <path>         REPL snapshot directory (default .my-sqweel/snapshots)\n  --log-filter <filter>         tracing filter (default my_sqweel=info)\n\nMaintenance commands run inside `sqwl repl` or `sqwl serve --repl`."
-    );
+    println!(concat!(
+        "MySqweel usage:\n",
+        "  sqwl [options] serve [--repl]\n",
+        "  sqwl [options] repl\n",
+        "  sqwl explain <sql>\n",
+        "\n",
+        "Options:\n",
+        "  --bind <addr>                 MySQL bind address (default 127.0.0.1:3307)\n",
+        "  --data-dir <dir>              locked Lux-backed data directory\n",
+        "  --allow-remote                allow non-loopback bind addresses\n",
+        "  --unique-mode <mode>          overwrite or enforce (default overwrite)\n",
+        "  --debug-bind <addr>           debug HTTP bind address (default: bind port + 100)\n",
+        "  --query-delay-ms <n>          add fixed latency per SQL statement\n",
+        "  --fail-read-every <n>         fail every Nth read statement\n",
+        "  --fail-write-every <n>        fail every Nth write statement\n",
+        "  --snapshot-dir <path>         REPL snapshot directory (default .my-sqweel/snapshots)\n",
+        "  --log-filter <filter>         tracing filter (default my_sqweel=info)\n",
+        "\n",
+        "Maintenance commands run inside `sqwl repl` or `sqwl serve --repl`."
+    ));
 }
 
 fn print_repl_help() {
@@ -681,7 +696,6 @@ mod tests {
             "--data-dir=./data".to_string(),
             "--unique-mode".to_string(),
             "enforce".to_string(),
-            "--debug-http".to_string(),
             "--snapshot-dir".to_string(),
             "./snapshots".to_string(),
             "--log-filter=my_sqweel=debug".to_string(),
@@ -703,6 +717,16 @@ mod tests {
         );
         assert_eq!(app.snapshot_dir, PathBuf::from("./snapshots"));
         assert_eq!(app.log_filter, "my_sqweel=debug");
+    }
+
+    #[test]
+    fn parse_cli_keeps_debug_http_flag_compatible() {
+        let (app, command) = parse_cli(&["--debug-http".to_string(), "serve".to_string()]).unwrap();
+        assert!(matches!(command, Command::Serve { repl: false }));
+        assert_eq!(
+            app.server.effective_debug_addr().to_string(),
+            "127.0.0.1:3407".to_string()
+        );
     }
 
     #[test]

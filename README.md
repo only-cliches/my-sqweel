@@ -16,6 +16,7 @@ Instead of dropping your dev database every time your schema changes, point your
 - **In-memory or file-backed storage** — runs fully in-memory by default; pass `--data-dir` to persist via Lux
 - **Schema drift tolerance** — columns can appear or disappear between runs without migrations; drift is tracked and reportable
 - **Debug HTTP API** — seed tables, inspect rows, snapshot/restore state, and get drift reports over plain HTTP
+- **Meilisearch-compatible HTTP API** — use official Meilisearch clients against MySQL-shaped tables, with Tantivy-backed text search, facets, stats, tasks, settings, keys, and multi-search
 - **Interactive REPL** — built-in maintenance shell for drift checks, snapshots, index rebuilds, and ad-hoc SQL
 - **Failure injection** — simulate read/write failures and query latency for resilience testing
 - **`information_schema` support** — `SHOW TABLES`, `SHOW COLUMNS`, `SHOW CREATE TABLE`, `SHOW INDEX`, and `information_schema.*` views for ORM introspection
@@ -90,7 +91,6 @@ Options:
   --data-dir <dir>           Lux-backed persistent storage (default: in-memory)
   --allow-remote             Allow non-loopback bind addresses
   --unique-mode <mode>       overwrite | enforce           (default: overwrite)
-  --debug-http               Enable the debug HTTP API
   --debug-bind <addr>        Debug HTTP listen address     (default: bind port + 100)
   --query-delay-ms <n>       Add fixed latency to every statement
   --fail-read-every <n>      Fail every Nth read statement
@@ -127,7 +127,7 @@ quit / exit / Ctrl+C        Exit the REPL
 
 ## Debug HTTP API
 
-Enable with `--debug-http` (or `--debug-bind <addr>`). By default it binds on `bind port + 100` (e.g. `127.0.0.1:3407`).
+Always available on the HTTP API port (defaults to `bind port + 100`; for example `127.0.0.1:3407`), with `--debug-bind <addr>` for override.
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -163,6 +163,61 @@ fetch('http://127.0.0.1:3407/tables/users/seed', {
 ```
 
 Seed calls extend the schema automatically — columns that don't exist yet are added without requiring a migration.
+
+## Meilisearch-Compatible API
+
+The same HTTP port also exposes a Meilisearch-compatible API intended for local development with official Meilisearch clients. A Meilisearch index maps to a MySqweel/MySQL table, and a Meilisearch document maps to a table row. The MySQL/table data remains the source of truth; the search layer maintains a synchronous in-memory Tantivy index derived from those rows.
+
+Example with the official JavaScript client:
+
+```js
+import { Meilisearch } from 'meilisearch';
+
+const client = new Meilisearch({
+  host: 'http://127.0.0.1:3407',
+  apiKey: 'masterKey',
+});
+
+await client.createIndex('books', { primaryKey: 'id' });
+
+const books = client.index('books');
+await books.addDocuments([
+  { id: '1', title: 'Dune', genre: 'sci-fi', rating: 10 },
+  { id: '2', title: 'Foundation', genre: 'sci-fi', rating: 8 },
+]);
+
+const results = await books.search('dune', {
+  facets: ['genre', 'rating'],
+  attributesToRetrieve: ['id', 'title'],
+  showRankingScore: true,
+});
+```
+
+Supported compatibility surface includes:
+
+| Area | Endpoints / behavior |
+|------|----------------------|
+| Health/version | `GET /health`, `GET /version` |
+| Indexes | create, list, get, update metadata, delete, swap |
+| Documents | add/update, patch/replace single docs, get/list/fetch, delete single/batch/filter/all |
+| Search | `POST /indexes/:uid/search`, `GET /indexes/:uid/search`, `/multi-search` |
+| Search options | `q`, filters, sort, pagination, `attributesToRetrieve`, `attributesToSearchOn`, ranking score fields |
+| Facets | `facets`, `facetDistribution`, numeric `facetStats`, `facets: ["*"]` |
+| Facet search | `POST /indexes/:uid/facet-search` with `facetName`, `facetQuery`, `q`, filter, and limit support |
+| Formatting | `attributesToHighlight`, custom highlight tags, `attributesToCrop`, `cropLength`, `cropMarker`, and `_matchesPosition` |
+| Text settings | best-effort `synonyms` and `typoTolerance` support in row-scan/fallback matching |
+| Settings | get/update/reset settings and individual settings, including searchable/filterable/sortable attributes |
+| Tasks | task creation, `GET /tasks/:uid`, task listing with `uids`, `types`, `statuses`, `indexUids`, ranges, pagination |
+| Dumps/webhooks | synchronous in-memory dump status/download responses and webhook CRUD compatibility endpoints |
+| Keys/stats/auth | default local key responses, permissive bearer/API-key acceptance for local tenant-token-style clients, index stats, global stats |
+
+Current limitations:
+
+- This is API-compatible enough for local dev workflows, not a byte-for-byte Meilisearch implementation.
+- Ranking is Tantivy/BM25-oriented, not an exact clone of Meilisearch ranking rules.
+- Typo tolerance, synonyms, highlighting/cropping, facet search, dumps, webhooks, and tenant-token behavior are 90/10 compatibility features. They are shaped for official client workflows, but they do not implement Meilisearch's full production semantics.
+- Dumps and webhooks are local compatibility resources; dumps are JSON snapshots kept in memory for the current process, and webhooks are stored but not dispatched.
+- Search indexes are currently in-memory derived indexes and are rebuilt synchronously after document/table mutations.
 
 ## Schema Drift
 
@@ -214,9 +269,18 @@ npm install
 npm run test:mysql2
 npm run test:drizzle
 npm run test:drizzle:compat
+
+# Official Meilisearch JS client smoke test (requires sqwl server running on :3407)
+npm run test:meili
+
+# Optional Python Meilisearch client smoke test
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -r requirements-dev.txt
+python tests/python/meili_client_compat.py http://127.0.0.1:3407 masterKey
 ```
 
-The test suite includes MySQL parity tests, schema metadata tests, a compat matrix, and Drizzle ORM compatibility tests.
+The test suite includes MySQL parity tests, schema metadata tests, a compat matrix, Drizzle ORM compatibility tests, direct Meilisearch handler tests, and official JavaScript/Python Meilisearch client compatibility harnesses. The Cargo wrappers for the SDK harnesses are `cargo test --test meili_js_client` and, when the Python SDK is available, `MEILI_PYTHON=.venv/bin/python cargo test --test meili_python_client`.
 
 ## Project Layout
 

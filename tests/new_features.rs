@@ -35,7 +35,9 @@ fn test_case_when_expression() {
 #[test]
 fn test_substring_function() {
     let engine = Engine::default();
-    let result = engine.execute_sql("SELECT SUBSTRING('hello world', 1, 5)").unwrap();
+    let result = engine
+        .execute_sql("SELECT SUBSTRING('hello world', 1, 5)")
+        .unwrap();
     assert_eq!(result[0].rows.len(), 1);
     let row = &result[0].rows[0];
     let col_name = &result[0].columns[0];
@@ -46,7 +48,9 @@ fn test_substring_function() {
 #[test]
 fn test_floor_ceil_functions() {
     let engine = Engine::default();
-    let result = engine.execute_sql("SELECT FLOOR(10.7), CEIL(10.3)").unwrap();
+    let result = engine
+        .execute_sql("SELECT FLOOR(10.7), CEIL(10.3)")
+        .unwrap();
     assert_eq!(result[0].rows.len(), 1);
 }
 
@@ -96,9 +100,7 @@ fn test_group_concat_aggregate() {
 #[test]
 fn test_information_schema_tables_has_table_type() {
     let engine = Engine::default();
-    engine
-        .execute_sql("CREATE TABLE mytable (id INT)")
-        .unwrap();
+    engine.execute_sql("CREATE TABLE mytable (id INT)").unwrap();
     let result = engine
         .execute_sql("SELECT table_name, table_type FROM information_schema.tables WHERE table_name = 'mytable'")
         .unwrap();
@@ -133,32 +135,36 @@ fn test_insert_select() {
 #[test]
 fn test_union() {
     let engine = Engine::default();
+    engine.execute_sql("CREATE TABLE t1 (id INT)").unwrap();
     engine
-        .execute_sql("CREATE TABLE t1 (id INT)")
+        .execute_sql("INSERT INTO t1 VALUES (1), (2)")
         .unwrap();
-    engine.execute_sql("INSERT INTO t1 VALUES (1), (2)").unwrap();
+    engine.execute_sql("CREATE TABLE t2 (id INT)").unwrap();
     engine
-        .execute_sql("CREATE TABLE t2 (id INT)")
+        .execute_sql("INSERT INTO t2 VALUES (2), (3)")
         .unwrap();
-    engine.execute_sql("INSERT INTO t2 VALUES (2), (3)").unwrap();
 
     let result = engine
         .execute_sql("SELECT id FROM t1 UNION SELECT id FROM t2")
         .unwrap();
-    assert_eq!(result[0].rows.len(), 3, "UNION should deduplicate and return 3 rows");
+    assert_eq!(
+        result[0].rows.len(),
+        3,
+        "UNION should deduplicate and return 3 rows"
+    );
 }
 
 #[test]
 fn test_union_all() {
     let engine = Engine::default();
+    engine.execute_sql("CREATE TABLE t1 (id INT)").unwrap();
     engine
-        .execute_sql("CREATE TABLE t1 (id INT)")
+        .execute_sql("INSERT INTO t1 VALUES (1), (2)")
         .unwrap();
-    engine.execute_sql("INSERT INTO t1 VALUES (1), (2)").unwrap();
+    engine.execute_sql("CREATE TABLE t2 (id INT)").unwrap();
     engine
-        .execute_sql("CREATE TABLE t2 (id INT)")
+        .execute_sql("INSERT INTO t2 VALUES (2), (3)")
         .unwrap();
-    engine.execute_sql("INSERT INTO t2 VALUES (2), (3)").unwrap();
 
     let result = engine
         .execute_sql("SELECT id FROM t1 UNION ALL SELECT id FROM t2")
@@ -173,14 +179,14 @@ fn test_union_all() {
 #[test]
 fn test_implicit_cross_join() {
     let engine = Engine::default();
+    engine.execute_sql("CREATE TABLE t1 (id INT)").unwrap();
     engine
-        .execute_sql("CREATE TABLE t1 (id INT)")
+        .execute_sql("INSERT INTO t1 VALUES (1), (2)")
         .unwrap();
-    engine.execute_sql("INSERT INTO t1 VALUES (1), (2)").unwrap();
+    engine.execute_sql("CREATE TABLE t2 (id INT)").unwrap();
     engine
-        .execute_sql("CREATE TABLE t2 (id INT)")
+        .execute_sql("INSERT INTO t2 VALUES (3), (4)")
         .unwrap();
-    engine.execute_sql("INSERT INTO t2 VALUES (3), (4)").unwrap();
 
     let result = engine
         .execute_sql("SELECT t1.id, t2.id FROM t1, t2 WHERE t1.id = 1")

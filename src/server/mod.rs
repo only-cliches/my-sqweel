@@ -65,16 +65,23 @@ impl ServerConfig {
                 self.bind_addr
             ));
         }
-        if let Some(debug_addr) = self.debug_addr
-            && !debug_addr.ip().is_loopback()
-            && !self.allow_remote
-        {
+        let debug_addr = self.effective_debug_addr();
+        if !debug_addr.ip().is_loopback() && !self.allow_remote {
             return Err(anyhow!(
                 "refusing non-loopback debug bind {}. Pass --allow-remote to override",
                 debug_addr
             ));
         }
         Ok(())
+    }
+
+    pub fn effective_debug_addr(&self) -> SocketAddr {
+        self.debug_addr.unwrap_or_else(|| {
+            SocketAddr::new(
+                self.bind_addr.ip(),
+                self.bind_addr.port().saturating_add(100),
+            )
+        })
     }
 }
 
@@ -136,8 +143,7 @@ fn log_runtime(cfg: &ServerConfig) {
 }
 
 fn start_debug_http(cfg: &ServerConfig, engine: Arc<Engine>) {
-    if let Some(debug_addr) = cfg.debug_addr {
-        debug_http::spawn(debug_addr, engine.clone());
-        tracing::info!(address = %debug_addr, "debug http endpoint listening");
-    }
+    let debug_addr = cfg.effective_debug_addr();
+    debug_http::spawn(debug_addr, engine.clone());
+    tracing::info!(address = %debug_addr, "debug http endpoint listening");
 }

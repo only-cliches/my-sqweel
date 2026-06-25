@@ -762,7 +762,9 @@ pub(super) fn like_match(target: &str, pattern: &str) -> bool {
                 }
             }
             LikeToken::Literal(ch) => {
-                if target.get(target_idx).map(|c| c.to_ascii_lowercase()) == Some(ch.to_ascii_lowercase()) {
+                if target.get(target_idx).map(|c| c.to_ascii_lowercase())
+                    == Some(ch.to_ascii_lowercase())
+                {
                     reachable.insert((pattern_idx + 1, target_idx + 1));
                 }
             }
@@ -1271,10 +1273,10 @@ pub(super) fn eval_function_text(
             if s == Value::Null || from == Value::Null || to == Value::Null {
                 Ok(Value::Null)
             } else {
-                Ok(Value::String(
-                    json_scalar_to_string(&s)
-                        .replace(&json_scalar_to_string(&from), &json_scalar_to_string(&to)),
-                ))
+                Ok(Value::String(json_scalar_to_string(&s).replace(
+                    &json_scalar_to_string(&from),
+                    &json_scalar_to_string(&to),
+                )))
             }
         }
         "DATE_FORMAT" => {

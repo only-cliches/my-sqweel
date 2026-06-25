@@ -4,7 +4,9 @@ use my_sqweel::sql::engine::Engine;
 fn information_schema_engines_lists_available_engines() {
     let engine = Engine::default();
     let result = engine
-        .execute_sql("SELECT engine, support FROM information_schema.engines WHERE engine = 'InnoDB'")
+        .execute_sql(
+            "SELECT engine, support FROM information_schema.engines WHERE engine = 'InnoDB'",
+        )
         .unwrap();
     assert_eq!(result[0].rows.len(), 1);
     assert!(result[0].columns.contains(&"engine".to_string()));
@@ -17,7 +19,11 @@ fn information_schema_processlist_shows_current_connection() {
     let result = engine
         .execute_sql("SELECT id, user, host, db FROM information_schema.processlist")
         .unwrap();
-    assert_eq!(result[0].rows.len(), 1, "Should show at least one connection");
+    assert_eq!(
+        result[0].rows.len(),
+        1,
+        "Should show at least one connection"
+    );
     assert!(result[0].columns.contains(&"id".to_string()));
     assert!(result[0].columns.contains(&"user".to_string()));
 }
@@ -72,12 +78,11 @@ fn information_schema_keywords_has_common_keywords() {
     assert!(result[0].rows.len() > 100, "Should have 100+ keywords");
 
     // Check for specific keywords
-    assert!(result[0]
-        .rows
-        .iter()
-        .any(|row| row.get("keyword")
+    assert!(result[0].rows.iter().any(|row| {
+        row.get("keyword")
             .and_then(|v| v.as_str())
-            .is_some_and(|s| s == "CREATE")));
+            .is_some_and(|s| s == "CREATE")
+    }));
 }
 
 #[test]
@@ -151,7 +156,10 @@ fn information_schema_engines_supports_common_queries() {
     let result = engine
         .execute_sql("SELECT engine FROM information_schema.engines WHERE support = 'YES'")
         .unwrap();
-    assert!(result[0].rows.len() > 0, "Should have at least one supported engine");
+    assert!(
+        result[0].rows.len() > 0,
+        "Should have at least one supported engine"
+    );
 }
 
 #[test]

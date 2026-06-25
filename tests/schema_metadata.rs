@@ -733,10 +733,14 @@ fn information_schema_schemata_returns_app_with_utf8mb4_defaults() {
         .unwrap();
     assert_eq!(rows[0].rows.len(), 1);
     let row = &rows[0].rows[0];
-    assert_eq!(row.get("catalog_name").and_then(|v| v.as_str()), Some("def"));
+    assert_eq!(
+        row.get("catalog_name").and_then(|v| v.as_str()),
+        Some("def")
+    );
     assert_eq!(row.get("schema_name").and_then(|v| v.as_str()), Some("app"));
     assert_eq!(
-        row.get("default_character_set_name").and_then(|v| v.as_str()),
+        row.get("default_character_set_name")
+            .and_then(|v| v.as_str()),
         Some("utf8mb4")
     );
     assert_eq!(
@@ -776,15 +780,24 @@ fn information_schema_columns_reports_all_documented_columns() {
         parent_id.get("is_nullable").and_then(|v| v.as_str()),
         Some("NO")
     );
-    assert_eq!(parent_id.get("column_key").and_then(|v| v.as_str()), Some("PRI"));
+    assert_eq!(
+        parent_id.get("column_key").and_then(|v| v.as_str()),
+        Some("PRI")
+    );
 
     let email = rows[0]
         .rows
         .iter()
         .find(|row| row.get("column_name").and_then(|v| v.as_str()) == Some("email"))
         .expect("email row");
-    assert_eq!(email.get("column_key").and_then(|v| v.as_str()), Some("UNI"));
-    assert_eq!(email.get("is_nullable").and_then(|v| v.as_str()), Some("NO"));
+    assert_eq!(
+        email.get("column_key").and_then(|v| v.as_str()),
+        Some("UNI")
+    );
+    assert_eq!(
+        email.get("is_nullable").and_then(|v| v.as_str()),
+        Some("NO")
+    );
 
     let note = rows[0]
         .rows
@@ -819,7 +832,9 @@ fn information_schema_table_constraints_includes_pk_unique_and_fk() {
         })
         .collect();
     assert!(
-        types.iter().any(|(name, kind)| *name == "PRIMARY" && *kind == "PRIMARY KEY"),
+        types
+            .iter()
+            .any(|(name, kind)| *name == "PRIMARY" && *kind == "PRIMARY KEY"),
         "expected PRIMARY/PRIMARY KEY row, saw {types:?}"
     );
     assert!(
@@ -827,7 +842,9 @@ fn information_schema_table_constraints_includes_pk_unique_and_fk() {
         "expected at least one UNIQUE row, saw {types:?}"
     );
     assert!(
-        types.iter().any(|(name, kind)| *name == "fk_children_parents" && *kind == "FOREIGN KEY"),
+        types
+            .iter()
+            .any(|(name, kind)| *name == "fk_children_parents" && *kind == "FOREIGN KEY"),
         "expected fk_children_parents/FOREIGN KEY row, saw {types:?}"
     );
     for row in &rows[0].rows {
@@ -906,7 +923,11 @@ fn information_schema_key_column_usage_emits_pk_unique_and_fk_rows() {
         .iter()
         .filter(|row| row.get("constraint_name").and_then(|v| v.as_str()) == Some("PRIMARY"))
         .collect();
-    pk_rows.sort_by_key(|row| row.get("ordinal_position").and_then(|v| v.as_u64()).unwrap());
+    pk_rows.sort_by_key(|row| {
+        row.get("ordinal_position")
+            .and_then(|v| v.as_u64())
+            .unwrap()
+    });
     assert_eq!(pk_rows.len(), 2, "composite PK should produce 2 rows");
     assert_eq!(
         pk_rows[0].get("column_name").and_then(|v| v.as_str()),
@@ -989,10 +1010,7 @@ fn information_schema_key_column_usage_emits_pk_unique_and_fk_rows() {
         fk.get("column_name").and_then(|v| v.as_str()),
         Some("parent_id")
     );
-    assert_eq!(
-        fk.get("ordinal_position").and_then(|v| v.as_u64()),
-        Some(1)
-    );
+    assert_eq!(fk.get("ordinal_position").and_then(|v| v.as_u64()), Some(1));
     assert_eq!(
         fk.get("position_in_unique_constraint")
             .and_then(|v| v.as_u64()),
@@ -1031,7 +1049,11 @@ fn information_schema_key_column_usage_handles_pk_added_via_alter_table() {
              WHERE table_name = 'late_pk' AND constraint_name = 'PRIMARY'",
         )
         .unwrap();
-    assert_eq!(rows[0].rows.len(), 1, "ALTER-added PK should populate key_column_usage");
+    assert_eq!(
+        rows[0].rows.len(),
+        1,
+        "ALTER-added PK should populate key_column_usage"
+    );
     assert_eq!(
         rows[0].rows[0].get("column_name").and_then(|v| v.as_str()),
         Some("id")
@@ -1059,10 +1081,17 @@ fn information_schema_referential_constraints_includes_full_fk_metadata() {
         .unwrap();
     assert_eq!(rows[0].rows.len(), 1);
     let row = &rows[0].rows[0];
-    assert_eq!(row.get("constraint_catalog").and_then(|v| v.as_str()), Some("def"));
-    assert_eq!(row.get("constraint_schema").and_then(|v| v.as_str()), Some("app"));
     assert_eq!(
-        row.get("unique_constraint_catalog").and_then(|v| v.as_str()),
+        row.get("constraint_catalog").and_then(|v| v.as_str()),
+        Some("def")
+    );
+    assert_eq!(
+        row.get("constraint_schema").and_then(|v| v.as_str()),
+        Some("app")
+    );
+    assert_eq!(
+        row.get("unique_constraint_catalog")
+            .and_then(|v| v.as_str()),
         Some("def")
     );
     assert_eq!(
@@ -1073,10 +1102,22 @@ fn information_schema_referential_constraints_includes_full_fk_metadata() {
         row.get("unique_constraint_name").and_then(|v| v.as_str()),
         Some("PRIMARY")
     );
-    assert_eq!(row.get("match_option").and_then(|v| v.as_str()), Some("NONE"));
-    assert_eq!(row.get("update_rule").and_then(|v| v.as_str()), Some("RESTRICT"));
-    assert_eq!(row.get("delete_rule").and_then(|v| v.as_str()), Some("CASCADE"));
-    assert_eq!(row.get("table_name").and_then(|v| v.as_str()), Some("children"));
+    assert_eq!(
+        row.get("match_option").and_then(|v| v.as_str()),
+        Some("NONE")
+    );
+    assert_eq!(
+        row.get("update_rule").and_then(|v| v.as_str()),
+        Some("RESTRICT")
+    );
+    assert_eq!(
+        row.get("delete_rule").and_then(|v| v.as_str()),
+        Some("CASCADE")
+    );
+    assert_eq!(
+        row.get("table_name").and_then(|v| v.as_str()),
+        Some("children")
+    );
     assert_eq!(
         row.get("referenced_table_name").and_then(|v| v.as_str()),
         Some("parents")
@@ -1096,7 +1137,11 @@ fn information_schema_character_sets_lists_common_charsets() {
     let names: Vec<&str> = rows[0]
         .rows
         .iter()
-        .map(|row| row.get("character_set_name").and_then(|v| v.as_str()).unwrap())
+        .map(|row| {
+            row.get("character_set_name")
+                .and_then(|v| v.as_str())
+                .unwrap()
+        })
         .collect();
     assert!(names.contains(&"utf8mb4"));
     assert!(names.contains(&"ascii"));

@@ -11,9 +11,19 @@ impl Engine {
 
         let mut rows = match &*query.body {
             SetExpr::Select(select) => {
-                return self.select_from(select.clone(), &order_by, limit.as_ref(), offset.as_ref())
+                return self.select_from(
+                    select.clone(),
+                    &order_by,
+                    limit.as_ref(),
+                    offset.as_ref(),
+                );
             }
-            SetExpr::SetOperation { op, left, right, set_quantifier } => {
+            SetExpr::SetOperation {
+                op,
+                left,
+                right,
+                set_quantifier,
+            } => {
                 let left_query = Query {
                     body: left.clone(),
                     order_by: None,
@@ -48,9 +58,9 @@ impl Engine {
                         let should_dedup = *set_quantifier != sqlparser::ast::SetQuantifier::All;
                         if should_dedup {
                             let mut seen = BTreeSet::new();
-                            left_result.rows.retain(|row| {
-                                seen.insert(encode_json_row(row))
-                            });
+                            left_result
+                                .rows
+                                .retain(|row| seen.insert(encode_json_row(row)));
                             for row in right_result.rows {
                                 let row_key = encode_json_row(&row);
                                 if seen.insert(row_key) {
@@ -727,7 +737,10 @@ impl Engine {
             let mut row = Map::new();
             row.insert("table_schema".to_string(), Value::String("app".to_string()));
             row.insert("table_name".to_string(), Value::String(table.key().clone()));
-            row.insert("table_type".to_string(), Value::String("BASE TABLE".to_string()));
+            row.insert(
+                "table_type".to_string(),
+                Value::String("BASE TABLE".to_string()),
+            );
             rows.push(row);
         }
         virtual_select_result(select, rows)
@@ -1082,38 +1095,33 @@ impl Engine {
             ("binary", "binary", 63, "Yes", "Yes", 1),
         ]
         .iter()
-        .map(
-            |(name, charset, id, is_default, is_compiled, sortlen)| {
-                let mut row = Map::new();
-                row.insert(
-                    "collation_name".to_string(),
-                    Value::String((*name).to_string()),
-                );
-                row.insert(
-                    "character_set_name".to_string(),
-                    Value::String((*charset).to_string()),
-                );
-                row.insert("id".to_string(), Value::Number(Number::from(*id)));
-                row.insert(
-                    "is_default".to_string(),
-                    Value::String((*is_default).to_string()),
-                );
-                row.insert(
-                    "is_compiled".to_string(),
-                    Value::String((*is_compiled).to_string()),
-                );
-                row.insert("sortlen".to_string(), Value::Number(Number::from(*sortlen)));
-                row
-            },
-        )
+        .map(|(name, charset, id, is_default, is_compiled, sortlen)| {
+            let mut row = Map::new();
+            row.insert(
+                "collation_name".to_string(),
+                Value::String((*name).to_string()),
+            );
+            row.insert(
+                "character_set_name".to_string(),
+                Value::String((*charset).to_string()),
+            );
+            row.insert("id".to_string(), Value::Number(Number::from(*id)));
+            row.insert(
+                "is_default".to_string(),
+                Value::String((*is_default).to_string()),
+            );
+            row.insert(
+                "is_compiled".to_string(),
+                Value::String((*is_compiled).to_string()),
+            );
+            row.insert("sortlen".to_string(), Value::Number(Number::from(*sortlen)));
+            row
+        })
         .collect();
         virtual_select_result(select, rows)
     }
 
-    pub(super) fn select_information_schema_views(
-        &self,
-        select: &Select,
-    ) -> Result<QueryResult> {
+    pub(super) fn select_information_schema_views(&self, select: &Select) -> Result<QueryResult> {
         virtual_select_result(select, Vec::new())
     }
 
@@ -1126,7 +1134,11 @@ impl Engine {
 
     pub(super) fn select_information_schema_engines(&self, select: &Select) -> Result<QueryResult> {
         let engines = vec![
-            ("InnoDB", "YES", "Supports transactions, row-level locking, and foreign keys"),
+            (
+                "InnoDB",
+                "YES",
+                "Supports transactions, row-level locking, and foreign keys",
+            ),
             ("MyISAM", "NO", "MyISAM storage engine"),
             ("MEMORY", "NO", "Hash based, stored in memory"),
             ("CSV", "NO", "CSV storage engine"),
@@ -1137,14 +1149,8 @@ impl Engine {
             .map(|(name, support, comment)| {
                 let mut row = Map::new();
                 row.insert("engine".to_string(), Value::String((*name).to_string()));
-                row.insert(
-                    "support".to_string(),
-                    Value::String((*support).to_string()),
-                );
-                row.insert(
-                    "comment".to_string(),
-                    Value::String((*comment).to_string()),
-                );
+                row.insert("support".to_string(), Value::String((*support).to_string()));
+                row.insert("comment".to_string(), Value::String((*comment).to_string()));
                 row.insert("transactions".to_string(), Value::String("NO".to_string()));
                 row.insert("xa".to_string(), Value::String("NO".to_string()));
                 row.insert("savepoints".to_string(), Value::String("NO".to_string()));
@@ -1167,10 +1173,7 @@ impl Engine {
         row.insert("time".to_string(), Value::Number(Number::from(0)));
         row.insert("state".to_string(), Value::String("".to_string()));
         row.insert("info".to_string(), Value::Null);
-        row.insert(
-            "time_ms".to_string(),
-            Value::Number(Number::from(0)),
-        );
+        row.insert("time_ms".to_string(), Value::Number(Number::from(0)));
         virtual_select_result(select, vec![row])
     }
 
@@ -1216,41 +1219,239 @@ impl Engine {
         self.select_information_schema_session_variables(select)
     }
 
-    pub(super) fn select_information_schema_keywords(&self, select: &Select) -> Result<QueryResult> {
+    pub(super) fn select_information_schema_keywords(
+        &self,
+        select: &Select,
+    ) -> Result<QueryResult> {
         let keywords = vec![
-            "ACCESSIBLE", "ADD", "ALL", "ALTER", "ANALYZE", "AND", "AS", "ASC", "ASENSITIVE",
-            "BEFORE", "BETWEEN", "BIGINT", "BINARY", "BLOB", "BOTH", "BY", "CALL", "CASCADE",
-            "CASE", "CHANGE", "CHAR", "CHARACTER", "CHECK", "COLLATE", "COLUMN", "CONDITION",
-            "CONSTRAINT", "CONTINUE", "CONVERT", "CREATE", "CROSS", "CURRENT_DATE",
-            "CURRENT_TIME", "CURRENT_TIMESTAMP", "CURRENT_USER", "CURSOR", "DATABASE",
-            "DATABASES", "DAY_HOUR", "DAY_MICROSECOND", "DAY_MINUTE", "DAY_SECOND", "DEC",
-            "DECIMAL", "DECLARE", "DEFAULT", "DELAYED", "DELETE", "DESC", "DESCRIBE",
-            "DETERMINISTIC", "DISTINCT", "DISTINCTROW", "DIV", "DOUBLE", "DROP", "DUAL",
-            "EACH", "ELSE", "ELSEIF", "ENCLOSED", "ESCAPED", "EXISTS", "EXIT", "EXPLAIN",
-            "FALSE", "FETCH", "FLOAT", "FLOAT4", "FLOAT8", "FOR", "FORCE", "FOREIGN", "FROM",
-            "FULLTEXT", "GENERAL", "GET", "GRANT", "GROUP", "HAVING", "HIGH_PRIORITY",
-            "HOUR_MICROSECOND", "HOUR_MINUTE", "HOUR_SECOND", "IF", "IGNORE", "IN", "INDEX",
-            "INFILE", "INNER", "INOUT", "INSENSITIVE", "INSERT", "INT", "INT1", "INT2",
-            "INT3", "INT4", "INT8", "INTEGER", "INTERVAL", "INTO", "IO_AFTER_GTIDS",
-            "IO_BEFORE_GTIDS", "IS", "ITERATE", "JOIN", "KEY", "KEYS", "KILL", "LEADING",
-            "LEAVE", "LEFT", "LIKE", "LIMIT", "LINEAR", "LINES", "LOAD", "LOCALTIME",
-            "LOCALTIMESTAMP", "LOCK", "LONG", "LONGBLOB", "LONGTEXT", "LOOP", "LOW_PRIORITY",
-            "MASTER_BIND", "MASTER_SSL_VERIFY_SERVER_CERT", "MATCH", "MEDIUMBLOB",
-            "MEDIUMINT", "MEDIUMTEXT", "MIDDLEINT", "MINUTE_MICROSECOND", "MINUTE_SECOND",
-            "MOD", "MODIFIES", "NATURAL", "NOT", "NO_WRITE_TO_BINLOG", "NULL", "NUMERIC",
-            "ON", "ONE_SHOT", "OR", "ORDER", "OUT", "OUTER", "OUTFILE", "PARTITION",
-            "PRECISION", "PRIMARY", "PROCEDURE", "PURGE", "RANGE", "READ", "READS",
-            "READ_WRITE", "REFERENCES", "REGEXP", "RELEASE", "RENAME", "REPEAT", "REPLACE",
-            "REQUIRE", "RESIGNAL", "RESTRICT", "RETURN", "REVOKE", "RIGHT", "RLIKE",
-            "SCHEMA", "SCHEMAS", "SECOND_MICROSECOND", "SELECT", "SENSITIVE", "SEPARATOR",
-            "SET", "SHOW", "SIGNAL", "SPATIAL", "SPECIFIC", "SQL", "SQLEXCEPTION",
-            "SQLSTATE", "SQLWARNING", "SQL_BIG_RESULT", "SQL_CALC_FOUND_ROWS",
-            "SQL_SMALL_RESULT", "SSL", "STARTING", "STRAIGHT_JOIN", "TABLE", "TERMINATED",
-            "THEN", "TINYBLOB", "TINYINT", "TINYTEXT", "TO", "TRAILING", "TRIGGER", "TRUE",
-            "UNDO", "UNION", "UNIQUE", "UNLOCK", "UNSIGNED", "UPDATE", "USAGE", "USE",
-            "USING", "UTC_DATE", "UTC_TIME", "UTC_TIMESTAMP", "VALUES", "VARBINARY",
-            "VARCHAR", "VARCHARACTER", "VARYING", "WHEN", "WHERE", "WHILE", "WITH", "WRITE",
-            "X509", "XOR", "YEAR_MONTH", "ZEROFILL",
+            "ACCESSIBLE",
+            "ADD",
+            "ALL",
+            "ALTER",
+            "ANALYZE",
+            "AND",
+            "AS",
+            "ASC",
+            "ASENSITIVE",
+            "BEFORE",
+            "BETWEEN",
+            "BIGINT",
+            "BINARY",
+            "BLOB",
+            "BOTH",
+            "BY",
+            "CALL",
+            "CASCADE",
+            "CASE",
+            "CHANGE",
+            "CHAR",
+            "CHARACTER",
+            "CHECK",
+            "COLLATE",
+            "COLUMN",
+            "CONDITION",
+            "CONSTRAINT",
+            "CONTINUE",
+            "CONVERT",
+            "CREATE",
+            "CROSS",
+            "CURRENT_DATE",
+            "CURRENT_TIME",
+            "CURRENT_TIMESTAMP",
+            "CURRENT_USER",
+            "CURSOR",
+            "DATABASE",
+            "DATABASES",
+            "DAY_HOUR",
+            "DAY_MICROSECOND",
+            "DAY_MINUTE",
+            "DAY_SECOND",
+            "DEC",
+            "DECIMAL",
+            "DECLARE",
+            "DEFAULT",
+            "DELAYED",
+            "DELETE",
+            "DESC",
+            "DESCRIBE",
+            "DETERMINISTIC",
+            "DISTINCT",
+            "DISTINCTROW",
+            "DIV",
+            "DOUBLE",
+            "DROP",
+            "DUAL",
+            "EACH",
+            "ELSE",
+            "ELSEIF",
+            "ENCLOSED",
+            "ESCAPED",
+            "EXISTS",
+            "EXIT",
+            "EXPLAIN",
+            "FALSE",
+            "FETCH",
+            "FLOAT",
+            "FLOAT4",
+            "FLOAT8",
+            "FOR",
+            "FORCE",
+            "FOREIGN",
+            "FROM",
+            "FULLTEXT",
+            "GENERAL",
+            "GET",
+            "GRANT",
+            "GROUP",
+            "HAVING",
+            "HIGH_PRIORITY",
+            "HOUR_MICROSECOND",
+            "HOUR_MINUTE",
+            "HOUR_SECOND",
+            "IF",
+            "IGNORE",
+            "IN",
+            "INDEX",
+            "INFILE",
+            "INNER",
+            "INOUT",
+            "INSENSITIVE",
+            "INSERT",
+            "INT",
+            "INT1",
+            "INT2",
+            "INT3",
+            "INT4",
+            "INT8",
+            "INTEGER",
+            "INTERVAL",
+            "INTO",
+            "IO_AFTER_GTIDS",
+            "IO_BEFORE_GTIDS",
+            "IS",
+            "ITERATE",
+            "JOIN",
+            "KEY",
+            "KEYS",
+            "KILL",
+            "LEADING",
+            "LEAVE",
+            "LEFT",
+            "LIKE",
+            "LIMIT",
+            "LINEAR",
+            "LINES",
+            "LOAD",
+            "LOCALTIME",
+            "LOCALTIMESTAMP",
+            "LOCK",
+            "LONG",
+            "LONGBLOB",
+            "LONGTEXT",
+            "LOOP",
+            "LOW_PRIORITY",
+            "MASTER_BIND",
+            "MASTER_SSL_VERIFY_SERVER_CERT",
+            "MATCH",
+            "MEDIUMBLOB",
+            "MEDIUMINT",
+            "MEDIUMTEXT",
+            "MIDDLEINT",
+            "MINUTE_MICROSECOND",
+            "MINUTE_SECOND",
+            "MOD",
+            "MODIFIES",
+            "NATURAL",
+            "NOT",
+            "NO_WRITE_TO_BINLOG",
+            "NULL",
+            "NUMERIC",
+            "ON",
+            "ONE_SHOT",
+            "OR",
+            "ORDER",
+            "OUT",
+            "OUTER",
+            "OUTFILE",
+            "PARTITION",
+            "PRECISION",
+            "PRIMARY",
+            "PROCEDURE",
+            "PURGE",
+            "RANGE",
+            "READ",
+            "READS",
+            "READ_WRITE",
+            "REFERENCES",
+            "REGEXP",
+            "RELEASE",
+            "RENAME",
+            "REPEAT",
+            "REPLACE",
+            "REQUIRE",
+            "RESIGNAL",
+            "RESTRICT",
+            "RETURN",
+            "REVOKE",
+            "RIGHT",
+            "RLIKE",
+            "SCHEMA",
+            "SCHEMAS",
+            "SECOND_MICROSECOND",
+            "SELECT",
+            "SENSITIVE",
+            "SEPARATOR",
+            "SET",
+            "SHOW",
+            "SIGNAL",
+            "SPATIAL",
+            "SPECIFIC",
+            "SQL",
+            "SQLEXCEPTION",
+            "SQLSTATE",
+            "SQLWARNING",
+            "SQL_BIG_RESULT",
+            "SQL_CALC_FOUND_ROWS",
+            "SQL_SMALL_RESULT",
+            "SSL",
+            "STARTING",
+            "STRAIGHT_JOIN",
+            "TABLE",
+            "TERMINATED",
+            "THEN",
+            "TINYBLOB",
+            "TINYINT",
+            "TINYTEXT",
+            "TO",
+            "TRAILING",
+            "TRIGGER",
+            "TRUE",
+            "UNDO",
+            "UNION",
+            "UNIQUE",
+            "UNLOCK",
+            "UNSIGNED",
+            "UPDATE",
+            "USAGE",
+            "USE",
+            "USING",
+            "UTC_DATE",
+            "UTC_TIME",
+            "UTC_TIMESTAMP",
+            "VALUES",
+            "VARBINARY",
+            "VARCHAR",
+            "VARCHARACTER",
+            "VARYING",
+            "WHEN",
+            "WHERE",
+            "WHILE",
+            "WITH",
+            "WRITE",
+            "X509",
+            "XOR",
+            "YEAR_MONTH",
+            "ZEROFILL",
         ];
         let rows = keywords
             .iter()
