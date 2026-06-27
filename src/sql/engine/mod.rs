@@ -125,6 +125,7 @@ struct InsertRowsOptions<'a> {
     ignore: bool,
     replace: bool,
     on_duplicate: &'a [Assignment],
+    returning: Option<&'a [SelectItem]>,
 }
 
 pub struct Engine {
@@ -238,8 +239,9 @@ impl Engine {
                 table,
                 assignments,
                 selection,
+                returning,
                 ..
-            } => self.update_rows(table, assignments, selection),
+            } => self.update_rows(table, assignments, selection, returning),
             Statement::Delete(delete) => self.delete_rows(delete),
             Statement::Drop {
                 object_type: sqlparser::ast::ObjectType::Table,

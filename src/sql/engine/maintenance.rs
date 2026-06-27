@@ -443,6 +443,7 @@ impl Engine {
                 ignore: false,
                 replace: false,
                 on_duplicate: &[],
+                returning: None,
             },
         )?;
 

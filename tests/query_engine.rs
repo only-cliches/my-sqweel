@@ -182,6 +182,70 @@ fn supports_last_insert_id_and_scalar_expressions() {
 }
 
 #[test]
+fn supports_returning_on_write_statements() {
+    let _guard = test_lock();
+    let engine = Engine::default();
+    engine
+        .execute_sql(
+            "CREATE TABLE users (id BIGINT PRIMARY KEY AUTO_INCREMENT, name TEXT, score BIGINT DEFAULT 10);",
+        )
+        .unwrap();
+
+    let inserted = engine
+        .execute_sql(
+            "INSERT INTO users (name, score) VALUES ('Alice', 7), ('Bob', 11) RETURNING id, name, score + 1 AS next_score;",
+        )
+        .unwrap();
+    assert_eq!(inserted[0].rows_affected, 2);
+    assert_eq!(inserted[0].last_insert_id, 1);
+    assert_eq!(inserted[0].columns, vec!["id", "name", "next_score"]);
+    assert_eq!(
+        inserted[0].rows[0].get("id").and_then(|v| v.as_i64()),
+        Some(1)
+    );
+    assert_eq!(
+        inserted[0].rows[0].get("name").and_then(|v| v.as_str()),
+        Some("Alice")
+    );
+    assert_eq!(
+        inserted[0].rows[0]
+            .get("next_score")
+            .and_then(|v| v.as_i64()),
+        Some(8)
+    );
+
+    let updated = engine
+        .execute_sql(
+            "UPDATE users SET score = score + 5 WHERE name = 'Bob' RETURNING id, score AS updated_score;",
+        )
+        .unwrap();
+    assert_eq!(updated[0].rows_affected, 1);
+    assert_eq!(
+        updated[0].rows[0]
+            .get("updated_score")
+            .and_then(|v| v.as_i64()),
+        Some(16)
+    );
+
+    let deleted = engine
+        .execute_sql("DELETE FROM users WHERE score < 10 RETURNING *;")
+        .unwrap();
+    assert_eq!(deleted[0].rows_affected, 1);
+    assert_eq!(deleted[0].columns, vec!["id", "name", "score"]);
+    assert_eq!(
+        deleted[0].rows[0].get("name").and_then(|v| v.as_str()),
+        Some("Alice")
+    );
+
+    let remaining = engine.execute_sql("SELECT name FROM users").unwrap();
+    assert_eq!(remaining[0].rows.len(), 1);
+    assert_eq!(
+        remaining[0].rows[0].get("name").and_then(|v| v.as_str()),
+        Some("Bob")
+    );
+}
+
+#[test]
 fn supports_contains_like_and_order_by_projection_alias() {
     let _guard = test_lock();
     let engine = Engine::default();
@@ -292,10 +356,10 @@ fn delete_returns_predicate_errors_instead_of_suppressing_them() {
 
     let err = engine
         .execute_sql(
-            "DELETE FROM users WHERE EXISTS (SELECT id FROM users UNION SELECT id FROM users)",
+            "DELETE FROM users WHERE EXISTS (SELECT id FROM users INTERSECT SELECT id FROM users)",
         )
         .unwrap_err();
-    assert!(err.to_string().contains("only SELECT is supported"));
+    assert!(err.to_string().contains("unsupported set operation"));
 }
 
 #[test]
@@ -315,6 +379,89 @@ fn supports_conditional_and_date_functions() {
     assert_eq!(row.get("y").and_then(|v| v.as_i64()), Some(2026));
     assert_eq!(row.get("m").and_then(|v| v.as_i64()), Some(2));
     assert_eq!(row.get("day").and_then(|v| v.as_i64()), Some(3));
+}
+
+#[test]
+fn supports_mysql_compatibility_query_edges() {
+    let _guard = test_lock();
+    let engine = Engine::default();
+    engine
+        .execute_sql(
+            "CREATE TABLE users (id BIGINT PRIMARY KEY AUTO_INCREMENT, email TEXT, nickname TEXT, score BIGINT, active BOOL);",
+        )
+        .unwrap();
+    engine
+        .execute_sql(
+            "INSERT INTO users (email, nickname, score, active) VALUES \
+             ('a@example.com', NULL, 10, true), \
+             ('b@example.com', 'bee', 20, false), \
+             ('c@example.com', NULL, 30, true);",
+        )
+        .unwrap();
+
+    let predicates = engine
+        .execute_sql(
+            "SELECT email FROM users \
+             WHERE score BETWEEN 10 AND 30 \
+             AND id NOT IN (2) \
+             AND email LIKE '_@example.com' \
+             AND active \
+             ORDER BY score DESC;",
+        )
+        .unwrap();
+    assert_eq!(predicates[0].rows.len(), 2);
+    assert_eq!(
+        predicates[0].rows[0].get("email").and_then(|v| v.as_str()),
+        Some("c@example.com")
+    );
+    assert_eq!(
+        predicates[0].rows[1].get("email").and_then(|v| v.as_str()),
+        Some("a@example.com")
+    );
+
+    let projections = engine
+        .execute_sql(
+            "SELECT id, \
+             CASE WHEN nickname IS NULL THEN 'missing' ELSE nickname END AS nick_state, \
+             score + 5 AS bumped \
+             FROM users ORDER BY bumped DESC;",
+        )
+        .unwrap();
+    assert_eq!(
+        projections[0].rows[0]
+            .get("nick_state")
+            .and_then(|v| v.as_str()),
+        Some("missing")
+    );
+    assert_eq!(
+        projections[0].rows[0]
+            .get("bumped")
+            .and_then(|v| v.as_i64()),
+        Some(35)
+    );
+
+    engine
+        .execute_sql("CREATE TABLE high_scores (email TEXT, doubled BIGINT);")
+        .unwrap();
+    let inserted = engine
+        .execute_sql(
+            "INSERT INTO high_scores (email, doubled) \
+             SELECT email, score * 2 FROM users WHERE score >= 20;",
+        )
+        .unwrap();
+    assert_eq!(inserted[0].rows_affected, 2);
+
+    let copied = engine
+        .execute_sql("SELECT email, doubled FROM high_scores ORDER BY doubled")
+        .unwrap();
+    assert_eq!(
+        copied[0].rows[0].get("email").and_then(|v| v.as_str()),
+        Some("b@example.com")
+    );
+    assert_eq!(
+        copied[0].rows[1].get("doubled").and_then(|v| v.as_i64()),
+        Some(60)
+    );
 }
 
 #[test]

@@ -9,6 +9,7 @@ impl Engine {
             .ok_or_else(|| anyhow!("missing INSERT source"))?;
         let ignore = insert.ignore;
         let replace = insert.replace_into;
+        let returning = insert.returning;
         let on_duplicate = match insert.on {
             Some(OnInsert::DuplicateKeyUpdate(assignments)) => assignments,
             Some(_) | None => Vec::new(),
@@ -73,6 +74,7 @@ impl Engine {
                 ignore,
                 replace,
                 on_duplicate: &on_duplicate,
+                returning: returning.as_deref(),
             },
         )
     }
@@ -87,6 +89,7 @@ impl Engine {
         let mut first_insert_id = 0_u64;
         let mut rows_to_persist: BTreeMap<String, StoredRow> = BTreeMap::new();
         let mut rows_to_delete: BTreeSet<String> = BTreeSet::new();
+        let mut returned_rows = Vec::new();
         {
             let mut table_rows = self.rows.entry(table.to_string()).or_default();
             for mut data in rows {
@@ -123,6 +126,7 @@ impl Engine {
                         }
                         existing.version += 1;
                         existing.updated_at = Utc::now();
+                        returned_rows.push(existing.data.clone());
                         rows_to_persist.insert(conflict_key.clone(), existing.clone());
                         affected += 1;
                         continue;
@@ -149,6 +153,7 @@ impl Engine {
                 if first_insert_id == 0 {
                     first_insert_id = generated_insert_id.unwrap_or(0);
                 }
+                returned_rows.push(stored.data.clone());
                 rows_to_persist.insert(key, stored);
                 affected += 1;
             }
@@ -166,12 +171,13 @@ impl Engine {
                 .store(first_insert_id, AtomicOrdering::Relaxed);
         }
 
-        Ok(QueryResult {
-            rows_affected: affected,
-            last_insert_id: first_insert_id,
-            columns: vec![],
-            rows: vec![],
-        })
+        self.returning_result(
+            table,
+            options.returning,
+            returned_rows,
+            affected,
+            first_insert_id,
+        )
     }
 
     pub(super) fn resolve_insert_columns(
@@ -279,6 +285,7 @@ impl Engine {
         table: TableWithJoins,
         assignments: Vec<Assignment>,
         selection: Option<Expr>,
+        returning: Option<Vec<SelectItem>>,
     ) -> Result<QueryResult> {
         let table_name = table_factor_name(&table.relation)?;
         if !self.schemas.contains_key(&table_name) {
@@ -293,6 +300,7 @@ impl Engine {
         let mut next_rows = current_rows.clone();
         let mut changed_rows: BTreeMap<String, StoredRow> = BTreeMap::new();
         let mut deleted_keys: BTreeSet<String> = BTreeSet::new();
+        let mut returned_rows = Vec::new();
 
         for (old_key, current_row) in &current_rows {
             if self.cfg.unique_mode == UniqueMode::Overwrite && !next_rows.contains_key(old_key) {
@@ -340,6 +348,7 @@ impl Engine {
             }
 
             next_rows.insert(new_key.clone(), updated_row.clone());
+            returned_rows.push(updated_row.data.clone());
             changed_rows.insert(new_key, updated_row);
             updated += 1;
         }
@@ -354,15 +363,11 @@ impl Engine {
             self.persist_row(&table_name, &pk, &row)?;
         }
 
-        Ok(QueryResult {
-            rows_affected: updated,
-            last_insert_id: 0,
-            columns: vec![],
-            rows: vec![],
-        })
+        self.returning_result(&table_name, returning.as_deref(), returned_rows, updated, 0)
     }
 
     pub(super) fn delete_rows(&self, delete: sqlparser::ast::Delete) -> Result<QueryResult> {
+        let returning = delete.returning;
         let table_name = match delete.from {
             sqlparser::ast::FromTable::WithFromKeyword(v) => v
                 .first()
@@ -378,32 +383,90 @@ impl Engine {
 
         let mut deleted = 0_u64;
         let mut deleted_keys = Vec::new();
-        if let Some(mut table_rows) = self.rows.get_mut(&table_name) {
-            let mut keys = Vec::new();
-            for (k, row) in table_rows.iter() {
-                if self.matches_selection_ctx(delete.selection.as_ref(), &row.data, 0)? {
-                    keys.push(k.clone());
-                }
+        let mut returned_rows = Vec::new();
+        let current_rows = self
+            .rows
+            .get(&table_name)
+            .map(|rows| rows.clone())
+            .unwrap_or_default();
+        let mut keys = Vec::new();
+        for (k, row) in &current_rows {
+            if self.matches_selection_ctx(delete.selection.as_ref(), &row.data, 0)? {
+                keys.push(k.clone());
             }
+        }
 
+        if !keys.is_empty() {
+            let mut next_rows = current_rows;
             for k in keys {
-                if table_rows.remove(&k).is_some() {
+                if let Some(row) = next_rows.remove(&k) {
+                    returned_rows.push(row.data);
                     deleted_keys.push(k);
                     deleted += 1;
                 }
             }
+            self.rows.insert(table_name.clone(), next_rows);
         }
         self.rebuild_indexes(&table_name);
         for key in deleted_keys {
             self.delete_row_from_storage(&table_name, &key)?;
         }
 
+        self.returning_result(&table_name, returning.as_deref(), returned_rows, deleted, 0)
+    }
+
+    fn returning_result(
+        &self,
+        table: &str,
+        returning: Option<&[SelectItem]>,
+        rows: Vec<Map<String, Value>>,
+        rows_affected: u64,
+        last_insert_id: u64,
+    ) -> Result<QueryResult> {
+        let Some(projection) = returning else {
+            return Ok(QueryResult {
+                rows_affected,
+                last_insert_id,
+                columns: vec![],
+                rows: vec![],
+            });
+        };
+
+        let rows = rows
+            .into_iter()
+            .map(|row| {
+                let row = self.current_schema_row(table, &row);
+                self.project_row_ctx(projection, &row, last_insert_id)
+            })
+            .collect::<Result<Vec<_>>>()?;
+
         Ok(QueryResult {
-            rows_affected: deleted,
-            last_insert_id: 0,
-            columns: vec![],
-            rows: vec![],
+            rows_affected,
+            last_insert_id,
+            columns: self.returning_columns(table, projection, rows.first()),
+            rows,
         })
+    }
+
+    fn returning_columns(
+        &self,
+        table: &str,
+        projection: &[SelectItem],
+        first_row: Option<&Map<String, Value>>,
+    ) -> Vec<String> {
+        if projection
+            .iter()
+            .any(|item| matches!(item, SelectItem::Wildcard(_)))
+        {
+            if let Some(schema) = self.schemas.get(table).map(|schema| schema.clone()) {
+                return ordered_schema_columns(&schema);
+            }
+            return first_row
+                .map(|row| row.keys().cloned().collect())
+                .unwrap_or_default();
+        }
+
+        infer_projection_columns(projection)
     }
     pub(super) fn apply_defaults(&self, table: &str, data: &mut Map<String, Value>) -> Result<()> {
         let Some(schema) = self.schemas.get(table).map(|schema| schema.clone()) else {

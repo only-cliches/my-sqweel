@@ -477,6 +477,25 @@ fn parity_with_mysql_for_supported_semantics() {
         &mut whatever_conn,
         &format!("SELECT email FROM {users} WHERE email LIKE '_@example.com' ORDER BY email"),
     );
+    assert_query_parity(
+        &mut mysql_conn,
+        &mut whatever_conn,
+        &format!(
+            "SELECT email FROM {users} WHERE score BETWEEN 10 AND 30 AND id NOT IN (2) ORDER BY score DESC"
+        ),
+    );
+    assert_query_parity(
+        &mut mysql_conn,
+        &mut whatever_conn,
+        &format!(
+            "SELECT id, CASE WHEN nickname IS NULL THEN 'missing' ELSE nickname END AS nick_state FROM {users} ORDER BY id"
+        ),
+    );
+    assert_query_parity(
+        &mut mysql_conn,
+        &mut whatever_conn,
+        &format!("SELECT email, score + 5 AS bumped FROM {users} ORDER BY bumped DESC LIMIT 2"),
+    );
 
     // Nested SELECT parity coverage.
     assert_query_parity(
@@ -582,6 +601,24 @@ fn parity_with_mysql_for_supported_semantics() {
         &mut mysql_conn,
         &mut whatever_conn,
         &format!("SELECT COUNT(*) AS n FROM {users} WHERE email = 'e@example.com'"),
+    );
+
+    assert_exec_parity(
+        &mut mysql_conn,
+        &mut whatever_conn,
+        &format!("CREATE TABLE {posts_archive} (user_id BIGINT, title TEXT, title_len BIGINT)"),
+    );
+    assert_exec_parity(
+        &mut mysql_conn,
+        &mut whatever_conn,
+        &format!(
+            "INSERT INTO {posts_archive} (user_id, title, title_len) SELECT user_id, title, LENGTH(title) FROM {posts} WHERE user_id IN (1, 3)"
+        ),
+    );
+    assert_query_parity(
+        &mut mysql_conn,
+        &mut whatever_conn,
+        &format!("SELECT user_id, title, title_len FROM {posts_archive} ORDER BY user_id, title"),
     );
 
     assert_exec_parity(

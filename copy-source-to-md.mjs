@@ -52,7 +52,11 @@ const languageByExtension = new Map([
   [".tsx", "tsx"],
 ]);
 
-const sourceFiles = await collectSourceFiles(root);
+const sourceFiles = [
+  "Cargo.toml",
+  ...await collectSourceFiles(root + path.sep + "src")
+].filter(v => v.indexOf("/vendor") == -1);
+
 const markdown = await renderMarkdown(sourceFiles);
 await writeFile(outputPath, markdown);
 

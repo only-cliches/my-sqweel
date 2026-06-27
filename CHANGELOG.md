@@ -2,6 +2,11 @@
 
 All notable changes to MySqweel will be documented in this file.
 
+## 0.2.1 - Jun 27, 2026
+
+- Added SQL `RETURNING` support for `INSERT`, `UPDATE`, and `DELETE`, including projection expressions and aliases.
+- Fixed `DELETE` predicate evaluation so subqueries do not deadlock while rows are being removed.
+
 ## 0.2.0 - Jun 25, 2026
 
 - Added an always-on Meilisearch-compatible HTTP API on the debug HTTP port.
