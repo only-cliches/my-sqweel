@@ -1,10 +1,14 @@
+<p align="center">
+  <img src="logo.png" alt="MySqweel logo" width="280">
+</p>
+
 # MySqweel
 
-> The development database for when your app is still becoming itself.
+**The development database for when your app is still becoming itself.**
 
 MySqweel is a **schema-drift-tolerant, development-only MySQL facade** built for fast local iteration.
 
-It speaks enough MySQL for real application code to connect to it, but it does not force your local workflow to behave like production. Tables can be created from select statements, inferred from inserts, extended from seed payloads, inspected through MySQL metadata, searched through a Meilisearch-shaped HTTP API, snapshotted, restored, reset, and intentionally broken for resilience testing.
+It speaks enough MySQL for real application code to connect to it, but it does not force your local workflow to behave like production. Tables can inferred from inserts, extended from seed payloads, inspected through MySQL metadata, searched through a Meilisearch-shaped HTTP API, snapshotted, restored, reset, and intentionally broken for resilience testing.
 
 ## Why this exists
 
