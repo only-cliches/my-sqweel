@@ -2,6 +2,17 @@
 
 All notable changes to MySqweel will be documented in this file.
 
+## 0.2.3 - Jun 29, 2026
+
+- Fixed `UPDATE ... JOIN` evaluation so `WHERE` clauses and assignment expressions use the joined row context, including table aliases.
+- Fixed `UPDATE ... LEFT JOIN` handling so unmatched right-side rows are null-extended for predicates such as `joined_table.id IS NULL`.
+- Fixed `INSERT ... SELECT` so source `ORDER BY` and `LIMIT` clauses are preserved.
+- Added support for single-table `DELETE ... ORDER BY ... LIMIT`.
+- Added explicit errors for unsupported `UPDATE ... FROM`, multi-table `DELETE`, `DELETE ... USING`, `DELETE` joins, and qualified correlated subqueries so they cannot be silently mis-evaluated.
+- Improved `ON DUPLICATE KEY UPDATE` evaluation for expressions that mix existing row values with `VALUES(...)`.
+- Added expanded regression and MySQL parity coverage for DML edge cases, including `UPDATE ... JOIN`, `UPDATE ... LEFT JOIN`, `INSERT ... SELECT` modifiers, limited deletes, duplicate-key update expressions, and unsupported syntax guards.
+- Updated README presentation and release package metadata for the next publish.
+
 ## 0.2.1 - Jun 27, 2026
 
 - Added SQL `RETURNING` support for `INSERT`, `UPDATE`, and `DELETE`, including projection expressions and aliases.

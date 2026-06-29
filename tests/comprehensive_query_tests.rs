@@ -281,9 +281,19 @@ fn exists_subquery() {
         .unwrap();
     engine.execute_sql("INSERT INTO comments VALUES (1, 1, 'comment1'), (2, 1, 'comment2'), (3, 2, 'comment3')").unwrap();
 
-    // Both users have comments
-    let result = engine.execute_sql("SELECT name FROM users WHERE EXISTS (SELECT 1 FROM comments WHERE comments.user_id = users.id)").unwrap();
-    assert!(result[0].rows.len() > 0);
+    let result = engine
+        .execute_sql("SELECT name FROM users WHERE EXISTS (SELECT 1 FROM comments WHERE comments.user_id = 1) ORDER BY id")
+        .unwrap();
+    assert_eq!(result[0].rows.len(), 2);
+
+    let correlated = engine
+        .execute_sql("SELECT name FROM users WHERE EXISTS (SELECT 1 FROM comments WHERE comments.user_id = users.id)");
+    assert!(
+        correlated
+            .expect_err("qualified correlated subqueries should fail explicitly")
+            .to_string()
+            .contains("correlated subqueries")
+    );
 }
 
 // ORDER BY and LIMIT

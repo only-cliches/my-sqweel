@@ -584,8 +584,12 @@ impl Engine {
         }
 
         match expr {
-            Expr::Subquery(query) => self.eval_scalar_subquery(query),
+            Expr::Subquery(query) => {
+                reject_correlated_subquery(query)?;
+                self.eval_scalar_subquery(query)
+            }
             Expr::Exists { subquery, negated } => {
+                reject_correlated_subquery(subquery)?;
                 let exists = !self.select_query((**subquery).clone())?.rows.is_empty();
                 Ok(Value::Bool(if *negated { !exists } else { exists }))
             }
@@ -594,6 +598,7 @@ impl Engine {
                 subquery,
                 negated,
             } => {
+                reject_correlated_subquery(subquery)?;
                 let value = self.eval_expr_ctx(expr, data, last_insert_id)?;
                 let result = self.select_query((**subquery).clone())?;
                 let hit = result.rows.iter().any(|row| {
@@ -1709,6 +1714,355 @@ impl Engine {
             }
         }
         Ok(QueryResult::default())
+    }
+}
+
+fn reject_correlated_subquery(query: &Query) -> Result<()> {
+    let local_qualifiers = query_local_qualifiers(query)?;
+    if let Some(identifier) = query_outer_reference(query, &local_qualifiers)? {
+        return Err(anyhow!(
+            "correlated subqueries are not supported yet: {identifier}"
+        ));
+    }
+    Ok(())
+}
+
+fn query_local_qualifiers(query: &Query) -> Result<BTreeSet<String>> {
+    let mut qualifiers = BTreeSet::new();
+    collect_set_expr_qualifiers(&query.body, &mut qualifiers)?;
+    Ok(qualifiers)
+}
+
+fn collect_set_expr_qualifiers(body: &SetExpr, qualifiers: &mut BTreeSet<String>) -> Result<()> {
+    match body {
+        SetExpr::Select(select) => collect_select_qualifiers(select, qualifiers),
+        SetExpr::Query(query) => collect_set_expr_qualifiers(&query.body, qualifiers),
+        SetExpr::SetOperation { left, right, .. } => {
+            collect_set_expr_qualifiers(left, qualifiers)?;
+            collect_set_expr_qualifiers(right, qualifiers)
+        }
+        _ => Ok(()),
+    }
+}
+
+fn collect_select_qualifiers(select: &Select, qualifiers: &mut BTreeSet<String>) -> Result<()> {
+    for table in &select.from {
+        collect_table_qualifier(&table.relation, qualifiers)?;
+        for join in &table.joins {
+            collect_table_qualifier(&join.relation, qualifiers)?;
+        }
+    }
+    Ok(())
+}
+
+fn collect_table_qualifier(
+    relation: &TableFactor,
+    qualifiers: &mut BTreeSet<String>,
+) -> Result<()> {
+    match relation {
+        TableFactor::Table { name, alias, .. } => {
+            let full_name = object_name(name)?;
+            qualifiers.insert(full_name.clone());
+            if let Some(last) = full_name.rsplit('.').next() {
+                qualifiers.insert(last.to_string());
+            }
+            if let Some(alias) = alias {
+                qualifiers.insert(alias.name.value.clone());
+            }
+        }
+        TableFactor::Derived { alias, .. } => {
+            if let Some(alias) = alias {
+                qualifiers.insert(alias.name.value.clone());
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn query_outer_reference(
+    query: &Query,
+    local_qualifiers: &BTreeSet<String>,
+) -> Result<Option<String>> {
+    if let Some(order_by) = &query.order_by {
+        for item in &order_by.exprs {
+            if let Some(identifier) = expr_outer_reference(&item.expr, local_qualifiers)? {
+                return Ok(Some(identifier));
+            }
+        }
+    }
+    set_expr_outer_reference(&query.body, local_qualifiers)
+}
+
+fn set_expr_outer_reference(
+    body: &SetExpr,
+    local_qualifiers: &BTreeSet<String>,
+) -> Result<Option<String>> {
+    match body {
+        SetExpr::Select(select) => select_outer_reference(select, local_qualifiers),
+        SetExpr::Query(query) => query_outer_reference(query, local_qualifiers),
+        SetExpr::SetOperation { left, right, .. } => {
+            if let Some(identifier) = set_expr_outer_reference(left, local_qualifiers)? {
+                return Ok(Some(identifier));
+            }
+            set_expr_outer_reference(right, local_qualifiers)
+        }
+        _ => Ok(None),
+    }
+}
+
+fn select_outer_reference(
+    select: &Select,
+    local_qualifiers: &BTreeSet<String>,
+) -> Result<Option<String>> {
+    for item in &select.projection {
+        if let Some(identifier) = select_item_outer_reference(item, local_qualifiers)? {
+            return Ok(Some(identifier));
+        }
+    }
+    for table in &select.from {
+        for join in &table.joins {
+            if let Some(identifier) = join_outer_reference(&join.join_operator, local_qualifiers)? {
+                return Ok(Some(identifier));
+            }
+        }
+    }
+    for expr in [&select.selection, &select.having, &select.qualify]
+        .into_iter()
+        .flatten()
+    {
+        if let Some(identifier) = expr_outer_reference(expr, local_qualifiers)? {
+            return Ok(Some(identifier));
+        }
+    }
+    match &select.group_by {
+        GroupByExpr::Expressions(exprs, _) => {
+            for expr in exprs {
+                if let Some(identifier) = expr_outer_reference(expr, local_qualifiers)? {
+                    return Ok(Some(identifier));
+                }
+            }
+        }
+        GroupByExpr::All(_) => {}
+    }
+    Ok(None)
+}
+
+fn select_item_outer_reference(
+    item: &SelectItem,
+    local_qualifiers: &BTreeSet<String>,
+) -> Result<Option<String>> {
+    match item {
+        SelectItem::UnnamedExpr(expr) | SelectItem::ExprWithAlias { expr, .. } => {
+            expr_outer_reference(expr, local_qualifiers)
+        }
+        _ => Ok(None),
+    }
+}
+
+fn join_outer_reference(
+    join: &JoinOperator,
+    local_qualifiers: &BTreeSet<String>,
+) -> Result<Option<String>> {
+    match join {
+        JoinOperator::Inner(JoinConstraint::On(expr))
+        | JoinOperator::LeftOuter(JoinConstraint::On(expr)) => {
+            expr_outer_reference(expr, local_qualifiers)
+        }
+        _ => Ok(None),
+    }
+}
+
+fn expr_outer_reference(
+    expr: &Expr,
+    local_qualifiers: &BTreeSet<String>,
+) -> Result<Option<String>> {
+    match expr {
+        Expr::CompoundIdentifier(parts) => {
+            let identifier = parts
+                .iter()
+                .map(|part| part.value.clone())
+                .collect::<Vec<_>>()
+                .join(".");
+            let qualifier = parts
+                .iter()
+                .take(parts.len().saturating_sub(1))
+                .map(|part| part.value.clone())
+                .collect::<Vec<_>>()
+                .join(".");
+            if !qualifier.is_empty() && !local_qualifiers.contains(&qualifier) {
+                return Ok(Some(identifier));
+            }
+            Ok(None)
+        }
+        Expr::Nested(expr)
+        | Expr::UnaryOp { expr, .. }
+        | Expr::IsNull(expr)
+        | Expr::IsNotNull(expr)
+        | Expr::Cast { expr, .. } => expr_outer_reference(expr, local_qualifiers),
+        Expr::BinaryOp { left, right, .. } => {
+            if let Some(identifier) = expr_outer_reference(left, local_qualifiers)? {
+                return Ok(Some(identifier));
+            }
+            expr_outer_reference(right, local_qualifiers)
+        }
+        Expr::InList { expr, list, .. } => {
+            if let Some(identifier) = expr_outer_reference(expr, local_qualifiers)? {
+                return Ok(Some(identifier));
+            }
+            for item in list {
+                if let Some(identifier) = expr_outer_reference(item, local_qualifiers)? {
+                    return Ok(Some(identifier));
+                }
+            }
+            Ok(None)
+        }
+        Expr::Between {
+            expr, low, high, ..
+        } => {
+            for expr in [expr.as_ref(), low.as_ref(), high.as_ref()] {
+                if let Some(identifier) = expr_outer_reference(expr, local_qualifiers)? {
+                    return Ok(Some(identifier));
+                }
+            }
+            Ok(None)
+        }
+        Expr::Like { expr, pattern, .. } => {
+            if let Some(identifier) = expr_outer_reference(expr, local_qualifiers)? {
+                return Ok(Some(identifier));
+            }
+            expr_outer_reference(pattern, local_qualifiers)
+        }
+        Expr::Case {
+            operand,
+            conditions,
+            results,
+            else_result,
+        } => {
+            if let Some(operand) = operand
+                && let Some(identifier) = expr_outer_reference(operand, local_qualifiers)?
+            {
+                return Ok(Some(identifier));
+            }
+            for expr in conditions.iter().chain(results.iter()) {
+                if let Some(identifier) = expr_outer_reference(expr, local_qualifiers)? {
+                    return Ok(Some(identifier));
+                }
+            }
+            if let Some(expr) = else_result
+                && let Some(identifier) = expr_outer_reference(expr, local_qualifiers)?
+            {
+                return Ok(Some(identifier));
+            }
+            Ok(None)
+        }
+        Expr::Function(function) => function_outer_reference(function, local_qualifiers),
+        Expr::Subquery(query) => query_outer_reference(query, &query_local_qualifiers(query)?),
+        Expr::Exists { subquery, .. } => {
+            query_outer_reference(subquery, &query_local_qualifiers(subquery)?)
+        }
+        Expr::InSubquery { expr, subquery, .. } => {
+            if let Some(identifier) = expr_outer_reference(expr, local_qualifiers)? {
+                return Ok(Some(identifier));
+            }
+            query_outer_reference(subquery, &query_local_qualifiers(subquery)?)
+        }
+        _ => Ok(None),
+    }
+}
+
+fn function_outer_reference(
+    function: &sqlparser::ast::Function,
+    local_qualifiers: &BTreeSet<String>,
+) -> Result<Option<String>> {
+    for args in [&function.parameters, &function.args] {
+        if let Some(identifier) = function_args_outer_reference(args, local_qualifiers)? {
+            return Ok(Some(identifier));
+        }
+    }
+    if let Some(filter) = &function.filter
+        && let Some(identifier) = expr_outer_reference(filter, local_qualifiers)?
+    {
+        return Ok(Some(identifier));
+    }
+    for item in &function.within_group {
+        if let Some(identifier) = expr_outer_reference(&item.expr, local_qualifiers)? {
+            return Ok(Some(identifier));
+        }
+    }
+    Ok(None)
+}
+
+fn function_args_outer_reference(
+    args: &FunctionArguments,
+    local_qualifiers: &BTreeSet<String>,
+) -> Result<Option<String>> {
+    match args {
+        FunctionArguments::None => Ok(None),
+        FunctionArguments::Subquery(query) => {
+            query_outer_reference(query, &query_local_qualifiers(query)?)
+        }
+        FunctionArguments::List(list) => {
+            for arg in &list.args {
+                if let Some(identifier) = function_arg_outer_reference(arg, local_qualifiers)? {
+                    return Ok(Some(identifier));
+                }
+            }
+            for clause in &list.clauses {
+                if let Some(identifier) =
+                    function_arg_clause_outer_reference(clause, local_qualifiers)?
+                {
+                    return Ok(Some(identifier));
+                }
+            }
+            Ok(None)
+        }
+    }
+}
+
+fn function_arg_outer_reference(
+    arg: &FunctionArg,
+    local_qualifiers: &BTreeSet<String>,
+) -> Result<Option<String>> {
+    match arg {
+        FunctionArg::Named { arg, .. } | FunctionArg::Unnamed(arg) => {
+            function_arg_expr_outer_reference(arg, local_qualifiers)
+        }
+        FunctionArg::ExprNamed { name, arg, .. } => {
+            if let Some(identifier) = expr_outer_reference(name, local_qualifiers)? {
+                return Ok(Some(identifier));
+            }
+            function_arg_expr_outer_reference(arg, local_qualifiers)
+        }
+    }
+}
+
+fn function_arg_expr_outer_reference(
+    arg: &FunctionArgExpr,
+    local_qualifiers: &BTreeSet<String>,
+) -> Result<Option<String>> {
+    match arg {
+        FunctionArgExpr::Expr(expr) => expr_outer_reference(expr, local_qualifiers),
+        FunctionArgExpr::QualifiedWildcard(_) | FunctionArgExpr::Wildcard => Ok(None),
+    }
+}
+
+fn function_arg_clause_outer_reference(
+    clause: &FunctionArgumentClause,
+    local_qualifiers: &BTreeSet<String>,
+) -> Result<Option<String>> {
+    match clause {
+        FunctionArgumentClause::OrderBy(order_by) => {
+            for item in order_by {
+                if let Some(identifier) = expr_outer_reference(&item.expr, local_qualifiers)? {
+                    return Ok(Some(identifier));
+                }
+            }
+            Ok(None)
+        }
+        FunctionArgumentClause::Limit(expr) => expr_outer_reference(expr, local_qualifiers),
+        FunctionArgumentClause::Having(bound) => expr_outer_reference(&bound.1, local_qualifiers),
+        _ => Ok(None),
     }
 }
 

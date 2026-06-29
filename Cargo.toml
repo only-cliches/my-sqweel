@@ -1,6 +1,6 @@
 [package]
 name = "my-sqweel"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2024"
 description = "A schema-drift-tolerant, development-only MySQL facade for fast local iteration."
 license = "MIT"

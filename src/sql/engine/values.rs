@@ -5,19 +5,111 @@ pub(super) fn eval_insert_update_value(
     existing: &Map<String, Value>,
     incoming: &Map<String, Value>,
 ) -> Result<Value> {
-    let text = expr
-        .to_string()
-        .chars()
-        .filter(|c| !c.is_whitespace() && *c != '`')
-        .collect::<String>();
-    let lower = text.to_ascii_lowercase();
-
-    if lower.starts_with("values(") && lower.ends_with(')') {
-        let col = &text[7..text.len() - 1];
-        return Ok(incoming.get(col).cloned().unwrap_or(Value::Null));
+    if let Some(value) = incoming_value_expr(expr, incoming)? {
+        return Ok(value);
     }
 
-    eval_expr(expr, existing, 0)
+    match expr {
+        Expr::Nested(expr) => eval_insert_update_value(expr, existing, incoming),
+        Expr::UnaryOp { op, expr } if op.to_string() == "-" => {
+            let value = eval_insert_update_value(expr, existing, incoming)?;
+            Ok(number_from_f64(-json_to_f64_lossy(&value)?))
+        }
+        Expr::UnaryOp { op, expr } if op.to_string().eq_ignore_ascii_case("NOT") => {
+            Ok(Value::Bool(!value_truthy(&eval_insert_update_value(
+                expr, existing, incoming,
+            )?)))
+        }
+        Expr::UnaryOp { expr, .. } => eval_insert_update_value(expr, existing, incoming),
+        Expr::BinaryOp { left, op, right } => {
+            let left = eval_insert_update_value(left, existing, incoming)?;
+            let right = eval_insert_update_value(right, existing, incoming)?;
+            eval_binary_values(left, op, right)
+        }
+        Expr::IsNull(expr) => Ok(Value::Bool(
+            eval_insert_update_value(expr, existing, incoming)? == Value::Null,
+        )),
+        Expr::IsNotNull(expr) => Ok(Value::Bool(
+            eval_insert_update_value(expr, existing, incoming)? != Value::Null,
+        )),
+        Expr::InList {
+            expr,
+            list,
+            negated,
+        } => {
+            let value = eval_insert_update_value(expr, existing, incoming)?;
+            let hit = list.iter().any(|item| {
+                eval_insert_update_value(item, existing, incoming)
+                    .map(|item| mysql_eq(&value, &item))
+                    .unwrap_or(false)
+            });
+            Ok(Value::Bool(if *negated { !hit } else { hit }))
+        }
+        Expr::Between {
+            expr,
+            negated,
+            low,
+            high,
+        } => {
+            let value = eval_insert_update_value(expr, existing, incoming)?;
+            let low = eval_insert_update_value(low, existing, incoming)?;
+            let high = eval_insert_update_value(high, existing, incoming)?;
+            let hit = !compare_predicate_values(value.clone(), low, |a, b| a < b)
+                && !compare_predicate_values(value, high, |a, b| a > b);
+            Ok(Value::Bool(if *negated { !hit } else { hit }))
+        }
+        Expr::Like {
+            expr,
+            pattern,
+            negated,
+            ..
+        } => {
+            let target = eval_insert_update_value(expr, existing, incoming)?;
+            let pattern = eval_insert_update_value(pattern, existing, incoming)?;
+            Ok(eval_like_values(target, pattern, *negated))
+        }
+        Expr::Case {
+            operand,
+            conditions,
+            results,
+            else_result,
+        } => {
+            for (condition, result) in conditions.iter().zip(results.iter()) {
+                let matches = match operand {
+                    Some(operand) => mysql_eq(
+                        &eval_insert_update_value(operand, existing, incoming)?,
+                        &eval_insert_update_value(condition, existing, incoming)?,
+                    ),
+                    None => value_truthy(&eval_insert_update_value(condition, existing, incoming)?),
+                };
+                if matches {
+                    return eval_insert_update_value(result, existing, incoming);
+                }
+            }
+            match else_result {
+                Some(expr) => eval_insert_update_value(expr, existing, incoming),
+                None => Ok(Value::Null),
+            }
+        }
+        _ => eval_expr(expr, existing, 0),
+    }
+}
+
+fn incoming_value_expr(expr: &Expr, incoming: &Map<String, Value>) -> Result<Option<Value>> {
+    let Expr::Function(function) = expr else {
+        return Ok(None);
+    };
+    if !object_name(&function.name)?.eq_ignore_ascii_case("VALUES") {
+        return Ok(None);
+    }
+    let FunctionArguments::List(args) = &function.args else {
+        return Ok(Some(Value::Null));
+    };
+    let Some(FunctionArg::Unnamed(FunctionArgExpr::Expr(expr))) = args.args.first() else {
+        return Ok(Some(Value::Null));
+    };
+    let column = projection_expr_column_name(expr);
+    Ok(Some(incoming.get(&column).cloned().unwrap_or(Value::Null)))
 }
 
 pub(super) fn assignment_target_name(assignment: &Assignment) -> String {

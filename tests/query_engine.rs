@@ -246,6 +246,46 @@ fn supports_returning_on_write_statements() {
 }
 
 #[test]
+fn insert_select_preserves_order_by_and_limit() {
+    let _guard = test_lock();
+    let engine = Engine::default();
+    engine
+        .execute_sql("CREATE TABLE source_rows (id BIGINT PRIMARY KEY, label TEXT);")
+        .unwrap();
+    engine
+        .execute_sql("CREATE TABLE copied_rows (id BIGINT PRIMARY KEY, label TEXT);")
+        .unwrap();
+    engine
+        .execute_sql(
+            "INSERT INTO source_rows (id, label) VALUES (1, 'one'), (2, 'two'), (3, 'three');",
+        )
+        .unwrap();
+
+    let inserted = engine
+        .execute_sql(
+            "INSERT INTO copied_rows (id, label) \
+             SELECT id, label FROM source_rows ORDER BY id DESC LIMIT 2;",
+        )
+        .unwrap();
+    assert_eq!(inserted[0].rows_affected, 2);
+
+    let rows = engine
+        .execute_sql("SELECT id, label FROM copied_rows ORDER BY id")
+        .unwrap();
+    assert_eq!(rows[0].rows.len(), 2);
+    assert_eq!(rows[0].rows[0].get("id").and_then(|v| v.as_i64()), Some(2));
+    assert_eq!(
+        rows[0].rows[0].get("label").and_then(|v| v.as_str()),
+        Some("two")
+    );
+    assert_eq!(rows[0].rows[1].get("id").and_then(|v| v.as_i64()), Some(3));
+    assert_eq!(
+        rows[0].rows[1].get("label").and_then(|v| v.as_str()),
+        Some("three")
+    );
+}
+
+#[test]
 fn supports_contains_like_and_order_by_projection_alias() {
     let _guard = test_lock();
     let engine = Engine::default();
@@ -318,6 +358,360 @@ fn update_validates_unique_constraints_and_rekeys_primary_key_rows() {
         .execute_sql("SELECT email FROM users WHERE id = 1")
         .unwrap();
     assert!(old_key[0].rows.is_empty());
+}
+
+#[test]
+fn update_inner_join_uses_joined_context_for_where_and_assignments() {
+    let _guard = test_lock();
+    let engine = Engine::default();
+    engine
+        .execute_sql("CREATE TABLE auth_users (id BIGINT PRIMARY KEY, display_name TEXT);")
+        .unwrap();
+    engine
+        .execute_sql(
+            "CREATE TABLE posts (id BIGINT PRIMARY KEY, author_id BIGINT, author_name TEXT, matched BIGINT);",
+        )
+        .unwrap();
+    engine
+        .execute_sql("INSERT INTO auth_users (id, display_name) VALUES (1, 'Ada'), (2, 'Grace');")
+        .unwrap();
+    engine
+        .execute_sql(
+            "INSERT INTO posts (id, author_id, author_name, matched) VALUES \
+             (10, 1, NULL, 0), (20, 2, NULL, 0), (30, 999, NULL, 0);",
+        )
+        .unwrap();
+
+    let updated = engine
+        .execute_sql(
+            "UPDATE posts AS p JOIN auth_users AS u ON u.id = p.author_id \
+             SET p.author_name = u.display_name, p.matched = 1 \
+             WHERE u.display_name = 'Ada'",
+        )
+        .unwrap();
+    assert_eq!(updated[0].rows_affected, 1);
+
+    let rows = engine
+        .execute_sql("SELECT id, author_name, matched FROM posts ORDER BY id")
+        .unwrap();
+    assert_eq!(
+        rows[0].rows[0].get("author_name").and_then(|v| v.as_str()),
+        Some("Ada")
+    );
+    assert_eq!(
+        rows[0].rows[0].get("matched").and_then(|v| v.as_i64()),
+        Some(1)
+    );
+    assert!(
+        rows[0].rows[1]
+            .get("author_name")
+            .is_some_and(|value| value.is_null())
+    );
+    assert_eq!(
+        rows[0].rows[1].get("matched").and_then(|v| v.as_i64()),
+        Some(0)
+    );
+    assert!(
+        rows[0].rows[2]
+            .get("author_name")
+            .is_some_and(|value| value.is_null())
+    );
+    assert_eq!(
+        rows[0].rows[2].get("matched").and_then(|v| v.as_i64()),
+        Some(0)
+    );
+}
+
+#[test]
+fn update_left_join_matches_null_extended_join_rows() {
+    let _guard = test_lock();
+    let engine = Engine::default();
+    engine
+        .execute_sql("CREATE TABLE auth_users (id BIGINT PRIMARY KEY, display_name TEXT);")
+        .unwrap();
+    engine
+        .execute_sql(
+            "CREATE TABLE posts (id BIGINT PRIMARY KEY, author_id BIGINT, repair_note TEXT);",
+        )
+        .unwrap();
+    engine
+        .execute_sql("INSERT INTO auth_users (id, display_name) VALUES (1, 'Dev Admin');")
+        .unwrap();
+    engine
+        .execute_sql(
+            "INSERT INTO posts (id, author_id, repair_note) VALUES \
+             (10, NULL, NULL), (20, 999, NULL), (30, 1, NULL);",
+        )
+        .unwrap();
+
+    let updated = engine
+        .execute_sql(
+            "UPDATE posts AS p LEFT JOIN auth_users AS u ON u.id = p.author_id \
+             SET p.author_id = 1, p.repair_note = 'repaired' \
+             WHERE p.author_id IS NULL OR u.id IS NULL",
+        )
+        .unwrap();
+    assert_eq!(updated[0].rows_affected, 2);
+
+    let rows = engine
+        .execute_sql("SELECT id, author_id, repair_note FROM posts ORDER BY id")
+        .unwrap();
+    assert_eq!(rows[0].rows.len(), 3);
+    assert_eq!(
+        rows[0].rows[0]
+            .get("author_id")
+            .and_then(|value| value.as_i64()),
+        Some(1)
+    );
+    assert_eq!(
+        rows[0].rows[0]
+            .get("repair_note")
+            .and_then(|value| value.as_str()),
+        Some("repaired")
+    );
+    assert_eq!(
+        rows[0].rows[1]
+            .get("author_id")
+            .and_then(|value| value.as_i64()),
+        Some(1)
+    );
+    assert_eq!(
+        rows[0].rows[1]
+            .get("repair_note")
+            .and_then(|value| value.as_str()),
+        Some("repaired")
+    );
+    assert_eq!(
+        rows[0].rows[2]
+            .get("author_id")
+            .and_then(|value| value.as_i64()),
+        Some(1)
+    );
+    assert!(
+        rows[0].rows[2]
+            .get("repair_note")
+            .is_some_and(|value| value.is_null())
+    );
+}
+
+#[test]
+fn update_left_join_assignments_can_read_null_extended_right_rows() {
+    let _guard = test_lock();
+    let engine = Engine::default();
+    engine
+        .execute_sql("CREATE TABLE auth_users (id BIGINT PRIMARY KEY, display_name TEXT);")
+        .unwrap();
+    engine
+        .execute_sql(
+            "CREATE TABLE posts (id BIGINT PRIMARY KEY, author_id BIGINT, author_name TEXT);",
+        )
+        .unwrap();
+    engine
+        .execute_sql("INSERT INTO auth_users (id, display_name) VALUES (1, 'Ada');")
+        .unwrap();
+    engine
+        .execute_sql(
+            "INSERT INTO posts (id, author_id, author_name) VALUES \
+             (10, NULL, 'unset'), (20, 1, 'unset');",
+        )
+        .unwrap();
+
+    let updated = engine
+        .execute_sql(
+            "UPDATE posts AS p LEFT JOIN auth_users AS u ON u.id = p.author_id \
+             SET p.author_name = u.display_name WHERE p.id IN (10, 20)",
+        )
+        .unwrap();
+    assert_eq!(updated[0].rows_affected, 2);
+
+    let rows = engine
+        .execute_sql("SELECT id, author_name FROM posts ORDER BY id")
+        .unwrap();
+    assert!(
+        rows[0].rows[0]
+            .get("author_name")
+            .is_some_and(|value| value.is_null())
+    );
+    assert_eq!(
+        rows[0].rows[1]
+            .get("author_name")
+            .and_then(|value| value.as_str()),
+        Some("Ada")
+    );
+}
+
+#[test]
+fn update_left_join_where_does_not_fallback_to_target_columns() {
+    let _guard = test_lock();
+    let engine = Engine::default();
+    engine
+        .execute_sql("CREATE TABLE auth_users (id BIGINT PRIMARY KEY, display_name TEXT);")
+        .unwrap();
+    engine
+        .execute_sql(
+            "CREATE TABLE posts (id BIGINT PRIMARY KEY, author_id BIGINT, repaired BIGINT);",
+        )
+        .unwrap();
+    engine
+        .execute_sql("INSERT INTO auth_users (id, display_name) VALUES (1, 'Ada');")
+        .unwrap();
+    engine
+        .execute_sql("INSERT INTO posts (id, author_id, repaired) VALUES (20, 999, 0);")
+        .unwrap();
+
+    let updated = engine
+        .execute_sql(
+            "UPDATE posts AS p LEFT JOIN auth_users AS u ON u.id = p.author_id \
+             SET p.repaired = 1 WHERE u.id = 20",
+        )
+        .unwrap();
+    assert_eq!(updated[0].rows_affected, 0);
+
+    let rows = engine
+        .execute_sql("SELECT repaired FROM posts WHERE id = 20")
+        .unwrap();
+    assert_eq!(
+        rows[0].rows[0].get("repaired").and_then(|v| v.as_i64()),
+        Some(0)
+    );
+}
+
+#[test]
+fn unsupported_update_from_fails_without_mutating() {
+    let _guard = test_lock();
+    let engine = Engine::default();
+    engine
+        .execute_sql("CREATE TABLE users (id BIGINT PRIMARY KEY, score BIGINT);")
+        .unwrap();
+    engine
+        .execute_sql("CREATE TABLE bumps (user_id BIGINT, amount BIGINT);")
+        .unwrap();
+    engine
+        .execute_sql("INSERT INTO users (id, score) VALUES (1, 10);")
+        .unwrap();
+    engine
+        .execute_sql("INSERT INTO bumps (user_id, amount) VALUES (1, 5);")
+        .unwrap();
+
+    assert!(
+        engine
+            .execute_sql(
+                "UPDATE users SET score = score + bumps.amount FROM bumps WHERE bumps.user_id = users.id",
+            )
+            .is_err()
+    );
+
+    let rows = engine
+        .execute_sql("SELECT score FROM users WHERE id = 1")
+        .unwrap();
+    assert_eq!(
+        rows[0].rows[0].get("score").and_then(|v| v.as_i64()),
+        Some(10)
+    );
+}
+
+#[test]
+fn delete_order_by_limit_deletes_only_selected_rows() {
+    let _guard = test_lock();
+    let engine = Engine::default();
+    engine
+        .execute_sql("CREATE TABLE events (id BIGINT PRIMARY KEY, score BIGINT, status TEXT);")
+        .unwrap();
+    engine
+        .execute_sql(
+            "INSERT INTO events (id, score, status) VALUES \
+             (1, 10, 'old'), (2, 30, 'old'), (3, 20, 'old'), (4, 40, 'new');",
+        )
+        .unwrap();
+
+    let deleted = engine
+        .execute_sql("DELETE FROM events WHERE status = 'old' ORDER BY score DESC LIMIT 1")
+        .unwrap();
+    assert_eq!(deleted[0].rows_affected, 1);
+
+    let rows = engine
+        .execute_sql("SELECT id FROM events ORDER BY id")
+        .unwrap();
+    let ids = rows[0]
+        .rows
+        .iter()
+        .filter_map(|row| row.get("id").and_then(|value| value.as_i64()))
+        .collect::<Vec<_>>();
+    assert_eq!(ids, vec![1, 3, 4]);
+}
+
+#[test]
+fn unsupported_delete_join_shapes_fail_without_mutating() {
+    let _guard = test_lock();
+    let engine = Engine::default();
+    engine
+        .execute_sql("CREATE TABLE users (id BIGINT PRIMARY KEY, email TEXT);")
+        .unwrap();
+    engine
+        .execute_sql("CREATE TABLE posts (id BIGINT PRIMARY KEY, user_id BIGINT);")
+        .unwrap();
+    engine
+        .execute_sql(
+            "INSERT INTO users (id, email) VALUES (1, 'a@example.com'), (2, 'b@example.com');",
+        )
+        .unwrap();
+    engine
+        .execute_sql("INSERT INTO posts (id, user_id) VALUES (10, 1);")
+        .unwrap();
+
+    assert!(
+        engine
+            .execute_sql(
+                "DELETE users FROM users JOIN posts ON posts.user_id = users.id WHERE posts.id = 10",
+            )
+            .is_err()
+    );
+    assert!(
+        engine
+            .execute_sql("DELETE FROM users USING posts WHERE posts.user_id = users.id")
+            .is_err()
+    );
+
+    let rows = engine
+        .execute_sql("SELECT id, email FROM users ORDER BY id")
+        .unwrap();
+    assert_eq!(rows[0].rows.len(), 2);
+    assert_eq!(rows[0].rows[0].get("id").and_then(|v| v.as_i64()), Some(1));
+    assert_eq!(rows[0].rows[1].get("id").and_then(|v| v.as_i64()), Some(2));
+}
+
+#[test]
+fn on_duplicate_key_update_can_mix_existing_and_incoming_values() {
+    let _guard = test_lock();
+    let engine = Engine::default();
+    engine
+        .execute_sql(
+            "CREATE TABLE counters (id BIGINT PRIMARY KEY AUTO_INCREMENT, email TEXT, score BIGINT, touched BIGINT, UNIQUE(email));",
+        )
+        .unwrap();
+    engine
+        .execute_sql("INSERT INTO counters (email, score, touched) VALUES ('a@example.com', 2, 0);")
+        .unwrap();
+
+    let updated = engine
+        .execute_sql(
+            "INSERT INTO counters (email, score, touched) VALUES ('a@example.com', 5, 1) \
+             ON DUPLICATE KEY UPDATE score = score + VALUES(score), touched = touched + VALUES(touched);",
+        )
+        .unwrap();
+    assert_eq!(updated[0].rows_affected, 1);
+
+    let rows = engine
+        .execute_sql("SELECT score, touched FROM counters WHERE email = 'a@example.com'")
+        .unwrap();
+    assert_eq!(
+        rows[0].rows[0].get("score").and_then(|v| v.as_i64()),
+        Some(7)
+    );
+    assert_eq!(
+        rows[0].rows[0].get("touched").and_then(|v| v.as_i64()),
+        Some(1)
+    );
 }
 
 #[test]
@@ -593,4 +987,10 @@ fn supports_common_subquery_shapes() {
         exists[0].rows[0].get("email").unwrap().as_str(),
         Some("a@example.com")
     );
+
+    let correlated = engine.execute_sql(
+        "SELECT email FROM users WHERE EXISTS (SELECT id FROM posts WHERE posts.user_id = users.id)",
+    );
+    let err = correlated.expect_err("qualified correlated subqueries should fail explicitly");
+    assert!(err.to_string().contains("correlated subqueries"));
 }

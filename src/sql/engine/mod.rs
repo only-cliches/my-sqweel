@@ -9,7 +9,8 @@ use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Number, Value, json};
 use sqlparser::ast::{
-    Assignment, BinaryOperator, Expr, Ident, JoinConstraint, JoinOperator, ObjectName, Offset,
+    Assignment, BinaryOperator, Expr, FunctionArg, FunctionArgExpr, FunctionArgumentClause,
+    FunctionArguments, GroupByExpr, Ident, JoinConstraint, JoinOperator, ObjectName, Offset,
     OnInsert, OrderByExpr, Query, Select, SelectItem, SetExpr, Statement, TableConstraint,
     TableFactor, TableWithJoins, Value as SqlValue,
 };
@@ -238,10 +239,11 @@ impl Engine {
             Statement::Update {
                 table,
                 assignments,
+                from,
                 selection,
                 returning,
                 ..
-            } => self.update_rows(table, assignments, selection, returning),
+            } => self.update_rows(table, assignments, from, selection, returning),
             Statement::Delete(delete) => self.delete_rows(delete),
             Statement::Drop {
                 object_type: sqlparser::ast::ObjectType::Table,

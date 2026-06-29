@@ -342,7 +342,7 @@ fn parity_with_mysql_for_supported_semantics() {
         &mut mysql_conn,
         &mut whatever_conn,
         &format!(
-            "CREATE TABLE {posts} (id BIGINT PRIMARY KEY AUTO_INCREMENT, user_id BIGINT, title TEXT)"
+            "CREATE TABLE {posts} (id BIGINT PRIMARY KEY AUTO_INCREMENT, user_id BIGINT, title TEXT, author_name TEXT, repair_note TEXT)"
         ),
     );
     assert_exec_parity(
@@ -360,7 +360,10 @@ fn parity_with_mysql_for_supported_semantics() {
     assert_exec_parity(
         &mut mysql_conn,
         &mut whatever_conn,
-        &format!("INSERT INTO {posts} (user_id, title) VALUES (1, 'p1'), (1, 'p2'), (3, 'p3')"),
+        &format!(
+            "INSERT INTO {posts} (user_id, title) VALUES \
+             (1, 'p1'), (1, 'p2'), (3, 'p3'), (999, 'orphan'), (NULL, 'draft')"
+        ),
     );
 
     assert_exec_parity(
@@ -419,6 +422,25 @@ fn parity_with_mysql_for_supported_semantics() {
         &format!(
             "SELECT {users}.id, {posts}.title FROM {users} LEFT JOIN {posts} ON {posts}.user_id = {users}.id WHERE {users}.id = 1 ORDER BY {posts}.title"
         ),
+    );
+    assert_exec_parity(
+        &mut mysql_conn,
+        &mut whatever_conn,
+        &format!(
+            "UPDATE {posts} AS p JOIN {users} AS u ON u.id = p.user_id SET p.author_name = u.name WHERE u.email = 'a@example.com'"
+        ),
+    );
+    assert_exec_parity(
+        &mut mysql_conn,
+        &mut whatever_conn,
+        &format!(
+            "UPDATE {posts} AS p LEFT JOIN {users} AS u ON u.id = p.user_id SET p.repair_note = 'missing' WHERE u.id IS NULL"
+        ),
+    );
+    assert_query_parity(
+        &mut mysql_conn,
+        &mut whatever_conn,
+        &format!("SELECT id, user_id, title, author_name, repair_note FROM {posts} ORDER BY id"),
     );
     assert_query_parity(
         &mut mysql_conn,

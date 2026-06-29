@@ -17,9 +17,9 @@ impl Engine {
 
         let mut prepared_rows = Vec::new();
 
-        match *query.body {
+        match query.body.as_ref() {
             SetExpr::Values(v) => {
-                let values = v.rows;
+                let values = v.rows.clone();
                 let columns = self.resolve_insert_columns(&table, explicit_columns, &values)?;
                 for row in values {
                     let mut data = Map::new();
@@ -32,20 +32,7 @@ impl Engine {
                 }
             }
             SetExpr::Select(_) => {
-                let select_query = Query {
-                    body: query.body.clone(),
-                    order_by: None,
-                    limit: None,
-                    offset: None,
-                    fetch: None,
-                    locks: vec![],
-                    with: None,
-                    for_clause: None,
-                    format_clause: None,
-                    limit_by: vec![],
-                    settings: None,
-                };
-                let select_result = self.select_query(select_query)?;
+                let select_result = self.select_query((*query).clone())?;
                 let columns = if explicit_columns.is_empty() {
                     select_result.columns.clone()
                 } else {
@@ -284,9 +271,14 @@ impl Engine {
         &self,
         table: TableWithJoins,
         assignments: Vec<Assignment>,
+        from: Option<TableWithJoins>,
         selection: Option<Expr>,
         returning: Option<Vec<SelectItem>>,
     ) -> Result<QueryResult> {
+        if from.is_some() {
+            return Err(anyhow!("UPDATE ... FROM is not supported yet"));
+        }
+
         let table_name = table_factor_name(&table.relation)?;
         if !self.schemas.contains_key(&table_name) {
             return Err(anyhow!("unknown table: {table_name}"));
@@ -306,14 +298,22 @@ impl Engine {
             if self.cfg.unique_mode == UniqueMode::Overwrite && !next_rows.contains_key(old_key) {
                 continue;
             }
-            if !self.matches_selection_ctx(selection.as_ref(), &current_row.data, 0)? {
+            let Some(match_context) =
+                self.update_match_context(&table, &table_name, current_row, selection.as_ref())?
+            else {
                 continue;
-            }
+            };
 
             let mut updated_data = current_row.data.clone();
             for assignment in &assignments {
                 let col = assignment_target_name(assignment);
-                let value = self.eval_expr_ctx(&assignment.value, &updated_data, 0)?;
+                let value_context = self.update_assignment_context(
+                    &table.relation,
+                    &table_name,
+                    &updated_data,
+                    &match_context,
+                )?;
+                let value = self.eval_expr_ctx(&assignment.value, &value_context, 0)?;
                 updated_data.insert(col, value);
             }
             self.apply_defaults(&table_name, &mut updated_data)?;
@@ -366,20 +366,127 @@ impl Engine {
         self.returning_result(&table_name, returning.as_deref(), returned_rows, updated, 0)
     }
 
+    fn update_match_context(
+        &self,
+        table: &TableWithJoins,
+        table_name: &str,
+        row: &StoredRow,
+        selection: Option<&Expr>,
+    ) -> Result<Option<Map<String, Value>>> {
+        let contexts = self.update_join_contexts(table, table_name, row)?;
+        for context in contexts {
+            if self.matches_selection_ctx(selection, &context, 0)? {
+                return Ok(Some(context));
+            }
+        }
+        Ok(None)
+    }
+
+    fn update_join_contexts(
+        &self,
+        table: &TableWithJoins,
+        table_name: &str,
+        row: &StoredRow,
+    ) -> Result<Vec<Map<String, Value>>> {
+        let (_, left_alias) = table_factor_name_and_alias(&table.relation)?;
+        let left_data = self.current_schema_row(table_name, &row.data);
+        let mut left_map = left_data.clone();
+        add_qualified_columns(&mut left_map, table_name, &left_data);
+        if let Some(alias) = &left_alias {
+            add_qualified_columns(&mut left_map, alias, &left_data);
+        }
+
+        let mut current = vec![left_map];
+        for join in &table.joins {
+            let (right_table, right_alias) = table_factor_name_and_alias(&join.relation)?;
+            let right_rows = self
+                .rows
+                .get(&right_table)
+                .map(|rows| rows.clone())
+                .unwrap_or_default();
+            let mut next = Vec::new();
+
+            for candidate in &current {
+                let mut matched = false;
+                for right_row in right_rows.values() {
+                    let right_data = self.current_schema_row(&right_table, &right_row.data);
+                    let mut combined = candidate.clone();
+                    add_qualified_columns(&mut combined, &right_table, &right_data);
+                    if let Some(alias) = &right_alias {
+                        add_qualified_columns(&mut combined, alias, &right_data);
+                    }
+                    for (key, value) in &right_data {
+                        combined.entry(key.clone()).or_insert_with(|| value.clone());
+                    }
+                    if self.join_matches_ctx(&join.join_operator, &combined)? {
+                        matched = true;
+                        next.push(combined);
+                    }
+                }
+
+                if !matched && matches!(join.join_operator, JoinOperator::LeftOuter(_)) {
+                    let right_nulls = self.current_schema_null_row(&right_table);
+                    let mut combined = candidate.clone();
+                    add_qualified_columns(&mut combined, &right_table, &right_nulls);
+                    if let Some(alias) = &right_alias {
+                        add_qualified_columns(&mut combined, alias, &right_nulls);
+                    }
+                    for (key, value) in &right_nulls {
+                        combined.entry(key.clone()).or_insert_with(|| value.clone());
+                    }
+                    next.push(combined);
+                }
+            }
+
+            current = next;
+        }
+
+        Ok(current)
+    }
+
+    fn update_assignment_context(
+        &self,
+        relation: &TableFactor,
+        table_name: &str,
+        updated_data: &Map<String, Value>,
+        match_context: &Map<String, Value>,
+    ) -> Result<Map<String, Value>> {
+        let (_, alias) = table_factor_name_and_alias(relation)?;
+        let mut context = match_context.clone();
+        let base_data = self.current_schema_row(table_name, updated_data);
+        for (key, value) in &base_data {
+            context.insert(key.clone(), value.clone());
+        }
+        add_qualified_columns(&mut context, table_name, &base_data);
+        if let Some(alias) = alias {
+            add_qualified_columns(&mut context, &alias, &base_data);
+        }
+        Ok(context)
+    }
+
     pub(super) fn delete_rows(&self, delete: sqlparser::ast::Delete) -> Result<QueryResult> {
         let returning = delete.returning;
-        let table_name = match delete.from {
-            sqlparser::ast::FromTable::WithFromKeyword(v) => v
-                .first()
-                .map(|t| table_factor_name(&t.relation))
-                .transpose()?
-                .ok_or_else(|| anyhow!("missing DELETE target table"))?,
-            sqlparser::ast::FromTable::WithoutKeyword(v) => v
-                .first()
-                .map(|t| table_factor_name(&t.relation))
-                .transpose()?
-                .ok_or_else(|| anyhow!("missing DELETE target table"))?,
+        if !delete.tables.is_empty() {
+            return Err(anyhow!("multi-table DELETE is not supported yet"));
+        }
+        if delete.using.is_some() {
+            return Err(anyhow!("DELETE ... USING is not supported yet"));
+        }
+
+        let from = match &delete.from {
+            sqlparser::ast::FromTable::WithFromKeyword(v)
+            | sqlparser::ast::FromTable::WithoutKeyword(v) => v,
         };
+        if from.len() != 1 {
+            return Err(anyhow!("DELETE supports exactly one target table"));
+        }
+        let root = from
+            .first()
+            .ok_or_else(|| anyhow!("missing DELETE target table"))?;
+        if !root.joins.is_empty() {
+            return Err(anyhow!("DELETE with joins is not supported yet"));
+        }
+        let table_name = table_factor_name(&root.relation)?;
 
         let mut deleted = 0_u64;
         let mut deleted_keys = Vec::new();
@@ -389,19 +496,24 @@ impl Engine {
             .get(&table_name)
             .map(|rows| rows.clone())
             .unwrap_or_default();
-        let mut keys = Vec::new();
+        let mut candidates = Vec::new();
         for (k, row) in &current_rows {
-            if self.matches_selection_ctx(delete.selection.as_ref(), &row.data, 0)? {
-                keys.push(k.clone());
+            let view = self.current_schema_row(&table_name, &row.data);
+            if self.matches_selection_ctx(delete.selection.as_ref(), &view, 0)? {
+                candidates.push((k.clone(), row.clone(), view));
             }
         }
+        sort_delete_candidates(&mut candidates, &delete.order_by)?;
+        if let Some(limit) = &delete.limit {
+            candidates.truncate(expr_to_usize(limit)?);
+        }
 
-        if !keys.is_empty() {
+        if !candidates.is_empty() {
             let mut next_rows = current_rows;
-            for k in keys {
-                if let Some(row) = next_rows.remove(&k) {
+            for (key, _, _) in candidates {
+                if let Some(row) = next_rows.remove(&key) {
                     returned_rows.push(row.data);
-                    deleted_keys.push(k);
+                    deleted_keys.push(key);
                     deleted += 1;
                 }
             }
@@ -710,4 +822,31 @@ impl Engine {
         }
         self.indexes.insert(table.to_string(), table_index);
     }
+}
+
+fn sort_delete_candidates(
+    candidates: &mut [(String, StoredRow, Map<String, Value>)],
+    order_by: &[OrderByExpr],
+) -> Result<()> {
+    for item in order_by {
+        validate_order_expr(&item.expr)?;
+    }
+
+    candidates.sort_by(|(_, _, left), (_, _, right)| {
+        for item in order_by {
+            let left_value = expr_resolved_value(&item.expr, left).unwrap_or(Value::Null);
+            let right_value = expr_resolved_value(&item.expr, right).unwrap_or(Value::Null);
+            let ordering = compare_json_values(&left_value, &right_value);
+            if ordering != Ordering::Equal {
+                return if item.asc.unwrap_or(true) {
+                    ordering
+                } else {
+                    ordering.reverse()
+                };
+            }
+        }
+        Ordering::Equal
+    });
+
+    Ok(())
 }
