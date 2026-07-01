@@ -467,6 +467,20 @@ fn parity_with_mysql_for_supported_semantics() {
         &mut mysql_conn,
         &mut whatever_conn,
         &format!(
+            "SELECT id, LEFT(name, 2) AS left_name, RIGHT(email, 11) AS email_domain, LPAD(score, 3, '0') AS padded_score, RPAD(name, 6, '.') AS padded_name, LOCATE('@', email) AS at_pos, INSTR(email, '.') AS dot_pos, POSITION('@' IN email) AS position_pos, REVERSE(name) AS reversed_name, REPEAT(SUBSTRING(name, 1, 1), 2) AS repeated_initial, ASCII(name) AS first_char FROM {users} ORDER BY id"
+        ),
+    );
+    assert_query_parity(
+        &mut mysql_conn,
+        &mut whatever_conn,
+        &format!(
+            "SELECT id, GREATEST(score, 15) AS greatest_score, LEAST(score, 15) AS least_score, SIGN(score - 20) AS score_sign, MOD(score, 7) AS score_mod FROM {users} ORDER BY id"
+        ),
+    );
+    assert_query_parity(
+        &mut mysql_conn,
+        &mut whatever_conn,
+        &format!(
             "SELECT id, YEAR(created_at) AS y, MONTH(created_at) AS m, DAY(created_at) AS d FROM {users} ORDER BY id"
         ),
     );
@@ -474,7 +488,26 @@ fn parity_with_mysql_for_supported_semantics() {
         &mut mysql_conn,
         &mut whatever_conn,
         &format!(
+            "SELECT id, DATE_FORMAT(created_at, '%Y-%m-%d') AS formatted_day, TIMESTAMPDIFF(DAY, '2026-01-01', created_at) AS days_since, DATEDIFF(created_at, '2026-01-01') AS datediff_days FROM {users} ORDER BY id"
+        ),
+    );
+    assert_query_parity(
+        &mut mysql_conn,
+        &mut whatever_conn,
+        "SELECT JSON_UNQUOTE(JSON_EXTRACT('{\"user\":{\"name\":\"Ada\"}}', '$.user.name')) AS json_name, JSON_CONTAINS('{\"a\":1,\"b\":2}', '{\"a\":1}') AS json_contains",
+    );
+    assert_query_parity(
+        &mut mysql_conn,
+        &mut whatever_conn,
+        &format!(
             "SELECT COUNT(*) AS all_rows, COUNT(nickname) AS nick_rows, COUNT(DISTINCT nickname) AS nick_distinct FROM {users}"
+        ),
+    );
+    assert_query_parity(
+        &mut mysql_conn,
+        &mut whatever_conn,
+        &format!(
+            "SELECT GROUP_CONCAT(name ORDER BY score DESC SEPARATOR '|') AS ordered_names, COUNT(DISTINCT name, score) AS distinct_name_scores FROM {users}"
         ),
     );
     assert_query_parity(

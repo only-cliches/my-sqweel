@@ -1,6 +1,6 @@
 [package]
 name = "my-sqweel"
-version = "0.2.3"
+version = "0.2.4"
 edition = "2024"
 description = "A schema-drift-tolerant, development-only MySQL facade for fast local iteration."
 license = "MIT"
@@ -41,7 +41,7 @@ futures-util = { version = "0.3", default-features = false, features = ["sink"] 
 hashbrown = "0.14"
 jsonwebtoken = { version = "10", features = ["rust_crypto"] }
 mlua = { version = "0.10", features = ["lua54", "vendored"] }
-msql-srv = "0.11"
+msql-srv = { version = "0.11", path = "vendor/msql-srv" }
 ordered-float = "4"
 parking_lot = "0.12"
 rand_core = { version = "0.6", features = ["getrandom"] }

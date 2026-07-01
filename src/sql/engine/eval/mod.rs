@@ -1,5 +1,15 @@
 use super::*;
 
+mod common;
+mod datetime;
+mod json;
+mod scalar;
+
+use common::*;
+use datetime::*;
+use json::*;
+use scalar::*;
+
 pub(super) fn table_factor_name(factor: &TableFactor) -> Result<String> {
     table_factor_name_and_alias(factor).map(|(name, _)| name)
 }
@@ -283,8 +293,16 @@ enum AggregateKind {
 #[derive(Debug, Clone)]
 struct AggregateCall {
     kind: AggregateKind,
-    arg: Option<String>,
+    args: Vec<String>,
     distinct: bool,
+    order_by: Vec<GroupConcatOrder>,
+    separator: String,
+}
+
+#[derive(Debug, Clone)]
+struct GroupConcatOrder {
+    expr: String,
+    asc: bool,
 }
 
 fn aggregate_call(expr: &Expr) -> Option<AggregateCall> {
@@ -298,21 +316,91 @@ fn aggregate_call(expr: &Expr) -> Option<AggregateCall> {
         "GROUP_CONCAT" => AggregateKind::GroupConcat,
         _ => return None,
     };
-    let mut arg = args.first().cloned();
+
+    if kind == AggregateKind::GroupConcat {
+        return Some(parse_group_concat_call(args));
+    }
+
+    let mut args = args;
     let mut distinct = false;
-    if let Some(raw) = &arg {
+    if let Some(raw) = args.first_mut() {
         let trimmed = raw.trim();
         if trimmed.to_ascii_uppercase().starts_with("DISTINCT ") {
             distinct = true;
-            arg = Some(trimmed[9..].trim().to_string());
+            *raw = trimmed[9..].trim().to_string();
         }
     }
 
     Some(AggregateCall {
         kind,
-        arg,
+        args,
         distinct,
+        order_by: Vec::new(),
+        separator: ",".to_string(),
     })
+}
+
+fn parse_group_concat_call(args: Vec<String>) -> AggregateCall {
+    let mut body = args.join(", ");
+    let mut separator = ",".to_string();
+    if let Some((left, right)) = split_top_level_keyword(&body, "SEPARATOR") {
+        let left = left.to_string();
+        let right = right.trim().to_string();
+        body = left;
+        separator = unquote_sql_string(&right).unwrap_or(right);
+    }
+
+    let mut order_by = Vec::new();
+    if let Some((left, right)) = split_top_level_keyword(&body, "ORDER BY") {
+        let left = left.to_string();
+        let right = right.to_string();
+        body = left;
+        order_by = split_sql_args(&right)
+            .into_iter()
+            .filter_map(|raw| {
+                let trimmed = raw.trim();
+                let upper = trimmed.to_ascii_uppercase();
+                if let Some(expr) = upper.strip_suffix(" DESC") {
+                    let expr_len = expr.len();
+                    Some(GroupConcatOrder {
+                        expr: trimmed[..expr_len].trim().to_string(),
+                        asc: false,
+                    })
+                } else if let Some(expr) = upper.strip_suffix(" ASC") {
+                    let expr_len = expr.len();
+                    Some(GroupConcatOrder {
+                        expr: trimmed[..expr_len].trim().to_string(),
+                        asc: true,
+                    })
+                } else if !trimmed.is_empty() {
+                    Some(GroupConcatOrder {
+                        expr: trimmed.to_string(),
+                        asc: true,
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect();
+    }
+
+    let mut args = split_sql_args(&body);
+    let mut distinct = false;
+    if let Some(first) = args.first_mut() {
+        let trimmed = first.trim();
+        if trimmed.to_ascii_uppercase().starts_with("DISTINCT ") {
+            distinct = true;
+            *first = trimmed[9..].trim().to_string();
+        }
+    }
+
+    AggregateCall {
+        kind: AggregateKind::GroupConcat,
+        args,
+        distinct,
+        order_by,
+        separator,
+    }
 }
 
 fn eval_aggregate_call(
@@ -321,10 +409,59 @@ fn eval_aggregate_call(
     last_insert_id: u64,
 ) -> Result<Value> {
     let mut values = Vec::new();
-    for row in group {
-        let value = match call.arg.as_deref() {
-            None | Some("*") => Value::Number(Number::from(1_u64)),
-            Some(arg) => eval_scalar_text(arg, row, last_insert_id)?,
+    let mut ordered_group = group.iter().collect::<Vec<_>>();
+    if call.kind == AggregateKind::GroupConcat && !call.order_by.is_empty() {
+        ordered_group.sort_by(|left, right| {
+            for order in &call.order_by {
+                let left_value =
+                    eval_scalar_text(&order.expr, left, last_insert_id).unwrap_or(Value::Null);
+                let right_value =
+                    eval_scalar_text(&order.expr, right, last_insert_id).unwrap_or(Value::Null);
+                let ordering = compare_json_values(&left_value, &right_value);
+                if ordering != Ordering::Equal {
+                    return if order.asc {
+                        ordering
+                    } else {
+                        ordering.reverse()
+                    };
+                }
+            }
+            Ordering::Equal
+        });
+    }
+
+    for row in ordered_group {
+        if call.kind == AggregateKind::GroupConcat {
+            let mut parts = Vec::new();
+            for arg in &call.args {
+                let value = eval_scalar_text(arg, row, last_insert_id)?;
+                if value == Value::Null {
+                    parts.clear();
+                    break;
+                }
+                parts.push(json_scalar_to_string(&value));
+            }
+            if !parts.is_empty() {
+                values.push(Value::String(parts.join("")));
+            }
+            continue;
+        }
+
+        let value = match call.args.as_slice() {
+            [] => Value::Number(Number::from(1_u64)),
+            [arg] if arg == "*" => Value::Number(Number::from(1_u64)),
+            [arg] => eval_scalar_text(arg, row, last_insert_id)?,
+            args => {
+                let tuple = args
+                    .iter()
+                    .map(|arg| eval_scalar_text(arg, row, last_insert_id))
+                    .collect::<Result<Vec<_>>>()?;
+                if tuple.iter().any(|value| value == &Value::Null) {
+                    Value::Null
+                } else {
+                    Value::Array(tuple)
+                }
+            }
         };
         if value != Value::Null {
             values.push(value);
@@ -371,7 +508,7 @@ fn eval_aggregate_call(
                 .into_iter()
                 .map(|v| json_scalar_to_string(&v))
                 .collect();
-            Ok(Value::String(strs.join(",")))
+            Ok(Value::String(strs.join(&call.separator)))
         }
     }
 }
@@ -775,9 +912,11 @@ pub(super) fn like_match(target: &str, pattern: &str) -> bool {
 
 pub(super) fn expr_field_value(expr: &Expr, data: &Map<String, Value>) -> Result<Value> {
     match expr {
-        Expr::Identifier(Ident { value, .. }) => {
-            Ok(data.get(value).cloned().unwrap_or(Value::Null))
-        }
+        Expr::Identifier(Ident { value, .. }) => Ok(data
+            .get(value)
+            .cloned()
+            .or_else(|| eval_bare_datetime_keyword(value))
+            .unwrap_or(Value::Null)),
         Expr::CompoundIdentifier(parts) => {
             let key = parts
                 .iter()
@@ -915,6 +1054,30 @@ pub(super) fn eval_expr(
                 None => Ok(Value::Null),
             }
         }
+        Expr::Extract { field, expr, .. } => {
+            eval_extract_datetime_field(field, eval_expr(expr, data, last_insert_id)?)
+        }
+        Expr::Position { expr, r#in } => eval_position_values(
+            eval_expr(expr, data, last_insert_id)?,
+            eval_expr(r#in, data, last_insert_id)?,
+        ),
+        Expr::Substring {
+            expr,
+            substring_from,
+            substring_for,
+            ..
+        } => {
+            let value = eval_expr(expr, data, last_insert_id)?;
+            let start = substring_from
+                .as_ref()
+                .map(|expr| eval_expr(expr, data, last_insert_id))
+                .transpose()?;
+            let len = substring_for
+                .as_ref()
+                .map(|expr| eval_expr(expr, data, last_insert_id))
+                .transpose()?;
+            eval_substring_values(value, start, len)
+        }
         Expr::Function(func) => eval_function_text(&func.to_string(), data, last_insert_id),
         Expr::Cast {
             expr, data_type, ..
@@ -922,6 +1085,21 @@ pub(super) fn eval_expr(
             eval_expr(expr, data, last_insert_id)?,
             &data_type.to_string(),
         ),
+        Expr::Convert {
+            expr,
+            data_type,
+            charset,
+            ..
+        } => {
+            let value = eval_expr(expr, data, last_insert_id)?;
+            if let Some(data_type) = data_type {
+                cast_json_value(value, &data_type.to_string())
+            } else if charset.is_some() {
+                Ok(Value::String(json_scalar_to_string(&value)))
+            } else {
+                Ok(value)
+            }
+        }
         _ => expr_to_json(expr),
     }
 }
@@ -1011,7 +1189,7 @@ pub(super) fn eval_function_text(
     last_insert_id: u64,
 ) -> Result<Value> {
     let Some((name, args)) = split_function_call(text) else {
-        return Ok(Value::Null);
+        return Ok(eval_bare_datetime_keyword(text).unwrap_or(Value::Null));
     };
 
     match name.as_str() {
@@ -1022,10 +1200,31 @@ pub(super) fn eval_function_text(
                 Ok(Value::Number(Number::from(last_insert_id)))
             }
         }
-        "NOW" | "CURRENT_TIMESTAMP" | "LOCALTIME" | "LOCALTIMESTAMP" => {
+        "NOW" | "CURRENT_TIMESTAMP" | "LOCALTIME" | "LOCALTIMESTAMP" | "UTC_TIMESTAMP" => {
             Ok(Value::String(Utc::now().naive_utc().to_string()))
         }
-        "CURRENT_DATE" | "CURDATE" => Ok(Value::String(Utc::now().date_naive().to_string())),
+        "CURRENT_DATE" | "CURDATE" | "UTC_DATE" => {
+            Ok(Value::String(Utc::now().date_naive().to_string()))
+        }
+        "CURRENT_TIME" | "CURTIME" | "UTC_TIME" => Ok(Value::String(format_mysql_naive_time(
+            Utc::now().naive_utc().time(),
+        ))),
+        "DATE_ADD" | "ADDDATE" => {
+            eval_date_add_sub(args.first(), args.get(1), data, last_insert_id, 1)
+        }
+        "DATE_SUB" | "SUBDATE" => {
+            eval_date_add_sub(args.first(), args.get(1), data, last_insert_id, -1)
+        }
+        "TIMESTAMPADD" => {
+            eval_timestamp_add(args.first(), args.get(1), args.get(2), data, last_insert_id)
+        }
+        "TIMESTAMPDIFF" => {
+            eval_timestamp_diff(args.first(), args.get(1), args.get(2), data, last_insert_id)
+        }
+        "DATEDIFF" => eval_date_diff(args.first(), args.get(1), data, last_insert_id),
+        "ADDTIME" => eval_add_sub_time(args.first(), args.get(1), data, last_insert_id, 1),
+        "SUBTIME" => eval_add_sub_time(args.first(), args.get(1), data, last_insert_id, -1),
+        "TIMEDIFF" => eval_time_diff(args.first(), args.get(1), data, last_insert_id),
         "UUID" => Ok(Value::String(uuid::Uuid::new_v4().to_string())),
         "DATABASE" | "SCHEMA" => Ok(Value::String("app".to_string())),
         "VERSION" => Ok(Value::String("8.0.0-my-sqweel".to_string())),
@@ -1135,6 +1334,7 @@ pub(super) fn eval_function_text(
                 )))
             }
         }
+        "ASCII" | "ORD" => eval_ascii_ord(args.first(), data, last_insert_id),
         "ABS" => {
             let value = args
                 .first()
@@ -1143,6 +1343,20 @@ pub(super) fn eval_function_text(
                 .unwrap_or(Value::Null);
             Ok(number_from_f64(json_to_f64_lossy(&value)?.abs()))
         }
+        "SIGN" => eval_unary_number(args.first(), data, last_insert_id, |value| {
+            if value > 0.0 {
+                1.0
+            } else if value < 0.0 {
+                -1.0
+            } else {
+                0.0
+            }
+        }),
+        "SQRT" => eval_unary_number(args.first(), data, last_insert_id, |value| value.sqrt()),
+        "EXP" => eval_unary_number(args.first(), data, last_insert_id, |value| value.exp()),
+        "LN" | "LOG" => eval_log(args.first(), args.get(1), data, last_insert_id),
+        "LOG10" => eval_unary_number(args.first(), data, last_insert_id, |value| value.log10()),
+        "LOG2" => eval_unary_number(args.first(), data, last_insert_id, |value| value.log2()),
         "ROUND" => {
             let value = args
                 .first()
@@ -1160,65 +1374,66 @@ pub(super) fn eval_function_text(
                 (json_to_f64_lossy(&value)? * factor).round() / factor,
             ))
         }
-        "DATE" => {
-            let value = args
-                .first()
-                .map(|arg| eval_scalar_text(arg, data, last_insert_id))
-                .transpose()?
-                .unwrap_or(Value::Null);
-            if value == Value::Null {
-                Ok(Value::Null)
-            } else {
-                let raw = json_scalar_to_string(&value);
-                let date = raw.split([' ', 'T']).next().unwrap_or_default().to_string();
-                if date.is_empty() {
-                    Ok(Value::Null)
-                } else {
-                    Ok(Value::String(date))
-                }
-            }
-        }
-        "YEAR" => extract_date_component(args.first(), data, last_insert_id, 0..4),
-        "MONTH" => extract_date_component(args.first(), data, last_insert_id, 5..7),
-        "DAY" | "DAYOFMONTH" => extract_date_component(args.first(), data, last_insert_id, 8..10),
+        "TRUNCATE" => eval_truncate(args.first(), args.get(1), data, last_insert_id),
+        "MOD" => eval_mod(args.first(), args.get(1), data, last_insert_id),
+        "GREATEST" => eval_extreme(args.as_slice(), data, last_insert_id, ExtremeKind::Greatest),
+        "LEAST" => eval_extreme(args.as_slice(), data, last_insert_id, ExtremeKind::Least),
+        "DATE" => eval_date_part(args.first(), data, last_insert_id),
+        "TIME" => eval_time_part(args.first(), data, last_insert_id),
+        "YEAR" => eval_datetime_component(args.first(), data, last_insert_id, "YEAR"),
+        "MONTH" => eval_datetime_component(args.first(), data, last_insert_id, "MONTH"),
+        "DAY" | "DAYOFMONTH" => eval_datetime_component(args.first(), data, last_insert_id, "DAY"),
+        "DAYOFWEEK" => eval_datetime_component(args.first(), data, last_insert_id, "DAYOFWEEK"),
+        "WEEKDAY" => eval_datetime_component(args.first(), data, last_insert_id, "WEEKDAY"),
+        "DAYOFYEAR" => eval_datetime_component(args.first(), data, last_insert_id, "DAYOFYEAR"),
+        "QUARTER" => eval_datetime_component(args.first(), data, last_insert_id, "QUARTER"),
+        "HOUR" => eval_datetime_component(args.first(), data, last_insert_id, "HOUR"),
+        "MINUTE" => eval_datetime_component(args.first(), data, last_insert_id, "MINUTE"),
+        "SECOND" => eval_datetime_component(args.first(), data, last_insert_id, "SECOND"),
+        "MICROSECOND" => eval_datetime_component(args.first(), data, last_insert_id, "MICROSECOND"),
+        "DAYNAME" => eval_datetime_name(args.first(), data, last_insert_id, DateNamePart::Day),
+        "MONTHNAME" => eval_datetime_name(args.first(), data, last_insert_id, DateNamePart::Month),
         "SUBSTRING" | "SUBSTR" => {
             let s = args
                 .first()
                 .map(|arg| eval_scalar_text(arg, data, last_insert_id))
                 .transpose()?
                 .unwrap_or(Value::Null);
-            if s == Value::Null {
-                return Ok(Value::Null);
-            }
-            let pos = args
+            let start = args
                 .get(1)
                 .map(|arg| eval_scalar_text(arg, data, last_insert_id))
-                .transpose()?
-                .and_then(|v| v.as_i64())
-                .unwrap_or(1);
+                .transpose()?;
             let len = args
                 .get(2)
                 .map(|arg| eval_scalar_text(arg, data, last_insert_id))
-                .transpose()?
-                .and_then(|v| v.as_i64());
-            let s = json_scalar_to_string(&s);
-            let chars: Vec<char> = s.chars().collect();
-            let start = if pos < 0 {
-                std::cmp::max(0, (chars.len() as i64) + pos) as usize
-            } else {
-                std::cmp::max(0, pos - 1) as usize
-            };
-            if start >= chars.len() {
-                Ok(Value::String(String::new()))
-            } else {
-                let end = if let Some(l) = len {
-                    std::cmp::min(chars.len(), start + (l as usize))
-                } else {
-                    chars.len()
-                };
-                Ok(Value::String(chars[start..end].iter().collect()))
-            }
+                .transpose()?;
+            eval_substring_values(s, start, len)
         }
+        "LEFT" => eval_left_right(args.first(), args.get(1), data, last_insert_id, false),
+        "RIGHT" => eval_left_right(args.first(), args.get(1), data, last_insert_id, true),
+        "LPAD" => eval_pad(
+            args.first(),
+            args.get(1),
+            args.get(2),
+            data,
+            last_insert_id,
+            false,
+        ),
+        "RPAD" => eval_pad(
+            args.first(),
+            args.get(1),
+            args.get(2),
+            data,
+            last_insert_id,
+            true,
+        ),
+        "LOCATE" => eval_locate(args.first(), args.get(1), args.get(2), data, last_insert_id),
+        "INSTR" => eval_instr(args.first(), args.get(1), data, last_insert_id),
+        "POSITION" => eval_position(args.first(), data, last_insert_id),
+        "REVERSE" => eval_unary_string(args.first(), data, last_insert_id, |value| {
+            value.chars().rev().collect()
+        }),
+        "REPEAT" => eval_repeat(args.first(), args.get(1), data, last_insert_id),
         "FLOOR" => {
             let value = args
                 .first()
@@ -1279,48 +1494,22 @@ pub(super) fn eval_function_text(
                 )))
             }
         }
-        "DATE_FORMAT" => {
-            let s = args
-                .first()
-                .map(|arg| eval_scalar_text(arg, data, last_insert_id))
-                .transpose()?
-                .unwrap_or(Value::Null);
-            let fmt = args
-                .get(1)
-                .map(|arg| eval_scalar_text(arg, data, last_insert_id))
-                .transpose()?
-                .unwrap_or(Value::Null);
-            if s == Value::Null || fmt == Value::Null {
-                return Ok(Value::Null);
-            }
-            let date_str = json_scalar_to_string(&s);
-            let fmt_str = json_scalar_to_string(&fmt);
-            let date_part = date_str.split([' ', 'T']).next().unwrap_or_default();
-            let date_parts: Vec<&str> = date_part.split('-').collect();
-            let time_part = date_str.split(' ').nth(1).unwrap_or_default();
-            let time_parts: Vec<&str> = time_part.split(':').collect();
-            let mut result = fmt_str;
-            if date_parts.len() >= 1 {
-                result = result.replace("%Y", date_parts[0]);
-            }
-            if date_parts.len() >= 2 {
-                result = result.replace("%m", date_parts[1]);
-            }
-            if date_parts.len() >= 3 {
-                result = result.replace("%d", date_parts[2]);
-            }
-            if time_parts.len() >= 1 {
-                result = result.replace("%H", time_parts[0]);
-            }
-            if time_parts.len() >= 2 {
-                result = result.replace("%i", time_parts[1]);
-            }
-            if time_parts.len() >= 3 {
-                result = result.replace("%s", time_parts[2].split('.').next().unwrap_or(""));
-            }
-            Ok(Value::String(result))
+        "DATE_FORMAT" => eval_date_format(args.first(), args.get(1), data, last_insert_id),
+        "JSON_EXTRACT" => eval_json_extract(args.as_slice(), data, last_insert_id),
+        "JSON_UNQUOTE" => eval_json_unquote(args.first(), data, last_insert_id),
+        "JSON_OBJECT" => eval_json_object(args.as_slice(), data, last_insert_id),
+        "JSON_ARRAY" => eval_json_array(args.as_slice(), data, last_insert_id),
+        "JSON_CONTAINS" => {
+            eval_json_contains(args.first(), args.get(1), args.get(2), data, last_insert_id)
         }
-        _ => Ok(Value::Null),
+        "JSON_SET" => eval_json_mutation(args.as_slice(), data, last_insert_id, JsonMutation::Set),
+        "JSON_REMOVE" => {
+            eval_json_mutation(args.as_slice(), data, last_insert_id, JsonMutation::Remove)
+        }
+        _ => {
+            tracing::debug!(function = %name, "sql.unsupported_function");
+            Ok(Value::Null)
+        }
     }
 }
 
@@ -1354,31 +1543,6 @@ pub(super) fn eval_scalar_text(
         return eval_expr(&expr, data, last_insert_id);
     }
     Ok(data.get(trimmed).cloned().unwrap_or(Value::Null))
-}
-
-pub(super) fn extract_date_component(
-    arg: Option<&String>,
-    data: &Map<String, Value>,
-    last_insert_id: u64,
-    range: std::ops::Range<usize>,
-) -> Result<Value> {
-    let value = arg
-        .map(|arg| eval_scalar_text(arg, data, last_insert_id))
-        .transpose()?
-        .unwrap_or(Value::Null);
-    if value == Value::Null {
-        return Ok(Value::Null);
-    }
-    let raw = json_scalar_to_string(&value);
-    let date = raw.split([' ', 'T']).next().unwrap_or_default();
-    if date.len() < range.end {
-        return Ok(Value::Null);
-    }
-    let fragment = &date[range];
-    match fragment.parse::<i64>() {
-        Ok(n) => Ok(Value::Number(Number::from(n))),
-        Err(_) => Ok(Value::Null),
-    }
 }
 
 pub(super) fn parse_scalar_expr(sql: &str) -> Option<Expr> {
@@ -1466,6 +1630,9 @@ pub(super) fn split_sql_args(args: &str) -> Vec<String> {
 
 pub(super) fn cast_json_value(value: Value, data_type: &str) -> Result<Value> {
     let data_type = data_type.to_ascii_lowercase();
+    if value == Value::Null {
+        return Ok(Value::Null);
+    }
     if data_type.contains("int") || data_type == "signed" || data_type == "unsigned" {
         return Ok(Value::Number(Number::from(
             json_to_f64_lossy(&value)? as i64
@@ -1480,6 +1647,27 @@ pub(super) fn cast_json_value(value: Value, data_type: &str) -> Result<Value> {
     }
     if data_type.contains("char") || data_type.contains("text") || data_type.contains("binary") {
         return Ok(Value::String(json_scalar_to_string(&value)));
+    }
+    if data_type.contains("datetime") || data_type.contains("timestamp") {
+        return Ok(parse_mysql_datetime_value(&value)
+            .map(|datetime| Value::String(datetime.to_string()))
+            .unwrap_or(Value::Null));
+    }
+    if data_type.contains("date") {
+        return Ok(parse_mysql_datetime_value(&value)
+            .map(|datetime| Value::String(datetime.date().to_string()))
+            .unwrap_or(Value::Null));
+    }
+    if data_type.contains("time") {
+        if let Some(datetime) = parse_mysql_datetime_value(&value) {
+            return Ok(Value::String(format_mysql_naive_time(datetime.time())));
+        }
+        return Ok(parse_mysql_time_duration(&value)
+            .map(|duration| Value::String(format_mysql_duration(duration)))
+            .unwrap_or(Value::Null));
+    }
+    if data_type.contains("json") {
+        return Ok(parse_json_document_value(value));
     }
     if data_type.contains("bool") {
         return Ok(Value::Bool(value_truthy(&value)));

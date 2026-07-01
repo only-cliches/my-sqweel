@@ -183,6 +183,15 @@ pub(super) fn coerce_value_for_column(value: Value, hint: &ColumnHint) -> Value 
         return coerce_bool(value.clone()).unwrap_or(value);
     }
 
+    // Floating-point columns must store their values as f64 even when an
+    // integral literal (e.g. `3800`) is inserted. Otherwise the value is kept
+    // as a JSON integer and the result-set metadata reports the column as
+    // LONGLONG instead of DOUBLE, which makes MySQL clients return it as a
+    // string (bigNumberStrings) and breaks numeric consumers downstream.
+    if sql_type.contains("double") || sql_type.contains("float") || sql_type.contains("real") {
+        return coerce_double(value.clone()).unwrap_or(value);
+    }
+
     if sql_type.contains("char")
         || sql_type.contains("text")
         || sql_type.contains("date")
@@ -220,6 +229,24 @@ pub(super) fn coerce_number(value: Value) -> Option<Value> {
                     .and_then(Number::from_f64)
                     .map(Value::Number)
             }),
+        other => Some(other),
+    }
+}
+
+// Force a numeric value into an f64-backed JSON number so floating-point
+// columns round-trip (and report) as DOUBLE even for integral inputs.
+pub(super) fn coerce_double(value: Value) -> Option<Value> {
+    match value {
+        Value::Number(ref number) => number
+            .as_f64()
+            .and_then(Number::from_f64)
+            .map(Value::Number),
+        Value::Bool(value) => Number::from_f64(if value { 1.0 } else { 0.0 }).map(Value::Number),
+        Value::String(value) => value
+            .parse::<f64>()
+            .ok()
+            .and_then(Number::from_f64)
+            .map(Value::Number),
         other => Some(other),
     }
 }

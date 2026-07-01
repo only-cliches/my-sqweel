@@ -2,6 +2,20 @@
 
 All notable changes to MySqweel will be documented in this file.
 
+## 0.2.4 - Jun 30, 2026
+
+- Added broader MySQL date/time scalar support, including `DATE_ADD`/`ADDDATE`, `DATE_SUB`/`SUBDATE`, `TIMESTAMPADD`, `TIMESTAMPDIFF`, `DATEDIFF`, `ADDTIME`, `SUBTIME`, `TIMEDIFF`, `EXTRACT`, current/UTC date-time functions, date/time part functions, and expanded `DATE_FORMAT` tokens.
+- Added common JSON scalar support for `JSON_EXTRACT`, `JSON_UNQUOTE`, `JSON_OBJECT`, `JSON_ARRAY`, `JSON_CONTAINS`, `JSON_SET`, and `JSON_REMOVE`.
+- Added more string and numeric scalar functions, including `LEFT`, `RIGHT`, `LPAD`, `RPAD`, `LOCATE`, `INSTR`, `POSITION`, `REVERSE`, `REPEAT`, `ASCII`/`ORD`, `GREATEST`, `LEAST`, `SIGN`, `SQRT`, `LOG`, `EXP`, `TRUNCATE`, and function-form `MOD`.
+- Improved `CAST`/`CONVERT` handling for date, time, datetime, JSON, and signed numeric conversions.
+- Improved aggregate compatibility for `GROUP_CONCAT(... ORDER BY ... SEPARATOR ...)` and multi-expression `COUNT(DISTINCT ...)`.
+- Split SQL evaluator helpers into focused date/time, JSON, scalar, and common helper modules.
+- Expanded real-MySQL parity coverage for date/time, JSON, string, numeric, and aggregate function behavior.
+- Switched the MySQL wire-protocol dependency to the vendored `msql-srv` copy under `vendor/msql-srv`.
+- Patched the vendored `msql-srv` session loop to acknowledge `COM_CHANGE_USER` and avoid panicking on unsupported command parse failures.
+- Fixed floating-point column coercion so integral inserts into `DOUBLE`, `FLOAT`, and `REAL` columns are stored and reported as floating-point values instead of integer metadata.
+- Added regression coverage for MySQL date/time, JSON, string, numeric, conversion, and aggregate function evaluation.
+
 ## 0.2.3 - Jun 29, 2026
 
 - Fixed `UPDATE ... JOIN` evaluation so `WHERE` clauses and assignment expressions use the joined row context, including table aliases.

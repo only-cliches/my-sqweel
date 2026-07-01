@@ -4,15 +4,17 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
 use anyhow::{Result, anyhow};
-use chrono::{DateTime, Utc};
+use chrono::{
+    DateTime, Datelike, Duration, Months, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc,
+};
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Number, Value, json};
 use sqlparser::ast::{
-    Assignment, BinaryOperator, Expr, FunctionArg, FunctionArgExpr, FunctionArgumentClause,
-    FunctionArguments, GroupByExpr, Ident, JoinConstraint, JoinOperator, ObjectName, Offset,
-    OnInsert, OrderByExpr, Query, Select, SelectItem, SetExpr, Statement, TableConstraint,
-    TableFactor, TableWithJoins, Value as SqlValue,
+    Assignment, BinaryOperator, DateTimeField, Expr, FunctionArg, FunctionArgExpr,
+    FunctionArgumentClause, FunctionArguments, GroupByExpr, Ident, JoinConstraint, JoinOperator,
+    ObjectName, Offset, OnInsert, OrderByExpr, Query, Select, SelectItem, SetExpr, Statement,
+    TableConstraint, TableFactor, TableWithJoins, Value as SqlValue,
 };
 
 use crate::model::StoredRow;
