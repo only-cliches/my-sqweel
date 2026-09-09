@@ -2857,8 +2857,17 @@ impl RawEngine {
     }
 
     pub(super) fn select_information_schema_columns(&self, select: &Select) -> Result<QueryResult> {
+        // Provisioning asks for one table repeatedly. Avoid constructing every
+        // database column's metadata before the ordinary virtual-table filter.
+        let table_name = metadata_table_name(select.selection.as_ref());
         let mut rows = Vec::new();
         for schema in self.schemas.iter() {
+            if table_name
+                .as_ref()
+                .is_some_and(|name| !mysql_eq(&Value::String(schema.table.clone()), name))
+            {
+                continue;
+            }
             for (idx, col) in ordered_schema_columns(&schema).into_iter().enumerate() {
                 let Some(hint) = schema.columns.get(&col) else {
                     continue;
@@ -4284,8 +4293,8 @@ impl RawEngine {
         self.persist_schema(to)?;
         self.persist_auto_inc()?;
         if let Some(rows) = self.rows.get(to).map(|rows| rows.clone()) {
-            for (pk, row) in rows {
-                self.persist_row(to, &pk, &row)?;
+            for (pk, row) in &rows {
+                self.persist_row(to, pk, row)?;
             }
         }
         Ok(QueryResult::default())
@@ -4850,7 +4859,7 @@ fn explain_single_table_result(_sql: &str) -> QueryResult {
 fn explain_tree_result(
     select: &Select,
     tables: &[(String, Option<String>)],
-    rows: &DashMap<String, BTreeMap<String, StoredRow>>,
+    rows: &DashMap<String, SharedTable<StoredRow>>,
 ) -> QueryResult {
     let mut text = String::new();
     for (index, (table, alias)) in tables.iter().enumerate() {
@@ -5490,6 +5499,38 @@ fn mysql_column_key(schema: &TableSchemaHint, column: &str) -> &'static str {
         return "MUL";
     }
     ""
+}
+
+fn metadata_table_name(selection: Option<&Expr>) -> Option<Value> {
+    match selection? {
+        Expr::Nested(inner) => metadata_table_name(Some(inner)),
+        Expr::BinaryOp {
+            left,
+            op: BinaryOperator::And,
+            right,
+        } => metadata_table_name(Some(left)).or_else(|| metadata_table_name(Some(right))),
+        Expr::BinaryOp {
+            left,
+            op: BinaryOperator::Eq,
+            right,
+        } => {
+            let Expr::Identifier(column) = left.as_ref() else {
+                return None;
+            };
+            if !column.value.eq_ignore_ascii_case("table_name") {
+                return None;
+            }
+            match right.as_ref() {
+                Expr::Value(
+                    SqlValue::SingleQuotedString(name) | SqlValue::DoubleQuotedString(name),
+                ) => Some(Value::String(name.clone())),
+                _ => None,
+            }
+        }
+        // A predicate below OR is not a necessary condition. Expressions must
+        // also retain their ordinary row/session-dependent evaluation.
+        _ => None,
+    }
 }
 
 fn remap_set_row(

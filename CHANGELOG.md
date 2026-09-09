@@ -9,13 +9,27 @@ All notable changes to MySqweel will be documented in this file.
 - Added independent `Engine::session()` connections with atomic statements, `BEGIN`, `COMMIT`, `ROLLBACK`, savepoints, autocommit handling, and rollback on disconnect. A failed statement preserves earlier successful work in its transaction without publishing partial row/index changes.
 - Added committed-state reads and per-database writer leases covering transactions and `SELECT ... FOR UPDATE`. The supported isolation level is `REPEATABLE READ`; writer acquisition times out after five seconds. Independent database commits merge under a serialized publication lock; catalog administration remains globally exclusive. DDL and catalog administration inside a transaction are rejected.
 - Deferred transaction snapshots until the first read. First writes refresh unobserved state; upgrades validate observed rows, columns, and schema and merge unrelated committed changes. Prewrite savepoints follow the refreshed state, and read-only commits cannot republish stale data.
-- Added locked, checksummed atomic commit images containing all database data and the account catalog. Commits sync a temporary image, replace the committed image, and sync the directory before acknowledgment. Uncertain commit outcomes stop further operations until reopen.
-- Reject legacy Lux development directories with reset guidance. Old development state is disposable; this release provides no legacy data migration path.
-- Whole-database statement copies and whole-server durable images intentionally limit this edition to development datasets. There is no XA, replication, fine-grained row lock manager, or production concurrency qualification.
+- Replaced whole-server commit images with locked, incremental embedded Lux persistence. Commits write changed rows, schemas, auto-increment counters, views, and index comments plus the database/account catalog; unchanged databases and shared, unmodified tables are skipped. SQL state is published only after the storage batch succeeds.
+- Added the version-2 Lux storage layout and private data-directory permissions on Unix. Legacy transaction-image files, nonempty unversioned Lux stores, and unsupported storage versions are rejected with reset guidance; there is no migration path.
+- SQL statement atomicity and session isolation remain in memory; persistence does not promise crash-atomic multi-key commits or synchronous durability. Storage batches can partially apply before an error; command and I/O failures retain the previous visible SQL state and block further operations until reopen. Reopening does not guarantee recovery of an entire transaction.
+- Statement working copies share immutable table rows, indexes, and schema metadata, detaching only modified values. Writes can still copy an entire affected table, and persistence compares changed tables linearly, so large single-table workloads remain a limitation. There is no XA, replication, fine-grained row lock manager, or production concurrency qualification.
+- Made Lux startup and shutdown safe inside an existing Tokio runtime, and propagated command-level errors returned within storage pipelines. Added regressions for incremental deltas, storage-error handling, legacy-image rejection, directory locking, and async-runtime reopen, plus an ignored manual DDL benchmark.
+
+### Performance
+
+- Replaced eager row, index, and schema copies with copy-on-write sharing across statement working copies and transaction snapshots. Shared-table identity also avoids unnecessary snapshot comparisons and persistence scans of unchanged tables.
+- Reused the parsed-SELECT syntax cache across statement working copies; plans, evaluated results, and session values are not cached. Reduced private directory shard allocations and construct working copies directly instead of initializing a fresh storage-backed engine.
+- Added exact primary-key lookups for foreign-key validation, including composite keys, with a scan fallback to preserve case-insensitive and numeric-coercion matches. Release directory guards before inspecting related tables so foreign-key operations work when parent and child share a shard.
+- Added regressions for shared-state detachment, schema and query-cache behavior after DDL, foreign-key lookup/coercion and shard collisions, failed multirow updates, and repeated savepoint rollback of rows and indexes. Added an ignored manual benchmark for private-directory shard allocation costs.
+- Reduced bulk-INSERT parsing and allocation work: command recognizers skip clearly unrelated leading keywords, authorization tracks qualifier rewrites without cloning the entire statement, and VALUES execution borrows parsed expressions. Commented or ambiguous prefixes still use full parsing, and trailing-command rejection remains enforced.
+- Avoided collecting returned-row copies when INSERT or upsert has no RETURNING clause and skipped redundant per-statement persistence buffers for private transaction state. Committed changes still flow through the coordinator’s incremental persistence path.
+- Limited information-schema column construction to the requested table for supported literal `table_name = '...'` predicates, including conditions joined by AND. Case matching and the full predicate evaluation are retained; OR and row-dependent expressions continue through ordinary filtering.
+- Replaced the wire listener’s 50 ms accept polling with socket-readiness notifications. The timer now checks shutdown, and the blocking listener API uses a separate worker when called inside an existing Tokio runtime.
+- Added regressions for INSERT/upsert RETURNING and rollback, metadata filtering with case differences and OR/row expressions, qualifier normalization, commented commands and trailing-command rejection, and listener shutdown/port release inside Tokio. Added ignored manual benchmarks for command recognition and metadata filtering.
 
 ### Databases, accounts, and wire sessions
 
-- Added connection-owned advisory locks for the development provisioner, scoped database catalog enumeration, and the `8.0.0-my-sqweel-intentkit-tx-v1` protocol identity.
+- Added connection-owned advisory locks for the development provisioner, scoped database catalog enumeration, and the `8.0.0-my-sqweel` version identity. `VERSION()`, session defaults, and variable metadata now use this shorter identifier consistently.
 - Corrected Drizzle introspection ordering, empty result metadata, primary-key labels, and distinct named indexes over the same columns. Snapshot upgrades preserve concurrent committed data; stale observed snapshots abort with retryable error 1213.
 - Avoided index reconstruction during private state copies and disabled TCP Nagle buffering for local request/response SQL traffic.
 - Added independent logical databases, bootstrap administrator credentials, MySQL native-password verification, and database-wide `SELECT`, `INSERT`, `UPDATE`, and `DELETE` grants. Fresh local engines default to `root` with an empty password; embedders can call `set_admin_credentials()` before accepting connections.
@@ -23,7 +37,7 @@ All notable changes to MySqweel will be documented in this file.
 - Enforced the selected-database boundary across nested queries and schema references. Cross-database SQL and switching databases inside a transaction are rejected. SQL accounts accept the `%` host form only; this is not the complete MySQL permissions system.
 - Made session settings and transaction status connection-owned; unsupported global/integrity settings fail explicitly. Unsupported wire commands, including `COM_RESET_CONNECTION`, return an error rather than pretending to reset state; reconnect instead.
 - Integrated the updated `vendor/msql-srv` dependency and retained warning-count support alongside connection-owned transaction flags in OK and EOF packets, including prepared-statement results.
-- Added focused transaction, wire, database-isolation, account-persistence, and durable-image tests.
+- Added focused transaction, wire, database-isolation, account-persistence, and storage-recovery tests.
 
 ### Administrative and diagnostic surfaces
 
@@ -53,8 +67,10 @@ All notable changes to MySqweel will be documented in this file.
 
 ### Verification status
 
+- The results below predate the current storage, execution, command-dispatch, metadata, and wire-listener changes. They remain historical checkpoints; the current working tree has not been requalified by these runs.
+
 - The focused upstream audit contains 25 complete files and 339 direct SQL statements. MariaDB 10.11.7 and the transactional MySqweel backend both pass all 25 files and 339 statements locally, with no infrastructure failures. All 12 previously failing focused-audit files now pass; this does not claim a full MariaDB-suite or strict-manifest CI qualification.
-- Verified the complete local pre-push check with MariaDB parity required: 281 Rust tests, 29 Python harness tests, and all benchmark targets pass. This includes the ORM introspection regression and transaction authorization checks.
+- Verified the complete local pre-push check with MariaDB parity required: 281 Rust tests, 29 Python harness tests, and all benchmark targets passed. This includes the ORM introspection regression and transaction authorization checks.
 - Reverified the complete strict manifest locally against MariaDB 10.11.7 and the transactional backend: all 32 files and 381 statements pass on both engines, with zero infrastructure failures. This is a local verification result, not a claim about a subsequent CI run.
 
 ## 0.4.3 Aug 24, 2026

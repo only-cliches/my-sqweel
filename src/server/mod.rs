@@ -133,7 +133,9 @@ pub fn spawn_with_engine(cfg: ServerConfig, engine: Arc<Engine>) -> Result<Serve
 }
 
 fn log_runtime(cfg: &ServerConfig) {
-    tracing::info!("MySqweel development transactions enabled; writers serialize and readers see committed data");
+    tracing::info!(
+        "MySqweel development transactions enabled; writers serialize and readers see committed data"
+    );
     if cfg.allow_remote {
         tracing::warn!(
             address = %cfg.bind_addr,
@@ -142,7 +144,7 @@ fn log_runtime(cfg: &ServerConfig) {
     }
 
     if let Some(path) = &cfg.data_dir {
-        tracing::info!(data_dir = %path, "atomic database image persistence enabled");
+        tracing::info!(data_dir = %path, "embedded Lux incremental persistence enabled");
     } else {
         tracing::info!("running with in-memory transactional storage");
     }
@@ -160,6 +162,31 @@ mod tests {
     use super::*;
     use std::net::{TcpListener, TcpStream};
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn blocking_wire_listener_stops_and_releases_port_inside_tokio() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+            let address = listener.local_addr().unwrap();
+            let stop = Arc::new(AtomicBool::new(false));
+            let worker_stop = stop.clone();
+            let stopper = thread::spawn(move || {
+                thread::sleep(Duration::from_millis(20));
+                worker_stop.store(true, Ordering::Relaxed);
+            });
+            WireServer::new(Arc::new(Engine::new(EngineConfig::mysql_strict())))
+                .serve_listener_until(listener, stop)
+                .unwrap();
+            stopper.join().unwrap();
+            // A completed blocking call must release its listener/reactor.
+            let rebound = TcpListener::bind(address).unwrap();
+            drop(rebound);
+        });
+    }
 
     #[test]
     fn server_handle_stops_debug_server_before_drop() {
@@ -188,7 +215,10 @@ mod tests {
 
         let deadline = Instant::now() + Duration::from_secs(2);
         while TcpStream::connect(debug_addr).is_ok() {
-            assert!(Instant::now() < deadline, "debug server remained bound after shutdown");
+            assert!(
+                Instant::now() < deadline,
+                "debug server remained bound after shutdown"
+            );
             std::thread::sleep(Duration::from_millis(10));
         }
     }

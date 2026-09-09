@@ -25,7 +25,7 @@ impl RawEngine {
             );
         }
         schema.updated_at = Some(Utc::now());
-        self.schemas.insert(table.to_string(), schema);
+        self.schemas.insert(table.to_string(), schema.into());
         let mut table_rows = BTreeMap::new();
         for (index, row) in result.rows.into_iter().enumerate() {
             let key = (index + 1).to_string();
@@ -37,7 +37,7 @@ impl RawEngine {
             self.persist_row(table, &key, &stored)?;
             table_rows.insert(key, stored);
         }
-        self.rows.insert(table.to_string(), table_rows);
+        self.rows.insert(table.to_string(), table_rows.into());
         self.rebuild_indexes(table);
         self.persist_schema(table)?;
         Ok(())
@@ -76,7 +76,7 @@ impl RawEngine {
         }
         schema.temporary = temporary;
         schema.updated_at = Some(Utc::now());
-        self.schemas.insert(table.clone(), schema);
+        self.schemas.insert(table.clone(), schema.into());
         let mut table_rows = BTreeMap::new();
         for (index, row) in result.rows.into_iter().enumerate() {
             let id = Value::Number(Number::from((index + 1) as u64));
@@ -85,7 +85,7 @@ impl RawEngine {
             self.persist_row(&table, &key, &stored)?;
             table_rows.insert(key, stored);
         }
-        self.rows.insert(table.clone(), table_rows);
+        self.rows.insert(table.clone(), table_rows.into());
         self.rebuild_indexes(&table);
         self.persist_schema(&table)?;
         Ok(QueryResult::default())
@@ -124,10 +124,10 @@ impl RawEngine {
             merge_create_table_schema(&mut existing, incoming);
             existing
         } else {
-            incoming
+            incoming.into()
         };
 
-        self.schemas.insert(table.clone(), schema);
+        self.schemas.insert(table.clone(), schema.into());
         self.rows.entry(table.clone()).or_default();
         self.rebuild_indexes(&table);
         self.persist_schema(&table)?;
@@ -157,9 +157,12 @@ impl RawEngine {
             .schemas
             .get(&table)
             .map(|s| s.clone())
-            .unwrap_or_else(|| TableSchemaHint {
-                table: table.clone(),
-                ..TableSchemaHint::default()
+            .unwrap_or_else(|| {
+                TableSchemaHint {
+                    table: table.clone(),
+                    ..TableSchemaHint::default()
+                }
+                .into()
             });
         let mut rows_affected = 0;
 
@@ -198,7 +201,7 @@ impl RawEngine {
                 validation?;
             }
         }
-        self.schemas.insert(table.clone(), schema);
+        self.schemas.insert(table.clone(), schema.into());
         self.rows.entry(table.clone()).or_default();
         self.rebuild_indexes(&table);
         self.persist_schema(&table)?;
@@ -443,9 +446,12 @@ impl RawEngine {
             .schemas
             .get(&index.table)
             .map(|schema| schema.clone())
-            .unwrap_or_else(|| TableSchemaHint {
-                table: index.table.clone(),
-                ..TableSchemaHint::default()
+            .unwrap_or_else(|| {
+                TableSchemaHint {
+                    table: index.table.clone(),
+                    ..TableSchemaHint::default()
+                }
+                .into()
             });
         if index.or_replace {
             schema
@@ -509,7 +515,7 @@ impl RawEngine {
                 .referenced_table
                 .eq_ignore_ascii_case(&schema.table)
             {
-                Some(schema.clone())
+                Some(SharedValue::from(schema.clone()))
             } else {
                 self.schemas
                     .get(&foreign_key.referenced_table)
@@ -589,7 +595,7 @@ impl RawEngine {
         drop_unique_metadata(&mut schema, index_name);
         if schema.indexes.len() + schema.unique.len() != before {
             schema.updated_at = Some(Utc::now());
-            self.schemas.insert(table.to_string(), schema);
+            self.schemas.insert(table.to_string(), schema.into());
             self.index_comments.remove(&format!("{table}:{index_name}"));
             self.rebuild_indexes(table);
             self.persist_schema(table)?;
@@ -614,7 +620,7 @@ impl RawEngine {
                     record_query_row_write(0);
                 }
             }
-            self.rows.insert(table.clone(), BTreeMap::new());
+            self.rows.insert(table.clone(), SharedTable::default());
             self.indexes.remove(&table);
             self.clear_auto_inc(&table);
             self.rebuild_indexes(&table);

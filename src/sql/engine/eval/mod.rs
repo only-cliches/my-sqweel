@@ -3243,7 +3243,7 @@ pub(super) fn eval_function_text(
         "DATABASE" | "SCHEMA" => {
             Ok(EVAL_DATABASE.with(|database| Value::String(database.borrow().clone())))
         }
-        "VERSION" => Ok(Value::String("8.0.0-my-sqweel-intentkit-tx-v1".to_string())),
+        "VERSION" => Ok(Value::String("8.0.0-my-sqweel".to_string())),
         "USER" | "CURRENT_USER" => Ok(Value::String("root@localhost".to_string())),
         "VALUES" => args
             .first()

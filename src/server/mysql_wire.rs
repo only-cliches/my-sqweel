@@ -49,20 +49,40 @@ impl WireServer {
         listener: TcpListener,
         stop: Arc<AtomicBool>,
     ) -> io::Result<()> {
+        // This is a blocking embedding API. Keep its private reactor outside any
+        // caller's Tokio runtime so block_on and runtime shutdown remain valid.
+        if tokio::runtime::Handle::try_current().is_ok() {
+            return std::thread::scope(|scope| {
+                scope
+                    .spawn(|| self.serve_listener_until(listener, stop))
+                    .join()
+                    .unwrap_or_else(|_| Err(io::Error::other("mysql accept worker panicked")))
+            });
+        }
         listener.set_nonblocking(true)?;
-        while !stop.load(Ordering::Relaxed) {
-            match listener.accept() {
-                Ok((stream, _)) => self.spawn_session(stream),
-                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
-                    std::thread::sleep(Duration::from_millis(50));
-                }
-                Err(err) => {
-                    tracing::warn!(error = %err, "failed accepting mysql connection");
-                    std::thread::sleep(Duration::from_millis(50));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_io()
+            .enable_time()
+            .build()?;
+        runtime.block_on(async {
+            let listener = tokio::net::TcpListener::from_std(listener)?;
+            // The timer only checks shutdown. Socket readiness wakes accept
+            // immediately, without adding 50 ms to each fresh SQL connection.
+            let mut shutdown_check = tokio::time::interval(Duration::from_millis(50));
+            while !stop.load(Ordering::Relaxed) {
+                tokio::select! {
+                    accepted = listener.accept() => match accepted {
+                        Ok((stream, _)) => self.spawn_session(stream.into_std()?),
+                        Err(err) => {
+                            tracing::warn!(error = %err, "failed accepting mysql connection");
+                            tokio::time::sleep(Duration::from_millis(50)).await;
+                        }
+                    },
+                    _ = shutdown_check.tick() => {}
                 }
             }
-        }
-        Ok(())
+            Ok(())
+        })
     }
 
     fn spawn_session(&self, stream: std::net::TcpStream) {
@@ -359,6 +379,9 @@ impl Backend {
     }
 
     fn execute_session_query(&mut self, query: &str) -> Option<QueryResult> {
+        if !crate::sql::engine::may_start_with(query, &["SELECT", "SHOW"]) {
+            return None;
+        }
         // Never swallow a multi-statement request: later transaction controls
         // and writes must reach the same per-connection executor.
         let statements = crate::sql::parse(query).ok()?;
@@ -882,7 +905,7 @@ fn default_session_vars() -> HashMap<String, Value> {
         ("time_zone", serde_json::json!("+00:00")),
         (
             "version",
-            serde_json::json!("8.0.0-my-sqweel-intentkit-tx-v1"),
+            serde_json::json!("8.0.0-my-sqweel"),
         ),
         ("version_comment", serde_json::json!("MySqweel")),
         (

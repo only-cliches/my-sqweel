@@ -6,12 +6,12 @@ impl RawEngine {
         let schemas = self
             .schemas
             .iter()
-            .map(|it| (it.key().clone(), it.value().clone()))
+            .map(|it| (it.key().clone(), (**it.value()).clone()))
             .collect();
         let rows = self
             .rows
             .iter()
-            .map(|it| (it.key().clone(), it.value().clone()))
+            .map(|it| (it.key().clone(), (**it.value()).clone()))
             .collect();
         let auto_inc = self
             .auto_inc
@@ -51,10 +51,10 @@ impl RawEngine {
         self.auto_inc.clear();
         self.indexes.clear();
         for (k, v) in snapshot.schemas {
-            self.schemas.insert(k, v);
+            self.schemas.insert(k, v.into());
         }
         for (k, v) in snapshot.rows {
-            self.rows.insert(k, v);
+            self.rows.insert(k, v.into());
         }
         for (k, v) in snapshot.auto_inc {
             self.auto_inc.insert(k, v);
@@ -368,7 +368,7 @@ impl RawEngine {
             .map(|schema| schema.key().clone())
             .collect::<Vec<_>>();
         for table in tables {
-            self.rows.insert(table.clone(), BTreeMap::new());
+            self.rows.insert(table.clone(), SharedTable::default());
             self.indexes.remove(&table);
             self.clear_auto_inc(&table);
             self.rebuild_indexes(&table);
@@ -381,7 +381,7 @@ impl RawEngine {
         if !self.schemas.contains_key(table) {
             return Err(anyhow!("unknown table: {table}"));
         }
-        self.rows.insert(table.to_string(), BTreeMap::new());
+        self.rows.insert(table.to_string(), SharedTable::default());
         self.indexes.remove(table);
         self.clear_auto_inc(table);
         self.rebuild_indexes(table);

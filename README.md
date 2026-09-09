@@ -28,10 +28,9 @@ Meilisearch-shaped search surface.
 | Embedded Rust engine | In process | SQLite-like SQL execution without network or HTTP listeners |
 | MariaDB-compatible wire protocol | `127.0.0.1:3307` | Application, ORM, migration, and MariaDB-client connections |
 | Debug and search HTTP | `127.0.0.1:3407` | Drift inspection, seeding, snapshots, and local search |
-| Storage | In memory | Disposable state; optional locked atomic commit-image persistence |
+| Storage | In memory | Disposable state; optional locked incremental Lux persistence |
 | Compatibility profiles | Drift tolerant / strict | Choose convenience or fail-fast schema behavior |
 | MariaDB differential verification | MariaDB 10.11.7 | Differential corpus and exact parity suites |
-| Upstream MariaDB MTR verification | MariaDB 10.11.7 | 25/25 focused files passing / 339 SQL statements on ARM64 |
 
 ## Where it fits
 
@@ -153,13 +152,24 @@ COMMIT;
 
 Statements are atomic, and a failed statement preserves earlier successful work in its transaction.
 `ROLLBACK` discards the transaction; disconnecting also rolls it back. `SET autocommit = 0` enables
-implicit transactions, and switching back to `1` commits pending work.
+implicit transactions, and switching back to `1` commits pending work. These are in-memory SQL
+guarantees; see [persistent local state](#persistent-local-state) for persistence limits.
 
 The supported isolation level is `REPEATABLE READ`. Snapshots begin at the first read; conflicts
 when upgrading an observed snapshot to a writer can return retryable error 1213. Each database
 allows one writer at a time, with a five-second acquisition timeout. Plain `SELECT ... FOR UPDATE`
 uses that database-wide writer lease. DDL, catalog administration, cross-database SQL, and changing
 databases inside a transaction are rejected.
+
+Statement working copies share table rows, indexes, and schema metadata until a write modifies
+them. Reads avoid copying every table’s contents, and writes detach the affected data while other
+sessions and savepoints retain their snapshots. Parsed query syntax is reused across statements;
+query results and session values are not cached. Foreign-key checks try an exact primary-key
+lookup first, with a scan fallback for SQL equality and coercion rules.
+
+Bulk inserts avoid repeated parsing by unrelated command handlers and unnecessary copies of
+parsed values. INSERT and upsert collect result rows only when `RETURNING` is requested;
+transaction persistence remains coordinated at commit.
 
 ### Databases and accounts
 
@@ -241,7 +251,7 @@ option list, including the strict compatibility profile.
 | `--bind <addr>` | SQL bind address; default `127.0.0.1:3307` |
 | `--debug-bind <addr>` | Debug/search HTTP bind; default is the SQL port plus 100 |
 | `--default-time-zone <offset>` | Initial timezone for new SQL sessions, such as `-10:00`; default `+00:00` |
-| `--data-dir <dir>` | Enable locked atomic commit-image persistence |
+| `--data-dir <dir>` | Enable locked incremental Lux persistence |
 | `--allow-remote` | Permit non-loopback SQL and HTTP bindings |
 | `--unique-mode <mode>` | Choose `overwrite` or `enforce`; default `overwrite` |
 | `--query-delay-ms <n>` | Add fixed latency to each SQL statement |
@@ -276,7 +286,7 @@ Example output:
 
 ## Local-data workflows
 
-### Durable local state
+### Persistent local state
 
 Without `--data-dir`, state lives in memory and disappears with the process. To reuse a local
 database between runs:
@@ -285,14 +295,26 @@ database between runs:
 sqwl --data-dir .my-sqweel/data serve
 ```
 
-The directory is locked against concurrent processes. Each durable commit writes a checksummed
-image containing all databases and the account catalog, syncs it, atomically replaces the committed
-image, and syncs the directory before acknowledgment. Recovery loads only committed images;
-corrupt or unsupported images are rejected. An uncertain commit outcome stops operations until reopen.
+The directory is locked against concurrent opens. The embedded Lux store persists all logical
+databases and the account catalog. A successful SQL operation writes changed rows, schemas,
+auto-increment counters, views, and index comments, then publishes the new in-memory SQL state.
+Unchanged databases and shared, unmodified tables are skipped; a commit no longer serializes
+the entire server into one image.
 
-Legacy Lux development directories are rejected with reset guidance; there is no migration path.
-Whole-database statement copies and whole-server durable images make this suitable for development
-size datasets.
+Statement atomicity and session isolation apply to the running engine. Persistence does **not**
+promise crash-atomic multi-key commits or synchronous durability. A storage batch can partially
+apply before a command or I/O error. On failure, the engine retains the previous visible SQL state
+and refuses further operations until reopen; reopening does not guarantee an all-or-nothing
+transaction recovery.
+
+The version-2 storage layout rejects legacy `transaction-image.json` files, nonempty unversioned
+Lux stores, and unsupported storage versions with reset guidance. There is no migration path for
+old development data. On Unix, the data directory is restricted to its owner.
+
+Writes can still copy an entire affected table, and persistence compares rows within changed
+tables linearly. Large single-table write workloads therefore remain costly; this is intended for
+development datasets. Embedded users can open, use, and close persistent engines inside an
+existing Tokio runtime.
 
 ### Maintenance REPL
 
@@ -371,7 +393,7 @@ snapshot restore before-auth-refactor
 ```
 
 Snapshots cover the default `app` database, excluding other databases and the account catalog.
-They are separate from durable commit images. The HTTP API can also export and restore these snapshots:
+They are separate from the incremental Lux store, which also includes other databases and accounts. The HTTP API can also export and restore these snapshots:
 
 ```sh
 curl -X POST http://127.0.0.1:3407/_drift/snapshot
@@ -400,15 +422,17 @@ instead of being silently evaluated as `NULL`, `FALSE`, or a partial result.
 ### Verification contract
 
 Compatibility verification targets pinned **MariaDB 10.11.7**. Differential corpus, exact parity,
-error-code, prepared-statement, and ORM-shaped suites exercise the supported surface.
+error-code, prepared-statement, and ORM-shaped suites exercise the supported surface. The results
+below predate the current storage, execution, command-dispatch, metadata, and wire-listener
+changes; they do not qualify the current working tree.
 
-- The latest local focused upstream audit passes **25/25 complete files**, containing **339 direct
+- The previous local focused upstream audit passed **25/25 complete files**, containing **339 direct
   SQL statements**, against both MariaDB and MySqweel, with zero infrastructure failures. The
   hash-pinned scope is [`tests/mariadb-mtr-scope.txt`](tests/mariadb-mtr-scope.txt).
 - The scope includes `innodb/innodb_bug57255`: 18 statements exercising a transaction with 743
   inserted rows and cascading deletes. Rust tests cover rollback, savepoints, autocommit,
   session isolation, wire status, account persistence, and recovery.
-- The strict manifest passes **32/32 files / 381 statements** locally against both MariaDB 10.11.7
+- The previous strict-manifest run passed **32/32 files / 381 statements** locally against both MariaDB 10.11.7
   and the transactional MySqweel backend, with zero infrastructure failures.
   Focused cases remain audit-only until CI qualification and promotion into
   [`tests/mariadb-mtr-allowlist.txt`](tests/mariadb-mtr-allowlist.txt).
@@ -437,6 +461,10 @@ reported edge case should become a regression case before its implementation is 
 - `SHOW TABLES`, `SHOW COLUMNS`, `SHOW INDEX`, `SHOW CREATE TABLE`, and `DESCRIBE`
 - common `information_schema` views used by clients and ORMs
 
+Column introspection with a literal `table_name = '...'` filter builds metadata only for that
+table, including when the condition is combined with `AND`. The full filter still runs; `OR`
+and row-dependent expressions retain ordinary evaluation.
+
 ### Writes
 
 - `INSERT ... VALUES` and `INSERT ... SELECT`
@@ -464,6 +492,12 @@ reported edge case should become a regression case before its implementation is 
 See [CHANGELOG.md](CHANGELOG.md) for the detailed function and compatibility history.
 
 ### Wire and client behavior
+
+New connections wake the SQL listener through socket readiness, avoiding the previous 50 ms
+accept-polling delay. `WireServer::serve_listener_until()` remains a blocking API; it can run from
+inside a Tokio runtime and releases its listener when stopped.
+
+`VERSION()` and version-variable defaults report `8.0.0-my-sqweel`.
 
 - prepared statements and positional parameters
 - declared/inferred result types and nullability
@@ -703,7 +737,8 @@ src/sql/engine/transaction.rs      Sessions, transactions, and commit publicatio
 src/sql/engine/catalog.rs          Database catalog, accounts, and authorization
 src/schema/mod.rs                  Schema-hint model
 src/model.rs                       Stored-row model
-src/storage/transaction_image.rs   Atomic durable commit images
+src/sql/engine/transaction/persistence.rs  Incremental committed-state persistence
+src/storage/mod.rs                 Embedded Lux storage, locking, and runtime lifecycle
 vendor/msql-srv/                   Vendored wire-server dependency
 tests/                            Engine, transaction, wire, ORM, and parity suites
 tests/mariadb-mtr-scope.txt         Focused upstream audit manifest

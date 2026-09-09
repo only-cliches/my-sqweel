@@ -54,6 +54,108 @@ fn failed_multirow_insert_rolls_back_statement_but_preserves_transaction() {
 }
 
 #[test]
+fn failed_multirow_update_preserves_pending_rows_and_committed_indexes() {
+    let engine = strict_engine();
+    engine.execute_sql("CREATE TABLE items (id INT PRIMARY KEY, code INT UNIQUE, status INT); CREATE INDEX status_idx ON items(status); INSERT INTO items VALUES(1,10,0),(2,20,0),(3,30,0)").unwrap();
+    let mut writer = engine.session();
+    let mut reader = engine.session();
+    writer
+        .execute_sql("BEGIN; UPDATE items SET status=1 WHERE id=3")
+        .unwrap();
+    assert!(
+        writer
+            .execute_sql("UPDATE items SET code=99, status=2 WHERE id IN (1,2)")
+            .is_err()
+    );
+    assert!(writer.is_in_transaction());
+    assert_eq!(
+        values(&mut writer, "SELECT code FROM items ORDER BY id", "code"),
+        vec![json!(10), json!(20), json!(30)]
+    );
+    assert_eq!(
+        values(&mut writer, "SELECT id FROM items WHERE status=1", "id"),
+        vec![json!(3)]
+    );
+    for session in [&mut writer, &mut reader] {
+        assert!(values(session, "SELECT id FROM items WHERE code=99", "id").is_empty());
+        assert!(values(session, "SELECT id FROM items WHERE status=2", "id").is_empty());
+    }
+    assert_eq!(
+        values(
+            &mut reader,
+            "SELECT id FROM items WHERE status=0 ORDER BY id",
+            "id"
+        ),
+        vec![json!(1), json!(2), json!(3)]
+    );
+    writer.execute_sql("COMMIT").unwrap();
+    assert_eq!(
+        values(&mut reader, "SELECT id FROM items WHERE status=1", "id"),
+        vec![json!(3)]
+    );
+    // A discarded statement must not reserve its rejected unique-index value.
+    reader
+        .execute_sql("INSERT INTO items VALUES(4,99,2)")
+        .unwrap();
+}
+
+#[test]
+fn repeated_savepoint_rollback_restores_rows_indexes_and_rejects_ddl() {
+    let engine = strict_engine();
+    engine.execute_sql("CREATE TABLE items (id INT PRIMARY KEY, code INT UNIQUE, status INT); CREATE INDEX status_idx ON items(status); INSERT INTO items VALUES(1,10,0),(2,20,0)").unwrap();
+    let mut writer = engine.session();
+    let mut reader = engine.session();
+    writer
+        .execute_sql("BEGIN; UPDATE items SET status=1 WHERE id=1; SAVEPOINT checkpoint")
+        .unwrap();
+    for _ in 0..2 {
+        writer.execute_sql("DELETE FROM items WHERE id=2; UPDATE items SET code=11, status=2 WHERE id=1; INSERT INTO items VALUES(3,20,2)").unwrap();
+        for ddl in [
+            "ALTER TABLE items ADD COLUMN leaked INT",
+            "DROP INDEX status_idx ON items",
+            "DROP TABLE items",
+        ] {
+            assert!(writer.execute_sql(ddl).is_err(), "allowed {ddl}");
+        }
+        assert_eq!(
+            values(
+                &mut writer,
+                "SELECT id FROM items WHERE status=2 ORDER BY id",
+                "id"
+            ),
+            vec![json!(1), json!(3)]
+        );
+        assert_eq!(
+            values(
+                &mut reader,
+                "SELECT id FROM items WHERE status=0 ORDER BY id",
+                "id"
+            ),
+            vec![json!(1), json!(2)]
+        );
+        writer.execute_sql("ROLLBACK TO checkpoint").unwrap();
+        assert_eq!(
+            values(&mut writer, "SELECT code FROM items ORDER BY id", "code"),
+            vec![json!(10), json!(20)]
+        );
+        assert_eq!(
+            values(&mut writer, "SELECT id FROM items WHERE status=1", "id"),
+            vec![json!(1)]
+        );
+        assert!(values(&mut writer, "SELECT id FROM items WHERE status=2", "id").is_empty());
+    }
+    writer.execute_sql("COMMIT").unwrap();
+    assert_eq!(
+        values(&mut reader, "SELECT id FROM items WHERE status=1", "id"),
+        vec![json!(1)]
+    );
+    assert!(reader.execute_sql("SELECT leaked FROM items").is_err());
+    assert!(
+        values(&mut reader, "SHOW INDEX FROM items", "Key_name").contains(&json!("status_idx"))
+    );
+}
+
+#[test]
 fn explicit_rollback_restores_multiple_tables_and_secondary_indexes() {
     let engine = strict_engine();
     engine.execute_sql("CREATE TABLE accounts (id BIGINT PRIMARY KEY, balance BIGINT); CREATE INDEX balance_idx ON accounts (balance); CREATE TABLE ledger (id BIGINT PRIMARY KEY, amount BIGINT); INSERT INTO accounts VALUES (1, 10)").unwrap();

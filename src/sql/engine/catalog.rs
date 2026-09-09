@@ -383,6 +383,7 @@ impl Catalog {
                 identity,
                 database,
                 read_only: false,
+                rewritten: false,
             }
             .relation(&mut table)?;
             let conditional = if if_exists { "IF EXISTS " } else { "" };
@@ -397,6 +398,7 @@ impl Catalog {
                 identity,
                 database,
                 read_only: false,
+                rewritten: false,
             }
             .relation(&mut table)?;
             return Ok(format!("ALTER TABLE {table} AUTO_INCREMENT={next}"));
@@ -408,17 +410,17 @@ impl Catalog {
             "Exactly one SQL statement is required"
         );
         let statement = &mut statements[0];
-        let original = statement.clone();
         let mut visitor = DatabaseVisitor {
             catalog: self,
             identity,
             database,
             read_only: matches!(statement, Statement::Query(_)),
+            rewritten: false,
         };
         if let ControlFlow::Break(error) = statement.visit(&mut visitor) {
             return Err(error);
         }
-        if *statement == original {
+        if !visitor.rewritten {
             return Ok(renamed.unwrap_or_else(|| sql.to_owned()));
         }
         // sqlparser's generic formatter escapes quotes, but not MySQL backslashes.
@@ -524,6 +526,9 @@ pub(super) fn parse_session_statement(sql: &str) -> Result<Vec<Statement>> {
 // Parse the complete option, including its table, before authorization. Never
 // discard the option and leave an incomplete ALTER TABLE for the generic parser.
 fn parse_auto_increment_option(sql: &str) -> Result<Option<(ObjectName, u64)>> {
+    if !may_start_with(sql, &["ALTER"]) {
+        return Ok(None);
+    }
     use sqlparser::keywords::Keyword;
     use sqlparser::parser::Parser;
     let mut parser = Parser::new(&MySqlDialect {}).try_with_sql(sql)?;
@@ -567,9 +572,11 @@ struct DatabaseVisitor<'a> {
     identity: &'a Identity,
     database: &'a str,
     read_only: bool,
+    // Set at each qualifier rewrite instead of cloning/comparing bulk VALUES ASTs.
+    rewritten: bool,
 }
 impl DatabaseVisitor<'_> {
-    fn column(&self, column: &mut ColumnDef) -> Result<()> {
+    fn column(&mut self, column: &mut ColumnDef) -> Result<()> {
         for option in &mut column.options {
             if let ColumnOption::ForeignKey { foreign_table, .. } = &mut option.option {
                 self.relation(foreign_table)?;
@@ -577,17 +584,18 @@ impl DatabaseVisitor<'_> {
         }
         Ok(())
     }
-    fn constraint(&self, constraint: &mut TableConstraint) -> Result<()> {
+    fn constraint(&mut self, constraint: &mut TableConstraint) -> Result<()> {
         if let TableConstraint::ForeignKey { foreign_table, .. } = constraint {
             self.relation(foreign_table)?;
         }
         Ok(())
     }
-    fn relation(&self, name: &mut ObjectName) -> Result<()> {
+    fn relation(&mut self, name: &mut ObjectName) -> Result<()> {
         match name.0.as_slice() {
             [_] => Ok(()),
             [database, _] if database.value == self.database => {
                 name.0.remove(0);
+                self.rewritten = true;
                 Ok(())
             }
             [database, _]
@@ -694,6 +702,7 @@ impl VisitorMut for DatabaseVisitor<'_> {
                     return ControlFlow::Break(anyhow!("Cross-database column reference denied"));
                 }
                 parts.remove(0);
+                self.rewritten = true;
             }
         }
         ControlFlow::Continue(())
@@ -746,10 +755,28 @@ pub(crate) enum CatalogEffect {
     DropDatabase(String),
 }
 
+// Recognizers below previously tokenized an entire bulk INSERT just to discover
+// that its first keyword was not theirs. This is only a negative dispatch hint:
+// comments, quoted identifiers and other ambiguous prefixes use the full parser.
+pub(crate) fn may_start_with(sql: &str, keywords: &[&str]) -> bool {
+    let first = sql
+        .trim_start()
+        .split(|character: char| !character.is_ascii_alphabetic())
+        .next()
+        .unwrap_or_default();
+    first.is_empty()
+        || keywords
+            .iter()
+            .any(|keyword| first.eq_ignore_ascii_case(keyword))
+}
+
 impl AdminCommand {
     /// MySQL's user@host and CREATE USER syntax are not supported by sqlparser's AST.
     /// Use its tokenizer, accept only the supported grammar, and reject all trailing tokens.
     pub(crate) fn parse(sql: &str) -> Result<Option<Self>> {
+        if !may_start_with(sql, &["CREATE", "DROP", "GRANT", "REVOKE"]) {
+            return Ok(None);
+        }
         let mut tokens = Tokens::new(sql)?;
         let command = if tokens.take_keyword("CREATE") {
             if tokens.take_keyword("DATABASE") || tokens.take_keyword("SCHEMA") {
@@ -881,6 +908,9 @@ pub(crate) enum PreparedCommand {
 }
 impl PreparedCommand {
     pub(crate) fn parse(sql: &str) -> Result<Option<Self>> {
+        if !may_start_with(sql, &["PREPARE", "EXECUTE", "DEALLOCATE"]) {
+            return Ok(None);
+        }
         let mut tokens = Tokens::new(sql)?;
         let command = if tokens.take_keyword("PREPARE") {
             let name = tokens.identifier()?.to_ascii_lowercase();
@@ -920,6 +950,9 @@ impl PreparedCommand {
 // sqlparser lacks MySQL DROP INDEX ... ON table. Keep the table identity;
 // the legacy parser's fallback discarded it and could drop names in other tables.
 pub(super) fn parse_index_drop(sql: &str) -> Result<Option<(ObjectName, Ident, bool)>> {
+    if !may_start_with(sql, &["DROP", "ALTER"]) {
+        return Ok(None);
+    }
     let mut tokens = Tokens::new(sql)?;
     if tokens.take_keyword("DROP") && tokens.take_keyword("INDEX") {
         let if_exists = tokens.if_exists()?;
@@ -931,7 +964,7 @@ pub(super) fn parse_index_drop(sql: &str) -> Result<Option<(ObjectName, Ident, b
         tokens.finish()?;
         return Ok(Some((table, index, if_exists)));
     }
-    let mut tokens = Tokens::new(sql)?;
+    tokens.position = 0;
     if tokens.take_keyword("ALTER") && tokens.take_keyword("TABLE") {
         let table = tokens.object_name()?;
         if !tokens.take_keyword("DROP")
@@ -948,6 +981,9 @@ pub(super) fn parse_index_drop(sql: &str) -> Result<Option<(ObjectName, Ident, b
 }
 
 fn normalize_rename(sql: &str) -> Result<Option<String>> {
+    if !may_start_with(sql, &["RENAME"]) {
+        return Ok(None);
+    }
     let mut tokens = Tokens::new(sql)?;
     if !tokens.take_keyword("RENAME") {
         return Ok(None);
@@ -961,6 +997,9 @@ fn normalize_rename(sql: &str) -> Result<Option<String>> {
 }
 
 pub(crate) fn parse_use(sql: &str) -> Result<Option<String>> {
+    if !may_start_with(sql, &["USE"]) {
+        return Ok(None);
+    }
     let mut tokens = Tokens::new(sql)?;
     if !tokens.take_keyword("USE") {
         return Ok(None);
@@ -1124,6 +1163,98 @@ impl Tokens {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn normalization_tracks_table_and_column_qualifier_rewrites() {
+        let catalog = Catalog::default();
+        let admin = catalog.identity("root").unwrap();
+        assert_eq!(
+            catalog
+                .authorize_and_normalize(&admin, "app", "SELECT app.items.id FROM items")
+                .unwrap(),
+            "SELECT items.id FROM items"
+        );
+        assert_eq!(
+            catalog
+                .authorize_and_normalize(&admin, "app", "SELECT id FROM app.items")
+                .unwrap(),
+            "SELECT id FROM items"
+        );
+        let original = "INSERT INTO items VALUES (1, 'unchanged text')";
+        assert_eq!(
+            catalog
+                .authorize_and_normalize(&admin, "app", original)
+                .unwrap(),
+            original
+        );
+    }
+
+    #[test]
+    fn recognizer_dispatch_keeps_comments_and_rejects_trailing_commands() {
+        assert_eq!(
+            parse_use("/* leading */ uSe app").unwrap().as_deref(),
+            Some("app")
+        );
+        assert!(
+            AdminCommand::parse("/* leading */ CREATE DATABASE app")
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            PreparedCommand::parse("-- comment\nPREPARE p FROM 'SELECT 1'")
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            parse_index_drop("/* leading */ DROP INDEX idx ON items")
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            parse_auto_increment_option("/* leading */ ALTER TABLE items AUTO_INCREMENT=2")
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            normalize_rename("/* leading */ RENAME TABLE items TO renamed")
+                .unwrap()
+                .is_some()
+        );
+        assert!(parse_use("USE app; DROP DATABASE app").is_err());
+        assert!(AdminCommand::parse("CREATE DATABASE app; DROP DATABASE app").is_err());
+        assert!(PreparedCommand::parse("PREPARE p FROM 'SELECT 1'; DROP DATABASE app").is_err());
+    }
+
+    #[test]
+    #[ignore = "manual comparison of command recognizer tokenization"]
+    fn benchmark_command_recognizers() {
+        let values = (0..200)
+            .map(|id| format!("({id},'{}')", "payload".repeat(100)))
+            .collect::<Vec<_>>()
+            .join(",");
+        let plain = format!("INSERT INTO items VALUES {values}");
+        let fallback = format!("/**/ {plain}");
+        for (label, sql) in [
+            ("full-tokenizer", &fallback),
+            ("keyword-dispatch", &plain),
+            ("full-tokenizer", &fallback),
+            ("keyword-dispatch", &plain),
+        ] {
+            let started = std::time::Instant::now();
+            for _ in 0..50 {
+                assert!(parse_use(sql).unwrap().is_none());
+                assert!(PreparedCommand::parse(sql).unwrap().is_none());
+                assert!(AdminCommand::parse(sql).unwrap().is_none());
+                assert!(parse_index_drop(sql).unwrap().is_none());
+                assert!(parse_auto_increment_option(sql).unwrap().is_none());
+                assert!(normalize_rename(sql).unwrap().is_none());
+            }
+            eprintln!(
+                "{label}: 50 batches {:.3} ms",
+                started.elapsed().as_secs_f64() * 1000.0
+            );
+        }
+    }
+
     fn execute(catalog: &mut Catalog, identity: &Identity, sql: &str) -> Result<CatalogEffect> {
         catalog.apply(
             identity,

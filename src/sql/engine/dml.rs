@@ -55,8 +55,8 @@ impl RawEngine {
 
         match query.body.as_ref() {
             SetExpr::Values(v) => {
-                let values = v.rows.clone();
-                let columns = self.resolve_insert_columns(&table, explicit_columns, &values)?;
+                let values = &v.rows;
+                let columns = self.resolve_insert_columns(&table, explicit_columns, values)?;
                 let mut value_context = Map::new();
                 if let Some(schema) = self.schemas.get(&table).map(|schema| schema.clone()) {
                     for column in ordered_schema_columns(&schema) {
@@ -65,9 +65,9 @@ impl RawEngine {
                 }
                 for row in values {
                     let mut data = Map::new();
-                    for (idx, expr) in row.into_iter().enumerate() {
+                    for (idx, expr) in row.iter().enumerate() {
                         if let Some(col) = columns.get(idx) {
-                            let value = match &expr {
+                            let value = match expr {
                                 Expr::Identifier(identifier)
                                     if identifier.value.eq_ignore_ascii_case("DEFAULT") =>
                                 {
@@ -118,7 +118,7 @@ impl RawEngine {
                                     };
                                     Value::String(format!("-{number}"))
                                 }
-                                _ => self.eval_expr_ctx(&expr, &value_context, 0)?,
+                                _ => self.eval_expr_ctx(expr, &value_context, 0)?,
                             };
                             data.insert(col.clone(), value);
                         }
@@ -247,6 +247,8 @@ impl RawEngine {
         options: InsertRowsOptions<'_>,
     ) -> Result<QueryResult> {
         let single_row = rows.len() == 1;
+        let persistent = self.storage.is_persistent();
+        let returning = options.returning.is_some();
         let unique_schema = self.schemas.get(table).map(|schema| schema.clone());
         let auto_increment_column = unique_schema.as_ref().and_then(|schema| {
             schema
@@ -348,7 +350,7 @@ impl RawEngine {
                 &key,
                 &data,
                 &table_rows,
-                unique_schema.as_ref(),
+                unique_schema.as_deref(),
                 &unique_lookup,
             );
 
@@ -390,17 +392,19 @@ impl RawEngine {
                             eval_insert_update_value(&assignment.value, &existing_context, &data)?;
                         existing.data.insert(col, value);
                     }
-                    returned_rows.push(existing.data.clone());
+                    if returning {
+                        returned_rows.push(existing.data.clone());
+                    }
                     if existing.data != original_data {
                         remove_from_unique_lookup(
                             &mut unique_lookup,
-                            unique_schema.as_ref(),
+                            unique_schema.as_deref(),
                             conflict_key,
                             &original_data,
                         );
                         add_to_unique_lookup(
                             &mut unique_lookup,
-                            unique_schema.as_ref(),
+                            unique_schema.as_deref(),
                             conflict_key,
                             &existing.data,
                         );
@@ -409,7 +413,9 @@ impl RawEngine {
                         record_query_row_write(changed_cell_count(&original_data, &existing.data));
                         existing.version += 1;
                         existing.updated_at = Utc::now();
-                        rows_to_persist.insert(conflict_key.clone(), existing.clone());
+                        if persistent {
+                            rows_to_persist.insert(conflict_key.clone(), existing.clone());
+                        }
                         // MySQL reports two affected rows when ON DUPLICATE KEY
                         // UPDATE changes an existing row (and zero for a no-op).
                         affected += 2;
@@ -422,7 +428,7 @@ impl RawEngine {
                         if let Some(removed) = table_rows.remove(&conflict_key) {
                             remove_from_unique_lookup(
                                 &mut unique_lookup,
-                                unique_schema.as_ref(),
+                                unique_schema.as_deref(),
                                 &conflict_key,
                                 &removed.data,
                             );
@@ -431,8 +437,10 @@ impl RawEngine {
                             if options.replace {
                                 affected += 1;
                             }
-                            rows_to_delete.insert(conflict_key.clone());
-                            rows_to_persist.remove(&conflict_key);
+                            if persistent {
+                                rows_to_delete.insert(conflict_key.clone());
+                                rows_to_persist.remove(&conflict_key);
+                            }
                         }
                     }
                 } else if conflict_keys.contains(&key) {
@@ -444,10 +452,11 @@ impl RawEngine {
 
             data.retain(|column, _| !column.contains('.'));
             let stored = StoredRow::new(table.to_string(), row_id, data);
-            table_rows.insert(key.clone(), stored.clone());
+            table_rows.insert(key.clone(), stored);
+            let stored = &table_rows[&key];
             add_to_unique_lookup(
                 &mut unique_lookup,
-                unique_schema.as_ref(),
+                unique_schema.as_deref(),
                 &key,
                 &stored.data,
             );
@@ -457,11 +466,15 @@ impl RawEngine {
             if first_insert_id == 0 {
                 first_insert_id = row_insert_id.unwrap_or(0);
             }
-            returned_rows.push(stored.data.clone());
-            rows_to_persist.insert(key, stored);
+            if returning {
+                returned_rows.push(stored.data.clone());
+            }
+            if persistent {
+                rows_to_persist.insert(key, stored.clone());
+            }
             affected += 1;
         }
-        if self.storage.is_persistent() {
+        if persistent {
             self.persist_auto_inc()?;
             self.persist_row_batch(table, &rows_to_delete, &rows_to_persist)?;
         }
@@ -543,7 +556,7 @@ impl RawEngine {
                     columns.push(column);
                 }
                 schema.updated_at = Some(Utc::now());
-                self.schemas.insert(table.to_string(), schema);
+                self.schemas.insert(table.to_string(), schema.into());
                 self.persist_schema(table)?;
             }
             return Ok(columns);
@@ -577,7 +590,7 @@ impl RawEngine {
         for column in columns {
             add_schema_column(&mut schema, column.clone(), ColumnHint::default());
         }
-        self.schemas.insert(table.to_string(), schema);
+        self.schemas.insert(table.to_string(), schema.into());
         self.rows.entry(table.to_string()).or_default();
         self.persist_schema(table)
     }
@@ -602,9 +615,12 @@ impl RawEngine {
             .schemas
             .get(table)
             .map(|schema| schema.clone())
-            .unwrap_or_else(|| TableSchemaHint {
-                table: table.to_string(),
-                ..TableSchemaHint::default()
+            .unwrap_or_else(|| {
+                TableSchemaHint {
+                    table: table.to_string(),
+                    ..TableSchemaHint::default()
+                }
+                .into()
             });
 
         let mut changed = !existed;
@@ -617,7 +633,7 @@ impl RawEngine {
 
         if changed {
             schema.updated_at = Some(Utc::now());
-            self.schemas.insert(table.to_string(), schema);
+            self.schemas.insert(table.to_string(), schema.into());
             self.rows.entry(table.to_string()).or_default();
             self.persist_schema(table)?;
         }
@@ -785,7 +801,7 @@ impl RawEngine {
 
         self.validate_unique_constraints(&table_name, &next_rows)?;
         self.apply_parent_update_actions(&table_name, &parent_updates)?;
-        self.rows.insert(table_name.clone(), next_rows);
+        self.rows.insert(table_name.clone(), next_rows.into());
         for key in &deleted_keys {
             if let Some(row) = current_rows.get(key) {
                 self.remove_row_from_indexes(&table_name, key, &row.data);
@@ -1011,7 +1027,7 @@ impl RawEngine {
             }
         }
         let schema = self.schemas.get(&table_name).map(|schema| schema.clone());
-        sort_delete_candidates(&mut candidates, &delete.order_by, schema.as_ref())?;
+        sort_delete_candidates(&mut candidates, &delete.order_by, schema.as_deref())?;
         if let Some(limit) = &delete.limit {
             candidates.truncate(expr_to_usize(limit)?);
         }
@@ -1055,7 +1071,7 @@ impl RawEngine {
                     deleted += 1;
                 }
             }
-            self.rows.insert(table_name.clone(), next_rows);
+            self.rows.insert(table_name.clone(), next_rows.into());
             for key in &deleted_keys {
                 if let Some(row) = current_rows.get(key) {
                     self.remove_row_from_indexes(&table_name, key, &row.data);
@@ -1496,11 +1512,14 @@ impl RawEngine {
                 .get(&foreign_key.referenced_table)
                 .map(|rows| rows.clone())
                 .unwrap_or_default();
-            let parent_plan = self
+            let parent_schema = self
                 .schemas
                 .get(&foreign_key.referenced_table)
-                .map(|schema| super::query::RowMaterializationPlan::from_schema(&schema));
-            let matched = parent_rows.values().any(|parent| {
+                .map(|schema| schema.clone());
+            let parent_plan = parent_schema
+                .as_ref()
+                .map(|schema| super::query::RowMaterializationPlan::from_schema(schema));
+            let matches_parent = |parent: &StoredRow| {
                 let parent = parent_plan.as_ref().map_or_else(
                     || self.current_schema_row(&foreign_key.referenced_table, &parent.data),
                     |plan| self.current_schema_row_with_plan(&parent.data, plan),
@@ -1514,7 +1533,26 @@ impl RawEngine {
                             .get(column)
                             .is_some_and(|referenced| mysql_eq(referenced, local))
                     })
-            });
+            };
+            // Stored row keys encode the primary-key value(s). Exact hits avoid
+            // materializing every parent for each row in a bulk INSERT. A miss
+            // still scans: SQL equality permits casing/numeric coercions that
+            // differ from the exact JSON encoding used by the row directory.
+            let primary_key = parent_schema
+                .as_ref()
+                .filter(|schema| schema.primary_key == foreign_key.referenced_columns)
+                .map(|_| {
+                    if local_values.len() == 1 {
+                        local_values[0].to_string()
+                    } else {
+                        Value::Array(local_values.clone()).to_string()
+                    }
+                });
+            let matched = primary_key
+                .as_ref()
+                .and_then(|key| parent_rows.get(key))
+                .is_some_and(&matches_parent)
+                || parent_rows.values().any(matches_parent);
             if !matched {
                 return Err(anyhow!(
                     "foreign key constraint fails: {}",
@@ -1755,7 +1793,7 @@ impl RawEngine {
             }
         }
 
-        let mut by_table = BTreeMap::<String, BTreeMap<String, StoredRow>>::new();
+        let mut by_table = BTreeMap::<String, SharedTable<StoredRow>>::new();
         for (table, key, foreign_key, values) in actions {
             let rows = by_table.entry(table.clone()).or_insert_with(|| {
                 self.rows
@@ -2055,7 +2093,7 @@ impl RawEngine {
             }
             table_index.insert(col, map);
         }
-        self.indexes.insert(table.to_string(), table_index);
+        self.indexes.insert(table.to_string(), table_index.into());
     }
 }
 

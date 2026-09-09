@@ -3,14 +3,9 @@ use super::catalog::{
     AdminCommand, Catalog, CatalogEffect, Identity, PreparedCommand, PreparedSource, parse_use,
 };
 use super::*;
-use crate::storage::transaction_image::TransactionImageStore;
+mod persistence;
 use parking_lot::Condvar;
-
-#[derive(Clone, Serialize, Deserialize)]
-struct Image {
-    catalog: Catalog,
-    databases: BTreeMap<String, Snapshot>,
-}
+use persistence::Persistence;
 
 #[derive(Clone)]
 struct Committed {
@@ -26,7 +21,7 @@ struct Coordinator {
     available: Condvar,
     advisory_locks: Mutex<HashMap<String, (uuid::Uuid, u32)>>,
     advisory_available: Condvar,
-    image: Option<TransactionImageStore>,
+    persistence: Option<Persistence>,
 }
 
 #[derive(Default)]
@@ -109,48 +104,34 @@ impl Engine {
                 return Err(anyhow!("default time zone offset is out of range"));
             }
         }
-        let image = data_dir.map(TransactionImageStore::open).transpose()?;
-        let recovered = image
+        let persistence = data_dir.map(Persistence::open).transpose()?;
+        let recovered = persistence
             .as_ref()
-            .map(|store| store.load::<Image>())
+            .map(|store| store.load(&cfg))
             .transpose()?
             .flatten();
-        let mut databases = BTreeMap::new();
-        let mut catalog = Catalog::default();
-        if let Some(recovered) = recovered {
-            catalog = recovered.catalog;
-            for (name, snapshot) in recovered.databases {
-                let mut raw = RawEngine::with_storage(cfg.clone(), Arc::new(PrivateStorage))?;
-                raw.database_name = name.clone();
-                raw.apply_snapshot(snapshot);
-                databases.insert(name, Arc::new(raw));
-            }
-        } else {
-            // Never silently open an old Lux directory as an empty database.
-            if let Some(path) = data_dir {
-                if std::path::Path::new(path).join("storage").exists() {
-                    return Err(anyhow!(
-                        "unsupported legacy development database format; remove the old data directory and restart with fresh storage"
-                    ));
-                }
-            }
-            databases.insert(
-                "app".into(),
-                Arc::new(RawEngine::with_storage(
-                    cfg.clone(),
-                    Arc::new(PrivateStorage),
-                )?),
-            );
-        }
+        let state = match recovered {
+            Some(state) => state,
+            None => Committed {
+                catalog: Catalog::default(),
+                databases: BTreeMap::from([(
+                    "app".into(),
+                    Arc::new(RawEngine::with_storage(
+                        cfg.clone(),
+                        Arc::new(PrivateStorage),
+                    )?),
+                )]),
+            },
+        };
         let shared = Arc::new(Coordinator {
             cfg,
-            committed: Mutex::new(Committed { databases, catalog }),
+            committed: Mutex::new(state),
             writer: Mutex::new(Writers::default()),
             publication: Mutex::new(()),
             available: Condvar::new(),
             advisory_locks: Mutex::new(HashMap::new()),
             advisory_available: Condvar::new(),
-            image,
+            persistence,
         });
         Ok(Self {
             default_session: Mutex::new(EngineSession::new(shared.clone())),
@@ -278,9 +259,9 @@ impl Engine {
 impl Coordinator {
     fn check(&self) -> Result<()> {
         if self
-            .image
+            .persistence
             .as_ref()
-            .is_some_and(TransactionImageStore::is_poisoned)
+            .is_some_and(Persistence::is_poisoned)
         {
             return Err(anyhow!(
                 "database commit outcome uncertain; close and reopen MySqweel"
@@ -344,15 +325,8 @@ impl Coordinator {
     }
     fn publish_locked(&self, state: Committed) -> Result<()> {
         self.check()?;
-        if let Some(image) = &self.image {
-            image.commit(&Image {
-                catalog: state.catalog.clone(),
-                databases: state
-                    .databases
-                    .iter()
-                    .map(|(name, raw)| (name.clone(), raw.snapshot()))
-                    .collect(),
-            })?;
+        if let Some(persistence) = &self.persistence {
+            persistence.commit(&self.committed.lock(), &state)?;
         }
         *self.committed.lock() = state;
         Ok(())
@@ -1340,6 +1314,7 @@ impl RawEngine {
     ) -> bool {
         self.schemas.get(table).as_deref() == other.schemas.get(table).as_deref()
             && match (self.rows.get(table), other.rows.get(table), columns) {
+                (Some(before), Some(after), _) if before.ptr_eq(&after) => true,
                 (Some(before), Some(after), Some(columns)) => {
                     before.len() == after.len()
                         && before.iter().all(|(key, row)| {
@@ -1367,23 +1342,35 @@ impl RawEngine {
         // Copying a private working version is engine bookkeeping, not logical
         // SQL row access. Keep diagnostics scoped to the requested operation.
         let _metrics = QueryMetricsGuard::install(Rc::new(QueryMetricsRecorder::new(false)));
-        // ponytail: whole-database copies bound this engine to development-sized
-        // datasets. Use table-level copy-on-write before pursuing large datasets.
-        let mut raw = Self::with_storage(self.cfg.clone(), Arc::new(PrivateStorage))?;
-        raw.database_name = self.database_name.clone();
-        // Committed engines are immutable. Clone their owned indexes along with
-        // rows instead of re-evaluating every indexed value on every SELECT.
-        raw.schemas = self.schemas.clone();
-        raw.rows = self.rows.clone();
-        raw.auto_inc = self.auto_inc.clone();
-        raw.indexes = self.indexes.clone();
-        raw.views = self.views.clone();
-        raw.index_comments = self.index_comments.clone();
-        raw.copy_session_from(self);
-        raw.query_event_subscribers = self.query_event_subscribers.clone();
-        raw.next_query_id = self.next_query_id.clone();
-        raw.read_query_count = self.read_query_count.clone();
-        raw.write_query_count = self.write_query_count.clone();
+        // ponytail: writes still copy the affected table. Consider row-level
+        // sharing only if large single-table write workloads justify it.
+        let raw = Self {
+            database_name: self.database_name.clone(),
+            visible_databases: self.visible_databases.clone(),
+            cfg: self.cfg.clone(),
+            storage: Arc::new(PrivateStorage),
+            schemas: self.schemas.clone(),
+            rows: self.rows.clone(),
+            auto_inc: self.auto_inc.clone(),
+            indexes: self.indexes.clone(),
+            index_comments: self.index_comments.clone(),
+            last_insert_id: AtomicU64::new(self.last_insert_id.load(AtomicOrdering::Relaxed)),
+            next_query_id: self.next_query_id.clone(),
+            read_query_count: self.read_query_count.clone(),
+            write_query_count: self.write_query_count.clone(),
+            last_rows_affected: AtomicU64::new(
+                self.last_rows_affected.load(AtomicOrdering::Relaxed),
+            ),
+            last_found_rows: AtomicU64::new(self.last_found_rows.load(AtomicOrdering::Relaxed)),
+            sql_mode: Mutex::new(self.sql_mode.lock().clone()),
+            user_variables: self.user_variables.clone(),
+            prepared_statements: self.prepared_statements.clone(),
+            views: self.views.clone(),
+            // Only parsed SQL syntax is cached, never plans or evaluated results.
+            // Sharing across statement forks cannot retain stale schema/session data.
+            parsed_select_cache: self.parsed_select_cache.clone(),
+            query_event_subscribers: self.query_event_subscribers.clone(),
+        };
         Ok(raw)
     }
     fn clear_session(&self) {
@@ -1425,7 +1412,7 @@ impl RawEngine {
 }
 
 // Private engines never publish intermediate row/index changes to Lux. The
-// coordinator's durable image is the sole authoritative persistence boundary.
+// coordinator publishes committed changes to Lux only after SQL succeeds.
 struct PrivateStorage;
 impl RedisStore for PrivateStorage {
     fn is_persistent(&self) -> bool {
@@ -1460,6 +1447,384 @@ impl RedisStore for PrivateStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn insert_buffers_preserve_returning_and_upsert_results() {
+        let engine = Engine::new(EngineConfig::mysql_strict());
+        engine
+            .execute_sql("CREATE TABLE items (id INT PRIMARY KEY, value INT)")
+            .unwrap();
+        let plain = engine
+            .execute_sql("INSERT INTO items VALUES (1,10),(2,20)")
+            .unwrap();
+        assert_eq!(plain[0].rows_affected, 2);
+        assert!(plain[0].rows.is_empty());
+        let returning = engine
+            .execute_sql("INSERT INTO items VALUES (3,30) RETURNING id,value")
+            .unwrap();
+        assert_eq!(returning[0].rows[0]["value"], 30);
+        let updated = engine.execute_sql("INSERT INTO items VALUES (3,40) ON DUPLICATE KEY UPDATE value=40 RETURNING id,value").unwrap();
+        assert_eq!(updated[0].rows_affected, 2);
+        assert_eq!(updated[0].rows[0]["value"], 40);
+        assert!(
+            engine
+                .execute_sql("INSERT INTO items VALUES (4,50),(1,60)")
+                .is_err()
+        );
+        assert_eq!(
+            engine.execute_sql("SELECT id FROM items").unwrap()[0]
+                .rows
+                .len(),
+            3
+        );
+    }
+
+    #[test]
+    fn metadata_table_filter_preserves_case_or_and_row_expressions() {
+        let engine = Engine::new(EngineConfig::mysql_strict());
+        engine.execute_sql("CREATE TABLE first (id INT PRIMARY KEY, first INT); CREATE TABLE second (id INT PRIMARY KEY)").unwrap();
+        assert_eq!(engine.execute_sql("SELECT column_name FROM information_schema.columns WHERE (TABLE_NAME = 'FIRST') AND column_key='PRI'").unwrap()[0].rows.len(), 1);
+        assert_eq!(engine.execute_sql("SELECT column_name FROM information_schema.columns WHERE table_name='first' OR table_name='second'").unwrap()[0].rows.len(), 3);
+        assert_eq!(engine.execute_sql("SELECT column_name FROM information_schema.columns WHERE table_name=column_name").unwrap()[0].rows.len(), 1);
+        assert!(
+            engine
+                .execute_sql(
+                    "SELECT column_name FROM information_schema.columns WHERE table_name='missing'"
+                )
+                .unwrap()[0]
+                .rows
+                .is_empty()
+        );
+    }
+
+    #[test]
+    #[ignore = "manual comparison of metadata predicate pushdown"]
+    fn benchmark_metadata_table_filter() {
+        let engine = Engine::new(EngineConfig::mysql_strict());
+        for table in 0..100 {
+            engine.execute_sql(&format!("CREATE TABLE table_{table} (id INT PRIMARY KEY, label VARCHAR(100), payload TEXT)")).unwrap();
+        }
+        for predicate in [
+            "CONCAT('table_', '0')",
+            "'table_0'",
+            "CONCAT('table_', '0')",
+            "'table_0'",
+        ] {
+            let sql = format!(
+                "SELECT column_name FROM information_schema.columns WHERE table_name={predicate} AND column_key='PRI'"
+            );
+            let started = Instant::now();
+            for _ in 0..100 {
+                assert_eq!(engine.execute_sql(&sql).unwrap()[0].rows.len(), 1);
+            }
+            eprintln!(
+                "metadata {predicate}: 100 lookups {:.3} ms",
+                started.elapsed().as_secs_f64() * 1000.0
+            );
+        }
+    }
+
+    #[test]
+    fn foreign_key_primary_lookup_preserves_coercions_and_statement_rollback() {
+        let engine = Engine::new(EngineConfig::mysql_strict());
+        engine.execute_sql("CREATE TABLE parents (id VARCHAR(20) PRIMARY KEY, tag VARCHAR(20) UNIQUE);
+            INSERT INTO parents VALUES ('AbC', 'Label'), ('001', 'Other');
+            CREATE TABLE exact_child (id INT PRIMARY KEY, parent_id VARCHAR(20), FOREIGN KEY (parent_id) REFERENCES parents(id));
+            CREATE TABLE numeric_child (id INT PRIMARY KEY, parent_id INT, FOREIGN KEY (parent_id) REFERENCES parents(id));
+            CREATE TABLE tag_child (id INT PRIMARY KEY, tag VARCHAR(20), FOREIGN KEY (tag) REFERENCES parents(tag));
+            CREATE TABLE composite_parent (a INT, b VARCHAR(20), PRIMARY KEY(a,b));
+            INSERT INTO composite_parent VALUES (1,'AbC');
+            CREATE TABLE composite_child (id INT PRIMARY KEY, a INT, b VARCHAR(20), FOREIGN KEY (a,b) REFERENCES composite_parent(a,b));
+            INSERT INTO exact_child VALUES (1,'AbC'), (2,'abc');
+            INSERT INTO numeric_child VALUES (1,1);
+            INSERT INTO tag_child VALUES (1,'label');
+            INSERT INTO composite_child VALUES (1,1,'AbC'), (2,1,'abc')").unwrap();
+        assert!(
+            engine
+                .execute_sql("INSERT INTO exact_child VALUES (3,'AbC'), (4,'missing')")
+                .is_err()
+        );
+        assert_eq!(
+            engine
+                .execute_sql("SELECT id FROM exact_child ORDER BY id")
+                .unwrap()[0]
+                .rows
+                .len(),
+            2
+        );
+        assert!(
+            engine
+                .execute_sql("INSERT INTO composite_child VALUES (3,2,'AbC')")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn foreign_keys_work_when_parent_and_child_share_a_directory_shard() {
+        let engine = Engine::new(EngineConfig::mysql_strict());
+        engine
+            .execute_sql("CREATE TABLE parent (id INT PRIMARY KEY); INSERT INTO parent VALUES (1)")
+            .unwrap();
+        let child = {
+            let raw = engine.shared.committed.lock().databases["app"].clone();
+            let _parent_guard = raw.rows.get_mut("parent").unwrap();
+            // try_get identifies a real collision without relying on DashMap's
+            // private hash-to-shard algorithm or blocking this test thread.
+            (0..1024)
+                .map(|index| format!("child_{index}"))
+                .find(|name| raw.rows.try_get(name).is_locked())
+                .unwrap()
+        };
+        engine.execute_sql(&format!("CREATE TABLE {child} (id INT PRIMARY KEY, parent_id INT, FOREIGN KEY (parent_id) REFERENCES parent(id) ON UPDATE CASCADE ON DELETE CASCADE); INSERT INTO {child} VALUES (1,1); UPDATE parent SET id=2")).unwrap();
+        assert_eq!(
+            engine
+                .execute_sql(&format!("SELECT parent_id FROM {child}"))
+                .unwrap()[0]
+                .rows[0]["parent_id"],
+            2
+        );
+        engine.execute_sql("DELETE FROM parent").unwrap();
+        assert!(
+            engine
+                .execute_sql(&format!("SELECT * FROM {child}"))
+                .unwrap()[0]
+                .rows
+                .is_empty()
+        );
+    }
+
+    #[test]
+    #[ignore = "manual comparison of private directory shard allocation costs"]
+    fn benchmark_private_directory_shards() {
+        fn reshard<T: Clone>(source: &DashMap<String, T>, shards: usize) -> DashMap<String, T> {
+            let result = DashMap::with_shard_amount(shards);
+            for entry in source {
+                result.insert(entry.key().clone(), entry.value().clone());
+            }
+            result
+        }
+        let engine = Engine::new(EngineConfig::mysql_strict());
+        for table in 0..100 {
+            engine
+                .execute_sql(&format!(
+                    "CREATE TABLE table_{table} (id INT PRIMARY KEY, value INT)"
+                ))
+                .unwrap();
+        }
+        engine
+            .execute_sql("INSERT INTO table_0 VALUES (1, 10)")
+            .unwrap();
+        for shards in [64, 2, 64, 2, 64, 2] {
+            {
+                let mut state = engine.shared.committed.lock();
+                let mut raw = state.databases["app"].fork().unwrap();
+                raw.schemas = reshard(&raw.schemas, shards);
+                raw.rows = reshard(&raw.rows, shards);
+                raw.auto_inc = reshard(&raw.auto_inc, shards);
+                raw.indexes = reshard(&raw.indexes, shards);
+                raw.index_comments = reshard(&raw.index_comments, shards);
+                raw.user_variables = reshard(&raw.user_variables, shards);
+                raw.prepared_statements = reshard(&raw.prepared_statements, shards);
+                raw.views = reshard(&raw.views, shards);
+                state.databases.insert("app".into(), Arc::new(raw));
+            }
+            for _ in 0..100 {
+                engine
+                    .execute_sql("SELECT id FROM table_0 WHERE id = 1")
+                    .unwrap();
+            }
+            let started = std::time::Instant::now();
+            for _ in 0..3000 {
+                assert_eq!(
+                    engine
+                        .execute_sql("SELECT id FROM table_0 WHERE id = 1")
+                        .unwrap()[0]
+                        .rows[0]["id"],
+                    1
+                );
+            }
+            eprintln!(
+                "{shards} shards: 3000 SELECTs in {:.3} ms",
+                started.elapsed().as_secs_f64() * 1000.0
+            );
+        }
+    }
+
+    #[test]
+    fn forks_share_schema_and_cached_syntax_without_stale_ddl_results() {
+        let engine = Engine::new(EngineConfig::mysql_strict());
+        engine.execute_sql("CREATE TABLE items (id INT PRIMARY KEY); CREATE TABLE unrelated (id INT PRIMARY KEY)").unwrap();
+        let before = engine.shared.committed.lock().databases["app"].clone();
+        let mut reader = engine.session();
+        let sql = "SELECT * FROM items";
+        assert_eq!(reader.execute_sql(sql).unwrap()[0].columns, ["id"]);
+        let read = reader.session_state.as_ref().unwrap().clone();
+        for table in ["items", "unrelated"] {
+            assert!(
+                before
+                    .schemas
+                    .get(table)
+                    .unwrap()
+                    .ptr_eq(&read.schemas.get(table).unwrap())
+            );
+        }
+        assert!(Arc::ptr_eq(
+            &before.parsed_select_cache,
+            &read.parsed_select_cache
+        ));
+        let cached = read
+            .parsed_select_cache
+            .lock()
+            .entries
+            .get(sql)
+            .unwrap()
+            .clone();
+        reader.execute_sql(sql).unwrap();
+        assert!(Arc::ptr_eq(
+            &cached,
+            reader
+                .session_state
+                .as_ref()
+                .unwrap()
+                .parsed_select_cache
+                .lock()
+                .entries
+                .get(sql)
+                .unwrap()
+        ));
+
+        engine
+            .execute_sql("ALTER TABLE items ADD COLUMN value INT")
+            .unwrap();
+        let after = engine.shared.committed.lock().databases["app"].clone();
+        assert!(
+            !before
+                .schemas
+                .get("items")
+                .unwrap()
+                .ptr_eq(&after.schemas.get("items").unwrap())
+        );
+        assert!(
+            before
+                .schemas
+                .get("unrelated")
+                .unwrap()
+                .ptr_eq(&after.schemas.get("unrelated").unwrap())
+        );
+        assert!(
+            !before
+                .schemas
+                .get("items")
+                .unwrap()
+                .columns
+                .contains_key("value")
+        );
+        assert_eq!(reader.execute_sql(sql).unwrap()[0].columns, ["id", "value"]);
+        assert!(Arc::ptr_eq(
+            &cached,
+            after.parsed_select_cache.lock().entries.get(sql).unwrap()
+        ));
+    }
+
+    #[test]
+    fn statement_forks_share_tables_and_detach_only_writes() {
+        let engine = Engine::new(EngineConfig::mysql_strict());
+        engine
+            .execute_sql(
+                "CREATE TABLE items (id INT PRIMARY KEY, value INT, INDEX by_value (value));
+             CREATE TABLE unrelated (id INT PRIMARY KEY, value INT, INDEX by_value (value));
+             INSERT INTO items VALUES (1, 10);
+             INSERT INTO unrelated VALUES (1, 20)",
+            )
+            .unwrap();
+        let before = engine.shared.committed.lock().databases["app"].clone();
+        let mut reader = engine.session();
+        reader
+            .execute_sql("SELECT id FROM items WHERE value = 10")
+            .unwrap();
+        let read = reader.session_state.as_ref().unwrap();
+        for table in ["items", "unrelated"] {
+            assert!(
+                before
+                    .rows
+                    .get(table)
+                    .unwrap()
+                    .ptr_eq(&read.rows.get(table).unwrap())
+            );
+            assert!(
+                before
+                    .indexes
+                    .get(table)
+                    .unwrap()
+                    .ptr_eq(&read.indexes.get(table).unwrap())
+            );
+        }
+
+        engine
+            .execute_sql("INSERT INTO items VALUES (2, 30)")
+            .unwrap();
+        let after = engine.shared.committed.lock().databases["app"].clone();
+        assert!(
+            !before
+                .rows
+                .get("items")
+                .unwrap()
+                .ptr_eq(&after.rows.get("items").unwrap())
+        );
+        assert!(
+            !before
+                .indexes
+                .get("items")
+                .unwrap()
+                .ptr_eq(&after.indexes.get("items").unwrap())
+        );
+        assert!(
+            before
+                .rows
+                .get("unrelated")
+                .unwrap()
+                .ptr_eq(&after.rows.get("unrelated").unwrap())
+        );
+        assert!(
+            before
+                .indexes
+                .get("unrelated")
+                .unwrap()
+                .ptr_eq(&after.indexes.get("unrelated").unwrap())
+        );
+        assert_eq!(before.rows.get("items").unwrap().len(), 1);
+        assert_eq!(after.rows.get("items").unwrap().len(), 2);
+
+        // The first row mutates the private fork before the duplicate fails.
+        assert!(
+            engine
+                .execute_sql("INSERT INTO items VALUES (3, 40), (2, 50)")
+                .is_err()
+        );
+        let failed = engine.shared.committed.lock().databases["app"].clone();
+        assert!(Arc::ptr_eq(&after, &failed));
+        assert!(
+            after
+                .rows
+                .get("items")
+                .unwrap()
+                .ptr_eq(&failed.rows.get("items").unwrap())
+        );
+        assert!(
+            after
+                .indexes
+                .get("items")
+                .unwrap()
+                .ptr_eq(&failed.indexes.get("items").unwrap())
+        );
+        assert!(
+            engine
+                .execute_sql("SELECT id FROM items WHERE value = 40")
+                .unwrap()[0]
+                .rows
+                .is_empty()
+        );
+    }
 
     #[test]
     fn read_only_transaction_does_not_block_committed_updates_or_publish_old_state() {

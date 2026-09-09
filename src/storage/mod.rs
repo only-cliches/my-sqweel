@@ -12,8 +12,6 @@ use fs2::FileExt;
 
 use crate::vendor::lux;
 
-pub mod transaction_image;
-
 /// Minimal Redis command surface MySqweel uses for durable table storage.
 pub trait RedisStore: Send + Sync {
     fn is_persistent(&self) -> bool;
@@ -64,7 +62,7 @@ pub enum StorageWrite {
 }
 
 pub struct LuxRedisStore {
-    rt: Arc<tokio::runtime::Runtime>,
+    rt: Option<Arc<tokio::runtime::Runtime>>,
     client: lux::EmbeddedClient,
     handle: Mutex<Option<lux::ServerHandle>>,
     persistent: bool,
@@ -73,20 +71,30 @@ pub struct LuxRedisStore {
 
 impl LuxRedisStore {
     pub fn open(data_dir: Option<&str>) -> Result<Self> {
-        let rt = Arc::new(
-            tokio::runtime::Builder::new_multi_thread()
-                .worker_threads(1)
-                .thread_name("my-sqweel-lux")
-                .enable_all()
-                .build()?,
-        );
         let lock = data_dir.map(acquire_file_lock).transpose()?;
         let cfg = lux_config(data_dir)?;
-        let handle = rt.block_on(lux::run_with_config(cfg))?;
+        let start = move || -> Result<_> {
+            let rt = Arc::new(
+                tokio::runtime::Builder::new_multi_thread()
+                    .worker_threads(1)
+                    .thread_name("my-sqweel-lux")
+                    .enable_all()
+                    .build()?,
+            );
+            let handle = rt.block_on(lux::run_with_config(cfg))?;
+            Ok((rt, handle))
+        };
+        let (rt, handle) = if tokio::runtime::Handle::try_current().is_ok() {
+            std::thread::spawn(start)
+                .join()
+                .map_err(|_| anyhow!("Lux startup worker panicked"))??
+        } else {
+            start()?
+        };
         let client = handle.client();
 
         Ok(Self {
-            rt,
+            rt: Some(rt),
             client,
             handle: Mutex::new(Some(handle)),
             persistent: data_dir.is_some(),
@@ -99,8 +107,9 @@ impl LuxRedisStore {
         F: Future<Output = Result<T, lux::LuxError>> + Send + 'static,
         T: Send + 'static,
     {
+        let rt = self.rt.as_ref().expect("Lux runtime exists until shutdown");
         if tokio::runtime::Handle::try_current().is_ok() {
-            let handle = self.rt.handle().clone();
+            let handle = rt.handle().clone();
             let (tx, rx) = mpsc::sync_channel(1);
             std::thread::spawn(move || {
                 let _ = tx.send(handle.block_on(fut));
@@ -111,7 +120,7 @@ impl LuxRedisStore {
                 .map_err(|err| anyhow!(err));
         }
 
-        self.rt.block_on(fut).map_err(|err| anyhow!(err))
+        rt.block_on(fut).map_err(|err| anyhow!(err))
     }
 
     fn save_snapshot(&self) -> Result<()> {
@@ -230,7 +239,11 @@ impl RedisStore for LuxRedisStore {
         }
         let client = self.client.clone();
         self.run_lux(async move {
-            client.pipeline(&commands).await?;
+            for reply in client.pipeline_values(&commands).await? {
+                if let lux::EmbeddedValue::Error(message) = reply {
+                    return Err(lux::LuxError::Command(message));
+                }
+            }
             Ok(())
         })
     }
@@ -246,15 +259,17 @@ impl Drop for LuxRedisStore {
             return;
         };
 
+        let Some(rt) = self.rt.take() else {
+            return;
+        };
+        let shutdown = move || {
+            let _ = rt.block_on(handle.shutdown_and_wait());
+            drop(rt);
+        };
         if tokio::runtime::Handle::try_current().is_ok() {
-            let runtime_handle = self.rt.handle().clone();
-            let (tx, rx) = mpsc::sync_channel(1);
-            std::thread::spawn(move || {
-                let _ = tx.send(runtime_handle.block_on(handle.shutdown_and_wait()));
-            });
-            let _ = rx.recv();
+            let _ = std::thread::spawn(shutdown).join();
         } else {
-            let _ = self.rt.block_on(handle.shutdown_and_wait());
+            shutdown();
         }
 
         drop(self.lock.take());

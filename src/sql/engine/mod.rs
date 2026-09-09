@@ -27,6 +27,7 @@ use crate::schema::{ColumnHint, ForeignKeyHint, IndexHint, TableSchemaHint};
 use crate::storage::RedisStore;
 
 mod catalog;
+pub(crate) use catalog::may_start_with;
 mod transaction;
 pub use transaction::{Engine, EngineSession};
 mod compat;
@@ -578,15 +579,79 @@ struct InsertRowsOptions<'a> {
     returning: Option<&'a [SelectItem]>,
 }
 
+// Each private statement owns its table directory but shares immutable data and
+// metadata. Mutations detach only the affected value, preserving rollback and
+// readers' snapshots without copying every table/schema for each SELECT.
+#[derive(Clone, Debug)]
+struct SharedValue<T>(Arc<T>);
+
+type SharedTable<T> = SharedValue<BTreeMap<String, T>>;
+
+impl<T> SharedValue<T> {
+    fn ptr_eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl<T: PartialEq> PartialEq for SharedValue<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.ptr_eq(other) || self.0 == other.0
+    }
+}
+
+impl<T: Default> Default for SharedValue<T> {
+    fn default() -> Self {
+        Self(Arc::new(T::default()))
+    }
+}
+
+impl<T: Serialize> Serialize for SharedValue<T> {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        self.0.as_ref().serialize(serializer)
+    }
+}
+
+impl<T> From<T> for SharedValue<T> {
+    fn from(value: T) -> Self {
+        Self(Arc::new(value))
+    }
+}
+
+impl<T> std::ops::Deref for SharedValue<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<T: Clone> std::ops::DerefMut for SharedValue<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        Arc::make_mut(&mut self.0)
+    }
+}
+
+impl<'a, T> IntoIterator for &'a SharedTable<T> {
+    type Item = (&'a String, &'a T);
+    type IntoIter = std::collections::btree_map::Iter<'a, String, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
 pub(super) struct RawEngine {
     database_name: String,
     visible_databases: Vec<String>,
     cfg: EngineConfig,
     storage: Arc<dyn RedisStore>,
-    schemas: DashMap<String, TableSchemaHint>,
-    rows: DashMap<String, BTreeMap<String, StoredRow>>,
+    schemas: DashMap<String, SharedValue<TableSchemaHint>>,
+    rows: DashMap<String, SharedTable<StoredRow>>,
     auto_inc: DashMap<String, i64>,
-    indexes: DashMap<String, BTreeMap<String, BTreeMap<String, BTreeSet<String>>>>,
+    indexes: DashMap<String, SharedTable<BTreeMap<String, BTreeSet<String>>>>,
     index_comments: DashMap<String, String>,
     last_insert_id: AtomicU64,
     next_query_id: Arc<AtomicU64>,
@@ -598,7 +663,7 @@ pub(super) struct RawEngine {
     user_variables: DashMap<String, Value>,
     prepared_statements: DashMap<String, String>,
     views: DashMap<String, String>,
-    parsed_select_cache: Mutex<ParsedSelectCache>,
+    parsed_select_cache: Arc<Mutex<ParsedSelectCache>>,
     query_event_subscribers: Arc<Mutex<Vec<QueryEventSubscriber>>>,
 }
 
@@ -640,11 +705,14 @@ impl RawEngine {
             visible_databases: vec!["app".into()],
             cfg,
             storage,
-            schemas: DashMap::default(),
-            rows: DashMap::default(),
-            auto_inc: DashMap::default(),
-            indexes: DashMap::default(),
-            index_comments: DashMap::default(),
+            // Statement-private directories have no concurrent writers. DashMap
+            // requires at least two shards; CPU-scaled defaults multiply the
+            // locks and allocations copied on every statement fork.
+            schemas: DashMap::with_shard_amount(2),
+            rows: DashMap::with_shard_amount(2),
+            auto_inc: DashMap::with_shard_amount(2),
+            indexes: DashMap::with_shard_amount(2),
+            index_comments: DashMap::with_shard_amount(2),
             last_insert_id: AtomicU64::new(0),
             next_query_id: Arc::new(AtomicU64::new(1)),
             read_query_count: Arc::new(AtomicU64::new(0)),
@@ -652,10 +720,10 @@ impl RawEngine {
             last_rows_affected: AtomicU64::new(0),
             last_found_rows: AtomicU64::new(0),
             sql_mode: Mutex::new(String::new()),
-            user_variables: DashMap::default(),
-            prepared_statements: DashMap::default(),
-            views: DashMap::default(),
-            parsed_select_cache: Mutex::new(ParsedSelectCache::new(256)),
+            user_variables: DashMap::with_shard_amount(2),
+            prepared_statements: DashMap::with_shard_amount(2),
+            views: DashMap::with_shard_amount(2),
+            parsed_select_cache: Arc::new(Mutex::new(ParsedSelectCache::new(256))),
             query_event_subscribers: Arc::new(Mutex::new(Vec::new())),
         };
         engine.load_from_storage()?;
