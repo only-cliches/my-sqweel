@@ -494,8 +494,8 @@ def configure_case_timezone(
 ) -> str:
     timezone = mtr_case_timezone(suite_root, case, layout)
     connection = parse_server_url(server.url)
-    # MySqweel has a fixed UTC session default and no mutable global settings.
-    # Verify that default rather than silently ignoring a requested timezone.
+    # MySqweel receives its session default at startup; global SQL settings stay disabled.
+    # Verify a fresh connection, including for externally managed servers.
     verify_timezone = server.name == "mysqweel"
     command = [
         str(client_bindir / "mysql"),
@@ -528,7 +528,8 @@ def configure_case_timezone(
     if verify_timezone and completed.stdout.strip() != timezone:
         raise RuntimeError(
             f"{case.name}: MySqweel session timezone {completed.stdout.strip()!r} "
-            f"does not match required {timezone!r}"
+            f"does not match required {timezone!r}; "
+            f"start the server with --default-time-zone={timezone}"
         )
     return timezone
 
@@ -669,14 +670,14 @@ def run_case(
         )
 
 
-def start_mysqweel(binary: Path, report_dir: Path) -> tuple[Server, subprocess.Popen[str]]:
+def start_mysqweel(binary: Path, report_dir: Path, timezone: str = "+00:00") -> tuple[Server, subprocess.Popen[str]]:
     host = "127.0.0.1"
     port = free_port(host)
     report_dir.mkdir(parents=True, exist_ok=True)
     log = report_dir / "mysqweel.log"
     stream = log.open("w")
     process = subprocess.Popen(
-        [str(binary), "--bind", f"{host}:{port}", "--mysql-strict", "serve"],
+        [str(binary), "--bind", f"{host}:{port}", "--mysql-strict", "--default-time-zone", timezone, "serve"],
         stdout=stream,
         stderr=subprocess.STDOUT,
         text=True,
@@ -846,7 +847,8 @@ def run(args: argparse.Namespace) -> int:
                 mysqweel_server = Server("mysqweel", args.mysqweel_url)
             else:
                 mysqweel_server, mysqweel_process = start_mysqweel(
-                    binary, report_dir / "mysqweel" / case.name.replace("/", "_")
+                    binary, report_dir / "mysqweel" / case.name.replace("/", "_"),
+                    timezone=mtr_case_timezone(suite_root, case, args.mtr_layout)
                 )
             try:
                 reset_test_database(

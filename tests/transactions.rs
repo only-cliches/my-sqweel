@@ -690,3 +690,65 @@ fn dropped_database_with_read_only_savepoints_returns_error_without_resurrection
         assert!(engine.session().use_database("disposable").is_err());
     }
 }
+
+#[test]
+fn configured_timezone_is_inherited_and_session_changes_are_isolated() {
+    fn timezone_value(session: &mut EngineSession, sql: &str) -> Vec<Value> {
+        let results = session.execute_sql(sql).unwrap();
+        assert_eq!(results[0].rows.len(), 1);
+        assert_eq!(results[0].rows[0].len(), 1);
+        results[0].rows[0].values().cloned().collect()
+    }
+    let engine = Engine::new(EngineConfig {
+        default_time_zone: Some("-10:00".into()),
+        ..EngineConfig::mysql_strict()
+    });
+    let mut first = engine.session();
+    let mut second = engine.session();
+    assert_eq!(
+        timezone_value(&mut first, "SELECT FROM_UNIXTIME(0) AS value"),
+        vec![json!("1969-12-31 14:00:00")]
+    );
+    first
+        .execute_sql("SET SESSION time_zone = '+03:00'")
+        .unwrap();
+    assert_eq!(
+        timezone_value(&mut first, "SELECT FROM_UNIXTIME(0)"),
+        vec![json!("1970-01-01 03:00:00")]
+    );
+    second.execute_sql("BEGIN").unwrap();
+    assert_eq!(
+        timezone_value(&mut second, "SELECT FROM_UNIXTIME(0)"),
+        vec![json!("1969-12-31 14:00:00")]
+    );
+    assert_eq!(
+        timezone_value(
+            &mut second,
+            "SELECT UNIX_TIMESTAMP('1969-12-31 14:00:01') AS value"
+        ),
+        vec![json!(1)]
+    );
+    second.execute_sql("ROLLBACK").unwrap();
+    assert!(
+        second
+            .execute_sql("SET GLOBAL time_zone = '+00:00'")
+            .is_err()
+    );
+}
+
+#[test]
+fn invalid_default_timezones_are_rejected() {
+    for zone in ["SYSTEM", "-14:00", "+14:01", "+00:60", "10:00", "-1:00"] {
+        assert!(
+            Engine::open_with_data_dir(
+                EngineConfig {
+                    default_time_zone: Some(zone.into()),
+                    ..EngineConfig::default()
+                },
+                None
+            )
+            .is_err(),
+            "{zone}"
+        );
+    }
+}

@@ -6,103 +6,54 @@ All notable changes to MySqweel will be documented in this file.
 
 ### Transactions and persistence
 
-- Added independent `Engine::session()` connections with atomic statements, `BEGIN`, `COMMIT`,
-  `ROLLBACK`, savepoints, autocommit handling, and rollback on disconnect. A failed statement
-  preserves earlier successful work in its transaction without publishing partial row/index changes.
-- Added committed-state reads and per-database writer leases covering transactions and
-  `SELECT ... FOR UPDATE`. The supported isolation level is `REPEATABLE READ`; writer acquisition
-  times out after five seconds. Independent database commits merge under a serialized publication
-  lock; catalog administration remains globally exclusive. DDL and catalog administration inside
-  a transaction are rejected.
-- Deferred transaction snapshots until the first read. First writes refresh unobserved state;
-  upgrades validate observed rows, columns, and schema and merge unrelated committed changes.
-  Prewrite savepoints follow the refreshed state, and read-only commits cannot republish stale data.
-- Added locked, checksummed atomic commit images containing all database data and the account
-  catalog. Commits sync a temporary image, replace the committed image, and sync the directory
-  before acknowledgment. Uncertain commit outcomes stop further operations until reopen.
-- Reject legacy Lux development directories with reset guidance. Old development state is
-  disposable; this release provides no legacy data migration path.
-- Whole-database statement copies and whole-server durable images intentionally limit this edition
-  to development datasets. There is no XA, replication, fine-grained row lock manager, or production
-  concurrency qualification.
+- Added independent `Engine::session()` connections with atomic statements, `BEGIN`, `COMMIT`, `ROLLBACK`, savepoints, autocommit handling, and rollback on disconnect. A failed statement preserves earlier successful work in its transaction without publishing partial row/index changes.
+- Added committed-state reads and per-database writer leases covering transactions and `SELECT ... FOR UPDATE`. The supported isolation level is `REPEATABLE READ`; writer acquisition times out after five seconds. Independent database commits merge under a serialized publication lock; catalog administration remains globally exclusive. DDL and catalog administration inside a transaction are rejected.
+- Deferred transaction snapshots until the first read. First writes refresh unobserved state; upgrades validate observed rows, columns, and schema and merge unrelated committed changes. Prewrite savepoints follow the refreshed state, and read-only commits cannot republish stale data.
+- Added locked, checksummed atomic commit images containing all database data and the account catalog. Commits sync a temporary image, replace the committed image, and sync the directory before acknowledgment. Uncertain commit outcomes stop further operations until reopen.
+- Reject legacy Lux development directories with reset guidance. Old development state is disposable; this release provides no legacy data migration path.
+- Whole-database statement copies and whole-server durable images intentionally limit this edition to development datasets. There is no XA, replication, fine-grained row lock manager, or production concurrency qualification.
 
 ### Databases, accounts, and wire sessions
 
-- Added connection-owned advisory locks for the development provisioner, scoped database catalog
-  enumeration, and the `8.0.0-my-sqweel-intentkit-tx-v1` protocol identity.
-- Corrected Drizzle introspection ordering, empty result metadata, primary-key labels, and distinct
-  named indexes over the same columns. Snapshot upgrades preserve concurrent committed data;
-  stale observed snapshots abort with retryable error 1213.
-- Avoided index reconstruction during private state copies and disabled TCP Nagle buffering for
-  local request/response SQL traffic.
-- Added independent logical databases, bootstrap administrator credentials, MySQL native-password
-  verification, and database-wide `SELECT`, `INSERT`, `UPDATE`, and `DELETE` grants. Fresh local
-  engines default to `root` with an empty password; embedders can call `set_admin_credentials()`
-  before accepting connections.
-- Added the provisioning subset of `CREATE/DROP DATABASE`, `CREATE/DROP USER`, `GRANT`, and
-  `REVOKE ALL PRIVILEGES`. Revocation affects existing sessions, and replacing an account requires
-  fresh authentication. SQL cannot grant administrator privileges.
-- Enforced the selected-database boundary across nested queries and schema references. Cross-database
-  SQL and switching databases inside a transaction are rejected. SQL accounts accept the `%` host
-  form only; this is not the complete MySQL permissions system.
-- Made session settings and transaction status connection-owned; unsupported global/integrity
-  settings fail explicitly. Unsupported wire commands, including `COM_RESET_CONNECTION`, return an
-  error rather than pretending to reset state; reconnect instead.
-- Integrated the updated `vendor/msql-srv` dependency and retained warning-count support alongside
-  connection-owned transaction flags in OK and EOF packets, including prepared-statement results.
+- Added connection-owned advisory locks for the development provisioner, scoped database catalog enumeration, and the `8.0.0-my-sqweel-intentkit-tx-v1` protocol identity.
+- Corrected Drizzle introspection ordering, empty result metadata, primary-key labels, and distinct named indexes over the same columns. Snapshot upgrades preserve concurrent committed data; stale observed snapshots abort with retryable error 1213.
+- Avoided index reconstruction during private state copies and disabled TCP Nagle buffering for local request/response SQL traffic.
+- Added independent logical databases, bootstrap administrator credentials, MySQL native-password verification, and database-wide `SELECT`, `INSERT`, `UPDATE`, and `DELETE` grants. Fresh local engines default to `root` with an empty password; embedders can call `set_admin_credentials()` before accepting connections.
+- Added the provisioning subset of `CREATE/DROP DATABASE`, `CREATE/DROP USER`, `GRANT`, and `REVOKE ALL PRIVILEGES`. Revocation affects existing sessions, and replacing an account requires fresh authentication. SQL cannot grant administrator privileges.
+- Enforced the selected-database boundary across nested queries and schema references. Cross-database SQL and switching databases inside a transaction are rejected. SQL accounts accept the `%` host form only; this is not the complete MySQL permissions system.
+- Made session settings and transaction status connection-owned; unsupported global/integrity settings fail explicitly. Unsupported wire commands, including `COM_RESET_CONNECTION`, return an error rather than pretending to reset state; reconnect instead.
+- Integrated the updated `vendor/msql-srv` dependency and retained warning-count support alongside connection-owned transaction flags in OK and EOF packets, including prepared-statement results.
 - Added focused transaction, wire, database-isolation, account-persistence, and durable-image tests.
 
 ### Administrative and diagnostic surfaces
 
-- Routed HTTP maintenance and search through committed default-`app` database state. These remain
-  trusted administrative surfaces; SQL account grants do not authenticate or restrict HTTP callers.
-- Clarified that query lifecycle events are diagnostics, including statements in transactions that
-  can subsequently roll back. They are not commit notifications or safe external-effect triggers.
+- Routed HTTP maintenance and search through committed default-`app` database state. These remain trusted administrative surfaces; SQL account grants do not authenticate or restrict HTTP callers.
+- Clarified that query lifecycle events are diagnostics, including statements in transactions that can subsequently roll back. They are not commit notifications or safe external-effect triggers.
 
 ### Fixed
 
-- Restored supported MariaDB syntax through transaction authorization, including `CHECK TABLE`,
-  `CREATE OR REPLACE INDEX`, `EXPLAIN FORMAT=JSON`, `INSERT`/`REPLACE ... SELECT ... RETURNING`,
-  and user-variable assignments inside expressions. These statements retain privilege checks,
-  cross-database rejection, and transaction DDL restrictions.
-- Preserved the original SQL through parser-only rewrites so interval conversion warnings reach
-  clients. Retained `IF EXISTS` when normalizing index drops and report note 1091 for missing indexes.
+- Added a validated `--default-time-zone` startup offset inherited by new sessions, and pass each upstream MTR case’s required timezone when launching MySqweel. This fixes non-UTC cases such as `timezone4` without enabling global SQL settings or editing upstream tests.
+
+- Fixed unique-constraint name rewriting so identifiers ending in `unique` retain their explicit names in index metadata; updated empty-column metadata coverage to include `collation_name`.
+
+- Restored supported MariaDB syntax through transaction authorization, including `CHECK TABLE`, `CREATE OR REPLACE INDEX`, `EXPLAIN FORMAT=JSON`, `INSERT`/`REPLACE ... SELECT ... RETURNING`, and user-variable assignments inside expressions. These statements retain privilege checks, cross-database rejection, and transaction DDL restrictions.
+- Preserved the original SQL through parser-only rewrites so interval conversion warnings reach clients. Retained `IF EXISTS` when normalizing index drops and report note 1091 for missing indexes.
 - Added connection-owned `optimizer_switch` compatibility settings and `SET NAMES` handling.
-- Corrected `STD`/`STDDEV` window metadata for text and approximate inputs and return MariaDB error
-  4014 (`HY000`) for invalid window-frame bounds.
+- Corrected `STD`/`STDDEV` window metadata for text and approximate inputs and return MariaDB error 4014 (`HY000`) for invalid window-frame bounds.
 
 ### Compatibility and CI
 
-- Enabled upstream discovery of basic transactions, autocommit, and savepoints while retaining
-  exclusions for unsupported isolation levels, table/shared locks, and XA. Safe-harness discovery
-  admits reviewed InnoDB cases without opening the entire engine suite. The pinned inventory now
-  contains 319 candidates and 20,082 direct and sourced SQL statements across 5,585 inspected files.
-- Added the complete, hash-pinned `innodb/innodb_bug57255` transaction case to the focused MTR
-  audit. Its 18 direct SQL statements include a transaction with 743 inserted rows followed by
-  cascading deletes. It passes locally against both MariaDB 10.11.7 and MySqweel and remains
-  audit-only pending CI qualification and strict-manifest promotion.
-- Fixed MTR startup for external servers without a selectable `mysql` database by staging a runner
-  copy whose feature probe uses `SHOW VARIABLES` without `USE mysql`. Both engines use the same
-  narrowly checked adaptation; upstream test/result files and the official `mysqltest` binary are
-  unchanged. Per-invocation source and adapted runner hashes are recorded and uploaded with CI artifacts.
-- Updated MTR setup to preserve MySqweel's default `app` database, recreate the separate `test`
-  database, and avoid unsupported global settings. Discovery also runs when transaction backend
-  and wire tests change.
-- Updated external-server timezone handling for transactional sessions, which reject global settings.
-  Hash-pinned tests with fixed POSIX `GMT` offsets apply the equivalent SQL timezone to MariaDB.
-  For MySqweel, the runner verifies the session default and fails explicitly if it differs from
-  the required timezone.
+- Enabled upstream discovery of basic transactions, autocommit, and savepoints while retaining exclusions for unsupported isolation levels, table/shared locks, and XA. Safe-harness discovery admits reviewed InnoDB cases without opening the entire engine suite. The pinned inventory now contains 319 candidates and 20,082 direct and sourced SQL statements across 5,585 inspected files.
+- Added the complete, hash-pinned `innodb/innodb_bug57255` transaction case to the focused MTR audit. Its 18 direct SQL statements include a transaction with 743 inserted rows followed by cascading deletes. It passes locally against both MariaDB 10.11.7 and MySqweel and remains audit-only pending CI qualification and strict-manifest promotion.
+- Fixed MTR startup for external servers without a selectable `mysql` database by staging a runner copy whose feature probe uses `SHOW VARIABLES` without `USE mysql`. Both engines use the same narrowly checked adaptation; upstream test/result files and the official `mysqltest` binary are unchanged. Per-invocation source and adapted runner hashes are recorded and uploaded with CI artifacts.
+- Updated MTR setup to preserve MySqweel's default `app` database, recreate the separate `test` database, and avoid unsupported global settings. Discovery also runs when transaction backend and wire tests change.
+- Updated external-server timezone handling for transactional sessions, which reject global settings. Hash-pinned tests with fixed POSIX `GMT` offsets apply the equivalent SQL timezone to MariaDB. For MySqweel, the runner verifies the session default and fails explicitly if it differs from the required timezone.
 
 ### Verification status
 
-- The focused upstream audit contains 25 complete files and 339 direct SQL statements. MariaDB
-  10.11.7 and the transactional MySqweel backend both pass all 25 files and 339 statements locally,
-  with no infrastructure failures. All 12 previously failing focused-audit files now pass; this
-  does not claim a full MariaDB-suite or strict-manifest CI qualification.
-- Verified 41 transaction, wire, and database-isolation tests, two protocol packet tests covering
-  transaction flags together with warning counts, and 28 MTR harness tests.
-- The strict manifest remains at 32 files. Earlier 100% compatibility results describe the
-  pre-transaction edition and are not a fresh qualification of this backend or a passing CI run.
+- The focused upstream audit contains 25 complete files and 339 direct SQL statements. MariaDB 10.11.7 and the transactional MySqweel backend both pass all 25 files and 339 statements locally, with no infrastructure failures. All 12 previously failing focused-audit files now pass; this does not claim a full MariaDB-suite or strict-manifest CI qualification.
+- Verified 41 transaction, wire, and database-isolation tests, two protocol packet tests covering transaction flags together with warning counts, and 28 MTR harness tests.
+- The strict manifest remains at 32 files. Earlier 100% compatibility results describe the pre-transaction edition and are not a fresh qualification of this backend or a passing CI run.
 
 ## 0.4.3 Aug 24, 2026
 
@@ -304,28 +255,13 @@ All notable changes to MySqweel will be documented in this file.
 
 ## 0.2.0 - Jun 25, 2026
 
-- Added an always-on Meilisearch-compatible HTTP API on the debug HTTP port.
-  - Meilisearch indexes map to MySqweel/MySQL tables.
-  - Meilisearch documents map to stored rows.
-  - The MySQL/table engine remains the source of truth.
-- Added synchronous Tantivy-backed text search for the Meilisearch-compatible API.
-  - Document and table mutations rebuild the derived search index before reporting task success.
-  - Search falls back to row-scan compatibility for edge cases where Tantivy produces no candidates.
+- Added an always-on Meilisearch-compatible HTTP API on the debug HTTP port. - Meilisearch indexes map to MySqweel/MySQL tables. - Meilisearch documents map to stored rows. - The MySQL/table engine remains the source of truth.
+- Added synchronous Tantivy-backed text search for the Meilisearch-compatible API. - Document and table mutations rebuild the derived search index before reporting task success. - Search falls back to row-scan compatibility for edge cases where Tantivy produces no candidates.
 - Added Meilisearch-compatible index, document, search, multi-search, settings, task, key, stats, and swap-index endpoints.
 - Added support for Meilisearch search options including filters, sort, pagination, `attributesToRetrieve`, `attributesToSearchOn`, `showRankingScore`, and `showRankingScoreDetails`.
 - Added facet support for Meilisearch search responses, including `facetDistribution`, numeric `facetStats`, array facet values, and `facets: ["*"]`.
-- Added a 90/10 Meilisearch compatibility pass for previously missing feature areas:
-  - query-time synonym and typo-tolerance fallback matching
-  - highlighting, cropping, and match-position metadata in search hits
-  - `POST /indexes/:uid/facet-search`
-  - synchronous in-memory dump status/download endpoints
-  - webhook CRUD compatibility endpoints
-  - permissive bearer/API-key handling for tenant-token-shaped local client requests
-- Added task compatibility improvements:
-  - write APIs return Meilisearch-shaped tasks
-  - tasks include both `taskUid` and `uid`
-  - task durations are serialized as strings
-  - task listing supports `uids`, `types`, `statuses`, `indexUids`, ranges, pagination, `from`, and `next`
+- Added a 90/10 Meilisearch compatibility pass for previously missing feature areas: - query-time synonym and typo-tolerance fallback matching - highlighting, cropping, and match-position metadata in search hits - `POST /indexes/:uid/facet-search` - synchronous in-memory dump status/download endpoints - webhook CRUD compatibility endpoints - permissive bearer/API-key handling for tenant-token-shaped local client requests
+- Added task compatibility improvements: - write APIs return Meilisearch-shaped tasks - tasks include both `taskUid` and `uid` - task durations are serialized as strings - task listing supports `uids`, `types`, `statuses`, `indexUids`, ranges, pagination, `from`, and `next`
 - Added official Meilisearch JavaScript client compatibility coverage via `tests/node/meili-js-client-compat.mjs` and `cargo test --test meili_js_client`.
 - Added optional official Meilisearch Python client compatibility coverage via `tests/python/meili_client_compat.py` and `cargo test --test meili_python_client`.
 - Added direct Meilisearch handler coverage for synonyms, typo tolerance, formatting, facet search, dumps, and webhooks.
@@ -345,11 +281,7 @@ All notable changes to MySqweel will be documented in this file.
 - Added the `sqwl` binary with `serve`, `serve --repl`, `repl`, and `explain` commands.
 - Added a lightweight maintenance REPL for status, drift reports, snapshots, index rebuilds, resets, SQL execution, help, and graceful `Ctrl+C` / `Ctrl+D` exit.
 - Added MySQL wire-protocol support for local `mysql2`, Drizzle, and migration workflows.
-- Added permissive schema behavior:
-  - inserts can create missing tables and columns
-  - repeated `CREATE TABLE` statements merge into existing metadata
-  - reads return rows shaped to the latest known schema
-  - stored rows are not rewritten just because the schema changed
+- Added permissive schema behavior: - inserts can create missing tables and columns - repeated `CREATE TABLE` statements merge into existing metadata - reads return rows shaped to the latest known schema - stored rows are not rewritten just because the schema changed
 - Added support for schema metadata from `CREATE TABLE`, `ALTER TABLE`, indexes, unique constraints, and advisory foreign keys.
 - Added dynamic row materialization against the latest schema metadata.
 - Added positional inserts that infer generated `column_1`, `column_2`, etc. columns when needed.

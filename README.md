@@ -240,6 +240,7 @@ option list, including the strict compatibility profile.
 | --- | --- |
 | `--bind <addr>` | SQL bind address; default `127.0.0.1:3307` |
 | `--debug-bind <addr>` | Debug/search HTTP bind; default is the SQL port plus 100 |
+| `--default-time-zone <offset>` | Initial timezone for new SQL sessions, such as `-10:00`; default `+00:00` |
 | `--data-dir <dir>` | Enable locked atomic commit-image persistence |
 | `--allow-remote` | Permit non-loopback SQL and HTTP bindings |
 | `--unique-mode <mode>` | Choose `overwrite` or `enforce`; default `overwrite` |

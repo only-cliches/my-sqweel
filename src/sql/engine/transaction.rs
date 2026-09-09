@@ -85,6 +85,30 @@ impl Engine {
     }
 
     pub fn open_with_data_dir(cfg: EngineConfig, data_dir: Option<&str>) -> Result<Self> {
+        if let Some(zone) = &cfg.default_time_zone {
+            let bytes = zone.as_bytes();
+            let valid = bytes.len() == 6
+                && matches!(bytes[0], b'+' | b'-')
+                && bytes[3] == b':'
+                && [1, 2, 4, 5]
+                    .iter()
+                    .all(|&index| bytes[index].is_ascii_digit());
+            if !valid {
+                return Err(anyhow!(
+                    "default time zone must be a fixed offset such as +00:00 or -10:00"
+                ));
+            }
+            let hours: u32 = zone[1..3].parse()?;
+            let minutes: u32 = zone[4..6].parse()?;
+            let limit = if bytes[0] == b'-' {
+                13 * 60 + 59
+            } else {
+                14 * 60
+            };
+            if minutes >= 60 || hours * 60 + minutes > limit {
+                return Err(anyhow!("default time zone offset is out of range"));
+            }
+        }
         let image = data_dir.map(TransactionImageStore::open).transpose()?;
         let recovered = image
             .as_ref()
@@ -360,6 +384,15 @@ impl EngineSession {
             "transaction_isolation" | "tx_isolation" => {
                 Some(Value::String("REPEATABLE-READ".into()))
             }
+            "time_zone" => Some(self.variables.get("time_zone").cloned().unwrap_or_else(|| {
+                Value::String(
+                    self.shared
+                        .cfg
+                        .default_time_zone
+                        .clone()
+                        .unwrap_or_else(|| "+00:00".into()),
+                )
+            })),
             key => self.variables.get(key).cloned(),
         }
     }
@@ -1355,6 +1388,9 @@ impl RawEngine {
     }
     fn clear_session(&self) {
         self.user_variables.clear();
+        if let Some(zone) = &self.cfg.default_time_zone {
+            self.set_session_time_zone(zone.clone());
+        }
         self.prepared_statements.clear();
         self.sql_mode.lock().clear();
         self.last_insert_id.store(0, AtomicOrdering::Relaxed);

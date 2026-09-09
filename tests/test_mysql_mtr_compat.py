@@ -21,6 +21,7 @@ from tools.mariadb_mtr_core import (
     render_markdown,
     reset_test_database,
     sql_statement_count,
+    start_mysqweel,
     validate_cases,
     validate_distinct_servers,
     validate_mtr_runtime,
@@ -75,6 +76,17 @@ class ManifestTests(unittest.TestCase):
             self.assertIn("DROP DATABASE IF EXISTS test", sql)
             self.assertNotIn("`app`", sql)
             self.assertNotIn("SET GLOBAL", sql)
+
+    def test_mysqweel_startup_passes_required_timezone(self):
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "tools.mariadb_mtr_core.subprocess.Popen"
+        ) as popen, patch("tools.mariadb_mtr_core.wait_for_port"), patch(
+            "tools.mariadb_mtr_core.free_port", return_value=3307
+        ):
+            start_mysqweel(Path("sqwl"), Path(directory), timezone="-10:00")
+            command = popen.call_args.args[0]
+            self.assertEqual(command[command.index("--default-time-zone") + 1], "-10:00")
+            popen.call_args.kwargs["stdout"].close()
 
     def test_mysqweel_timezone_must_match_the_upstream_requirement(self):
         case = TestCase("simple", "query", DIGEST_A, DIGEST_B, "manifest")

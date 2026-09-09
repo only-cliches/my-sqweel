@@ -149,6 +149,7 @@ fn empty_information_schema_columns_retains_drizzle_result_columns() {
             "column_type",
             "data_type",
             "character_set_name",
+            "collation_name",
             "generation_expression",
             "column_key",
             "extra",
@@ -344,4 +345,30 @@ fn information_schema_statistics_includes_unique_constraints() {
             .and_then(|value| value.as_u64()),
         Some(0)
     );
+}
+
+#[test]
+fn explicit_unique_names_survive_keyword_rewriting() {
+    for constraint in [
+        "CONSTRAINT custom_unique UNIQUE (email)",
+        "CONSTRAINT customunique UNIQUE (email)",
+        "UNIQUE custom_unique (email)",
+    ] {
+        let engine = Engine::default();
+        engine
+            .execute_sql(&format!("CREATE TABLE users (email TEXT, {constraint})"))
+            .unwrap();
+        let result = engine
+            .execute_sql(
+                "SELECT index_name FROM information_schema.statistics WHERE table_name = 'users'",
+            )
+            .unwrap();
+        let expected = if constraint.contains("customunique") {
+            "customunique"
+        } else {
+            "custom_unique"
+        };
+        assert_eq!(result[0].rows.len(), 1, "{constraint}");
+        assert_eq!(result[0].rows[0]["index_name"], expected, "{constraint}");
+    }
 }

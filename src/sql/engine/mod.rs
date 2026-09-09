@@ -111,6 +111,9 @@ impl SeedMode {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EngineConfig {
+    /// Fixed SQL timezone inherited by new sessions; None selects UTC.
+    #[serde(default)]
+    pub default_time_zone: Option<String>,
     pub unique_mode: UniqueMode,
     #[serde(default)]
     pub compatibility_profile: CompatibilityProfile,
@@ -127,6 +130,7 @@ pub struct FailureInjectionConfig {
 impl Default for EngineConfig {
     fn default() -> Self {
         Self {
+            default_time_zone: None,
             unique_mode: UniqueMode::Overwrite,
             compatibility_profile: CompatibilityProfile::Drift,
             failure_injection: FailureInjectionConfig::default(),
@@ -4493,6 +4497,16 @@ fn rewrite_named_unique_constraints(sql: &str) -> String {
     let mut cursor = 0;
     while let Some(offset) = upper[cursor..].find("UNIQUE ") {
         let start = cursor + offset;
+        // Do not interpret an identifier suffix (for example users_email_unique)
+        // as the UNIQUE keyword and rewrite the constraint's explicit name.
+        if sql[..start].chars().next_back().is_some_and(|character| {
+            character.is_alphanumeric() || character == '_' || character == '$'
+        }) {
+            let end = start + "UNIQUE ".len();
+            result.push_str(&sql[cursor..end]);
+            cursor = end;
+            continue;
+        }
         let name_start = start + "UNIQUE ".len();
         let name_end = sql[name_start..]
             .char_indices()

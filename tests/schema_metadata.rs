@@ -188,7 +188,7 @@ fn permissive_schema_ddl_infers_missing_metadata_and_noops_unknown_drops() {
     engine.execute_sql("TRUNCATE TABLE unknown_table").unwrap();
     engine.execute_sql("DROP TABLE unknown_table").unwrap();
     engine
-        .execute_sql("DROP INDEX unknown_index ON missing_users")
+        .execute_sql("DROP INDEX IF EXISTS unknown_index ON missing_users")
         .unwrap();
 
     engine

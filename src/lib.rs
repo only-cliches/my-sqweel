@@ -135,6 +135,11 @@ fn parse_cli(args: &[String]) -> Result<(AppConfig, Command)> {
             idx += 1;
             continue;
         }
+        if let Some(value) = option_value(args, &mut idx, "--default-time-zone")? {
+            app.server.engine.default_time_zone = Some(value);
+            idx += 1;
+            continue;
+        }
         if arg == "--mysql-strict" {
             app.server.engine.compatibility_profile = CompatibilityProfile::MysqlStrict;
             app.server.engine.unique_mode = UniqueMode::Enforce;
@@ -668,6 +673,7 @@ fn print_help() {
         "  --data-dir <dir>              locked Lux-backed data directory\n",
         "  --allow-remote                allow non-loopback bind addresses\n",
         "  --unique-mode <mode>          overwrite or enforce (default overwrite)\n",
+        "  --default-time-zone <offset>   initial session timezone (default +00:00)\n",
         "  --mysql-strict                reject drift and enforce MySQL-style errors\n",
         "  --debug-bind <addr>           debug HTTP bind address (default: bind port + 100)\n",
         "  --query-delay-ms <n>          add fixed latency per SQL statement\n",
