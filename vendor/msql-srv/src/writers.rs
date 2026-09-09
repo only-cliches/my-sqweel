@@ -5,7 +5,7 @@ use crate::{Column, ErrorKind};
 use byteorder::{LittleEndian, WriteBytesExt};
 use std::io::{self, Read, Write};
 
-pub(crate) fn write_eof_packet<W: Read + Write>(
+pub(crate) fn write_eof_packet_with_warnings<W: Read + Write>(
     w: &mut PacketConn<W>,
     s: StatusFlags,
     warnings: u16,
@@ -16,7 +16,7 @@ pub(crate) fn write_eof_packet<W: Read + Write>(
     w.end_packet()
 }
 
-pub(crate) fn write_ok_packet<W: Read + Write>(
+pub(crate) fn write_ok_packet_with_warnings<W: Read + Write>(
     w: &mut PacketConn<W>,
     rows: u64,
     last_insert_id: u64,
@@ -114,7 +114,7 @@ where
     if empty && only_eof_on_nonempty {
         Ok(())
     } else {
-        write_eof_packet(w, StatusFlags::empty(), 0)
+        write_eof_packet(w, StatusFlags::empty())
     }
 }
 
@@ -131,4 +131,21 @@ where
     w.write_lenenc_int(i.len() as u64)?;
     w.end_packet()?;
     write_column_definitions(i, w, false, false)
+}
+
+// Preserve the ordinary protocol helpers for callers without statement warnings.
+pub(crate) fn write_eof_packet<W: Read + Write>(
+    w: &mut PacketConn<W>,
+    status: StatusFlags,
+) -> io::Result<()> {
+    write_eof_packet_with_warnings(w, status, 0)
+}
+
+pub(crate) fn write_ok_packet<W: Read + Write>(
+    w: &mut PacketConn<W>,
+    rows: u64,
+    last_insert_id: u64,
+    status: StatusFlags,
+) -> io::Result<()> {
+    write_ok_packet_with_warnings(w, rows, last_insert_id, status, 0)
 }

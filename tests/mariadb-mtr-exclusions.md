@@ -8,7 +8,8 @@ with behavior that MySqweel intentionally does not provide.
 
 | Excluded area | Reason |
 | --- | --- |
-| Transactions, isolation, savepoints, locking, and XA | Outside the streamlined compatibility contract. |
+| Isolation levels other than `REPEATABLE READ`, fine-grained row locking, and XA | Outside the serialized transaction contract. Basic transactions, autocommit, and savepoints are eligible for discovery. |
+| DDL and catalog administration inside active transactions | The transactional backend rejects these operations rather than implicitly committing. |
 | Replication, binary logging, group replication, and NDB | Require server topology or storage engines that MySqweel does not implement. |
 | Users, grants, authentication plugins, and TLS | MySqweel exposes a local development wire endpoint, not MySQL access control. |
 | Stored procedures, stored functions, triggers, and events | Outside the supported SQL surface. |
@@ -55,11 +56,43 @@ The strict gate contains 32 complete files and 381 SQL statements:
 | Uniqueness | `unique` | Unique-key insertion, nullable duplicates, and indexed deletes. |
 
 The focused non-gating audit scope in
-[`tests/mariadb-mtr-scope.txt`](mariadb-mtr-scope.txt) retains 24 complete files and 321 SQL
+[`tests/mariadb-mtr-scope.txt`](mariadb-mtr-scope.txt) contains 25 complete files and 339 SQL
 statements across DDL, DML, aggregates, subqueries, date/time, window functions, JSON, and
-generated columns. Its results are reported separately from the strict manifest. `win_std` remains
-audit-only because its complete upstream results do not yet match MySqweel; a file is promoted only
-after it passes in full against both engines.
+generated columns, plus transactions. Its results are reported separately from the strict manifest. `win_std` now passes in full
+against both engines locally and remains audit-only pending CI qualification and promotion.
+
+The transaction audit adds `innodb/innodb_bug57255`: one complete upstream file
+with 18 direct SQL statements, including a transaction that inserts 257 parent
+and 486 child rows before committing and exercising cascading deletes. The complete
+file passes locally against both MariaDB 10.11.7 and MySqweel. It remains in the
+non-gating audit pending CI qualification and strict-manifest promotion. The
+25-file focused scope now passes in full against both MariaDB and the transactional
+MySqweel backend (339 direct SQL statements), with no infrastructure failures.
+All 12 previously failing files pass after fixes to authorization parsing, session
+settings, warning propagation, and window result/error metadata. The manifest and
+upstream expected results were not reduced or weakened to achieve this result.
+
+The runner stages a copy of MariaDB's MTR script for each invocation and changes
+only its external-server feature probe from `USE mysql; SHOW VARIABLES` to
+`SHOW VARIABLES`. Server variables do not depend on the selected database; this
+allows servers without a selectable `mysql` schema to reach test execution.
+The same adaptation is applied to both engines, and an unexpected or ambiguous
+probe causes the run to fail. Upstream `.test`/`.result` files and the official
+`mysqltest` binary remain unchanged. Each invocation records source and adapted
+runner SHA-256 hashes in `mariadb-test-run.json` alongside the staged script.
+
+The discovery filter admits basic transaction commands and labels their feature
+category `transactions`; the InnoDB suite remains restricted to explicitly
+reviewed cases in safe-harness mode.
+
+Broader transaction coverage still needs qualifying complete files. In particular,
+`commit` combines transactions with unsupported isolation levels, chaining, routines,
+and XA; `rollback` requires nontransactional MyISAM behavior; and
+`innodb/temp_table_savepoint` requires routines and file-system side effects.
+`innodb/mvcc_secondary` is not in the executable scope because its additional
+`localhost` connection uses a local socket instead of the configured external
+endpoint. Savepoint and rollback behavior remains covered by the focused backend
+and wire regression suites until suitable complete upstream files qualify.
 
 Features without a suitable complete upstream file are covered by the
 differential corpus and focused parity tests. They are not represented as an
@@ -78,7 +111,7 @@ topology requirements, storage engines, and behavior outside the compatibility c
 
 Each weekly, manual, or relevant push run inventories all 5,585 packaged files and executes every
 safely classifiable candidate rather than sampling a rotating batch. The current pinned inventory
-contains 308 candidates and 19,517 direct and sourced SQL statements. Each file is validated
+contains 319 candidates and 20,082 direct and sourced SQL statements. Each file is validated
 against MariaDB first, then run against MySqweel when the external-server baseline is valid. The
 workflow publishes the inventory, complete execution reports, and a generated promotion manifest
 containing only files that passed both engines. Promotion into the strict manifest still requires

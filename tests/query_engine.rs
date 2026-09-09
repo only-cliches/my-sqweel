@@ -16,6 +16,14 @@ fn accepts_mysql2_query_protocol_escaped_json_with_apostrophes() {
 
     let query = r##"INSERT INTO virtual_email (id, payload) VALUES ('email-1', '{\"from\":{\"name\":\"Here\'s My Brain Support\"},\"html\":\"<!doctype html>\\n<html lang=\\\"und\\\" dir=\\\"auto\\\" xmlns=\\\"http://www.w3.org/1999/xhtml\\\">\\n<style>font-family:\'Nunito\'; color:red;</style>\"}')"##;
     engine.execute_sql(query).unwrap();
+    engine.execute_sql("DELETE FROM virtual_email").unwrap();
+    engine
+        .execute_sql(&query.replacen(
+            "INSERT INTO virtual_email",
+            "INSERT INTO app.virtual_email",
+            1,
+        ))
+        .unwrap();
 
     let rows = engine
         .execute_sql("SELECT payload FROM virtual_email WHERE id = 'email-1'")
@@ -1283,4 +1291,32 @@ fn supports_common_subquery_shapes() {
             .as_i64(),
         Some(1)
     );
+}
+
+#[test]
+fn indexed_candidates_handle_misses_conjunctions_and_sql_equality() {
+    use my_sqweel::sql::engine::{QueryEvent, QueryEventOptions};
+    let _guard = test_lock();
+    let engine = Engine::new(EngineConfig::mysql_strict());
+    engine.execute_sql("CREATE TABLE candidates (id INT PRIMARY KEY, lookup_key VARCHAR(40), tag VARCHAR(40)); CREATE INDEX lookup_idx ON candidates (lookup_key); INSERT INTO candidates VALUES (1, 'Alpha', 'yes'), (2, 'alpha', 'no'), (3, '2', 'yes')").unwrap();
+    for (predicate, expected, reads) in [
+        ("lookup_key = 'missing'", 0, 0),
+        ("(tag = 'yes' AND (lookup_key = 'ALPHA'))", 1, 2),
+        ("(lookup_key = 'Alpha' AND tag = 'absent')", 0, 2),
+        ("(lookup_key = 'missing' OR tag = 'yes')", 2, 3),
+        ("tag = 'yes'", 2, 3),
+        ("lookup_key = 2", 1, 1),
+        ("lookup_key = NULL", 0, 0),
+    ] {
+        let events = engine.subscribe_query_events(QueryEventOptions::metadata_only());
+        let result = engine
+            .execute_sql(&format!("SELECT id FROM candidates WHERE {predicate}"))
+            .unwrap();
+        assert_eq!(result[0].rows.len(), expected, "{predicate}");
+        assert!(matches!(events.recv().unwrap(), QueryEvent::Received(_)));
+        let QueryEvent::Completed(event) = events.recv().unwrap() else {
+            panic!("completion missing")
+        };
+        assert_eq!(event.metrics.rows_read, reads, "{predicate}");
+    }
 }

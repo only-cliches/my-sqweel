@@ -99,7 +99,6 @@ extern crate mysql_common as myc;
 use std::collections::HashMap;
 use std::io;
 use std::io::prelude::*;
-use std::iter;
 use std::net;
 
 use myc::constants::CapabilityFlags;
@@ -147,6 +146,11 @@ pub trait MysqlShim<W: Read + Write> {
     ///
     /// Must implement `From<io::Error>` so that transport-level errors can be lifted.
     type Error: From<io::Error>;
+
+    /// Current connection transaction/autocommit status, including PING responses.
+    fn status_flags(&self) -> StatusFlags {
+        StatusFlags::SERVER_STATUS_AUTOCOMMIT
+    }
 
     /// Called when the client issues a request to prepare `query` for later execution.
     ///
@@ -212,6 +216,12 @@ pub trait MysqlShim<W: Read + Write> {
 pub struct AuthenticationContext<'a> {
     /// The username exactly as passed by the client,
     pub username: Option<Vec<u8>>,
+    /// Native-password challenge response supplied by the client.
+    pub auth_response: Vec<u8>,
+    /// Fresh server challenge used for this handshake.
+    pub auth_plugin_data: [u8; 20],
+    /// Optional database selected by the initial handshake.
+    pub database: Option<Vec<u8>>,
     #[cfg(feature = "tls")]
     /// The TLS certificate chain presented by the client.
     pub tls_client_certs: Option<&'a [rustls::pki_types::CertificateDer<'a>]>,
@@ -265,38 +275,53 @@ impl<B: MysqlShim<RW>, RW: Read + Write> MysqlIntermediary<B, RW> {
         #[cfg(feature = "tls")]
         let tls_conf = self.shim.tls_config();
 
+        use rand::RngCore;
+        let mut challenge = [0u8; 20];
+        rand::rngs::OsRng.fill_bytes(&mut challenge);
+        // Native clients treat challenge fragments as NUL-terminated strings.
+        for byte in &mut challenge {
+            while *byte == 0 {
+                *byte = rand::rngs::OsRng.next_u32() as u8;
+            }
+        }
         self.rw.write_all(&[10])?; // protocol 10
 
         // 5.1.10 because that's what Ruby's ActiveRecord requires
         self.rw.write_all(&b"5.1.10-alpha-msql-proxy\0"[..])?;
 
         self.rw.write_all(&[0x08, 0x00, 0x00, 0x00])?; // TODO: connection ID
-        self.rw.write_all(&b";X,po_k}\0"[..])?; // auth seed
-        let capability_flags = &mut [0x00, 0x42]; // 4.1 proto
+        self.rw.write_all(&challenge[..8])?;
+        self.rw.write_all(&[0])?;
+        let capabilities = &mut [0x08, 0xc2]; // 4.1 proto
         #[cfg(feature = "tls")]
         if tls_conf.is_some() {
-            capability_flags[1] |= 0x08; // SSL support flag
+            capabilities[1] |= 0x08; // SSL support flag
         }
-        self.rw.write_all(capability_flags)?;
+        self.rw.write_all(capabilities)?;
         self.rw.write_all(&[0x21])?; // UTF8_GENERAL_CI
-        self.rw.write_all(&[0x00, 0x00])?; // status flags
+        self.rw
+            .write_all(&StatusFlags::SERVER_STATUS_AUTOCOMMIT.bits().to_le_bytes())?; // status flags
         self.rw.write_all(&[0x00, 0x00])?; // extended capabilities
         self.rw.write_all(&[0x00])?; // no plugins
         self.rw.write_all(&[0x00; 6][..])?; // filler
         self.rw.write_all(&[0x00; 4][..])?; // filler
-        self.rw.write_all(&b">o6^Wz!/kM}N\0"[..])?; // 4.1+ servers must extend salt
+        self.rw.write_all(&challenge[8..])?;
+        self.rw.write_all(&[0])?;
         self.rw.flush()?;
 
-        let mut auth_context = AuthenticationContext::default();
+        let mut auth_context = AuthenticationContext {
+            auth_plugin_data: challenge,
+            ..AuthenticationContext::default()
+        };
 
         {
-            let (seq, handshake_packet) = self.rw.next()?.ok_or_else(|| {
+            let (seq, handshake) = self.rw.next()?.ok_or_else(|| {
                 io::Error::new(
                     io::ErrorKind::ConnectionAborted,
                     "peer terminated connection",
                 )
             })?;
-            let handshake = commands::client_handshake(&handshake_packet, false)
+            let handshake = commands::client_handshake(&handshake, false)
                 .map_err(|e| match e {
                     nom::Err::Incomplete(_) => io::Error::new(
                         io::ErrorKind::UnexpectedEof,
@@ -325,6 +350,8 @@ impl<B: MysqlShim<RW>, RW: Read + Write> MysqlIntermediary<B, RW> {
                 .1;
 
             auth_context.username = handshake.username.map(|x| x.to_vec());
+            auth_context.auth_response = handshake.auth_response.to_vec();
+            auth_context.database = handshake.database.map(|x| x.to_vec());
 
             self.rw.set_seq(seq + 1);
 
@@ -384,6 +411,8 @@ impl<B: MysqlShim<RW>, RW: Read + Write> MysqlIntermediary<B, RW> {
                     .1;
 
                 auth_context.username = handshake.username.map(|x| x.to_vec());
+                auth_context.auth_response = handshake.auth_response.to_vec();
+                auth_context.database = handshake.database.map(|x| x.to_vec());
 
                 self.rw.set_seq(seq + 1);
 
@@ -401,7 +430,7 @@ impl<B: MysqlShim<RW>, RW: Read + Write> MysqlIntermediary<B, RW> {
             }
         }
 
-        writers::write_ok_packet(&mut self.rw, 0, 0, StatusFlags::empty(), 0)?;
+        writers::write_ok_packet(&mut self.rw, 0, 0, StatusFlags::SERVER_STATUS_AUTOCOMMIT)?;
         self.rw.flush()?;
 
         Ok(())
@@ -414,53 +443,27 @@ impl<B: MysqlShim<RW>, RW: Read + Write> MysqlIntermediary<B, RW> {
         while let Some((seq, packet)) = self.rw.next()? {
             self.rw.set_seq(seq + 1);
             let cmd = match commands::parse(&packet) {
-                Ok((_, cmd)) => cmd,
-                Err(_) => break,
+                Ok((_, command)) => command,
+                Err(_) => {
+                    // In particular, RESET_CONNECTION and CHANGE_USER must
+                    // not acknowledge success while retaining session state.
+                    writers::write_err(
+                        ErrorKind::ER_UNKNOWN_COM_ERROR,
+                        b"Unsupported or malformed command; reconnect to reset the session",
+                        &mut self.rw,
+                    )?;
+                    self.rw.flush()?;
+                    continue;
+                }
             };
             match cmd {
                 Command::Query(q) => {
-                    if q.starts_with(b"SELECT @@") || q.starts_with(b"select @@") {
-                        let w = QueryResultWriter::new(&mut self.rw, false);
-                        let var = &q[b"SELECT @@".len()..];
-                        match var {
-                            b"max_allowed_packet" => {
-                                let cols = &[Column {
-                                    table: String::new(),
-                                    column: "@@max_allowed_packet".to_owned(),
-                                    coltype: myc::constants::ColumnType::MYSQL_TYPE_LONG,
-                                    colflags: myc::constants::ColumnFlags::UNSIGNED_FLAG,
-                                }];
-                                let mut w = w.start(cols)?;
-                                w.write_row(iter::once(67108864u32))?;
-                                w.finish()?;
-                            }
-                            _ => {
-                                drop(w);
-                                let w = QueryResultWriter::new(&mut self.rw, false);
-                                self.shim.on_query(
-                                    ::std::str::from_utf8(q).map_err(|e| {
-                                        io::Error::new(io::ErrorKind::InvalidData, e)
-                                    })?,
-                                    w,
-                                )?;
-                            }
-                        }
-                    } else if q.starts_with(b"USE ") || q.starts_with(b"use ") {
-                        let w = InitWriter {
-                            writer: &mut self.rw,
-                        };
-                        let schema = ::std::str::from_utf8(&q[b"USE ".len()..])
-                            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-                        let schema = schema.trim().trim_end_matches(';').trim_matches('`');
-                        self.shim.on_init(schema, w)?;
-                    } else {
-                        let w = QueryResultWriter::new(&mut self.rw, false);
-                        self.shim.on_query(
-                            ::std::str::from_utf8(q)
-                                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
-                            w,
-                        )?;
-                    }
+                    let w = QueryResultWriter::new(&mut self.rw, false);
+                    self.shim.on_query(
+                        ::std::str::from_utf8(q)
+                            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
+                        w,
+                    )?;
                 }
                 Command::Prepare(q) => {
                     let w = StatementMetaWriter {
@@ -507,15 +510,6 @@ impl<B: MysqlShim<RW>, RW: Read + Write> MysqlIntermediary<B, RW> {
                     stmts.remove(&stmt);
                     // NOTE: spec dictates no response from server
                 }
-                Command::ResetStatement(stmt) => {
-                    if let Some(state) = stmts.get_mut(&stmt) {
-                        state.long_data.clear();
-                    }
-                    writers::write_ok_packet(&mut self.rw, 0, 0, StatusFlags::empty(), 0)?;
-                }
-                Command::SetOption | Command::ResetConnection | Command::ChangeUser => {
-                    writers::write_ok_packet(&mut self.rw, 0, 0, StatusFlags::empty(), 0)?;
-                }
                 Command::ListFields(_) => {
                     let cols = &[Column {
                         table: String::new(),
@@ -536,7 +530,7 @@ impl<B: MysqlShim<RW>, RW: Read + Write> MysqlIntermediary<B, RW> {
                     )?;
                 }
                 Command::Ping => {
-                    writers::write_ok_packet(&mut self.rw, 0, 0, StatusFlags::empty(), 0)?;
+                    writers::write_ok_packet(&mut self.rw, 0, 0, self.shim.status_flags())?;
                 }
                 Command::Quit => {
                     break;

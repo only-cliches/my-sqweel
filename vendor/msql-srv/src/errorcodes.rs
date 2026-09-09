@@ -1754,12 +1754,6 @@ pub enum ErrorKind {
     ER_IO_WRITE_ERROR = 1811,
     /// Tablespace is missing for table '%s'
     ER_TABLESPACE_MISSING = 1812,
-    /// Cannot DISCARD/IMPORT tablespace associated with temporary table
-    ER_CANNOT_DISCARD_TEMPORARY_TABLE = 3007,
-    /// Spatial indexes can't be primary or unique indexes
-    ER_SPATIAL_UNIQUE_INDEX = 3728,
-    /// Unsupported action on generated column
-    ER_UNSUPPORTED_ACTION_ON_GENERATED_COLUMN = 3106,
     /// Tablespace for table '%s' exists. Please DISCARD the tablespace before IMPORT.
     ER_TABLESPACE_EXISTS = 1813,
     /// Tablespace has been discarded for table '%s'
@@ -1906,15 +1900,14 @@ pub enum ErrorKind {
     ER_GTID_UNSAFE_BINLOG_SPLITTABLE_STATEMENT_AND_GTID_GROUP = 1884,
     /// Slave has more GTIDs than the master has, using the master's SERVER_UUID. This may indicate that the end of the binary log was truncated or that the last binary log file was lost, e.g., after a power or disk failure when sync_binlog != 1. The master may or may not have rolled back transactions that were already replicated to the slave. Suggest to replicate any transactions that master has rolled back from slave to master, and/or commit empty transactions on master to account for transactions that have been committed on master but are not included in GTID_EXECUTED.
     ER_SLAVE_HAS_MORE_GTIDS_THAN_MASTER = 1885,
-    /// Cannot convert a binary string to the requested character set.
-    ER_CANNOT_CONVERT_STRING = 3854,
-    /// Window frame bounds are in an invalid combination.
+    /// MariaDB: unacceptable combination of window frame bound specifications.
     ER_BAD_COMBINATION_OF_WINDOW_FRAME_BOUND_SPECS = 4014,
 }
 
 impl From<u16> for ErrorKind {
     fn from(x: u16) -> Self {
         match x {
+            4014_u16 => ErrorKind::ER_BAD_COMBINATION_OF_WINDOW_FRAME_BOUND_SPECS,
             1000_u16 => ErrorKind::ER_HASHCHK,
             1001_u16 => ErrorKind::ER_NISAMCHK,
             1002_u16 => ErrorKind::ER_NO,
@@ -2730,9 +2723,6 @@ impl From<u16> for ErrorKind {
             1810_u16 => ErrorKind::ER_IO_READ_ERROR,
             1811_u16 => ErrorKind::ER_IO_WRITE_ERROR,
             1812_u16 => ErrorKind::ER_TABLESPACE_MISSING,
-            3007_u16 => ErrorKind::ER_CANNOT_DISCARD_TEMPORARY_TABLE,
-            3728_u16 => ErrorKind::ER_SPATIAL_UNIQUE_INDEX,
-            3106_u16 => ErrorKind::ER_UNSUPPORTED_ACTION_ON_GENERATED_COLUMN,
             1813_u16 => ErrorKind::ER_TABLESPACE_EXISTS,
             1814_u16 => ErrorKind::ER_TABLESPACE_DISCARDED,
             1815_u16 => ErrorKind::ER_INTERNAL_ERROR,
@@ -2806,7 +2796,6 @@ impl From<u16> for ErrorKind {
             1883_u16 => ErrorKind::ER_PLUGIN_CANNOT_BE_UNINSTALLED,
             1884_u16 => ErrorKind::ER_GTID_UNSAFE_BINLOG_SPLITTABLE_STATEMENT_AND_GTID_GROUP,
             1885_u16 => ErrorKind::ER_SLAVE_HAS_MORE_GTIDS_THAN_MASTER,
-            3854_u16 => ErrorKind::ER_CANNOT_CONVERT_STRING,
             _ => panic!("Unknown error type {}", x),
         }
     }
@@ -2832,6 +2821,7 @@ impl ErrorKind {
     /// See also https://mariadb.com/kb/en/library/sqlstate/
     pub fn sqlstate(self) -> &'static [u8; 5] {
         match self {
+            ErrorKind::ER_BAD_COMBINATION_OF_WINDOW_FRAME_BOUND_SPECS => b"HY000",
             ErrorKind::ER_BAD_HOST_ERROR
             | ErrorKind::ER_HANDSHAKE_ERROR
             | ErrorKind::ER_UNKNOWN_COM_ERROR
@@ -3702,12 +3692,7 @@ impl ErrorKind {
             | ErrorKind::ER_AES_INVALID_IV
             | ErrorKind::ER_PLUGIN_CANNOT_BE_UNINSTALLED
             | ErrorKind::ER_GTID_UNSAFE_BINLOG_SPLITTABLE_STATEMENT_AND_GTID_GROUP
-            | ErrorKind::ER_SLAVE_HAS_MORE_GTIDS_THAN_MASTER
-            | ErrorKind::ER_CANNOT_CONVERT_STRING
-            | ErrorKind::ER_CANNOT_DISCARD_TEMPORARY_TABLE
-            | ErrorKind::ER_SPATIAL_UNIQUE_INDEX
-            | ErrorKind::ER_UNSUPPORTED_ACTION_ON_GENERATED_COLUMN
-            | ErrorKind::ER_BAD_COMBINATION_OF_WINDOW_FRAME_BOUND_SPECS => b"HY000",
+            | ErrorKind::ER_SLAVE_HAS_MORE_GTIDS_THAN_MASTER => b"HY000",
             ErrorKind::ER_XAER_NOTA => b"XAE04",
             ErrorKind::ER_XA_RBROLLBACK => b"XA100",
             ErrorKind::ER_DATA_TOO_LONG => b"22001",

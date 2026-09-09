@@ -72,7 +72,10 @@ fn exposes_mtr_metadata_and_ignores_mtr_suppression_calls() {
         .unwrap()
         .remove(0);
     assert_eq!(variables.rows[0]["Variable_name"], "version");
-    assert_eq!(variables.rows[0]["Value"], "8.0.0-my-sqweel");
+    assert_eq!(
+        variables.rows[0]["Value"],
+        "8.0.0-my-sqweel-intentkit-tx-v1"
+    );
 
     assert!(
         engine

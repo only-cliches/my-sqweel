@@ -5,7 +5,7 @@ use std::ops::ControlFlow;
 
 use sqlparser::ast::Visitor;
 
-impl Engine {
+impl RawEngine {
     pub(super) fn select_query(&self, mut query: Query) -> Result<QueryResult> {
         if query.with.as_ref().is_some_and(|with| with.recursive) {
             query = self.expand_recursive_common_table_expressions(query)?;
@@ -457,72 +457,129 @@ impl Engine {
         } else {
             table_factor_name_full(&root.relation)?
         };
-        if root_name_full.eq_ignore_ascii_case("information_schema.tables") {
-            return self.select_information_schema_tables(&select);
+        // Metadata ordering must run before projection: physical fingerprints order
+        // by fields (such as ORDINAL_POSITION) that are intentionally not selected.
+        let finish_metadata = !order_by.is_empty() || limit.is_some() || offset.is_some();
+        let mut metadata_select = select.clone();
+        if finish_metadata {
+            metadata_select.projection = vec![SelectItem::Wildcard(Default::default())];
+            metadata_select.distinct = None;
+            metadata_select.group_by = GroupByExpr::Expressions(vec![], vec![]);
+            metadata_select.having = None;
         }
-        if root_name_full.eq_ignore_ascii_case("information_schema.schemata") {
-            return self.select_information_schema_schemata(&select);
-        }
-        if root_name_full.eq_ignore_ascii_case("information_schema.columns") {
-            return self.select_information_schema_columns(&select);
-        }
-        if root_name_full.eq_ignore_ascii_case("information_schema.table_constraints") {
-            if root.joins.iter().any(|join| {
-                table_factor_name_full(&join.relation).is_ok_and(|name| {
-                    name.eq_ignore_ascii_case("information_schema.key_column_usage")
-                })
-            }) {
-                return self.select_information_schema_constraints_with_column_usage(&select);
+        let metadata = (|| {
+            if root_name_full.eq_ignore_ascii_case("information_schema.tables") {
+                return Some(self.select_information_schema_tables(&metadata_select));
             }
-            return self.select_information_schema_table_constraints(&select);
-        }
-        if root_name_full.eq_ignore_ascii_case("information_schema.statistics") {
-            return self.select_information_schema_statistics(&select);
-        }
-        if root_name_full.eq_ignore_ascii_case("information_schema.key_column_usage") {
-            return self.select_information_schema_key_column_usage(&select);
-        }
-        if root_name_full.eq_ignore_ascii_case("information_schema.referential_constraints") {
-            return self.select_information_schema_referential_constraints(&select);
-        }
-        if root_name_full.eq_ignore_ascii_case("information_schema.character_sets") {
-            return self.select_information_schema_character_sets(&select);
-        }
-        if root_name_full.eq_ignore_ascii_case("information_schema.collations") {
-            return self.select_information_schema_collations(&select);
-        }
-        if root_name_full.eq_ignore_ascii_case("information_schema.views") {
-            return self.select_information_schema_views(&select);
-        }
-        if root_name_full.eq_ignore_ascii_case("information_schema.routines") {
-            return self.select_information_schema_routines(&select);
-        }
-        if root_name_full.eq_ignore_ascii_case("information_schema.engines") {
-            return self.select_information_schema_engines(&select);
-        }
-        if root_name_full.eq_ignore_ascii_case("information_schema.processlist") {
-            return self.select_information_schema_processlist(&select);
-        }
-        if root_name_full.eq_ignore_ascii_case("information_schema.session_variables") {
-            return self.select_information_schema_session_variables(&select);
-        }
-        if root_name_full.eq_ignore_ascii_case("information_schema.global_variables") {
-            return self.select_information_schema_global_variables(&select);
-        }
-        if root_name_full.eq_ignore_ascii_case("information_schema.system_variables") {
-            return self.select_information_schema_system_variables(&select);
-        }
-        if root_name_full.eq_ignore_ascii_case("information_schema.keywords") {
-            return self.select_information_schema_keywords(&select);
-        }
-        if root_name_full.eq_ignore_ascii_case("information_schema.triggers") {
-            return self.select_information_schema_triggers(&select);
-        }
-        if root_name_full.eq_ignore_ascii_case("information_schema.check_constraints") {
-            return self.select_information_schema_check_constraints(&select);
-        }
-        if root_name_full.eq_ignore_ascii_case("information_schema.files") {
-            return self.select_information_schema_files(&select);
+            if root_name_full.eq_ignore_ascii_case("information_schema.schemata") {
+                return Some(self.select_information_schema_schemata(&metadata_select));
+            }
+            if root_name_full.eq_ignore_ascii_case("information_schema.columns") {
+                return Some(self.select_information_schema_columns(&metadata_select));
+            }
+            if root_name_full.eq_ignore_ascii_case("information_schema.table_constraints") {
+                if root.joins.iter().any(|join| {
+                    table_factor_name_full(&join.relation).is_ok_and(|name| {
+                        name.eq_ignore_ascii_case("information_schema.key_column_usage")
+                    })
+                }) {
+                    return Some(
+                        self.select_information_schema_constraints_with_column_usage(
+                            &metadata_select,
+                        ),
+                    );
+                }
+                return Some(self.select_information_schema_table_constraints(&metadata_select));
+            }
+            if root_name_full.eq_ignore_ascii_case("information_schema.statistics") {
+                return Some(self.select_information_schema_statistics(&metadata_select));
+            }
+            if root_name_full.eq_ignore_ascii_case("information_schema.key_column_usage") {
+                return Some(self.select_information_schema_key_column_usage(&metadata_select));
+            }
+            if root_name_full.eq_ignore_ascii_case("information_schema.referential_constraints") {
+                return Some(
+                    self.select_information_schema_referential_constraints(&metadata_select),
+                );
+            }
+            if root_name_full.eq_ignore_ascii_case("information_schema.character_sets") {
+                return Some(self.select_information_schema_character_sets(&metadata_select));
+            }
+            if root_name_full.eq_ignore_ascii_case("information_schema.collations") {
+                return Some(self.select_information_schema_collations(&metadata_select));
+            }
+            if root_name_full.eq_ignore_ascii_case("information_schema.views") {
+                return Some(self.select_information_schema_views(&metadata_select));
+            }
+            if root_name_full.eq_ignore_ascii_case("information_schema.routines") {
+                return Some(self.select_information_schema_routines(&metadata_select));
+            }
+            if root_name_full.eq_ignore_ascii_case("information_schema.engines") {
+                return Some(self.select_information_schema_engines(&metadata_select));
+            }
+            if root_name_full.eq_ignore_ascii_case("information_schema.processlist") {
+                return Some(self.select_information_schema_processlist(&metadata_select));
+            }
+            if root_name_full.eq_ignore_ascii_case("information_schema.session_variables") {
+                return Some(self.select_information_schema_session_variables(&metadata_select));
+            }
+            if root_name_full.eq_ignore_ascii_case("information_schema.global_variables") {
+                return Some(self.select_information_schema_global_variables(&metadata_select));
+            }
+            if root_name_full.eq_ignore_ascii_case("information_schema.system_variables") {
+                return Some(self.select_information_schema_system_variables(&metadata_select));
+            }
+            if root_name_full.eq_ignore_ascii_case("information_schema.keywords") {
+                return Some(self.select_information_schema_keywords(&metadata_select));
+            }
+            if root_name_full.eq_ignore_ascii_case("information_schema.triggers") {
+                return Some(self.select_information_schema_triggers(&metadata_select));
+            }
+            if root_name_full.eq_ignore_ascii_case("information_schema.check_constraints") {
+                return Some(self.select_information_schema_check_constraints(&metadata_select));
+            }
+            if root_name_full.eq_ignore_ascii_case("information_schema.files") {
+                return Some(self.select_information_schema_files(&metadata_select));
+            }
+            None
+        })();
+        if let Some(result) = metadata {
+            let mut result = result?;
+            if !finish_metadata {
+                return Ok(result);
+            }
+            let last_insert_id = self.last_insert_id.load(AtomicOrdering::Relaxed);
+            if let Some(aggregate) = aggregate_select_result(
+                &select,
+                &mut result.rows,
+                order_by,
+                &order_hints,
+                &aggregate_hints,
+                limit,
+                offset,
+                last_insert_id,
+                &|expr, data, id| self.eval_expr_ctx(expr, data, id),
+            )? {
+                return Ok(self.with_select_metadata(&select, aggregate));
+            }
+            let mut finished = self.finish_select_rows(
+                &select,
+                result.rows,
+                order_by,
+                limit,
+                offset,
+                last_insert_id,
+            )?;
+            if finished.rows.is_empty() {
+                let columns = result
+                    .columns
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>();
+                finished.columns =
+                    virtual_select_result_with_empty_schema(&select, vec![], &columns)?.columns;
+            }
+            return Ok(finished);
         }
         if root_name_full.eq_ignore_ascii_case("dual") {
             return self.finish_select_rows(
@@ -1384,19 +1441,43 @@ impl Engine {
             Expr::Value(SqlValue::Null) => metadata.column_type = MysqlColumnType::Null,
             _ => {}
         }
-        if window_exprs(expr).iter().any(|window| {
+        for window in window_exprs(expr) {
             let Expr::Function(function) = window else {
-                return false;
+                continue;
             };
-            function.name.0.last().is_some_and(|name| {
-                matches!(
-                    name.value.to_ascii_uppercase().as_str(),
-                    "AVG" | "STD" | "STDDEV"
-                )
-            })
-        }) {
-            metadata.column_type = MysqlColumnType::Decimal;
-            metadata.decimals = 4;
+            let name = function
+                .name
+                .0
+                .last()
+                .map(|name| name.value.to_ascii_uppercase())
+                .unwrap_or_default();
+            if !matches!(name.as_str(), "AVG" | "STD" | "STDDEV") {
+                continue;
+            }
+            let approximate = matches!(name.as_str(), "STD" | "STDDEV")
+                && window_function_arguments(function)
+                    .ok()
+                    .and_then(|args| args.into_iter().next().flatten())
+                    .is_some_and(|arg| {
+                        let input =
+                            self.expression_metadata(select, &arg, String::new(), first_row);
+                        !matches!(
+                            input.column_type,
+                            MysqlColumnType::TinyInt
+                                | MysqlColumnType::SmallInt
+                                | MysqlColumnType::Integer
+                                | MysqlColumnType::BigInt
+                                | MysqlColumnType::Decimal
+                        )
+                    });
+            // Text and floating inputs use approximate numeric conversion. Their
+            // standard deviation has no fixed decimal scale (unlike exact inputs).
+            metadata.column_type = if approximate {
+                MysqlColumnType::Double
+            } else {
+                MysqlColumnType::Decimal
+            };
+            metadata.decimals = if approximate { 0 } else { 4 };
         }
         metadata
     }
@@ -1694,14 +1775,28 @@ impl Engine {
         let filter = select.selection.as_ref();
         let mut rows = Vec::new();
 
-        if let Some(index_hit) = try_index_lookup(filter, &table)
-            && let Some(index_rows) = self
-                .indexes
-                .get(&table)
-                .and_then(|idx| idx.get(&index_hit.0).cloned())
-            && let Some(keys) = index_rows.get(&index_hit.1)
-            && let Some(table_rows) = self.rows.get(&table)
+        let table_indexes = self.indexes.get(&table);
+        if let Some((column, value)) = try_index_lookup(filter, &table, &|column| {
+            table_indexes
+                .as_ref()
+                .is_some_and(|indexes| indexes.contains_key(column))
+        }) && let Some(index_rows) = table_indexes
+            .as_ref()
+            .and_then(|indexes| indexes.get(&column))
         {
+            // Index keys retain JSON types and spelling. SQL equality permits
+            // case-insensitive text and numeric coercion, so collect all equal
+            // buckets rather than assuming a missing exact key means no match.
+            let mut keys = BTreeSet::new();
+            for (encoded, bucket) in index_rows {
+                let indexed_value: Value = serde_json::from_str(encoded)?;
+                if mysql_eq_value(&indexed_value, &value) == Value::Bool(true) {
+                    keys.extend(bucket.iter());
+                }
+            }
+            let Some(table_rows) = self.rows.get(&table) else {
+                return Ok(rows);
+            };
             rows.reserve(keys.len());
             for key in keys {
                 if let Some(row) = table_rows.get(key) {
@@ -2678,13 +2773,20 @@ impl Engine {
                 .get(table.key())
                 .map(|rows| rows.len())
                 .unwrap_or(0);
-            row.insert("table_schema".to_string(), Value::String("app".to_string()));
+            row.insert(
+                "table_schema".to_string(),
+                Value::String(self.database_name.clone()),
+            );
             row.insert("table_name".to_string(), Value::String(table.key().clone()));
             row.insert(
                 "table_type".to_string(),
                 Value::String("BASE TABLE".to_string()),
             );
             row.insert("engine".to_string(), Value::String("InnoDB".to_string()));
+            row.insert(
+                "table_collation".into(),
+                Value::String("utf8mb4_general_ci".into()),
+            );
             row.insert(
                 "table_rows".to_string(),
                 Value::Number(Number::from(table_rows as u64)),
@@ -2721,6 +2823,7 @@ impl Engine {
                 "table_name",
                 "table_type",
                 "engine",
+                "table_collation",
                 "table_rows",
                 "index_length",
                 "max_data_length",
@@ -2732,18 +2835,25 @@ impl Engine {
         &self,
         select: &Select,
     ) -> Result<QueryResult> {
-        let mut row = Map::new();
-        row.insert("catalog_name".to_string(), Value::String("def".to_string()));
-        row.insert("schema_name".to_string(), Value::String("app".to_string()));
-        row.insert(
-            "default_character_set_name".to_string(),
-            Value::String("utf8mb4".to_string()),
-        );
-        row.insert(
-            "default_collation_name".to_string(),
-            Value::String("utf8mb4_general_ci".to_string()),
-        );
-        virtual_select_result(select, vec![row])
+        let rows = self
+            .visible_databases
+            .iter()
+            .map(|database| {
+                let mut row = Map::new();
+                row.insert("catalog_name".to_string(), Value::String("def".to_string()));
+                row.insert("schema_name".to_string(), Value::String(database.clone()));
+                row.insert(
+                    "default_character_set_name".to_string(),
+                    Value::String("utf8mb4".to_string()),
+                );
+                row.insert(
+                    "default_collation_name".to_string(),
+                    Value::String("utf8mb4_general_ci".to_string()),
+                );
+                row
+            })
+            .collect();
+        virtual_select_result(select, rows)
     }
 
     pub(super) fn select_information_schema_columns(&self, select: &Select) -> Result<QueryResult> {
@@ -2758,7 +2868,10 @@ impl Engine {
                 let (column_type, data_type) =
                     mysql_column_metadata_types(hint.sql_type.as_deref());
                 let mut row = Map::new();
-                row.insert("table_schema".to_string(), Value::String("app".to_string()));
+                row.insert(
+                    "table_schema".to_string(),
+                    Value::String(self.database_name.clone()),
+                );
                 row.insert(
                     "table_name".to_string(),
                     Value::String(schema.table.clone()),
@@ -2783,12 +2896,31 @@ impl Engine {
                         .map(Value::String)
                         .unwrap_or(Value::Null),
                 );
-                row.insert("column_type".to_string(), Value::String(column_type));
+                row.insert(
+                    "column_type".to_string(),
+                    Value::String(column_type.clone()),
+                );
                 row.insert("data_type".to_string(), Value::String(data_type));
-                row.insert("character_set_name".to_string(), Value::Null);
+                let character = is_character_type(&column_type.to_ascii_uppercase());
+                row.insert(
+                    "character_set_name".to_string(),
+                    if character {
+                        json!("utf8mb4")
+                    } else {
+                        Value::Null
+                    },
+                );
+                row.insert(
+                    "collation_name".to_string(),
+                    if character {
+                        json!("utf8mb4_general_ci")
+                    } else {
+                        Value::Null
+                    },
+                );
                 row.insert(
                     "generation_expression".to_string(),
-                    Value::String(String::new()),
+                    Value::String(hint.generated.clone().unwrap_or_default()),
                 );
                 row.insert(
                     "column_key".to_string(),
@@ -2818,6 +2950,7 @@ impl Engine {
                 "column_type",
                 "data_type",
                 "character_set_name",
+                "collation_name",
                 "generation_expression",
                 "column_key",
                 "extra",
@@ -2835,9 +2968,12 @@ impl Engine {
                 let mut row = Map::new();
                 row.insert(
                     "constraint_schema".to_string(),
-                    Value::String("app".to_string()),
+                    Value::String(self.database_name.clone()),
                 );
-                row.insert("table_schema".to_string(), Value::String("app".to_string()));
+                row.insert(
+                    "table_schema".to_string(),
+                    Value::String(self.database_name.clone()),
+                );
                 row.insert(
                     "table_name".to_string(),
                     Value::String(schema.table.clone()),
@@ -2857,9 +2993,12 @@ impl Engine {
                 let mut row = Map::new();
                 row.insert(
                     "constraint_schema".to_string(),
-                    Value::String("app".to_string()),
+                    Value::String(self.database_name.clone()),
                 );
-                row.insert("table_schema".to_string(), Value::String("app".to_string()));
+                row.insert(
+                    "table_schema".to_string(),
+                    Value::String(self.database_name.clone()),
+                );
                 row.insert(
                     "table_name".to_string(),
                     Value::String(schema.table.clone()),
@@ -2879,9 +3018,12 @@ impl Engine {
                 let mut row = Map::new();
                 row.insert(
                     "constraint_schema".to_string(),
-                    Value::String("app".to_string()),
+                    Value::String(self.database_name.clone()),
                 );
-                row.insert("table_schema".to_string(), Value::String("app".to_string()));
+                row.insert(
+                    "table_schema".to_string(),
+                    Value::String(self.database_name.clone()),
+                );
                 row.insert(
                     "table_name".to_string(),
                     Value::String(schema.table.clone()),
@@ -2917,8 +3059,15 @@ impl Engine {
         let mut rows = Vec::new();
         for schema in self.schemas.iter() {
             for (idx, column) in schema.primary_key.iter().enumerate() {
-                let mut row =
-                    key_column_usage_row(&schema.table, "PRIMARY", column, idx + 1, None, None);
+                let mut row = key_column_usage_row(
+                    &self.database_name,
+                    &schema.table,
+                    "PRIMARY",
+                    column,
+                    idx + 1,
+                    None,
+                    None,
+                );
                 row.insert(
                     "constraint_type".to_string(),
                     Value::String("PRIMARY KEY".to_string()),
@@ -2929,6 +3078,7 @@ impl Engine {
                 let constraint_name = unique_index_name(&schema, unique);
                 for (idx, column) in unique.iter().enumerate() {
                     let mut row = key_column_usage_row(
+                        &self.database_name,
                         &schema.table,
                         &constraint_name,
                         column,
@@ -2947,6 +3097,7 @@ impl Engine {
                 for (idx, column) in foreign_key.columns.iter().enumerate() {
                     let referenced = foreign_key.referenced_columns.get(idx).cloned();
                     let mut row = key_column_usage_row(
+                        &self.database_name,
                         &schema.table,
                         &foreign_key.name,
                         column,
@@ -2972,14 +3123,13 @@ impl Engine {
         let mut rows = Vec::new();
         for schema in self.schemas.iter() {
             for index in &schema.indexes {
-                let index_name = if index.unique && !index.name.eq_ignore_ascii_case("PRIMARY") {
-                    unique_index_name(&schema, &index.columns)
-                } else {
-                    index.name.clone()
-                };
+                let index_name = index.name.clone();
                 for (idx, col) in index.columns.iter().enumerate() {
                     let mut row = Map::new();
-                    row.insert("table_schema".to_string(), Value::String("app".to_string()));
+                    row.insert(
+                        "table_schema".to_string(),
+                        Value::String(self.database_name.clone()),
+                    );
                     row.insert(
                         "table_name".to_string(),
                         Value::String(schema.table.clone()),
@@ -3020,6 +3170,7 @@ impl Engine {
         for schema in self.schemas.iter() {
             for (idx, col) in schema.primary_key.iter().enumerate() {
                 rows.push(key_column_usage_row(
+                    &self.database_name,
                     &schema.table,
                     "PRIMARY",
                     col,
@@ -3032,6 +3183,7 @@ impl Engine {
                 let constraint_name = unique_index_name(&schema, unique);
                 for (idx, col) in unique.iter().enumerate() {
                     rows.push(key_column_usage_row(
+                        &self.database_name,
                         &schema.table,
                         &constraint_name,
                         col,
@@ -3045,6 +3197,7 @@ impl Engine {
                 for (idx, col) in foreign_key.columns.iter().enumerate() {
                     let referenced = foreign_key.referenced_columns.get(idx).cloned();
                     rows.push(key_column_usage_row(
+                        &self.database_name,
                         &schema.table,
                         &foreign_key.name,
                         col,
@@ -3089,7 +3242,7 @@ impl Engine {
                 );
                 row.insert(
                     "constraint_schema".to_string(),
-                    Value::String("app".to_string()),
+                    Value::String(self.database_name.clone()),
                 );
                 row.insert(
                     "constraint_name".to_string(),
@@ -3101,7 +3254,7 @@ impl Engine {
                 );
                 row.insert(
                     "unique_constraint_schema".to_string(),
-                    Value::String("app".to_string()),
+                    Value::String(self.database_name.clone()),
                 );
                 row.insert(
                     "unique_constraint_name".to_string(),
@@ -3247,7 +3400,7 @@ impl Engine {
                     })
                     .unwrap_or_else(|| definition.to_string());
                 Map::from_iter([
-                    ("table_schema".to_string(), Value::String("app".to_string())),
+                    ("table_schema".to_string(), Value::String(self.database_name.clone())),
                     ("table_name".to_string(), Value::String(view.key().clone())),
                     ("view_definition".to_string(), Value::String(view_definition)),
                     ("check_option".to_string(), Value::String("NONE".to_string())),
@@ -3293,7 +3446,7 @@ impl Engine {
             (
                 "InnoDB",
                 "YES",
-                "Supports transactions, row-level locking, and foreign keys",
+                "MySqweel development transactions, serialized writers, and foreign keys",
             ),
             ("MyISAM", "NO", "MyISAM storage engine"),
             ("MEMORY", "NO", "Hash based, stored in memory"),
@@ -3307,9 +3460,15 @@ impl Engine {
                 row.insert("engine".to_string(), Value::String((*name).to_string()));
                 row.insert("support".to_string(), Value::String((*support).to_string()));
                 row.insert("comment".to_string(), Value::String((*comment).to_string()));
-                row.insert("transactions".to_string(), Value::String("NO".to_string()));
+                row.insert(
+                    "transactions".to_string(),
+                    Value::String(if *name == "InnoDB" { "YES" } else { "NO" }.to_string()),
+                );
                 row.insert("xa".to_string(), Value::String("NO".to_string()));
-                row.insert("savepoints".to_string(), Value::String("NO".to_string()));
+                row.insert(
+                    "savepoints".to_string(),
+                    Value::String(if *name == "InnoDB" { "YES" } else { "NO" }.to_string()),
+                );
                 row
             })
             .collect();
@@ -3324,7 +3483,7 @@ impl Engine {
         row.insert("id".to_string(), Value::Number(Number::from(1)));
         row.insert("user".to_string(), Value::String("root".to_string()));
         row.insert("host".to_string(), Value::String("localhost".to_string()));
-        row.insert("db".to_string(), Value::String("app".to_string()));
+        row.insert("db".to_string(), Value::String(self.database_name.clone()));
         row.insert("command".to_string(), Value::String("Sleep".to_string()));
         row.insert("time".to_string(), Value::Number(Number::from(0)));
         row.insert("state".to_string(), Value::String("".to_string()));
@@ -5815,7 +5974,7 @@ fn range_frame_placeholder(units: &sqlparser::ast::WindowFrameUnits) -> bool {
 }
 
 fn eval_window_argument(
-    engine: &Engine,
+    engine: &RawEngine,
     argument: Option<&Option<Expr>>,
     row: &Map<String, Value>,
     last_insert_id: u64,
@@ -5828,7 +5987,7 @@ fn eval_window_argument(
 }
 
 fn window_usize_argument(
-    engine: &Engine,
+    engine: &RawEngine,
     argument: Option<&Option<Expr>>,
     row: &Map<String, Value>,
     last_insert_id: u64,
@@ -6622,6 +6781,7 @@ fn function_arg_clause_outer_reference(
 }
 
 fn key_column_usage_row(
+    database: &str,
     table: &str,
     constraint_name: &str,
     column_name: &str,
@@ -6636,7 +6796,7 @@ fn key_column_usage_row(
     );
     row.insert(
         "constraint_schema".to_string(),
-        Value::String("app".to_string()),
+        Value::String(database.to_string()),
     );
     row.insert(
         "constraint_name".to_string(),
@@ -6646,7 +6806,10 @@ fn key_column_usage_row(
         "table_catalog".to_string(),
         Value::String("def".to_string()),
     );
-    row.insert("table_schema".to_string(), Value::String("app".to_string()));
+    row.insert(
+        "table_schema".to_string(),
+        Value::String(database.to_string()),
+    );
     row.insert("table_name".to_string(), Value::String(table.to_string()));
     row.insert(
         "column_name".to_string(),
@@ -6664,7 +6827,7 @@ fn key_column_usage_row(
     );
     let (ref_schema, ref_table, ref_column) = match referenced {
         Some((table, column)) => (
-            Value::String("app".to_string()),
+            Value::String(database.to_string()),
             Value::String(table),
             column.map(Value::String).unwrap_or(Value::Null),
         ),

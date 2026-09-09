@@ -5,8 +5,13 @@ use std::collections::{HashMap, HashSet};
 use sqlparser::ast::Function;
 
 thread_local! {
+    static EVAL_DATABASE: RefCell<String> = RefCell::new("app".into());
     static EVAL_USER_VARIABLES: RefCell<std::collections::HashMap<String, Value>> =
         RefCell::new(std::collections::HashMap::new());
+}
+
+pub(super) fn set_eval_database(name: &str) {
+    EVAL_DATABASE.with(|database| *database.borrow_mut() = name.into());
 }
 
 pub(super) fn clear_eval_user_variables() {
@@ -2094,23 +2099,39 @@ pub(super) fn is_defaultish(value: &Value) -> bool {
     matches!(value, Value::Null) || is_default_keyword(value)
 }
 
-pub(super) fn try_index_lookup(selection: Option<&Expr>, table: &str) -> Option<(String, String)> {
-    let expr = selection?;
-    if let Expr::BinaryOp { left, op, right } = expr {
-        if *op != BinaryOperator::Eq {
-            return None;
-        }
-        let col = match &**left {
-            Expr::Identifier(Ident { value, .. }) => value.clone(),
-            Expr::CompoundIdentifier(parts) if parts.len() == 2 && parts[0].value == table => {
-                parts[1].value.clone()
+pub(super) fn try_index_lookup(
+    selection: Option<&Expr>,
+    table: &str,
+    indexed: &impl Fn(&str) -> bool,
+) -> Option<(String, Value)> {
+    match selection? {
+        Expr::Nested(expr) => try_index_lookup(Some(expr), table, indexed),
+        Expr::BinaryOp {
+            left,
+            op: BinaryOperator::And,
+            right,
+        } => try_index_lookup(Some(left), table, indexed)
+            .or_else(|| try_index_lookup(Some(right), table, indexed)),
+        Expr::BinaryOp {
+            left,
+            op: BinaryOperator::Eq,
+            right,
+        } => {
+            let column = match &**left {
+                Expr::Identifier(Ident { value, .. }) => value.clone(),
+                Expr::CompoundIdentifier(parts) if parts.len() == 2 && parts[0].value == table => {
+                    parts[1].value.clone()
+                }
+                _ => return None,
+            };
+            if !indexed(&column) {
+                return None;
             }
-            _ => return None,
-        };
-        let val = eval_expr(right, &Map::new(), 0).ok()?.to_string();
-        return Some((col, val));
+            Some((column, eval_expr(right, &Map::new(), 0).ok()?))
+        }
+        // An equality underneath OR is not a necessary condition for a match.
+        _ => None,
     }
-    None
 }
 
 pub(super) fn matches_selection(
@@ -3219,8 +3240,10 @@ pub(super) fn eval_function_text(
         }
         "UUID" => Ok(Value::String(uuid::Uuid::new_v4().to_string())),
         "RAND" => Ok(number_from_f64(0.5)),
-        "DATABASE" | "SCHEMA" => Ok(Value::String("app".to_string())),
-        "VERSION" => Ok(Value::String("8.0.0-my-sqweel".to_string())),
+        "DATABASE" | "SCHEMA" => {
+            Ok(EVAL_DATABASE.with(|database| Value::String(database.borrow().clone())))
+        }
+        "VERSION" => Ok(Value::String("8.0.0-my-sqweel-intentkit-tx-v1".to_string())),
         "USER" | "CURRENT_USER" => Ok(Value::String("root@localhost".to_string())),
         "VALUES" => args
             .first()

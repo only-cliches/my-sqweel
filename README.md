@@ -5,15 +5,15 @@
 # MySqweel
 
 <p align="center">
-  <strong>Streamlined, embeddable MySQL for applications, testing, and QA.</strong>
+  <strong>Streamlined, embeddable MySQL/MariaDB for applications, testing, and QA.</strong>
 </p>
 
 <p align="center">
   <a href="https://github.com/only-cliches/my-sqweel/actions/workflows/ci.yml"><img src="https://github.com/only-cliches/my-sqweel/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
 </p>
 
-MySqweel is a lightweight reimplementation of core MySQL behavior. Embed the engine directly in a
-Rust application like SQLite, or expose it through the MySQL wire protocol for existing clients,
+MySqweel is a lightweight reimplementation of core MariaDB behavior. Embed the engine directly in a
+Rust application like SQLite, or expose it through a MariaDB-compatible wire protocol for existing clients,
 ORMs, and migration tools. State stays easy to infer, inspect, seed, snapshot, reset, and
 deliberately break.
 
@@ -21,21 +21,17 @@ Choose the default drift-tolerant profile for rapid iteration, or enable the str
 compatibility matters more than convenience. The server process can also expose a debug API and a
 Meilisearch-shaped search surface.
 
-> **Compatibility boundary.** MySqweel is designed for workloads where transactions and atomicity
-> are not critical. It does not provide ACID transactions, replication, access control, secure
-> multi-tenant isolation, or complete MySQL compatibility.
-
 ## At a glance
 
 | Surface | Default | Purpose |
 | --- | --- | --- |
 | Embedded Rust engine | In process | SQLite-like SQL execution without network or HTTP listeners |
-| MySQL wire protocol | `127.0.0.1:3307` | Application, ORM, migration, and MySQL-client connections |
+| MariaDB-compatible wire protocol | `127.0.0.1:3307` | Application, ORM, migration, and MariaDB-client connections |
 | Debug and search HTTP | `127.0.0.1:3407` | Drift inspection, seeding, snapshots, and local search |
-| Storage | In memory | Disposable state; optional locked Lux-backed directory persistence |
-| Compatibility profiles | Drift tolerant / MySQL strict | Choose convenience or fail-fast schema behavior |
+| Storage | In memory | Disposable state; optional locked atomic commit-image persistence |
+| Compatibility profiles | Drift tolerant / strict | Choose convenience or fail-fast schema behavior |
 | MariaDB differential verification | MariaDB 10.11.7 | Differential corpus and exact parity suites |
-| Upstream MariaDB MTR verification | MariaDB 10.11.7 | 32 gated files / 381 SQL statements on ARM64 |
+| Upstream MariaDB MTR verification | MariaDB 10.11.7 | 25/25 focused files passing / 339 SQL statements on ARM64 |
 
 ## Where it fits
 
@@ -43,7 +39,7 @@ MySqweel is useful for:
 
 - embedding streamlined SQL storage directly in Rust applications
 - early application development while the schema is changing
-- local integration tests that need a disposable MySQL endpoint
+- local integration tests that need a disposable MariaDB-compatible endpoint
 - test harnesses, QA environments, and deterministic fixtures
 - ORM, query-builder, migration, and seed-script development
 - realistic UI flows without a full production-shaped stack
@@ -52,21 +48,23 @@ MySqweel is useful for:
 - local text, facet, and vector-search development
 - demos, teaching, and experiments
 
-Use real MariaDB when your workload depends on transactions, atomic multi-statement writes,
-permissions, replication, optimizer fidelity, security boundaries, high-concurrency durability,
-scale, or compliance guarantees.
+Use real MariaDB when your workload depends on fine-grained locking, full permissions, replication,
+optimizer fidelity, security boundaries, high-concurrency durability, scale, or compliance guarantees.
 
 ## Embed it
 
 The engine can run entirely in process. This starts no TCP or HTTP listener:
 
 ```rust
-use my_sqweel::sql::engine::{Engine, EngineConfig};
+use my_sqweel::sql::engine::Engine;
 
 fn main() -> anyhow::Result<()> {
-    let db = Engine::new(EngineConfig::mysql_strict());
+    let engine = Engine::default();
+    let mut db = engine.session();
     db.execute_sql("CREATE TABLE users (id INT PRIMARY KEY, name TEXT)")?;
+    db.execute_sql("BEGIN")?;
     db.execute_sql("INSERT INTO users VALUES (1, 'Ada')")?;
+    db.execute_sql("COMMIT")?;
 
     let results = db.execute_sql("SELECT id, name FROM users")?;
     println!("{:?}", results[0].rows);
@@ -75,13 +73,14 @@ fn main() -> anyhow::Result<()> {
 ```
 
 Use `Engine::default()` for drift-tolerant in-memory storage, or
-`Engine::open_with_data_dir(...)` for directory-backed persistence.
+`Engine::open_with_data_dir(...)` for directory-backed persistence. Create an `Engine::session()`
+for each independent caller. Calls directly on `Engine::execute_sql()` share its default session.
 
 ## Quick start
 
 ### 1. Install from a checkout
 
-You need a recent stable Rust toolchain and Cargo. A MySQL CLI is optional but useful for the
+You need a recent stable Rust toolchain and Cargo. A MariaDB CLI is optional but useful for the
 examples below.
 
 ```sh
@@ -102,20 +101,22 @@ cargo run --bin sqwl -- serve
 sqwl serve
 ```
 
-The MySQL and HTTP listeners bind to loopback by default:
+The SQL and HTTP listeners bind to loopback by default:
 
 ```text
-MySQL wire:   127.0.0.1:3307
+SQL wire:     127.0.0.1:3307
 Debug/search: 127.0.0.1:3407
 ```
 
 ### 3. Connect
 
 ```sh
-mysql --protocol=TCP -h 127.0.0.1 -P 3307 -u root app
+mariadb --protocol=TCP -h 127.0.0.1 -P 3307 -u root app
 ```
 
-No password is required for the local connection. Try a normal schema and query flow:
+Fresh engines bootstrap the `root` administrator with an empty password and select the `app`
+database. Embedders can call `engine.set_admin_credentials()` before accepting connections.
+Try a normal schema and query flow:
 
 ```sql
 CREATE TABLE users (
@@ -134,17 +135,41 @@ FROM users
 ORDER BY id;
 ```
 
-Point an application at the same endpoint:
+Configure your application’s MariaDB driver with host `127.0.0.1`, port `3307`, database `app`,
+user `root`, and an empty password. For fail-fast compatibility work, enable the strict profile;
+`sqwl help` lists its command-line option.
 
-```sh
-export DATABASE_URL="mysql://root@127.0.0.1:3307/app"
+### Transactions and sessions
+
+```sql
+START TRANSACTION;
+INSERT INTO users (email, display_name) VALUES ('linus@example.test', 'Linus');
+SAVEPOINT before_edit;
+UPDATE users SET display_name = 'Temporary' WHERE email = 'linus@example.test';
+ROLLBACK TO SAVEPOINT before_edit;
+RELEASE SAVEPOINT before_edit;
+COMMIT;
 ```
 
-For fail-fast compatibility work, start with the strict profile instead:
+Statements are atomic, and a failed statement preserves earlier successful work in its transaction.
+`ROLLBACK` discards the transaction; disconnecting also rolls it back. `SET autocommit = 0` enables
+implicit transactions, and switching back to `1` commits pending work.
 
-```sh
-sqwl --mysql-strict serve
-```
+The supported isolation level is `REPEATABLE READ`. Snapshots begin at the first read; conflicts
+when upgrading an observed snapshot to a writer can return retryable error 1213. Each database
+allows one writer at a time, with a five-second acquisition timeout. Plain `SELECT ... FOR UPDATE`
+uses that database-wide writer lease. DDL, catalog administration, cross-database SQL, and changing
+databases inside a transaction are rejected.
+
+### Databases and accounts
+
+Logical databases have independent data. The provisioning subset supports `CREATE/DROP DATABASE`,
+`CREATE/DROP USER`, database-wide `SELECT`, `INSERT`, `UPDATE`, and `DELETE` grants, and
+`REVOKE ALL PRIVILEGES`. Accounts support the `%` host form only. Revocation affects existing
+sessions; replacing an account requires fresh authentication. SQL cannot grant administrator status.
+
+`GET_LOCK()` and `RELEASE_LOCK()` provide connection-owned recursive advisory locks. They survive
+transaction completion and are released on disconnect.
 
 ### Embed the engine and observe query metrics
 
@@ -166,26 +191,27 @@ if let QueryEvent::Completed(event) = events.recv()? {
 ```
 
 These are logical execution metrics, not storage-I/O counters. Repeated join or subquery
-examinations count repeatedly, and multi-statement API calls report aggregate totals.
+examinations count repeatedly, and multi-statement API calls report aggregate totals. These events
+are diagnostics, not commit notifications: a completed statement can still be rolled back.
 
 ## Choose a compatibility profile
 
 MySqweel has two intentionally different compatibility profiles.
 
-| Behavior | Drift tolerant (default) | MySQL strict (`--mysql-strict`) |
+| Behavior | Drift tolerant (default) | Strict |
 | --- | --- | --- |
 | Missing tables or columns during writes | Infer and extend schema hints | Return an error |
-| Repeated `CREATE TABLE` | Merge new hints into known metadata | Use MySQL-style exists behavior |
+| Repeated `CREATE TABLE` | Merge new hints into known metadata | Use MariaDB-style exists behavior |
 | Declared types, ranges, lengths, nulls, and defaults | Best-effort coercion | Validate and reject invalid values |
 | Unique conflicts | Overwrite by default; configurable | Enforce uniqueness |
-| Foreign keys | Enforce declared relationships and actions | Enforce relationships with MySQL-style errors |
+| Foreign keys | Enforce declared relationships and actions | Enforce relationships with MariaDB-style errors |
 | Best use | Embedded apps, prototypes, fixtures, changing DTOs | Application integration, ORMs, migrations, and compatibility tests |
 
-Strict mode also returns common MySQL wire error numbers for missing tables and columns, duplicate
+Strict mode also returns common MariaDB wire error numbers for missing tables and columns, duplicate
 entries, null/default violations, invalid values, length/range errors, and foreign-key failures.
 
-Strict mode narrows accidental differences; it does not turn MySqweel into MySQL. Both profiles use
-the same supported SQL surface, and neither implements transaction semantics.
+Strict mode narrows accidental differences; it does not turn MySqweel into MariaDB. Both profiles use
+the same supported SQL and transaction surface.
 
 ### Unique conflicts without full strict mode
 
@@ -207,15 +233,15 @@ sqwl explain <sql>
 sqwl help
 ```
 
-Global options in the table below must appear before the subcommand.
+Global options in the table below must appear before the subcommand. Use `sqwl help` for the full
+option list, including the strict compatibility profile.
 
 | Option | Purpose |
 | --- | --- |
-| `--bind <addr>` | MySQL bind address; default `127.0.0.1:3307` |
-| `--debug-bind <addr>` | Debug/search HTTP bind; default is the MySQL port plus 100 |
-| `--data-dir <dir>` | Enable locked Lux-backed directory persistence |
-| `--allow-remote` | Permit non-loopback MySQL and HTTP bindings |
-| `--mysql-strict` | Reject schema drift and use MySQL-style validation errors |
+| `--bind <addr>` | SQL bind address; default `127.0.0.1:3307` |
+| `--debug-bind <addr>` | Debug/search HTTP bind; default is the SQL port plus 100 |
+| `--data-dir <dir>` | Enable locked atomic commit-image persistence |
+| `--allow-remote` | Permit non-loopback SQL and HTTP bindings |
 | `--unique-mode <mode>` | Choose `overwrite` or `enforce`; default `overwrite` |
 | `--query-delay-ms <n>` | Add fixed latency to each SQL statement |
 | `--fail-read-every <n>` | Fail every Nth read statement |
@@ -258,8 +284,14 @@ database between runs:
 sqwl --data-dir .my-sqweel/data serve
 ```
 
-The embedded Lux store locks the directory so two MySqweel processes cannot open it concurrently.
-Directory persistence does not add transaction or atomic multi-statement guarantees.
+The directory is locked against concurrent processes. Each durable commit writes a checksummed
+image containing all databases and the account catalog, syncs it, atomically replaces the committed
+image, and syncs the directory before acknowledgment. Recovery loads only committed images;
+corrupt or unsupported images are rejected. An uncertain commit outcome stops operations until reopen.
+
+Legacy Lux development directories are rejected with reset guidance; there is no migration path.
+Whole-database statement copies and whole-server durable images make this suitable for development
+size datasets.
 
 ### Maintenance REPL
 
@@ -337,7 +369,8 @@ reset users
 snapshot restore before-auth-refactor
 ```
 
-The HTTP API can also return or restore complete engine snapshots:
+Snapshots cover the default `app` database, excluding other databases and the account catalog.
+They are separate from durable commit images. The HTTP API can also export and restore these snapshots:
 
 ```sh
 curl -X POST http://127.0.0.1:3407/_drift/snapshot
@@ -358,36 +391,37 @@ sqwl \
 This is useful for testing retries, loading states, error handling, idempotency, and unhappy-path
 user experiences.
 
-## MySQL compatibility
+## MariaDB compatibility
 
-MySqweel implements a practical, tested MySQL subset. Unsupported syntax returns an explicit error
+MySqweel implements a practical, tested MariaDB subset. Unsupported syntax returns an explicit error
 instead of being silently evaluated as `NULL`, `FALSE`, or a partial result.
 
 ### Verification contract
 
-- A deterministic 2,500-query corpus compares column names and normalized values with MySQL 8.0.43.
-- The current corpus result is 2,500/2,500 exact matches; CI requires 100%.
-- Broader parity tests require exact results for every claimed DDL, DML, metadata, and query shape.
-- Wire tests verify common MySQL error numbers and typed prepared-statement behavior.
-- ORM-shaped tests cover migration, CRUD, relation, and introspection patterns used by Diesel,
-  Drizzle/Knex, Prisma, and SeaORM.
-- The [MariaDB MTR workflow](.github/workflows/mariadb-mtr-discovery.yml) inventories the ARM64
-  MariaDB 10.11.7 MTR distribution and runs every safely classifiable external-server candidate
-  through MariaDB and MySqweel. The pinned inventory currently inspects 5,585 files and executes
-  308 candidates containing 19,517 direct and sourced SQL statements. It also audits the focused
-  [`tests/mariadb-mtr-scope.txt`](tests/mariadb-mtr-scope.txt) set covering 24 files and 321 SQL
-  statements across DDL, DML, aggregates, subqueries, date/time, windows, JSON, and generated
-  columns.
+Compatibility verification targets pinned **MariaDB 10.11.7**. Differential corpus, exact parity,
+error-code, prepared-statement, and ORM-shaped suites exercise the supported surface.
 
-The percentage describes this versioned corpus, not the entire MySQL grammar. Every reported edge
-case should become a regression case before its implementation is changed.
+- The latest local focused upstream audit passes **25/25 complete files**, containing **339 direct
+  SQL statements**, against both MariaDB and MySqweel, with zero infrastructure failures. The
+  hash-pinned scope is [`tests/mariadb-mtr-scope.txt`](tests/mariadb-mtr-scope.txt).
+- The scope includes `innodb/innodb_bug57255`: 18 statements exercising a transaction with 743
+  inserted rows and cascading deletes. Rust tests cover rollback, savepoints, autocommit,
+  session isolation, wire status, account persistence, and recovery.
+- The strict manifest remains **32 files / 381 statements**. Its earlier qualification predates
+  this transactional edition; the focused result does not establish a fresh strict-gate pass.
+  Focused cases remain audit-only until CI qualification and promotion into
+  [`tests/mariadb-mtr-allowlist.txt`](tests/mariadb-mtr-allowlist.txt).
+- The [discovery workflow](.github/workflows/mariadb-mtr-discovery.yml) inventories **5,585 files**,
+  identifying **319 candidates / 20,082 direct and sourced statements**. Candidates are not passing
+  tests or a compatibility score; each must pass both engines before promotion.
 
-The MariaDB MTR inventory is not itself a compatibility score: static candidates still have to
-pass against both MariaDB and MySqweel. A discovered file becomes eligible for the strict CI gate
-only after that dual-engine pass and a compatibility-boundary review. The strict manifest records
-the exact upstream test and expected-result hashes in
-[`tests/mariadb-mtr-allowlist.txt`](tests/mariadb-mtr-allowlist.txt). The broader focused scope
-remains non-gating; complete files move into the strict manifest only after they pass both engines.
+The external MTR runner’s startup probe is adapted to run `SHOW VARIABLES` in the configured
+database. Both engines receive the same adaptation, with original and adapted runner hashes
+recorded in `mariadb-test-run.json`. Upstream test files, expected results, and the test client
+binary remain unchanged.
+
+Percentages describe only their versioned test scope, not the entire MariaDB grammar. Every
+reported edge case should become a regression case before its implementation is changed.
 
 ### Schema, DDL, and metadata
 
@@ -396,7 +430,7 @@ remains non-gating; complete files move into the strict manifest only after they
 - virtual and stored generated columns
 - `ALTER TABLE` add, drop, rename, change, and modify column forms
 - column defaults, types, nullability, `FIRST`, and `AFTER`
-- `CREATE INDEX`, prefix indexes, `DROP INDEX`, and `ALTER TABLE ... DROP INDEX`
+- `CREATE INDEX`, `CREATE OR REPLACE INDEX`, prefix indexes, `DROP INDEX IF EXISTS`, and `ALTER TABLE ... DROP INDEX`
 - `DROP TABLE`, `TRUNCATE TABLE`, and `RENAME TABLE`
 - foreign-key validation and `CASCADE`, `SET NULL`, `RESTRICT`, and `NO ACTION`
 - `SHOW TABLES`, `SHOW COLUMNS`, `SHOW INDEX`, `SHOW CREATE TABLE`, and `DESCRIBE`
@@ -407,7 +441,7 @@ remains non-gating; complete files move into the strict manifest only after they
 - `INSERT ... VALUES` and `INSERT ... SELECT`
 - `INSERT IGNORE`, `REPLACE`, and `ON DUPLICATE KEY UPDATE`
 - `UPDATE`, including common joined-update forms
-- single-table deletes with ordering/limits and MySQL multi-table delete forms
+- single-table deletes with ordering/limits and MariaDB multi-table delete forms
 - `RETURNING` for inserts, updates, and deletes
 - auto-increment keys, defaults, generated values, type coercion, and affected-row counts
 
@@ -418,13 +452,13 @@ remains non-gating; complete files move into the strict manifest only after they
 - aggregate, scalar, date/time, JSON, string, numeric, and conversion functions
 - broad JSON document functions, JSON aggregates, wildcard paths, arrow extraction, and basic `JSON_TABLE` projections
 - `INNER`, `LEFT`, `RIGHT`, `CROSS`, `NATURAL`, `ON`, and `USING` joins
-- derived tables and nonrecursive CTEs with column aliases
+- derived tables and CTEs with column aliases, including supported recursive `UNION` forms
 - scalar and `EXISTS`/`IN` subqueries
 - `UNION`, `INTERSECT`, and `EXCEPT`, including `ALL`/`DISTINCT` variants
 - named/inline windows, common `ROWS` frames, and peer-aware `RANGE` behavior
 - `ROW_NUMBER`, `RANK`, `DENSE_RANK`, `PERCENT_RANK`, `CUME_DIST`, `NTILE`, `LAG`, `LEAD`,
   `FIRST_VALUE`, `LAST_VALUE`, `NTH_VALUE`, and aggregate windows
-- MySQL-style three-valued logic, numeric-prefix coercion, and byte/character length behavior
+- MariaDB-style three-valued logic, numeric-prefix coercion, and byte/character length behavior
 
 See [CHANGELOG.md](CHANGELOG.md) for the detailed function and compatibility history.
 
@@ -436,21 +470,23 @@ See [CHANGELOG.md](CHANGELOG.md) for the detailed function and compatibility his
 - typed `DATE`, `DATETIME`, `TIMESTAMP`, and signed fractional `TIME` values
 - JSON and binary result metadata
 - `LAST_INSERT_ID()`, `DATABASE()`, `SCHEMA()`, and common session variables
-- charset, collation, and MySQL system-metadata stubs
+- charset, collation, and compatibility system-metadata stubs
+- connection-owned settings, `SET NAMES`, and transaction status and warning counts in result packets
+- native-password authentication; unsupported connection-reset and change-user commands fail explicitly
 
 ### Explicit limits
 
 The following are outside the supported compatibility surface:
 
-- transaction semantics, isolation, savepoints, and row locking
-- recursive CTEs
+- isolation levels other than `REPEATABLE READ`, fine-grained row locks, and XA transactions
+- unrestricted recursive CTE support
 - `FULL JOIN`
 - stored procedures, stored functions, triggers, and events
-- replication, users, grants, and production authentication
+- replication, the full account/permissions system, and production security guarantees
 - exact optimizer, index-planning, collation, and locking behavior
-- the remainder of the MySQL grammar not listed above
+- the remainder of the MariaDB grammar not listed above
 - `JSON_VALUE` optional `RETURNING`/`ON EMPTY`/`ON ERROR` clauses (the pinned sqlparser version rejects those forms before execution)
-- nested `JSON_TABLE` column expansion and MySQL binary-JSON storage byte-for-byte accounting
+- nested `JSON_TABLE` column expansion and binary-JSON storage byte-for-byte accounting
 - the complete JSON Schema keyword vocabulary; the embedded validator currently covers the common structural/type constraints
 
 Use real MariaDB for tests that depend on any of these behaviors.
@@ -459,6 +495,8 @@ Use real MariaDB for tests that depend on any of these behaviors.
 
 The debug HTTP listener also provides a local API shaped like Meilisearch. SQL tables remain the
 source of truth; document mutations update table rows and rebuild the derived Tantivy search index.
+HTTP maintenance and search operate on committed state in the default `app` database. They are
+trusted administrative surfaces: SQL account authentication and grants do not protect HTTP callers.
 
 Create an index and add documents:
 
@@ -587,10 +625,10 @@ git config core.hooksPath .githooks
 ```
 
 When Docker and a local MariaDB image are available, compatibility tests provision and
-remove their own comparison server. To require comparison or use an existing MariaDB instance:
+remove their own comparison server. To use an existing instance, set `MARIADB_COMPARE_URL` to its
+driver connection URL. Require comparison with:
 
 ```sh
-MARIADB_COMPARE_URL=mysql://root:password@127.0.0.1:3306/test \
 MARIADB_PARITY_REQUIRED=1 \
 cargo test --all-targets --locked
 ```
@@ -608,19 +646,18 @@ downloaded Ubuntu MTR packages under `.cache/mariadb-mtr` and writes the report 
 ARM64 emulation, although it will be slower than Apple Silicon.
 
 On an Ubuntu 24.04 ARM64 runner, reproduce the upstream MariaDB MTR comparison with the pinned
-Ubuntu MariaDB packages:
+Ubuntu MariaDB packages. Set `MARIADB_COMPARE_URL` to a reachable disposable MariaDB 10.11.7
+instance’s driver connection URL first; the runner resets test databases:
 
 ```sh
 eval "$(tools/prepare_mariadb_mtr.sh .cache/mariadb-mtr --print-env)"
-export MARIADB_COMPARE_URL=mysql://root:password@127.0.0.1:3306/test
+export PATH="$MTR_BINDIR/bin:$PATH"
 cargo build --locked --bin sqwl
 python3 tools/mariadb_mtr_compat.py \
   --target both \
   --suite-root "$MARIADB_MTR_ROOT" \
   --allowlist tests/mariadb-mtr-allowlist.txt \
   --baseline-url "$MARIADB_COMPARE_URL" \
-  --mysqltest-bin "$MYSQLTEST_BIN" \
-  --client-bindir "$MYSQL_CLIENT_BINDIR" \
   --mtr-runner "$MTR_RUNNER" \
   --safe-process-bin "$MTR_SAFE_PROCESS" \
   --mtr-layout mariadb \
@@ -631,6 +668,10 @@ python3 tools/mariadb_mtr_compat.py \
   --source-revision 10.11.7-2ubuntu2 \
   --minimum-percent 100
 ```
+
+To reproduce the focused transaction-inclusive audit, replace the allowlist with
+`tests/mariadb-mtr-scope.txt` and use `--report-dir artifacts/mariadb-mtr-focused`. The runner starts
+the local MySqweel binary automatically for `--target both`.
 
 Formatting and linting:
 
@@ -654,17 +695,18 @@ version, expected result, and MySqweel result.
 ```text
 src/bin/sqwl.rs                    CLI entrypoint
 src/lib.rs                         CLI, REPL, snapshots, and SQL explain
-src/server/mysql_wire.rs           MySQL wire protocol and typed results
-src/server/debug_http.rs           Drift and Meilisearch-shaped HTTP APIs
-src/sql/mod.rs                     MySQL-dialect parsing
+src/server/                        SQL wire protocol and administrative HTTP APIs
+src/sql/mod.rs                     SQL parsing
 src/sql/engine/                    SQL execution and compatibility validation
+src/sql/engine/transaction.rs      Sessions, transactions, and commit publication
+src/sql/engine/catalog.rs          Database catalog, accounts, and authorization
 src/schema/mod.rs                  Schema-hint model
 src/model.rs                       Stored-row model
-src/storage/mod.rs                 Embedded Lux-backed storage adapter
-tests/mariadb_compatibility_corpus.rs Differential MariaDB query corpus
-tests/mariadb_parity.rs              Exact MariaDB parity suite
-tests/mariadb_error_compatibility.rs MariaDB error-code parity suite
-tests/orm_compatibility.rs         ORM-shaped wire and migration coverage
+src/storage/transaction_image.rs   Atomic durable commit images
+vendor/msql-srv/                   Vendored wire-server dependency
+tests/                            Engine, transaction, wire, ORM, and parity suites
+tests/mariadb-mtr-scope.txt         Focused upstream audit manifest
+tests/mariadb-mtr-allowlist.txt     Strict upstream gate manifest
 ```
 
 ## License

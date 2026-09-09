@@ -2,36 +2,124 @@
 
 All notable changes to MySqweel will be documented in this file.
 
-## 0.4.3 future
+## 0.4.4 Future
+
+### Transactions and persistence
+
+- Added independent `Engine::session()` connections with atomic statements, `BEGIN`, `COMMIT`,
+  `ROLLBACK`, savepoints, autocommit handling, and rollback on disconnect. A failed statement
+  preserves earlier successful work in its transaction without publishing partial row/index changes.
+- Added committed-state reads and per-database writer leases covering transactions and
+  `SELECT ... FOR UPDATE`. The supported isolation level is `REPEATABLE READ`; writer acquisition
+  times out after five seconds. Independent database commits merge under a serialized publication
+  lock; catalog administration remains globally exclusive. DDL and catalog administration inside
+  a transaction are rejected.
+- Deferred transaction snapshots until the first read. First writes refresh unobserved state;
+  upgrades validate observed rows, columns, and schema and merge unrelated committed changes.
+  Prewrite savepoints follow the refreshed state, and read-only commits cannot republish stale data.
+- Added locked, checksummed atomic commit images containing all database data and the account
+  catalog. Commits sync a temporary image, replace the committed image, and sync the directory
+  before acknowledgment. Uncertain commit outcomes stop further operations until reopen.
+- Reject legacy Lux development directories with reset guidance. Old development state is
+  disposable; this release provides no legacy data migration path.
+- Whole-database statement copies and whole-server durable images intentionally limit this edition
+  to development datasets. There is no XA, replication, fine-grained row lock manager, or production
+  concurrency qualification.
+
+### Databases, accounts, and wire sessions
+
+- Added connection-owned advisory locks for the development provisioner, scoped database catalog
+  enumeration, and the `8.0.0-my-sqweel-intentkit-tx-v1` protocol identity.
+- Corrected Drizzle introspection ordering, empty result metadata, primary-key labels, and distinct
+  named indexes over the same columns. Snapshot upgrades preserve concurrent committed data;
+  stale observed snapshots abort with retryable error 1213.
+- Avoided index reconstruction during private state copies and disabled TCP Nagle buffering for
+  local request/response SQL traffic.
+- Added independent logical databases, bootstrap administrator credentials, MySQL native-password
+  verification, and database-wide `SELECT`, `INSERT`, `UPDATE`, and `DELETE` grants. Fresh local
+  engines default to `root` with an empty password; embedders can call `set_admin_credentials()`
+  before accepting connections.
+- Added the provisioning subset of `CREATE/DROP DATABASE`, `CREATE/DROP USER`, `GRANT`, and
+  `REVOKE ALL PRIVILEGES`. Revocation affects existing sessions, and replacing an account requires
+  fresh authentication. SQL cannot grant administrator privileges.
+- Enforced the selected-database boundary across nested queries and schema references. Cross-database
+  SQL and switching databases inside a transaction are rejected. SQL accounts accept the `%` host
+  form only; this is not the complete MySQL permissions system.
+- Made session settings and transaction status connection-owned; unsupported global/integrity
+  settings fail explicitly. Unsupported wire commands, including `COM_RESET_CONNECTION`, return an
+  error rather than pretending to reset state; reconnect instead.
+- Integrated the updated `vendor/msql-srv` dependency and retained warning-count support alongside
+  connection-owned transaction flags in OK and EOF packets, including prepared-statement results.
+- Added focused transaction, wire, database-isolation, account-persistence, and durable-image tests.
+
+### Administrative and diagnostic surfaces
+
+- Routed HTTP maintenance and search through committed default-`app` database state. These remain
+  trusted administrative surfaces; SQL account grants do not authenticate or restrict HTTP callers.
+- Clarified that query lifecycle events are diagnostics, including statements in transactions that
+  can subsequently roll back. They are not commit notifications or safe external-effect triggers.
+
+### Fixed
+
+- Restored supported MariaDB syntax through transaction authorization, including `CHECK TABLE`,
+  `CREATE OR REPLACE INDEX`, `EXPLAIN FORMAT=JSON`, `INSERT`/`REPLACE ... SELECT ... RETURNING`,
+  and user-variable assignments inside expressions. These statements retain privilege checks,
+  cross-database rejection, and transaction DDL restrictions.
+- Preserved the original SQL through parser-only rewrites so interval conversion warnings reach
+  clients. Retained `IF EXISTS` when normalizing index drops and report note 1091 for missing indexes.
+- Added connection-owned `optimizer_switch` compatibility settings and `SET NAMES` handling.
+- Corrected `STD`/`STDDEV` window metadata for text and approximate inputs and return MariaDB error
+  4014 (`HY000`) for invalid window-frame bounds.
+
+### Compatibility and CI
+
+- Enabled upstream discovery of basic transactions, autocommit, and savepoints while retaining
+  exclusions for unsupported isolation levels, table/shared locks, and XA. Safe-harness discovery
+  admits reviewed InnoDB cases without opening the entire engine suite. The pinned inventory now
+  contains 319 candidates and 20,082 direct and sourced SQL statements across 5,585 inspected files.
+- Added the complete, hash-pinned `innodb/innodb_bug57255` transaction case to the focused MTR
+  audit. Its 18 direct SQL statements include a transaction with 743 inserted rows followed by
+  cascading deletes. It passes locally against both MariaDB 10.11.7 and MySqweel and remains
+  audit-only pending CI qualification and strict-manifest promotion.
+- Fixed MTR startup for external servers without a selectable `mysql` database by staging a runner
+  copy whose feature probe uses `SHOW VARIABLES` without `USE mysql`. Both engines use the same
+  narrowly checked adaptation; upstream test/result files and the official `mysqltest` binary are
+  unchanged. Per-invocation source and adapted runner hashes are recorded and uploaded with CI artifacts.
+- Updated MTR setup to preserve MySqweel's default `app` database, recreate the separate `test`
+  database, and avoid unsupported global settings. Discovery also runs when transaction backend
+  and wire tests change.
+- Updated external-server timezone handling for transactional sessions, which reject global settings.
+  Hash-pinned tests with fixed POSIX `GMT` offsets apply the equivalent SQL timezone to MariaDB.
+  For MySqweel, the runner verifies the session default and fails explicitly if it differs from
+  the required timezone.
+
+### Verification status
+
+- The focused upstream audit contains 25 complete files and 339 direct SQL statements. MariaDB
+  10.11.7 and the transactional MySqweel backend both pass all 25 files and 339 statements locally,
+  with no infrastructure failures. All 12 previously failing focused-audit files now pass; this
+  does not claim a full MariaDB-suite or strict-manifest CI qualification.
+- Verified 41 transaction, wire, and database-isolation tests, two protocol packet tests covering
+  transaction flags together with warning counts, and 28 MTR harness tests.
+- The strict manifest remains at 32 files. Earlier 100% compatibility results describe the
+  pre-transaction edition and are not a fresh qualification of this backend or a passing CI run.
+
+## 0.4.3 Aug 24, 2026
 
 ### Compatibility
 
-- Improved `information_schema` compatibility for ORM introspection: empty virtual tables retain result-set columns, wire metadata uses MySQL's declared column casing while preserving explicit aliases, and constraint/index metadata exposes primary, unique, and foreign-key columns consistently.
+- Improved `information_schema` compatibility for ORM introspection: empty virtual tables retain result-set columns, wire metadata uses MySQL's declared column casing while preserving explicit aliases and selected column labels, and constraint/index metadata exposes primary, unique, and foreign-key columns consistently.
 - Added correlated subquery evaluation inside aggregate expressions, including correlated `COUNT` and `NOT EXISTS` queries.
-- Accepted plain `SELECT ... FOR UPDATE` syntax for transaction-oriented clients while explicitly rejecting locking extensions whose locking semantics are not implemented.
+- Accepted plain `SELECT ... FOR UPDATE` syntax for transaction-oriented clients while explicitly rejecting unsupported locking extensions. Transaction and writer-lock semantics are added in 0.4.4.
 
 ### Compatibility and CI
 
 - Consolidated external compatibility verification on pinned MariaDB 10.11.7 across the differential corpus, exact parity and error-code suites, pre-push provisioning, CI, and MTR discovery tooling; removed the Oracle MySQL comparison paths.
+- Updated the MTR harness tests for the renamed MariaDB tooling modules.
 
 ### Fixed
 
-- Fixed `JSON_SET` so it replaces existing values correctly, including values addressed by nested array indexes; previously those paths behaved like insert-only updates.
-- Fixed `JSON_SEARCH(..., 'one', ...)` to recursively search scalar values when no explicit JSON path is supplied, returning matching nested paths such as `$.name`.
-- Fixed `JSON_SEARCH` result encoding so matching paths retain their JSON string representation over the MySQL wire protocol.
-- Fixed `SET GLOBAL time_zone` and `SET SESSION time_zone` variable-name normalization, and aligned whole-second `UNIX_TIMESTAMP` wire metadata with MariaDB's integer output.
-- Fixed expression lookup precedence so SQL string literals that match column names remain literals, preserving typed column values and keys in nested `JSON_OBJECT` expressions.
-
-### Compatibility and CI
-
-- Fixed the ARM64 MariaDB MTR preparation flow by extracting the pinned `mariadb-server` package for its required `myisamlog` test utility without installing or starting a second database server.
-- Bumped the MariaDB MTR package cache key so CI refreshes stale package archives and runs the corrected upstream baseline checks.
-- Added external-server timezone handling to the MTR compatibility runner. Hash-pinned tests with fixed POSIX `GMT` offsets now apply the equivalent SQL timezone to both MariaDB and MySqweel before each case.
-- Preserved upstream warning checks in source builds by sending MySqweel query warning counts through the vendored MySQL protocol writer, while retaining compatibility with the published dependency during package verification.
-- Added a fail-closed `tools/prepush.sh` check and opt-in Git pre-push hook, and made CI use that same entry point for its real-MySQL differential suite; local checks refuse to report success when neither MySQL nor Docker is available.
-- Made the pre-push check raise low host file-descriptor limits before running parallel Lux-backed tests, preventing macOS defaults from causing unrelated `Too many open files` failures.
-- Removed a timing-dependent port rebind from the parity harness so parallel local checks connect to the already-bound MySqweel listener reliably.
-- Added regression coverage for JSON array-index mutation and recursive JSON path search.
+- Corrected generated unique-index names and retained explicitly configured index names.
 
 ## 0.4.2 Aug 15, 2026
 
@@ -65,7 +153,27 @@ All notable changes to MySqweel will be documented in this file.
 - Matched MariaDB's `ON DUPLICATE KEY UPDATE` insert-ID behavior by returning the existing row's auto-increment value when an update resolves a unique-key conflict.
 - Matched MariaDB insert-ID metadata when an `INSERT` explicitly supplies the value of an auto-increment column.
 - Changed MariaDB parity comparisons to collect value mismatches through the full scenario and report them together, instead of stopping at the first mismatch.
-- Consolidated external compatibility testing on pinned MariaDB 10.11.7: differential corpus, exact parity, error-code checks, pre-push provisioning, CI, and MTR discovery now use MariaDB-only targets and configuration, with the Oracle MySQL comparison paths removed.
+
+## 0.4.1 Aug 13, 2026
+
+### Fixed
+
+- Fixed `JSON_SET` so it replaces existing values correctly, including values addressed by nested array indexes; previously those paths behaved like insert-only updates.
+- Fixed `JSON_SEARCH(..., 'one', ...)` to recursively search scalar values when no explicit JSON path is supplied, returning matching nested paths such as `$.name`.
+- Fixed `JSON_SEARCH` result encoding so matching paths retain their JSON string representation over the MySQL wire protocol.
+- Fixed `SET GLOBAL time_zone` and `SET SESSION time_zone` variable-name normalization, and aligned whole-second `UNIX_TIMESTAMP` wire metadata with MariaDB's integer output.
+- Fixed expression lookup precedence so SQL string literals that match column names remain literals, preserving typed column values and keys in nested `JSON_OBJECT` expressions.
+
+### Compatibility and CI
+
+- Fixed the ARM64 MariaDB MTR preparation flow by extracting the pinned `mariadb-server` package for its required `myisamlog` test utility without installing or starting a second database server.
+- Bumped the MariaDB MTR package cache key so CI refreshes stale package archives and runs the corrected upstream baseline checks.
+- Added external-server timezone handling to the MTR compatibility runner. Hash-pinned tests with fixed POSIX `GMT` offsets now apply the equivalent SQL timezone to both MariaDB and MySqweel before each case.
+- Preserved upstream warning checks in source builds by sending MySqweel query warning counts through the vendored MySQL protocol writer, while retaining compatibility with the published dependency during package verification.
+- Added a fail-closed `tools/prepush.sh` check and opt-in Git pre-push hook, and made CI use that same entry point for its real-MySQL differential suite; local checks refuse to report success when neither MySQL nor Docker is available.
+- Made the pre-push check raise low host file-descriptor limits before running parallel Lux-backed tests, preventing macOS defaults from causing unrelated `Too many open files` failures.
+- Removed a timing-dependent port rebind from the parity harness so parallel local checks connect to the already-bound MySqweel listener reliably.
+- Added regression coverage for JSON array-index mutation and recursive JSON path search.
 
 ## 0.4.0 Aug 12, 2026
 

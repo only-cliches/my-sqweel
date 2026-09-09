@@ -2,7 +2,7 @@ use super::*;
 
 type ParentRowChange = (Map<String, Value>, Map<String, Value>);
 
-impl Engine {
+impl RawEngine {
     pub(super) fn delete_ignore_subquery_compat(&self, tables: &[&str]) -> QueryResult {
         for table in tables {
             let Some(mut table_rows) = self.rows.get(*table).map(|rows| rows.clone()) else {

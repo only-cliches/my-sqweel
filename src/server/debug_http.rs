@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex};
+use std::thread;
 
 use anyhow::{Result, anyhow};
 use axum::extract::{Path, Query, State};
@@ -553,8 +554,29 @@ struct SearchRequest {
     show_matches_position: bool,
 }
 
-pub fn spawn(addr: SocketAddr, engine: SharedEngine) {
-    std::thread::spawn(move || {
+pub struct DebugHttpHandle {
+    stop: Option<tokio::sync::oneshot::Sender<()>>,
+    join: Option<thread::JoinHandle<()>>,
+}
+
+impl Drop for DebugHttpHandle {
+    fn drop(&mut self) {
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
+        }
+        if let Some(join) = self.join.take() {
+            let _ = join.join();
+        }
+    }
+}
+
+pub fn spawn(addr: SocketAddr, engine: SharedEngine) -> DebugHttpHandle {
+    let (stop, stop_rx) = tokio::sync::oneshot::channel();
+    let join = thread::spawn(move || {
+        // Keep one engine reference outside the async runtime. The debug state's
+        // reference is dropped while the runtime is still active; retaining this
+        // guard ensures the final Engine/Lux cleanup runs after block_on returns.
+        let engine_guard = engine.clone();
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build();
@@ -585,8 +607,8 @@ pub fn spawn(addr: SocketAddr, engine: SharedEngine) {
                     "/indexes/{uid}/documents",
                     get(list_documents)
                         .post(add_documents)
-                        .patch(add_documents)
-                        .put(add_documents)
+                        .patch(update_documents)
+                        .put(update_documents)
                         .delete(delete_all_documents),
                 )
                 .route("/indexes/{uid}/documents/fetch", post(fetch_documents))
@@ -652,11 +674,21 @@ pub fn spawn(addr: SocketAddr, engine: SharedEngine) {
                 }
             };
 
-            if let Err(err) = axum::serve(listener, app).await {
+            if let Err(err) = axum::serve(listener, app)
+                .with_graceful_shutdown(async move {
+                    let _ = stop_rx.await;
+                })
+                .await
+            {
                 tracing::warn!(error = %err, "debug http serve failed");
             }
         });
+        drop(engine_guard);
     });
+    DebugHttpHandle {
+        stop: Some(stop),
+        join: Some(join),
+    }
 }
 
 async fn health() -> Json<Value> {
@@ -731,12 +763,20 @@ async fn snapshot(State(state): State<MeiliState>) -> Json<Snapshot> {
     Json(state.engine.snapshot())
 }
 
-async fn restore(State(state): State<MeiliState>, Json(snapshot): Json<Snapshot>) -> Json<Value> {
-    state.engine.restore_snapshot(snapshot);
+async fn restore(
+    State(state): State<MeiliState>,
+    Json(snapshot): Json<Snapshot>,
+) -> (StatusCode, Json<Value>) {
+    if let Err(error) = state.engine.restore_snapshot(snapshot) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": error.to_string() })),
+        );
+    }
     if let Err(err) = rebuild_all_search_indexes(&state) {
         tracing::warn!(error = %err, "failed to rebuild search indexes after restore");
     }
-    Json(json!({ "restored": true }))
+    (StatusCode::OK, Json(json!({ "restored": true })))
 }
 
 async fn list_indexes(
@@ -811,7 +851,7 @@ async fn create_index(
     }
 
     let sql = build_create_index_sql(&table, payload.primary_key.as_deref());
-    match state.engine.execute_sql(&sql) {
+    match state.engine.session().execute_sql(&sql) {
         Ok(_) => {
             state.upsert_default_settings(&table);
             if let Err(err) = rebuild_search_index(&state, &table) {
@@ -907,7 +947,11 @@ async fn delete_index(
             StatusCode::BAD_REQUEST,
             Json(json!({ "error": err.to_string() })),
         ),
-        Ok(table) => match state.engine.execute_sql(&format!("DROP TABLE {table}")) {
+        Ok(table) => match state
+            .engine
+            .session()
+            .execute_sql(&format!("DROP TABLE {table}"))
+        {
             Ok(_) => {
                 {
                     let mut settings = state
@@ -1284,43 +1328,14 @@ fn upsert_single_document(
         }
     };
 
-    let table = match quote_identifier(&uid) {
-        Ok(table) => table,
-        Err(err) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": err.to_string() })),
-            );
-        }
-    };
-
-    if !replace && !index_exists(&state, &uid) {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(
-                json!({ "message": format!("index `{uid}` not found"), "code": "index_not_found" }),
-            ),
-        );
-    }
-
-    if let Err(err) = state.engine.execute_sql_with_params(
-        &format!("DELETE FROM {table} WHERE id = ?"),
-        &[Value::String(document_id.clone())],
-    ) {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": err.to_string() })),
-        );
-    }
-
-    match state.engine.seed_json_rows(&uid, row, SeedMode::Append) {
-        Ok(report) => {
+    match state.engine.upsert_json_documents(&uid, row, !replace) {
+        Ok(count) => {
             if let Err(err) = rebuild_search_index(&state, &uid) {
                 return search_index_error(err);
             }
             let details = json!({
                 "documentId": document_id,
-                "indexedDocuments": report.rows_affected,
+                "indexedDocuments": count,
             });
             let task = state.push_task(uid, "documentAdditionOrUpdate", "succeeded", Some(details));
             (StatusCode::ACCEPTED, Json(json!(task)))
@@ -1365,7 +1380,7 @@ async fn delete_document(
         }
     };
 
-    if let Err(err) = state.engine.execute_sql_with_params(
+    if let Err(err) = state.engine.session().execute_sql_with_params(
         &format!("DELETE FROM {table} WHERE id = ?"),
         &[Value::String(document_id.clone())],
     ) {
@@ -1412,7 +1427,11 @@ async fn delete_all_documents(
         }
     };
 
-    if let Err(err) = state.engine.execute_sql(&format!("TRUNCATE TABLE {table}")) {
+    if let Err(err) = state
+        .engine
+        .session()
+        .execute_sql(&format!("TRUNCATE TABLE {table}"))
+    {
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({ "error": err.to_string() })),
@@ -1481,6 +1500,23 @@ async fn add_documents(
     State(state): State<MeiliState>,
     Json(payload): Json<Value>,
 ) -> (StatusCode, Json<Value>) {
+    upsert_documents(uid, state, payload, false)
+}
+
+async fn update_documents(
+    Path(uid): Path<String>,
+    State(state): State<MeiliState>,
+    Json(payload): Json<Value>,
+) -> (StatusCode, Json<Value>) {
+    upsert_documents(uid, state, payload, true)
+}
+
+fn upsert_documents(
+    uid: String,
+    state: MeiliState,
+    payload: Value,
+    merge: bool,
+) -> (StatusCode, Json<Value>) {
     let mut rows = match parse_documents_payload(payload) {
         Ok(rows) => rows,
         Err(err) => {
@@ -1505,14 +1541,14 @@ async fn add_documents(
         normalize_document(row, primary_key.as_deref());
     }
 
-    match state.engine.seed_json_rows(&uid, rows, SeedMode::Append) {
-        Ok(report) => {
+    match state.engine.upsert_json_documents(&uid, rows, merge) {
+        Ok(count) => {
             if let Err(err) = rebuild_search_index(&state, &uid) {
                 return search_index_error(err);
             }
             let details = json!({
-                "receivedDocuments": report.rows_seeded,
-                "indexedDocuments": report.rows_affected,
+                "receivedDocuments": count,
+                "indexedDocuments": count,
             });
             let task = state.push_task(uid, "documentAdditionOrUpdate", "succeeded", Some(details));
             (StatusCode::ACCEPTED, Json(json!(task)))
@@ -1888,67 +1924,11 @@ async fn swap_indexes(
         }
     }
 
-    for (left, right) in swaps.iter() {
-        let tmp = format!("__sqw_swap_tmp_{}", uuid::Uuid::new_v4());
-        let tmp = match quote_identifier(&tmp) {
-            Ok(table) => table,
-            Err(err) => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(json!({ "error": err.to_string() })),
-                );
-            }
-        };
-
-        let left_table = match quote_identifier(left) {
-            Ok(table) => table,
-            Err(err) => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(json!({ "error": err.to_string() })),
-                );
-            }
-        };
-
-        let right_table = match quote_identifier(right) {
-            Ok(table) => table,
-            Err(err) => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(json!({ "error": err.to_string() })),
-                );
-            }
-        };
-
-        if let Err(err) = state
-            .engine
-            .execute_sql(&format!("RENAME TABLE {left_table} TO {tmp}"))
-        {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": err.to_string() })),
-            );
-        }
-
-        if let Err(err) = state
-            .engine
-            .execute_sql(&format!("RENAME TABLE {right_table} TO {left_table}"))
-        {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": err.to_string() })),
-            );
-        }
-
-        if let Err(err) = state
-            .engine
-            .execute_sql(&format!("RENAME TABLE {tmp} TO {right_table}"))
-        {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": err.to_string() })),
-            );
-        }
+    if let Err(err) = state.engine.swap_tables(&swaps) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": err.to_string() })),
+        );
     }
 
     {
@@ -3093,7 +3073,7 @@ fn delete_rows_by_id_strings(state: &MeiliState, uid: &str, ids: &[String]) -> u
 
     let mut deleted = 0_u64;
     for id in ids {
-        if let Ok(results) = state.engine.execute_sql_with_params(
+        if let Ok(results) = state.engine.session().execute_sql_with_params(
             &format!("DELETE FROM {table} WHERE id = ?"),
             &[Value::String(id.clone())],
         ) {
@@ -4754,6 +4734,152 @@ mod tests {
             rows[0].rows[0].get("email").and_then(Value::as_str),
             Some("c@example.com")
         );
+    }
+
+    #[test]
+    fn meili_search_stays_in_app_when_embedded_sql_selects_platform() {
+        let engine = Arc::new(Engine::new(EngineConfig::mysql_strict()));
+        engine.execute_sql("CREATE DATABASE platform").unwrap();
+        engine.execute_sql("USE platform").unwrap();
+        engine
+            .execute_sql("CREATE TABLE books (id TEXT PRIMARY KEY, title TEXT)")
+            .unwrap();
+        engine
+            .execute_sql("INSERT INTO books VALUES ('platform', 'Private platform row')")
+            .unwrap();
+        let state = MeiliState::new(engine.clone());
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        let (status, body) = rt.block_on(create_index(
+            State(state.clone()),
+            Json(CreateIndexRequest {
+                uid: "books".to_string(),
+                primary_key: Some("id".to_string()),
+            }),
+        ));
+        assert_eq!(status, StatusCode::ACCEPTED, "{body:?}");
+        let (status, body) = rt.block_on(update_settings(
+            Path("books".to_string()),
+            State(state.clone()),
+            Json(json!({"searchableAttributes": ["title"]})),
+        ));
+        assert_eq!(status, StatusCode::ACCEPTED, "{body:?}");
+        let (status, body) = rt.block_on(add_documents(
+            Path("books".to_string()),
+            State(state.clone()),
+            Json(json!({"documents": [{"id": "search", "title": "Dune"}]})),
+        ));
+        assert_eq!(status, StatusCode::ACCEPTED, "{body:?}");
+        let (status, body) = rt.block_on(get_settings(
+            Path("books".to_string()),
+            State(state.clone()),
+        ));
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.0["searchableAttributes"], json!(["title"]));
+        let (status, body) = rt.block_on(search_documents_post(
+            Path("books".to_string()),
+            State(state),
+            Json(SearchBody {
+                q: Some("Dune".to_string()),
+                ..Default::default()
+            }),
+        ));
+        assert_eq!(status, StatusCode::OK, "{body:?}");
+        assert_eq!(body.0["hits"].as_array().unwrap().len(), 1);
+        assert_eq!(body.0["hits"][0]["id"], "search");
+
+        // Search never changes the embedding owner's selected database or rows.
+        let platform = engine.execute_sql("SELECT id, title FROM books").unwrap();
+        assert_eq!(platform[0].rows.len(), 1);
+        assert_eq!(platform[0].rows[0]["id"], "platform");
+        assert_eq!(platform[0].rows[0]["title"], "Private platform row");
+        let search = engine
+            .session()
+            .execute_sql("SELECT id, title FROM books")
+            .unwrap();
+        assert_eq!(search[0].rows.len(), 1);
+        assert_eq!(search[0].rows[0]["id"], "search");
+    }
+
+    #[test]
+    fn strict_search_documents_replace_merge_and_repeat_atomically() {
+        let engine = Arc::new(Engine::new(EngineConfig::mysql_strict()));
+        let state = MeiliState::new(engine.clone());
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let (status, body) = rt.block_on(create_index(
+            State(state.clone()),
+            Json(CreateIndexRequest {
+                uid: "books".into(),
+                primary_key: Some("shaID".into()),
+            }),
+        ));
+        assert_eq!(status, StatusCode::ACCEPTED, "{body:?}");
+        for payload in [
+            json!([{"shaID":"one","title":"Old","description":"remove me"},{"shaID":"two","title":"Other"}]),
+            json!([{"shaID":"one","title":"Changed"}]),
+            json!([{"shaID":"one","title":"Changed"}]),
+        ] {
+            let (status, body) = rt.block_on(add_documents(
+                Path("books".into()),
+                State(state.clone()),
+                Json(payload),
+            ));
+            assert_eq!(status, StatusCode::ACCEPTED, "{body:?}");
+        }
+        let rows = engine
+            .session()
+            .execute_sql("SELECT * FROM books ORDER BY shaID")
+            .unwrap();
+        assert_eq!(rows[0].rows.len(), 2);
+        assert_eq!(rows[0].rows[0]["title"], "Changed");
+        assert!(
+            rows[0].rows[0]
+                .get("description")
+                .is_none_or(Value::is_null)
+        );
+        assert_eq!(rows[0].rows[1]["title"], "Other");
+        for _ in 0..2 {
+            let (status, body) = rt.block_on(update_documents(
+                Path("books".into()),
+                State(state.clone()),
+                Json(json!([
+                    {"shaID":"one","description":"Merged"}
+                ])),
+            ));
+            assert_eq!(status, StatusCode::ACCEPTED, "{body:?}");
+        }
+        let rows = engine
+            .session()
+            .execute_sql("SELECT * FROM books ORDER BY shaID")
+            .unwrap();
+        assert_eq!(rows[0].rows.len(), 2);
+        assert_eq!(rows[0].rows[0]["title"], "Changed");
+        assert_eq!(rows[0].rows[0]["description"], "Merged");
+        assert!(
+            engine
+                .session()
+                .execute_sql(
+                    "INSERT INTO books (shaID, id, title) VALUES ('one', 'one', 'Duplicate')"
+                )
+                .is_err()
+        );
+        let (status, body) = rt.block_on(search_documents_post(
+            Path("books".into()),
+            State(state),
+            Json(SearchBody {
+                q: Some("Changed".into()),
+                ..Default::default()
+            }),
+        ));
+        assert_eq!(status, StatusCode::OK, "{body:?}");
+        assert_eq!(body.0["hits"].as_array().unwrap().len(), 1);
+        assert_eq!(body.0["hits"][0]["description"], "Merged");
     }
 
     #[test]

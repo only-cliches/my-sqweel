@@ -180,6 +180,7 @@ fn start_mysqweel_server() -> String {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind local port");
     let address = listener.local_addr().expect("read local address");
     let engine = Arc::new(Engine::new(EngineConfig::mysql_strict()));
+    engine.execute_sql("CREATE DATABASE test").unwrap();
     thread::spawn(move || {
         WireServer::new(engine)
             .serve_listener(listener)

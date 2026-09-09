@@ -7,6 +7,8 @@ pub struct ClientHandshake<'a> {
     maxps: u32,
     collation: u16,
     pub(crate) username: Option<&'a [u8]>,
+    pub(crate) auth_response: &'a [u8],
+    pub(crate) database: Option<&'a [u8]>,
 }
 
 pub fn client_handshake(i: &[u8], after_tls: bool) -> nom::IResult<&[u8], ClientHandshake<'_>> {
@@ -35,6 +37,30 @@ pub fn client_handshake(i: &[u8], after_tls: bool) -> nom::IResult<&[u8], Client
             (i, None)
         };
 
+        let (i, auth_response, database) = if username.is_some() {
+            // We advertise secure native-password authentication, never the
+            // length-encoded plugin extension or the obsolete 3.20 protocol.
+            let (i, auth_response) =
+                if capabilities.contains(CapabilityFlags::CLIENT_SECURE_CONNECTION) {
+                    let (i, length) = nom::number::complete::le_u8(i)?;
+                    nom::bytes::complete::take(length)(i)?
+                } else {
+                    let (i, response) = nom::bytes::complete::take_until(&b"\0"[..])(i)?;
+                    let (i, _) = nom::bytes::complete::tag(b"\0")(i)?;
+                    (i, response)
+                };
+            let (i, database) = if capabilities.contains(CapabilityFlags::CLIENT_CONNECT_WITH_DB) {
+                let (i, database) = nom::bytes::complete::take_until(&b"\0"[..])(i)?;
+                let (i, _) = nom::bytes::complete::tag(b"\0")(i)?;
+                (i, Some(database))
+            } else {
+                (i, None)
+            };
+            (i, auth_response, database)
+        } else {
+            (i, &[][..], None)
+        };
+
         Ok((
             i,
             ClientHandshake {
@@ -42,6 +68,8 @@ pub fn client_handshake(i: &[u8], after_tls: bool) -> nom::IResult<&[u8], Client
                 maxps,
                 collation: u16::from(collation[0]),
                 username,
+                auth_response,
+                database,
             },
         ))
     } else {
@@ -58,6 +86,8 @@ pub fn client_handshake(i: &[u8], after_tls: bool) -> nom::IResult<&[u8], Client
                 maxps,
                 collation: 0,
                 username: Some(username),
+                auth_response: &[],
+                database: None,
             },
         ))
     }
@@ -70,7 +100,6 @@ pub enum Command<'a> {
     Close(u32),
     Prepare(&'a [u8]),
     Init(&'a [u8]),
-    ChangeUser,
     Execute {
         stmt: u32,
         params: &'a [u8],
@@ -80,9 +109,6 @@ pub enum Command<'a> {
         param: u16,
         data: &'a [u8],
     },
-    ResetConnection,
-    ResetStatement(u32),
-    SetOption,
     Ping,
     Quit,
 }
@@ -125,10 +151,6 @@ pub fn parse(i: &[u8]) -> nom::IResult<&[u8], Command<'_>> {
             Command::Init,
         ),
         map(
-            preceded(tag(&[CommandByte::COM_CHANGE_USER as u8]), rest),
-            |_| Command::ChangeUser,
-        ),
-        map(
             preceded(tag(&[CommandByte::COM_STMT_PREPARE as u8]), rest),
             Command::Prepare,
         ),
@@ -144,23 +166,6 @@ pub fn parse(i: &[u8]) -> nom::IResult<&[u8], Command<'_>> {
             ),
             Command::Close,
         ),
-        map(
-            preceded(
-                tag(&[CommandByte::COM_STMT_RESET as u8]),
-                nom::number::complete::le_u32,
-            ),
-            Command::ResetStatement,
-        ),
-        map(
-            preceded(
-                tag(&[CommandByte::COM_SET_OPTION as u8]),
-                nom::bytes::complete::take(2u8),
-            ),
-            |_| Command::SetOption,
-        ),
-        map(tag(&[CommandByte::COM_RESET_CONNECTION as u8]), |_| {
-            Command::ResetConnection
-        }),
         map(tag(&[CommandByte::COM_QUIT as u8]), |_| Command::Quit),
         map(tag(&[CommandByte::COM_PING as u8]), |_| Command::Ping),
     ))(i)
@@ -302,50 +307,5 @@ mod tests {
             cmd,
             Command::ListFields(&b"select @@version_comment limit 1"[..])
         );
-    }
-
-    #[test]
-    fn it_handles_change_user() {
-        let data = [
-            CommandByte::COM_CHANGE_USER as u8,
-            b'r',
-            b'o',
-            b'o',
-            b't',
-            0x00,
-            0x00,
-            b't',
-            b'e',
-            b's',
-            b't',
-            0x00,
-            0x21,
-            0x00,
-            b'm',
-            b'y',
-            b's',
-            b'q',
-            b'l',
-            b'_',
-            b'n',
-            b'a',
-            b't',
-            b'i',
-            b'v',
-            b'e',
-            b'_',
-            b'p',
-            b'a',
-            b's',
-            b's',
-            b'w',
-            b'o',
-            b'r',
-            b'd',
-            0x00,
-            0x00,
-        ];
-        let (_, cmd) = parse(&data).unwrap();
-        assert_eq!(cmd, Command::ChangeUser);
     }
 }

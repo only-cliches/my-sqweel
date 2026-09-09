@@ -379,7 +379,7 @@ pub(super) fn session_variable_default(name: &str) -> Value {
         .to_ascii_lowercase()
         .as_str()
     {
-        "version" => Value::String("8.0.0-my-sqweel".to_string()),
+        "version" => Value::String("8.0.0-my-sqweel-intentkit-tx-v1".to_string()),
         "version_comment" => Value::String("MySqweel".to_string()),
         "autocommit" => Value::Number(Number::from(1)),
         "sql_mode" => Value::String(String::new()),

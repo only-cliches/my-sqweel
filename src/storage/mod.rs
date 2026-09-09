@@ -12,6 +12,8 @@ use fs2::FileExt;
 
 use crate::vendor::lux;
 
+pub mod transaction_image;
+
 /// Minimal Redis command surface MySqweel uses for durable table storage.
 pub trait RedisStore: Send + Sync {
     fn is_persistent(&self) -> bool;
@@ -255,9 +257,7 @@ impl Drop for LuxRedisStore {
             let _ = self.rt.block_on(handle.shutdown_and_wait());
         }
 
-        if let Some(lock) = &self.lock {
-            let _ = lock.file.unlock();
-        }
+        drop(self.lock.take());
     }
 }
 
@@ -268,9 +268,14 @@ struct FileLockGuard {
 
 impl Drop for FileLockGuard {
     fn drop(&mut self) {
-        if let Ok(mut paths) = locked_data_dirs().lock() {
-            paths.remove(&self.data_dir);
-        }
+        let mut paths = locked_data_dirs()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // A fork or cloned descriptor can retain the open file description after
+        // this File drops. Release the OS lock explicitly before allowing another
+        // local owner to reserve the directory in the registry.
+        let _ = FileExt::unlock(&self.file);
+        paths.remove(&self.data_dir);
     }
 }
 

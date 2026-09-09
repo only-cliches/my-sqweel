@@ -16,7 +16,12 @@ pub struct InitWriter<'a, W: Read + Write> {
 impl<'a, W: Read + Write + 'a> InitWriter<'a, W> {
     /// Tell client that database context has been changed
     pub fn ok(self) -> io::Result<()> {
-        writers::write_ok_packet(self.writer, 0, 0, StatusFlags::empty(), 0)
+        self.ok_with_status(StatusFlags::empty())
+    }
+
+    /// Report the current connection status after changing database context.
+    pub fn ok_with_status(self, status: StatusFlags) -> io::Result<()> {
+        writers::write_ok_packet_with_warnings(self.writer, 0, 0, status, 0)
     }
 
     /// Tell client that there was a problem changing the database context.
@@ -109,6 +114,7 @@ pub struct QueryResultWriter<'a, W: Read + Write> {
     pub(crate) is_bin: bool,
     pub(crate) writer: &'a mut PacketConn<W>,
     last_end: Option<Finalizer>,
+    status: StatusFlags,
 }
 
 impl<'a, W: Read + Write> QueryResultWriter<'a, W> {
@@ -117,11 +123,17 @@ impl<'a, W: Read + Write> QueryResultWriter<'a, W> {
             is_bin,
             writer,
             last_end: None,
+            status: StatusFlags::empty(),
         }
     }
 
+    /// Set the connection status reported in result terminators.
+    pub fn set_status_flags(&mut self, status: StatusFlags) {
+        self.status = status;
+    }
+
     fn finalize(&mut self, more_exists: bool) -> io::Result<()> {
-        let mut status = StatusFlags::empty();
+        let mut status = self.status;
         if more_exists {
             status.set(StatusFlags::SERVER_MORE_RESULTS_EXISTS, true);
         }
@@ -131,9 +143,9 @@ impl<'a, W: Read + Write> QueryResultWriter<'a, W> {
                 rows,
                 last_insert_id,
                 warnings,
-            }) => writers::write_ok_packet(self.writer, rows, last_insert_id, status, warnings),
+            }) => writers::write_ok_packet_with_warnings(self.writer, rows, last_insert_id, status, warnings),
             Some(Finalizer::Eof { warnings }) => {
-                writers::write_eof_packet(self.writer, status, warnings)
+                writers::write_eof_packet_with_warnings(self.writer, status, warnings)
             }
         }
     }
@@ -445,5 +457,40 @@ impl<'a, W: Read + Write + 'a> RowWriter<'a, W> {
 impl<'a, W: Read + Write + 'a> Drop for RowWriter<'a, W> {
     fn drop(&mut self) {
         self.finish_inner(true).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod transaction_warning_tests {
+    use super::*;
+    use std::io::Cursor;
+
+    #[test]
+    fn ok_packet_preserves_transaction_status_and_warnings() {
+        let mut output = Cursor::new(Vec::new());
+        let mut connection = PacketConn::new(&mut output);
+        let mut result = QueryResultWriter::new(&mut connection, false);
+        result.set_status_flags(
+            StatusFlags::SERVER_STATUS_IN_TRANS | StatusFlags::SERVER_STATUS_AUTOCOMMIT,
+        );
+        result.completed_with_warnings(0, 0, 7).unwrap();
+        assert_eq!(&output.into_inner()[4..], &[0, 0, 0, 3, 0, 7, 0]);
+    }
+
+    #[test]
+    fn eof_packet_preserves_transaction_status_and_warnings() {
+        let mut output = Cursor::new(Vec::new());
+        let mut connection = PacketConn::new(&mut output);
+        let mut result = QueryResultWriter::new(&mut connection, false);
+        result.set_status_flags(StatusFlags::SERVER_STATUS_IN_TRANS);
+        let columns = [Column {
+            table: String::new(),
+            column: "value".into(),
+            coltype: crate::ColumnType::MYSQL_TYPE_LONG,
+            colflags: ColumnFlags::empty(),
+        }];
+        result.start_with_warnings(&columns, 9).unwrap().finish().unwrap();
+        let bytes = output.into_inner();
+        assert_eq!(&bytes[bytes.len() - 5..], &[0xfe, 9, 0, 1, 0]);
     }
 }

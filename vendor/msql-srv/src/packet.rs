@@ -3,7 +3,6 @@ use byteorder::{ByteOrder, LittleEndian};
 use rustls::{pki_types::CertificateDer, ServerConfig};
 use std::io;
 use std::io::prelude::*;
-use std::time::Duration;
 
 const U24_MAX: usize = 16_777_215;
 
@@ -37,15 +36,7 @@ impl<W: Read + Write> Write for PacketConn<W> {
 
     fn flush(&mut self) -> io::Result<()> {
         self.maybe_end_packet()?;
-        loop {
-            match self.rw.flush() {
-                Ok(()) => return Ok(()),
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                    std::thread::sleep(Duration::from_millis(1));
-                }
-                Err(error) => return Err(error),
-            }
-        }
+        self.rw.flush()
     }
 }
 
@@ -74,22 +65,7 @@ impl<W: Read + Write> PacketConn<W> {
             self.to_write[3] = self.seq;
             self.seq = self.seq.wrapping_add(1);
 
-            let mut written = 0;
-            while written < self.to_write.len() {
-                match self.rw.write(&self.to_write[written..]) {
-                    Ok(0) => {
-                        return Err(io::Error::new(
-                            io::ErrorKind::WriteZero,
-                            "failed to write mysql packet",
-                        ));
-                    }
-                    Ok(bytes) => written += bytes,
-                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                        std::thread::sleep(Duration::from_millis(1));
-                    }
-                    Err(error) => return Err(error),
-                }
-            }
+            self.rw.write_all(&self.to_write[..])?;
             self.to_write.truncate(4); // back to just header
         }
         Ok(())
@@ -151,14 +127,7 @@ impl<R: Read + Write> PacketConn<R> {
             self.bytes.resize(std::cmp::max(4096, end * 2), 0);
             let read = {
                 let buf = &mut self.bytes[end..];
-                match self.rw.read(buf) {
-                    Ok(read) => read,
-                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                        std::thread::sleep(Duration::from_millis(1));
-                        continue;
-                    }
-                    Err(error) => return Err(error),
-                }
+                self.rw.read(buf)?
             };
             self.bytes.truncate(end + read);
             self.remaining = self.bytes.len();

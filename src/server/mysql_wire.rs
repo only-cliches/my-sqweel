@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::net::TcpListener;
@@ -8,12 +7,13 @@ use std::time::Duration;
 
 use chrono::{Datelike, Timelike};
 use msql_srv::{
-    Column, ColumnFlags, ColumnType, ErrorKind, InitWriter, MysqlIntermediary, MysqlShim,
-    ParamParser, ParamValue, QueryResultWriter, StatementMetaWriter, ToMysqlValue, ValueInner,
+    AuthenticationContext, Column, ColumnFlags, ColumnType, ErrorKind, InitWriter,
+    MysqlIntermediary, MysqlShim, ParamParser, ParamValue, QueryResultWriter, StatementMetaWriter,
+    StatusFlags, ToMysqlValue, ValueInner,
 };
 use serde_json::{Map, Value};
 
-use crate::sql::engine::{Engine, MysqlColumnType, QueryResult, QueryWarning};
+use crate::sql::engine::{Engine, EngineSession, MysqlColumnType, QueryResult, QueryWarning};
 
 #[derive(Clone)]
 pub struct WireServer {
@@ -72,6 +72,12 @@ impl WireServer {
                 tracing::warn!(error = %err, "failed setting mysql session stream to blocking mode");
                 return;
             }
+            // Small request/response packets otherwise incur Nagle/delayed-ACK
+            // latency on every SQL statement, dominating local schema startup.
+            if let Err(err) = stream.set_nodelay(true) {
+                tracing::warn!(error = %err, "failed disabling mysql session Nagle buffering");
+                return;
+            }
             if let Err(err) = MysqlIntermediary::run_on_tcp(backend, stream) {
                 tracing::warn!(error = %err, "mysql session ended with error");
             }
@@ -80,11 +86,10 @@ impl WireServer {
 }
 
 struct Backend {
-    engine: Arc<Engine>,
+    session: EngineSession,
     next_stmt_id: AtomicU32,
     statements: HashMap<u32, PreparedStatement>,
     last_insert_id: u64,
-    current_db: String,
     session_vars: HashMap<String, Value>,
     warnings: Vec<QueryWarning>,
 }
@@ -97,11 +102,10 @@ struct PreparedStatement {
 impl Backend {
     fn new(engine: Arc<Engine>) -> Self {
         Self {
-            engine,
+            session: engine.session(),
             next_stmt_id: AtomicU32::new(1),
             statements: HashMap::new(),
             last_insert_id: 0,
-            current_db: "app".to_string(),
             session_vars: default_session_vars(),
             warnings: Vec::new(),
         }
@@ -110,6 +114,10 @@ impl Backend {
 
 impl<W: io::Read + io::Write> MysqlShim<W> for Backend {
     type Error = io::Error;
+
+    fn status_flags(&self) -> StatusFlags {
+        Backend::status_flags(self)
+    }
 
     fn on_prepare(&mut self, query: &str, info: StatementMetaWriter<'_, W>) -> io::Result<()> {
         let stmt_id = self.next_stmt_id.fetch_add(1, Ordering::Relaxed);
@@ -122,7 +130,7 @@ impl<W: io::Read + io::Write> MysqlShim<W> for Backend {
             },
         );
         let params = parameter_columns(param_count);
-        let mut columns = prepared_result_columns(&self.engine, query, param_count);
+        let mut columns = prepared_result_columns(&mut self.session, query, param_count);
         if references_information_schema(query) {
             let aliases = information_schema_aliases(query);
             for column in &mut columns {
@@ -136,11 +144,14 @@ impl<W: io::Read + io::Write> MysqlShim<W> for Backend {
         &mut self,
         id: u32,
         params: ParamParser<'_>,
-        results: QueryResultWriter<'_, W>,
+        mut results: QueryResultWriter<'_, W>,
     ) -> io::Result<()> {
         self.warnings.clear();
         let Some(statement) = self.statements.get(&id) else {
-            return results.completed(0, 0);
+            return results.error(
+                ErrorKind::ER_UNKNOWN_STMT_HANDLER,
+                b"Unknown prepared statement",
+            );
         };
         let statement_sql = statement.sql.clone();
         let params = params.into_iter().map(param_to_json).collect::<Vec<_>>();
@@ -150,20 +161,18 @@ impl<W: io::Read + io::Write> MysqlShim<W> for Backend {
                 actual = params.len(),
                 "prepared parameter count mismatch"
             );
-            return results.completed(0, 0);
+            return results.error(
+                ErrorKind::ER_WRONG_ARGUMENTS,
+                b"Prepared parameter count mismatch",
+            );
         }
-        let mut out = if is_last_insert_id_query(&statement_sql) {
-            Ok(vec![last_insert_id_result(self.last_insert_id)])
-        } else {
-            let statement_sql = self.qualify_create_table(&statement_sql);
-            self.engine
-                .execute_sql_with_params_for_wire(&statement_sql, &params)
-        };
+        let mut out = self.execute_prepared_query(&statement_sql, &params);
         if references_information_schema(&statement_sql)
             && let Ok(items) = &mut out
         {
             canonicalize_information_schema_columns(items, &statement_sql);
         }
+        results.set_status_flags(self.status_flags());
         write_query_items(
             out,
             results,
@@ -177,14 +186,46 @@ impl<W: io::Read + io::Write> MysqlShim<W> for Backend {
         self.statements.remove(&stmt);
     }
 
-    fn on_init(&mut self, schema: &str, writer: InitWriter<'_, W>) -> io::Result<()> {
-        if !schema.is_empty() {
-            self.current_db = schema.to_string();
+    fn after_authentication(&mut self, context: &AuthenticationContext<'_>) -> io::Result<()> {
+        let user = context
+            .username
+            .as_deref()
+            .and_then(|user| std::str::from_utf8(user).ok())
+            .ok_or_else(|| io::Error::new(io::ErrorKind::PermissionDenied, "Invalid username"))?;
+        if !self
+            .session
+            .authenticate(user, &context.auth_plugin_data, &context.auth_response)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "Access denied",
+            ));
         }
-        writer.ok()
+        if let Some(database) = context
+            .database
+            .as_deref()
+            .filter(|database| !database.is_empty())
+        {
+            let database = std::str::from_utf8(database)
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+            self.session.use_database(database).map_err(|error| {
+                io::Error::new(io::ErrorKind::PermissionDenied, error.to_string())
+            })?;
+        }
+        Ok(())
     }
 
-    fn on_query(&mut self, query: &str, results: QueryResultWriter<'_, W>) -> io::Result<()> {
+    fn on_init(&mut self, schema: &str, writer: InitWriter<'_, W>) -> io::Result<()> {
+        if let Err(error) = self.session.use_database(schema) {
+            return writer.error(
+                mysql_error_kind(&error.to_string()),
+                error.to_string().as_bytes(),
+            );
+        }
+        writer.ok_with_status(self.status_flags())
+    }
+
+    fn on_query(&mut self, query: &str, mut results: QueryResultWriter<'_, W>) -> io::Result<()> {
         let is_show_warnings = query
             .trim_start()
             .to_ascii_uppercase()
@@ -192,25 +233,19 @@ impl<W: io::Read + io::Write> MysqlShim<W> for Backend {
         if !is_show_warnings {
             self.warnings.clear();
         }
-        let mut out = if let Some(result) = self.execute_session_query(query) {
-            Ok(vec![result])
-        } else if is_last_insert_id_query(query) {
-            Ok(vec![last_insert_id_result(self.last_insert_id)])
-        } else {
-            let query = self.qualify_create_table(query);
-            self.engine.execute_sql_for_wire(query.as_ref())
-        };
+        let mut out = self.execute_text_query(query);
         if references_information_schema(query)
             && let Ok(items) = &mut out
         {
             canonicalize_information_schema_columns(items, query);
         }
+        results.set_status_flags(self.status_flags());
         write_query_items(
             out,
             results,
             &mut self.last_insert_id,
             &mut self.warnings,
-            Some(query.as_ref()),
+            Some(query),
         )
     }
 }
@@ -235,14 +270,6 @@ fn information_schema_aliases(query: &str) -> HashSet<String> {
         .flatten()
         .filter_map(|item| match item {
             sqlparser::ast::SelectItem::ExprWithAlias { alias, .. } => Some(alias.value),
-            sqlparser::ast::SelectItem::UnnamedExpr(sqlparser::ast::Expr::Identifier(
-                identifier,
-            )) => Some(identifier.value),
-            sqlparser::ast::SelectItem::UnnamedExpr(sqlparser::ast::Expr::CompoundIdentifier(
-                identifiers,
-            )) => identifiers
-                .last()
-                .map(|identifier| identifier.value.clone()),
             _ => None,
         })
         .collect()
@@ -286,88 +313,61 @@ fn canonicalize_information_schema_columns(items: &mut [QueryResult], query: &st
 }
 
 impl Backend {
-    fn qualify_create_table<'a>(&self, query: &'a str) -> Cow<'a, str> {
-        if self.current_db.eq_ignore_ascii_case("test")
-            || self.current_db.eq_ignore_ascii_case("app")
-        {
-            return Cow::Borrowed(query);
+    fn status_flags(&self) -> StatusFlags {
+        let mut flags = StatusFlags::empty();
+        flags.set(
+            StatusFlags::SERVER_STATUS_IN_TRANS,
+            self.session.is_in_transaction(),
+        );
+        flags.set(
+            StatusFlags::SERVER_STATUS_AUTOCOMMIT,
+            self.session.autocommit(),
+        );
+        flags
+    }
+
+    fn execute_prepared_query(
+        &mut self,
+        query: &str,
+        params: &[Value],
+    ) -> anyhow::Result<Vec<QueryResult>> {
+        if params.is_empty() {
+            return self.execute_text_query(query);
         }
-        let trimmed = query.trim_start();
-        let upper = trimmed.to_ascii_uppercase();
-        let Some(mut offset) = upper
-            .strip_prefix("CREATE TABLE")
-            .map(|_| "CREATE TABLE".len())
-        else {
-            return Cow::Borrowed(query);
-        };
-        while trimmed[offset..]
-            .chars()
-            .next()
-            .is_some_and(|character| character.is_ascii_whitespace())
-        {
-            offset += trimmed[offset..].chars().next().unwrap().len_utf8();
+        self.session.execute_sql_with_params_for_wire(query, params)
+    }
+
+    fn execute_text_query(&mut self, query: &str) -> anyhow::Result<Vec<QueryResult>> {
+        if let Some(result) = self.execute_session_query(query) {
+            return Ok(vec![result]);
         }
-        if upper[offset..].starts_with("IF NOT EXISTS") {
-            offset += "IF NOT EXISTS".len();
-            while trimmed[offset..]
-                .chars()
-                .next()
-                .is_some_and(|character| character.is_ascii_whitespace())
-            {
-                offset += trimmed[offset..].chars().next().unwrap().len_utf8();
-            }
+        if is_last_insert_id_query(query) {
+            return Ok(vec![last_insert_id_result(self.last_insert_id)]);
         }
-        let name_end = trimmed[offset..]
-            .find(|character: char| character.is_ascii_whitespace() || character == '(')
-            .map(|relative| offset + relative)
-            .unwrap_or(trimmed.len());
-        let name = &trimmed[offset..name_end];
-        if name.is_empty() || name.contains('.') {
-            return Cow::Borrowed(query);
+        let results = self.session.execute_sql_for_wire(query)?;
+        let trimmed = query.trim().trim_end_matches(';').trim();
+        if trimmed.to_ascii_uppercase().starts_with("SET ") {
+            self.apply_set_statement(&trimmed[4..]);
         }
-        let qualified = format!("`{}`.`{}`", self.current_db, name.trim_matches('`'));
-        let replacement_start = query.len() - trimmed.len() + offset;
-        let replacement_end = query.len() - trimmed.len() + name_end;
-        let mut rewritten = query.to_string();
-        rewritten.replace_range(replacement_start..replacement_end, &qualified);
-        Cow::Owned(rewritten)
+        Ok(results)
     }
 
     fn execute_session_query(&mut self, query: &str) -> Option<QueryResult> {
+        // Never swallow a multi-statement request: later transaction controls
+        // and writes must reach the same per-connection executor.
+        let statements = crate::sql::parse(query).ok()?;
+        if statements.len() != 1 {
+            return None;
+        }
         let trimmed = query.trim().trim_end_matches(';').trim();
         let upper = trimmed.to_ascii_uppercase();
-        if upper.starts_with("USE ") {
-            self.current_db = trimmed[4..].trim().trim_matches('`').to_string();
-            return Some(QueryResult::default());
-        }
-        if upper.starts_with("SET ") {
-            if upper.contains("SQL_SAFE_UPDATES") {
-                let enabled = trimmed
-                    .split_once('=')
-                    .map(|(_, value)| {
-                        matches!(
-                            value
-                                .trim()
-                                .trim_matches(['\'', '"'])
-                                .to_ascii_uppercase()
-                                .as_str(),
-                            "ON" | "1" | "TRUE"
-                        )
-                    })
-                    .unwrap_or(false);
-                self.engine.set_sql_safe_updates(enabled);
-            }
-            if upper.contains("SQL_MODE") || upper.starts_with("SET @") {
-                return None;
-            }
-            self.apply_set_statement(&trimmed[4..]);
-            return Some(QueryResult::default());
-        }
         if upper.starts_with("SELECT ") {
+            if let Some(result) = self.select_session_values(trimmed) {
+                return Some(result);
+            }
             if trimmed.contains("@@") {
                 return Some(system_variable_query_result(trimmed));
             }
-            return self.select_session_values(trimmed);
         }
         if upper.starts_with("SHOW WARNINGS") {
             return Some(show_warnings_result(&self.warnings));
@@ -382,10 +382,6 @@ impl Backend {
             };
             let name = normalize_session_var_name(name);
             let parsed = parse_session_value(value.trim());
-            if name.eq_ignore_ascii_case("time_zone") {
-                self.engine
-                    .set_session_time_zone(parsed.as_str().unwrap_or("+00:00"));
-            }
             self.session_vars.insert(name, parsed);
         }
     }
@@ -439,16 +435,16 @@ impl Backend {
             .collect::<String>();
         let normalized_upper = normalized.to_ascii_uppercase();
         let value = if normalized_upper == "DATABASE()" || normalized_upper == "SCHEMA()" {
-            Value::String(self.current_db.clone())
+            Value::String(self.session.current_database().to_string())
         } else if normalized_upper.contains("@@GLOBAL.LOG_BIN")
             && normalized_upper.contains("@@GLOBAL.BINLOG_FORMAT")
         {
             Value::Number(0.into())
         } else if normalized.starts_with("@@") {
             let name = normalize_session_var_name(&normalized);
-            self.session_vars
-                .get(&name)
-                .cloned()
+            self.session
+                .system_variable(&name)
+                .or_else(|| self.session_vars.get(&name).cloned())
                 .unwrap_or_else(|| Value::String(String::new()))
         } else {
             return None;
@@ -553,7 +549,21 @@ fn write_query_items<W: io::Read + io::Write>(
 
 fn mysql_error_kind(message: &str) -> ErrorKind {
     let message = message.to_ascii_lowercase();
-    if message.contains("already exists") {
+    if message.contains("transaction snapshot changed") {
+        ErrorKind::ER_LOCK_DEADLOCK
+    } else if message.contains("lock wait timeout") {
+        ErrorKind::ER_LOCK_WAIT_TIMEOUT
+    } else if message.contains("administrative command denied")
+        || message.contains("requires database administration privileges")
+    {
+        ErrorKind::ER_SPECIFIC_ACCESS_DENIED_ERROR
+    } else if message.contains("command denied") {
+        ErrorKind::ER_TABLEACCESS_DENIED_ERROR
+    } else if message.contains("access denied") {
+        ErrorKind::ER_DBACCESS_DENIED_ERROR
+    } else if message.contains("unknown database") {
+        ErrorKind::ER_BAD_DB_ERROR
+    } else if message.contains("already exists") {
         ErrorKind::ER_TABLE_EXISTS_ERROR
     } else if message.contains("too many tables") {
         ErrorKind::ER_TOO_MANY_TABLES
@@ -652,7 +662,7 @@ fn mysql_error_kind(message: &str) -> ErrorKind {
     } else if message.contains("incorrect usage of or replace and if not exists") {
         ErrorKind::ER_WRONG_USAGE
     } else if message.contains("window frame bound specifications") {
-        ErrorKind::ER_WRONG_USAGE
+        ErrorKind::ER_BAD_COMBINATION_OF_WINDOW_FRAME_BOUND_SPECS
     } else if message.contains("too few arguments") {
         ErrorKind::ER_SP_WRONG_NO_OF_ARGS
     } else if message.contains("too big precision") {
@@ -685,6 +695,8 @@ fn mysql_error_kind(message: &str) -> ErrorKind {
         || message.contains("incorrect time")
     {
         ErrorKind::ER_TRUNCATED_WRONG_VALUE
+    } else if message.contains("not supported") || message.contains("unsupported session setting") {
+        ErrorKind::ER_NOT_SUPPORTED_YET
     } else if message.contains("sql parser error") || message.contains("parse") {
         ErrorKind::ER_PARSE_ERROR
     } else {
@@ -862,7 +874,10 @@ fn default_session_vars() -> HashMap<String, Value> {
         ("autocommit", serde_json::json!(1)),
         ("sql_mode", serde_json::json!("")),
         ("time_zone", serde_json::json!("+00:00")),
-        ("version", serde_json::json!("8.0.0-my-sqweel")),
+        (
+            "version",
+            serde_json::json!("8.0.0-my-sqweel-intentkit-tx-v1"),
+        ),
         ("version_comment", serde_json::json!("MySqweel")),
         (
             "transaction_isolation",
@@ -1534,7 +1549,11 @@ fn parameter_columns(count: usize) -> Vec<Column> {
         .collect()
 }
 
-fn prepared_result_columns(engine: &Engine, query: &str, param_count: usize) -> Vec<Column> {
+fn prepared_result_columns(
+    session: &mut EngineSession,
+    query: &str,
+    param_count: usize,
+) -> Vec<Column> {
     // COM_STMT_PREPARE must not execute mutating statements.  The engine call
     // below substitutes zero-valued parameters to derive result metadata, so
     // restrict it to parsed query statements; otherwise INSERT/UPDATE/DELETE
@@ -1542,16 +1561,18 @@ fn prepared_result_columns(engine: &Engine, query: &str, param_count: usize) -> 
     let Ok(statements) = crate::sql::parse(query) else {
         return Vec::new();
     };
-    if !matches!(
-        statements.first(),
-        Some(sqlparser::ast::Statement::Query(_))
-    ) {
+    if statements.len() != 1
+        || !matches!(
+            statements.first(),
+            Some(sqlparser::ast::Statement::Query(_))
+        )
+    {
         return Vec::new();
     }
     let decimal_columns = mysql_decimal_columns(query);
     // Zero is accepted by LIMIT/OFFSET placeholders and generally produces an
     // empty SELECT while still allowing the engine to derive schema metadata.
-    if let Ok(mut results) = engine.execute_sql_with_params_without_events(
+    if let Ok(mut results) = session.prepare_sql_with_params_for_wire(
         query,
         &vec![Value::Number(serde_json::Number::from(0)); param_count],
     ) && let Some(result) = results.pop()
@@ -1807,6 +1828,113 @@ mod tests {
     use crate::sql::engine::{Engine, EngineConfig, QueryResult};
 
     #[test]
+    fn transaction_and_permission_errors_have_mysql_codes() {
+        for (message, code) in [
+            (
+                "Lock wait timeout exceeded; try restarting transaction",
+                1205,
+            ),
+            ("Administrative command denied", 1227),
+            (
+                "Statement requires database administration privileges",
+                1227,
+            ),
+            ("transaction snapshot changed; retry transaction", 1213),
+            ("Select command denied for database 'shard_a'", 1142),
+            ("access denied for database 'shard_b'", 1044),
+            (
+                "transaction modes are not supported; use REPEATABLE READ",
+                1235,
+            ),
+            ("DDL is not supported inside an active transaction", 1235),
+            (
+                "only REPEATABLE READ isolation is supported, before starting a transaction",
+                1235,
+            ),
+            ("unsupported session setting: foreign_key_checks", 1235),
+        ] {
+            assert_eq!(super::mysql_error_kind(message) as u16, code, "{message}");
+        }
+        let defaults = super::default_session_vars();
+        assert_eq!(
+            defaults.get("transaction_isolation"),
+            Some(&json!("REPEATABLE-READ"))
+        );
+        assert_eq!(
+            defaults.get("tx_isolation"),
+            Some(&json!("REPEATABLE-READ"))
+        );
+    }
+
+    #[test]
+    fn wire_text_and_prepared_statements_share_transaction_state() {
+        let engine =
+            Arc::new(Engine::open_with_data_dir(EngineConfig::mysql_strict(), None).unwrap());
+        let mut backend = Backend::new(engine.clone());
+        backend
+            .execute_text_query("CREATE TABLE wire_tx (id BIGINT PRIMARY KEY)")
+            .unwrap();
+        backend.execute_prepared_query("BEGIN", &[]).unwrap();
+        assert!(
+            backend
+                .status_flags()
+                .contains(msql_srv::StatusFlags::SERVER_STATUS_IN_TRANS)
+        );
+        backend
+            .execute_prepared_query("INSERT INTO wire_tx (id) VALUES (?)", &[json!(1)])
+            .unwrap();
+        backend.execute_text_query("ROLLBACK").unwrap();
+        assert!(
+            !backend
+                .status_flags()
+                .contains(msql_srv::StatusFlags::SERVER_STATUS_IN_TRANS)
+        );
+        assert!(
+            backend.execute_text_query("SELECT * FROM wire_tx").unwrap()[0]
+                .rows
+                .is_empty()
+        );
+
+        backend.execute_text_query("SET autocommit = 0").unwrap();
+        assert!(
+            !backend
+                .status_flags()
+                .contains(msql_srv::StatusFlags::SERVER_STATUS_AUTOCOMMIT)
+        );
+        let result = backend
+            .execute_prepared_query("SELECT @@autocommit AS enabled", &[])
+            .unwrap();
+        assert_eq!(result[0].rows[0].get("enabled"), Some(&json!(0)));
+        backend
+            .execute_text_query("INSERT INTO wire_tx (id) VALUES (2)")
+            .unwrap();
+        drop(backend);
+        let mut reconnected = Backend::new(engine);
+        assert!(
+            reconnected
+                .execute_text_query("SELECT * FROM wire_tx")
+                .unwrap()[0]
+                .rows
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn wire_session_shortcuts_do_not_swallow_later_statements() {
+        let mut backend = Backend::new(Arc::new(Engine::default()));
+        assert!(
+            backend
+                .execute_session_query("SELECT @@autocommit; BEGIN")
+                .is_none()
+        );
+        assert!(
+            backend
+                .execute_session_query("SET autocommit = 0")
+                .is_none()
+        );
+    }
+
+    #[test]
     fn information_schema_wire_results_use_mysql_column_casing() {
         assert!(references_information_schema(
             "select * from information_schema.columns"
@@ -1851,7 +1979,7 @@ mod tests {
     }
 
     #[test]
-    fn information_schema_wire_results_preserve_explicit_column_labels() {
+    fn information_schema_wire_results_use_declared_names_for_unaliased_columns() {
         let mut row = Map::new();
         row.insert("column_name".to_string(), json!("id"));
         let mut results = vec![QueryResult {
@@ -1865,8 +1993,8 @@ mod tests {
             "SELECT column_name FROM information_schema.columns",
         );
 
-        assert_eq!(results[0].columns, ["column_name"]);
-        assert_eq!(results[0].rows[0].get("column_name"), Some(&json!("id")));
+        assert_eq!(results[0].columns, ["COLUMN_NAME"]);
+        assert_eq!(results[0].rows[0].get("COLUMN_NAME"), Some(&json!("id")));
     }
 
     #[test]
@@ -1932,7 +2060,11 @@ mod tests {
             )
             .unwrap();
 
-        let columns = prepared_result_columns(&engine, "INSERT INTO users (email) VALUES (?)", 1);
+        let columns = prepared_result_columns(
+            &mut engine.session(),
+            "INSERT INTO users (email) VALUES (?)",
+            1,
+        );
         assert!(columns.is_empty());
         let snapshot = engine.snapshot();
         assert_eq!(snapshot.rows.get("users").map(|rows| rows.len()), Some(0));

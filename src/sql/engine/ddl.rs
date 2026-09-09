@@ -1,6 +1,6 @@
 use super::*;
 
-impl Engine {
+impl RawEngine {
     pub(super) fn replace_table_from_result(&self, table: &str, result: QueryResult) -> Result<()> {
         self.schemas.remove(table);
         self.rows.remove(table);
@@ -1433,6 +1433,13 @@ pub(super) fn drop_unique_metadata(schema: &mut TableSchemaHint, index_name: &st
         !hit
     });
     schema.unique.retain(|cols| {
+        if schema
+            .indexes
+            .iter()
+            .any(|index| index.unique && index.columns == *cols)
+        {
+            return true;
+        }
         let generated = generated_index_name(&schema.table, cols);
         let legacy_generated = legacy_generated_index_name(&schema.table, cols);
         let drizzle_name = format!("{}_{}_unique", schema.table, cols.join("_"));
@@ -1445,10 +1452,11 @@ pub(super) fn drop_unique_metadata(schema: &mut TableSchemaHint, index_name: &st
 }
 
 pub(super) fn add_index_metadata(schema: &mut TableSchemaHint, index: IndexHint) {
-    if !schema.indexes.iter().any(|existing| {
-        existing.name == index.name
-            || (existing.columns == index.columns && existing.unique == index.unique)
-    }) {
+    if !schema
+        .indexes
+        .iter()
+        .any(|existing| existing.name == index.name)
+    {
         schema.indexes.push(index);
     }
 }

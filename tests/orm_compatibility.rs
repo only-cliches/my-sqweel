@@ -170,9 +170,9 @@ fn start_strict_server() -> String {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     thread::spawn(move || {
-        WireServer::new(Arc::new(Engine::new(EngineConfig::mysql_strict())))
-            .serve_listener(listener)
-            .unwrap();
+        let engine = Arc::new(Engine::new(EngineConfig::mysql_strict()));
+        engine.execute_sql("CREATE DATABASE test").unwrap();
+        WireServer::new(engine).serve_listener(listener).unwrap();
     });
     format!("mysql://root@{address}/test")
 }

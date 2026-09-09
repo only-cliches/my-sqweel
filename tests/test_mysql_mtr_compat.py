@@ -5,16 +5,21 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
+from subprocess import CompletedProcess
 from argparse import Namespace
 from pathlib import Path
 
 from tools.mariadb_mtr_core import (
     Server,
     TestCase,
+    configure_case_timezone,
     mtr_case_timezone,
     mtr_command,
     parse_manifest,
+    prepare_external_mariadb_runner,
     render_markdown,
+    reset_test_database,
     sql_statement_count,
     validate_cases,
     validate_distinct_servers,
@@ -31,6 +36,60 @@ DIGEST_B = "b" * 64
 
 
 class ManifestTests(unittest.TestCase):
+    def test_external_runner_adaptation_changes_only_the_feature_probe(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "upstream.pl"
+            destination = root / "external.pl"
+            original = b'before\r\nuse mysql; SHOW VARIABLES\r\nafter\r\n'
+            source.write_bytes(original)
+            self.assertEqual(prepare_external_mariadb_runner(source, destination), destination)
+            self.assertEqual(source.read_bytes(), original)
+            adapted = b'before\r\nSHOW VARIABLES\r\nafter\r\n'
+            self.assertEqual(destination.read_bytes(), adapted)
+            metadata = json.loads(destination.with_suffix(".json").read_text())
+            self.assertEqual(metadata["source_sha256"], hashlib.sha256(original).hexdigest())
+            self.assertEqual(metadata["adapted_sha256"], hashlib.sha256(adapted).hexdigest())
+
+    def test_external_runner_adaptation_rejects_missing_or_ambiguous_probes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "upstream.pl"
+            destination = root / "external.pl"
+            for count in (0, 2):
+                with self.subTest(count=count):
+                    source.write_text("use mysql; SHOW VARIABLES\n" * count)
+                    with self.assertRaisesRegex(RuntimeError, "unrecognized MariaDB MTR"):
+                        prepare_external_mariadb_runner(source, destination)
+                    self.assertFalse(destination.exists())
+
+    def test_mysqweel_reset_preserves_embedded_database_and_avoids_global_settings(self):
+        with patch("tools.mariadb_mtr_core.subprocess.run") as run:
+            run.side_effect = [
+                CompletedProcess([], 0, "app\ntest\nleftover\n", ""),
+                CompletedProcess([], 0, "", ""),
+            ]
+            reset_test_database(Server("mysqweel", "mysql://root@localhost/test"), Path("/bin"), mariadb=True)
+            sql = run.call_args.args[0][-1]
+            self.assertIn("DROP DATABASE IF EXISTS `leftover`", sql)
+            self.assertIn("DROP DATABASE IF EXISTS test", sql)
+            self.assertNotIn("`app`", sql)
+            self.assertNotIn("SET GLOBAL", sql)
+
+    def test_mysqweel_timezone_must_match_the_upstream_requirement(self):
+        case = TestCase("simple", "query", DIGEST_A, DIGEST_B, "manifest")
+        with patch("tools.mariadb_mtr_core.mtr_case_timezone", return_value="+00:00"), patch(
+            "tools.mariadb_mtr_core.subprocess.run", return_value=CompletedProcess([], 0, "+00:00\n", "")
+        ) as run:
+            timezone = configure_case_timezone(Server("mysqweel", "mysql://root@localhost/test"), Path("/bin"), Path("/suite"), case)
+            self.assertEqual(timezone, "+00:00")
+            self.assertEqual(run.call_args.args[0][-1], "--execute=SELECT @@time_zone")
+        with patch("tools.mariadb_mtr_core.mtr_case_timezone", return_value="-10:00"), patch(
+            "tools.mariadb_mtr_core.subprocess.run", return_value=CompletedProcess([], 0, "+00:00\n", "")
+        ):
+            with self.assertRaisesRegex(RuntimeError, "does not match required"):
+                configure_case_timezone(Server("mysqweel", "mysql://root@localhost/test"), Path("/bin"), Path("/suite"), case)
+
     def test_same_host_and_port_for_both_servers_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "same host and port"):
             validate_distinct_servers(
@@ -176,6 +235,62 @@ INSERT INTO t1 VALUES ('a;b'), ("c;d"), (`value`);
                 )
             }
             self.assertEqual(cases["writes_file"].exclusion, "harness-side-effect")
+
+    def test_discovery_admits_transaction_commands_and_sourced_savepoints(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            test_dir = root / "mysql-test" / "main"
+            include_dir = root / "mysql-test" / "include"
+            test_dir.mkdir(parents=True)
+            include_dir.mkdir()
+            (include_dir / "savepoints.inc").write_text(
+                "SAVEPOINT s; ROLLBACK TO SAVEPOINT s; RELEASE SAVEPOINT s;\n"
+            )
+            sources = {
+                "begin": "BEGIN; SELECT 1; COMMIT;",
+                "begin_work": "BEGIN WORK; SELECT 1; ROLLBACK WORK;",
+                "start": "START TRANSACTION; SELECT 1; ROLLBACK;",
+                "autocommit": "SET @@session.autocommit=0; SELECT 1; SET autocommit=1;",
+                "savepoints": "--source include/savepoints.inc\nSELECT 1;",
+                "repeatable_read": "SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ; BEGIN; COMMIT;",
+                "xa": "XA START 'x'; SELECT 1; XA END 'x'; XA COMMIT 'x';",
+                "table_lock": "LOCK TABLES t WRITE; UNLOCK TABLES;",
+                "shared_lock": "SELECT * FROM t LOCK IN SHARE MODE;",
+                "read_committed": "SET TRANSACTION ISOLATION LEVEL READ COMMITTED; SELECT 1;",
+                "serializable": "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE; SELECT 1;",
+            }
+            for name, source in sources.items():
+                (test_dir / f"{name}.test").write_text(source)
+                (test_dir / f"{name}.result").write_text("")
+            cases = {
+                case.name: case
+                for case in discover_cases(root, "main", 200, include_safe_harness=True)
+            }
+            for name in ("begin", "begin_work", "start", "autocommit", "savepoints", "repeatable_read"):
+                with self.subTest(name=name):
+                    self.assertIsNone(cases[name].exclusion)
+                    self.assertIn("transactions", cases[name].feature.split("-"))
+            for name in ("xa", "table_lock", "shared_lock", "read_committed", "serializable"):
+                with self.subTest(name=name):
+                    self.assertEqual(cases[name].exclusion, "outside-contract")
+
+    def test_safe_harness_admits_only_reviewed_innodb_cases(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            suite = root / "mysql-test" / "suite" / "innodb"
+            (suite / "t").mkdir(parents=True)
+            (suite / "r").mkdir()
+            for name in ("innodb_bug57255", "unreviewed_transaction"):
+                (suite / "t" / f"{name}.test").write_text("BEGIN; SELECT 1; COMMIT;")
+                (suite / "r" / f"{name}.result").write_text("")
+            cases = {
+                case.name: case
+                for case in discover_cases(root, "all", 200, include_safe_harness=True)
+            }
+            self.assertIsNone(cases["innodb/innodb_bug57255"].exclusion)
+            self.assertEqual(
+                cases["innodb/unreviewed_transaction"].exclusion, "outside-contract-suite"
+            )
 
     def test_mariadb_layout_uses_main_for_top_level_cases(self):
         with tempfile.TemporaryDirectory() as directory:

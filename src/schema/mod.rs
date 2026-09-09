@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct ColumnHint {
     pub sql_type: Option<String>,
     pub nullable: Option<bool>,
@@ -15,7 +15,7 @@ pub struct ColumnHint {
     pub generated_stored: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct TableSchemaHint {
     pub table: String,
     #[serde(default)]

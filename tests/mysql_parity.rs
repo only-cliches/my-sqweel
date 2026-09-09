@@ -80,6 +80,7 @@ fn start_whatever_server() -> String {
 
     thread::spawn(move || {
         let engine = std::sync::Arc::new(Engine::new(EngineConfig::mysql_strict()));
+        engine.execute_sql("CREATE DATABASE test").unwrap();
         let wire = WireServer::new(engine);
         wire.serve_listener(listener)
             .expect("wire server should run");

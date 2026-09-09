@@ -39,8 +39,8 @@ SOURCE_DIRECTIVE = re.compile(
 )
 DELIMITER_DIRECTIVE = re.compile(r"(?im)^\s*(?:--\s*)?delimiter\b")
 UNSUPPORTED_SQL = re.compile(
-    r"(?is)\b(?:START\s+TRANSACTION|BEGIN\s+WORK|COMMIT|ROLLBACK|SAVEPOINT|"
-    r"LOCK\s+TABLES?|UNLOCK\s+TABLES?|XA\s|GRANT\s|REVOKE\s|"
+    r"(?is)\b(?:ISOLATION\s+LEVEL\s+(?:READ\s+(?:COMMITTED|UNCOMMITTED)|SERIALIZABLE)|"
+    r"LOCK\s+IN\s+SHARE\s+MODE|LOCK\s+TABLES?|UNLOCK\s+TABLES?|XA\s|GRANT\s|REVOKE\s|"
     r"CREATE\s+USER|ALTER\s+USER|DROP\s+USER|CREATE\s+(?:DEFINER\s*=\s*\S+\s+)?"
     r"(?:PROCEDURE|FUNCTION|TRIGGER|EVENT)|DROP\s+(?:PROCEDURE|FUNCTION|TRIGGER|EVENT)|"
     r"CHANGE\s+(?:MASTER|REPLICATION\s+SOURCE)|START\s+(?:SLAVE|REPLICA)|"
@@ -73,6 +73,15 @@ COMPATIBILITY_SUITES = {
     "json",
 }
 SAFE_HARNESS_SUITES = (COMPATIBILITY_SUITES - {"innodb"}) | {"vcol"}
+# Admit reviewed InnoDB transaction cases without opening the whole engine suite
+# (which also exercises physical storage, row locks, and debug instrumentation).
+SAFE_HARNESS_CASES = {"innodb/innodb_bug57255"}
+TRANSACTION_SQL = re.compile(
+    r"(?im)(?:^|;)\s*(?:BEGIN(?:\s+WORK)?\s*;|START\s+TRANSACTION\b|"
+    r"COMMIT\b|ROLLBACK\b|(?:RELEASE\s+)?SAVEPOINT\b)|"
+    r"\bSET\s+(?:(?:SESSION|LOCAL)\s+|@@(?:(?:session|local)\.)?)?autocommit\s*=",
+)
+
 
 
 @dataclass(frozen=True)
@@ -127,7 +136,7 @@ def expanded_mtr_text(
 
 
 def classify_feature(sql: str) -> str:
-    categories: set[str] = set()
+    categories: set[str] = {"transactions"} if TRANSACTION_SQL.search(sql) else set()
     keyword_categories = (
         (r"\b(?:CREATE|ALTER|DROP|TRUNCATE|RENAME)\s", "ddl"),
         (r"\b(?:INSERT|REPLACE)\s", "insert"),
@@ -195,7 +204,11 @@ def exclusion_reason(
     if not TEST_NAME.fullmatch(name):
         return "invalid-manifest-name"
     suites = SAFE_HARNESS_SUITES if include_safe_harness else COMPATIBILITY_SUITES
-    if "/" in name and name.split("/", 1)[0] not in suites:
+    if (
+        "/" in name
+        and name.split("/", 1)[0] not in suites
+        and not (include_safe_harness and name in SAFE_HARNESS_CASES)
+    ):
         return "outside-contract-suite"
     if not result_file.is_file():
         return "missing-result"

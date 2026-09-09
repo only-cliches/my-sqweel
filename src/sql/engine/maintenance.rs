@@ -1,7 +1,7 @@
 use super::*;
 use crate::storage::StorageWrite;
 
-impl Engine {
+impl RawEngine {
     pub fn snapshot(&self) -> Snapshot {
         let schemas = self
             .schemas
@@ -24,17 +24,28 @@ impl Engine {
             schemas,
             rows,
             auto_inc,
-        }
-    }
-
-    pub fn restore_snapshot(&self, snapshot: Snapshot) {
-        self.apply_snapshot(snapshot);
-        if let Err(err) = self.persist_all() {
-            tracing::warn!(error = %err, "failed to persist restored snapshot to Lux");
+            views: self
+                .views
+                .iter()
+                .map(|it| (it.key().clone(), it.value().clone()))
+                .collect(),
+            index_comments: self
+                .index_comments
+                .iter()
+                .map(|it| (it.key().clone(), it.value().clone()))
+                .collect(),
         }
     }
 
     pub(super) fn apply_snapshot(&self, snapshot: Snapshot) {
+        self.views.clear();
+        self.index_comments.clear();
+        for (k, v) in snapshot.views {
+            self.views.insert(k, v);
+        }
+        for (k, v) in snapshot.index_comments {
+            self.index_comments.insert(k, v);
+        }
         self.schemas.clear();
         self.rows.clear();
         self.auto_inc.clear();
@@ -88,6 +99,8 @@ impl Engine {
             schemas,
             rows,
             auto_inc,
+            views: BTreeMap::new(),
+            index_comments: BTreeMap::new(),
         });
         Ok(())
     }
@@ -142,36 +155,6 @@ impl Engine {
         repair_column_order(&mut schema);
 
         Ok(schema)
-    }
-
-    pub(super) fn persist_all(&self) -> Result<()> {
-        let snapshot = self.snapshot();
-        for key in self.storage.keys(STORAGE_NAMESPACE_PATTERN)? {
-            self.storage.del(&key)?;
-        }
-
-        let mut writes = Vec::new();
-        for (table, schema) in &snapshot.schemas {
-            writes.extend(schema_storage_writes(table, schema));
-        }
-        for (key, value) in &snapshot.auto_inc {
-            writes.push(StorageWrite::HSet {
-                key: STORAGE_AUTO_INC_KEY.to_string(),
-                field: key.clone(),
-                value: value.to_string(),
-            });
-        }
-        self.storage.write_batch(writes)?;
-
-        for (table, table_rows) in &snapshot.rows {
-            self.storage.sadd(storage_tables_key(), table)?;
-            for (pk, row) in table_rows {
-                self.storage.sadd(&storage_table_pks_key(table), pk)?;
-                persist_stored_row(self.storage.as_ref(), &storage_row_key(table, pk), row)?;
-            }
-        }
-
-        Ok(())
     }
 
     pub(super) fn persist_schema(&self, table: &str) -> Result<()> {
@@ -404,6 +387,54 @@ impl Engine {
         self.rebuild_indexes(table);
         self.delete_table_rows_from_storage(table)?;
         self.persist_auto_inc()
+    }
+
+    /// Search document updates are explicit upserts, independent of SQL INSERT policy.
+    /// The coordinator publishes the complete batch only after every row succeeds.
+    pub fn upsert_json_documents(
+        &self,
+        table: &str,
+        rows: Vec<Map<String, Value>>,
+        merge: bool,
+    ) -> Result<u64> {
+        let primary_key = self
+            .schemas
+            .get(table)
+            .ok_or_else(|| anyhow!("unknown search index {table}"))?
+            .primary_key
+            .clone();
+        let count = rows.len() as u64;
+        for mut row in rows {
+            if merge {
+                let existing = self.rows.get(table).and_then(|stored| {
+                    stored
+                        .values()
+                        .find(|existing| {
+                            !primary_key.is_empty()
+                                && primary_key.iter().all(|key| {
+                                    row.get(key).is_some() && row.get(key) == existing.data.get(key)
+                                })
+                        })
+                        .map(|existing| existing.data.clone())
+                });
+                if let Some(mut existing) = existing {
+                    existing.extend(row);
+                    row = existing;
+                }
+            }
+            self.ensure_schema_for_seed(table, std::slice::from_ref(&row))?;
+            self.insert_prepared_rows(
+                table,
+                vec![row],
+                InsertRowsOptions {
+                    ignore: false,
+                    replace: true,
+                    on_duplicate: &[],
+                    returning: None,
+                },
+            )?;
+        }
+        Ok(count)
     }
 
     pub fn seed_json_rows(

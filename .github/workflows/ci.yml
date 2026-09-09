@@ -129,6 +129,7 @@ jobs:
             artifacts/mariadb-mtr-baseline/**/log/**/*.log
             artifacts/mariadb-mtr-baseline/**/*.reject
             artifacts/mariadb-mtr-baseline/**/my.cnf
+            artifacts/mariadb-mtr-baseline/**/mariadb-test-run.json
           if-no-files-found: warn
 
   mtr-mysqweel:
@@ -207,4 +208,5 @@ jobs:
             artifacts/mariadb-mtr-mysqweel/**/*.reject
             artifacts/mariadb-mtr-mysqweel/**/mysqweel.log
             artifacts/mariadb-mtr-mysqweel/**/my.cnf
+            artifacts/mariadb-mtr-mysqweel/**/mariadb-test-run.json
           if-no-files-found: warn

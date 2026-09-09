@@ -446,7 +446,7 @@ fn run_repl_command(
             let bytes =
                 fs::read(&path).with_context(|| format!("read snapshot: {}", path.display()))?;
             let snapshot = serde_json::from_slice(&bytes).context("parse snapshot file")?;
-            engine.restore_snapshot(snapshot);
+            engine.restore_snapshot(snapshot)?;
             print_json(
                 &json!({ "restored": true, "name": name, "path": path.display().to_string() }),
             )
@@ -459,7 +459,7 @@ fn run_repl_command(
             }))
         }
         ReplCommand::IndexRebuildAll => {
-            engine.rebuild_indexes_for_all_tables();
+            engine.rebuild_indexes_for_all_tables()?;
             print_json(&json!({ "rebuilt": true, "scope": "all" }))
         }
         ReplCommand::IndexRebuildTable { table } => {

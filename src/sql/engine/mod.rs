@@ -24,8 +24,11 @@ use sqlparser::ast::{
 
 use crate::model::StoredRow;
 use crate::schema::{ColumnHint, ForeignKeyHint, IndexHint, TableSchemaHint};
-use crate::storage::{LuxRedisStore, RedisStore};
+use crate::storage::RedisStore;
 
+mod catalog;
+mod transaction;
+pub use transaction::{Engine, EngineSession};
 mod compat;
 mod ddl;
 mod dml;
@@ -47,7 +50,6 @@ use support::*;
 use values::*;
 
 const STORAGE_NAMESPACE: &str = "my-sqweel";
-const STORAGE_NAMESPACE_PATTERN: &str = "my-sqweel:*";
 const STORAGE_AUTO_INC_KEY: &str = "my-sqweel:auto_inc";
 const UNIQUE_SEPARATOR: char = '\u{1f}';
 const FK_FIELD_SEPARATOR: char = '\u{1e}';
@@ -550,6 +552,10 @@ pub struct Snapshot {
     pub schemas: BTreeMap<String, TableSchemaHint>,
     pub rows: BTreeMap<String, BTreeMap<String, StoredRow>>,
     pub auto_inc: BTreeMap<String, i64>,
+    #[serde(default)]
+    pub views: BTreeMap<String, String>,
+    #[serde(default)]
+    pub index_comments: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -568,7 +574,9 @@ struct InsertRowsOptions<'a> {
     returning: Option<&'a [SelectItem]>,
 }
 
-pub struct Engine {
+pub(super) struct RawEngine {
+    database_name: String,
+    visible_databases: Vec<String>,
     cfg: EngineConfig,
     storage: Arc<dyn RedisStore>,
     schemas: DashMap<String, TableSchemaHint>,
@@ -577,9 +585,9 @@ pub struct Engine {
     indexes: DashMap<String, BTreeMap<String, BTreeMap<String, BTreeSet<String>>>>,
     index_comments: DashMap<String, String>,
     last_insert_id: AtomicU64,
-    next_query_id: AtomicU64,
-    read_query_count: AtomicU64,
-    write_query_count: AtomicU64,
+    next_query_id: Arc<AtomicU64>,
+    read_query_count: Arc<AtomicU64>,
+    write_query_count: Arc<AtomicU64>,
     last_rows_affected: AtomicU64,
     last_found_rows: AtomicU64,
     sql_mode: Mutex<String>,
@@ -587,7 +595,7 @@ pub struct Engine {
     prepared_statements: DashMap<String, String>,
     views: DashMap<String, String>,
     parsed_select_cache: Mutex<ParsedSelectCache>,
-    query_event_subscribers: Mutex<Vec<QueryEventSubscriber>>,
+    query_event_subscribers: Arc<Mutex<Vec<QueryEventSubscriber>>>,
 }
 
 struct ParsedSelectCache {
@@ -621,24 +629,11 @@ impl ParsedSelectCache {
     }
 }
 
-impl Default for Engine {
-    fn default() -> Self {
-        Self::new(EngineConfig::default())
-    }
-}
-
-impl Engine {
-    pub fn new(cfg: EngineConfig) -> Self {
-        Self::open_with_data_dir(cfg, None).expect("failed to start embedded Lux storage")
-    }
-
-    pub fn open_with_data_dir(cfg: EngineConfig, data_dir: Option<&str>) -> Result<Self> {
-        let storage = Arc::new(LuxRedisStore::open(data_dir)?);
-        Self::with_storage(cfg, storage)
-    }
-
+impl RawEngine {
     fn with_storage(cfg: EngineConfig, storage: Arc<dyn RedisStore>) -> Result<Self> {
         let engine = Self {
+            database_name: "app".into(),
+            visible_databases: vec!["app".into()],
             cfg,
             storage,
             schemas: DashMap::default(),
@@ -647,9 +642,9 @@ impl Engine {
             indexes: DashMap::default(),
             index_comments: DashMap::default(),
             last_insert_id: AtomicU64::new(0),
-            next_query_id: AtomicU64::new(1),
-            read_query_count: AtomicU64::new(0),
-            write_query_count: AtomicU64::new(0),
+            next_query_id: Arc::new(AtomicU64::new(1)),
+            read_query_count: Arc::new(AtomicU64::new(0)),
+            write_query_count: Arc::new(AtomicU64::new(0)),
             last_rows_affected: AtomicU64::new(0),
             last_found_rows: AtomicU64::new(0),
             sql_mode: Mutex::new(String::new()),
@@ -657,14 +652,10 @@ impl Engine {
             prepared_statements: DashMap::default(),
             views: DashMap::default(),
             parsed_select_cache: Mutex::new(ParsedSelectCache::new(256)),
-            query_event_subscribers: Mutex::new(Vec::new()),
+            query_event_subscribers: Arc::new(Mutex::new(Vec::new())),
         };
         engine.load_from_storage()?;
         Ok(engine)
-    }
-
-    pub fn compatibility_profile(&self) -> CompatibilityProfile {
-        self.cfg.compatibility_profile
     }
 
     /// Subscribe to query lifecycle events. Each subscription has its own
@@ -725,18 +716,6 @@ impl Engine {
         self.mysql_strict() || self.cfg.unique_mode == UniqueMode::Enforce
     }
 
-    pub fn execute_sql(&self, sql: &str) -> Result<Vec<QueryResult>> {
-        self.execute_sql_internal(sql, sql, true, true)
-    }
-
-    /// Execute a statement without converting the internal JSON-null marker
-    /// to SQL `NULL`. The MySQL wire layer needs that distinction so a JSON
-    /// literal `null` is sent as the bytes `null`, while an actual SQL NULL is
-    /// sent as a protocol NULL.
-    pub(crate) fn execute_sql_for_wire(&self, sql: &str) -> Result<Vec<QueryResult>> {
-        self.execute_sql_internal(sql, sql, false, true)
-    }
-
     fn execute_sql_internal(
         &self,
         event_sql: &str,
@@ -745,6 +724,7 @@ impl Engine {
         emit_events: bool,
     ) -> Result<Vec<QueryResult>> {
         eval::clear_eval_user_variables();
+        eval::set_eval_database(&self.database_name);
         let query_id = (emit_events && self.query_events_enabled())
             .then(|| self.next_query_id.fetch_add(1, AtomicOrdering::Relaxed));
         let metrics = query_id.map(|_| Rc::new(QueryMetricsRecorder::new(true)));
@@ -1274,30 +1254,6 @@ impl Engine {
         });
     }
 
-    fn query_failed_before_execution(
-        &self,
-        query: &str,
-        error: anyhow::Error,
-    ) -> Result<Vec<QueryResult>> {
-        if !self.query_events_enabled() {
-            return Err(error);
-        }
-        let query_id = self.next_query_id.fetch_add(1, AtomicOrdering::Relaxed);
-        let started = Instant::now();
-        self.publish_query_event(QueryEvent::Received(QueryReceivedEvent {
-            query_id,
-            query: query.to_string(),
-        }));
-        self.publish_query_completed(
-            query_id,
-            started.elapsed(),
-            QueryMetrics::default(),
-            None,
-            Some(error.to_string()),
-        );
-        Err(error)
-    }
-
     fn maybe_inject_failure(&self, sql: &str) -> Result<()> {
         let cfg = &self.cfg.failure_injection;
         if cfg.query_delay_ms > 0 {
@@ -1325,65 +1281,6 @@ impl Engine {
         }
 
         Ok(())
-    }
-
-    pub fn execute_sql_with_params(&self, sql: &str, params: &[Value]) -> Result<Vec<QueryResult>> {
-        let execution_sql = match substitute_params(sql, params) {
-            Ok(execution_sql) => execution_sql,
-            Err(error) => return self.query_failed_before_execution(sql, error),
-        };
-        self.execute_sql_internal(sql, &execution_sql, true, true)
-    }
-
-    pub(crate) fn execute_sql_with_params_for_wire(
-        &self,
-        sql: &str,
-        params: &[Value],
-    ) -> Result<Vec<QueryResult>> {
-        let execution_sql = match substitute_params(sql, params) {
-            Ok(execution_sql) => execution_sql,
-            Err(error) => return self.query_failed_before_execution(sql, error),
-        };
-        self.execute_sql_internal(sql, &execution_sql, false, true)
-    }
-
-    pub(crate) fn execute_sql_with_params_without_events(
-        &self,
-        sql: &str,
-        params: &[Value],
-    ) -> Result<Vec<QueryResult>> {
-        let execution_sql = substitute_params(sql, params)?;
-        self.execute_sql_internal(sql, &execution_sql, true, false)
-    }
-
-    pub fn execute_statement(&self, stmt: Statement) -> Result<QueryResult> {
-        let query = stmt.to_string();
-        if !self.query_events_enabled() {
-            return self.execute_statement_unobserved(stmt);
-        }
-        let query_id = self.next_query_id.fetch_add(1, AtomicOrdering::Relaxed);
-        let metrics = Rc::new(QueryMetricsRecorder::new(true));
-        let _metrics_guard = QueryMetricsGuard::install(metrics.clone());
-        let started = Instant::now();
-        self.publish_query_event(QueryEvent::Received(QueryReceivedEvent { query_id, query }));
-        let outcome = self.execute_statement_unobserved(stmt);
-        match &outcome {
-            Ok(result) => self.publish_query_completed(
-                query_id,
-                started.elapsed(),
-                metrics.snapshot(),
-                Some(std::slice::from_ref(result)),
-                None,
-            ),
-            Err(error) => self.publish_query_completed(
-                query_id,
-                started.elapsed(),
-                metrics.snapshot(),
-                None,
-                Some(error.to_string()),
-            ),
-        }
-        outcome
     }
 
     fn execute_statement_unobserved(&self, stmt: Statement) -> Result<QueryResult> {
@@ -1445,8 +1342,10 @@ impl Engine {
             Statement::StartTransaction { .. }
             | Statement::Commit { .. }
             | Statement::Rollback { .. }
-            | Statement::Use { .. }
-            | Statement::ShowVariable { .. }
+            | Statement::Use { .. } => Err(anyhow!(
+                "transaction and database control must execute through EngineSession"
+            )),
+            Statement::ShowVariable { .. }
             | Statement::SetVariable { .. }
             | Statement::ShowVariables { .. }
             | Statement::ShowStatus { .. } => Ok(QueryResult::default()),
@@ -3283,7 +3182,7 @@ impl Engine {
             return Err(anyhow!("incorrect prefix key"));
         }
 
-        if upper.starts_with("SET ") && upper.contains("TIME_ZONE") {
+        if upper.starts_with("SET TIME_ZONE ") {
             let value = trimmed
                 .split_once('=')
                 .map(|(_, value)| value.trim().trim_matches(';').trim_matches(['\'', '"']))
@@ -3300,7 +3199,7 @@ impl Engine {
                 .unwrap_or_default();
             return Ok(Some(QueryResult::default()));
         }
-        if upper.contains("SQL_SAFE_UPDATES") {
+        if upper.starts_with("SET SQL_SAFE_UPDATES ") {
             let enabled = trimmed
                 .split_once('=')
                 .map(|(_, value)| {
@@ -3772,7 +3671,37 @@ impl Engine {
         if upper.starts_with("UPDATE") && upper.ends_with("LIMIT 0") {
             return Ok(Some(QueryResult::default()));
         }
-        if let Some((table, index)) = parse_alter_table_drop_index(trimmed) {
+        if let Some((table, index, if_exists)) = catalog::parse_index_drop(trimmed)? {
+            let table = object_name(&table)?;
+            let index = index.value;
+            let schema = self
+                .schemas
+                .get(&table)
+                .ok_or_else(|| anyhow!("unknown table: {table}"))?;
+            let exists = schema
+                .indexes
+                .iter()
+                .any(|item| item.name.eq_ignore_ascii_case(&index))
+                || schema.unique.iter().any(|columns| {
+                    columns
+                        .first()
+                        .is_some_and(|name| name.eq_ignore_ascii_case(&index))
+                });
+            drop(schema);
+            if !exists {
+                let message = format!("Can't DROP INDEX `{index}`; check that it exists");
+                if !if_exists {
+                    return Err(anyhow!("{message}"));
+                }
+                return Ok(Some(QueryResult {
+                    warnings: vec![QueryWarning {
+                        level: "Note".into(),
+                        code: 1091,
+                        message,
+                    }],
+                    ..QueryResult::default()
+                }));
+            }
             return Ok(Some(self.drop_index_from_table(&table, &index)?));
         }
         if upper.starts_with("SHOW DATABASES") || upper.starts_with("SHOW SCHEMAS") {
@@ -4027,10 +3956,37 @@ fn preserve_select_result_headers(sql: &str, result: &mut QueryResult) {
     if expressions.len() != result.columns.len() {
         return;
     }
+    let named_projections = super::parse(trimmed)
+        .ok()
+        .and_then(|statements| match statements.into_iter().next()? {
+            Statement::Query(query) => match *query.body {
+                SetExpr::Select(select) => Some(
+                    select
+                        .projection
+                        .into_iter()
+                        .map(|item| {
+                            matches!(
+                                item,
+                                SelectItem::UnnamedExpr(
+                                    Expr::Identifier(_) | Expr::CompoundIdentifier(_)
+                                ) | SelectItem::ExprWithAlias { .. }
+                            )
+                        })
+                        .collect::<Vec<_>>(),
+                ),
+                _ => None,
+            },
+            _ => None,
+        })
+        .unwrap_or_default();
     let headers = expressions
         .into_iter()
         .zip(result.columns.iter())
-        .map(|(expression, current)| {
+        .enumerate()
+        .map(|(index, (expression, current))| {
+            if named_projections.get(index) == Some(&true) {
+                return current.clone();
+            }
             if expression.trim() == "*"
                 || expression.trim().ends_with(".*")
                 || projection_is_modifier_wildcard(&expression)
@@ -4092,7 +4048,7 @@ fn simple_qualified_column_name(expression: &str) -> Option<String> {
         .split('.')
         .map(|part| part.trim().trim_matches('`'))
         .collect::<Vec<_>>();
-    (parts.len() > 1
+    (!parts.is_empty()
         && parts.iter().all(|part| {
             !part.is_empty()
                 && part

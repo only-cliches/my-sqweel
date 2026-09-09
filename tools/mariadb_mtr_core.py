@@ -377,6 +377,10 @@ def reset_test_database(server: Server, client_bindir: Path, mariadb: bool = Fal
 
     statements = []
     protected_databases = {"information_schema", "mysql", "performance_schema", "sys", "mtr", "test"}
+    if server.name == "mysqweel":
+        # The embedded catalog keeps its default database for the server's lifetime.
+        # MTR cases use the separate, recreated `test` database.
+        protected_databases.add("app")
     for database in databases.stdout.splitlines():
         database = database.strip()
         if database and database not in protected_databases:
@@ -389,9 +393,10 @@ def reset_test_database(server: Server, client_bindir: Path, mariadb: bool = Fal
                 escaped_user = user.replace("'", "''")
                 escaped_host = host.replace("'", "''")
                 statements.append(f"DROP USER IF EXISTS '{escaped_user}'@'{escaped_host}'")
+    if server.name != "mysqweel":
+        statements.append("SET GLOBAL log_bin_trust_function_creators = 1")
     statements.extend(
         (
-            "SET GLOBAL log_bin_trust_function_creators = 1",
             "DROP DATABASE IF EXISTS test",
             "CREATE DATABASE test",
         )
@@ -489,6 +494,9 @@ def configure_case_timezone(
 ) -> str:
     timezone = mtr_case_timezone(suite_root, case, layout)
     connection = parse_server_url(server.url)
+    # MySqweel has a fixed UTC session default and no mutable global settings.
+    # Verify that default rather than silently ignoring a requested timezone.
+    verify_timezone = server.name == "mysqweel"
     command = [
         str(client_bindir / "mysql"),
         "--no-defaults",
@@ -497,7 +505,12 @@ def configure_case_timezone(
         f"--host={connection['host']}",
         f"--port={connection['port']}",
         "--protocol=TCP",
-        f"--execute=SET GLOBAL time_zone = '{timezone}'",
+        *(["--batch", "--skip-column-names"] if verify_timezone else []),
+        (
+            "--execute=SELECT @@time_zone"
+            if verify_timezone
+            else f"--execute=SET GLOBAL time_zone = '{timezone}'"
+        ),
     ]
     completed = subprocess.run(
         command,
@@ -512,7 +525,34 @@ def configure_case_timezone(
             f"could not configure {server.name} timezone for {case.name}: "
             f"{completed.stderr.strip()}"
         )
+    if verify_timezone and completed.stdout.strip() != timezone:
+        raise RuntimeError(
+            f"{case.name}: MySqweel session timezone {completed.stdout.strip()!r} "
+            f"does not match required {timezone!r}"
+        )
     return timezone
+
+
+def prepare_external_mariadb_runner(runner: Path, destination: Path) -> Path:
+    """Keep the feature probe in --extern's database without editing upstream files.
+
+    SHOW VARIABLES is database-independent. MariaDB 10.11's probe unnecessarily
+    selects mysql, which prevents external servers without that schema from
+    reaching any test. Apply the same narrowly checked adaptation to both engines.
+    """
+    original = runner.read_bytes()
+    probe = b'use mysql; SHOW VARIABLES'
+    if original.count(probe) != 1:
+        raise RuntimeError("unrecognized MariaDB MTR external feature probe; review runner adaptation")
+    adapted = original.replace(probe, b'SHOW VARIABLES', 1)
+    destination.write_bytes(adapted)
+    destination.with_suffix(".json").write_text(json.dumps({
+        "source": str(runner),
+        "source_sha256": hashlib.sha256(original).hexdigest(),
+        "adapted_sha256": hashlib.sha256(adapted).hexdigest(),
+        "adaptation": "Run SHOW VARIABLES in the configured external database",
+    }, indent=2) + "\n")
+    return destination
 
 
 def run_case(
@@ -528,6 +568,10 @@ def run_case(
 ) -> Invocation:
     case_artifact = artifact_dir / server.name / case.name.replace("/", "_")
     case_artifact.mkdir(parents=True, exist_ok=True)
+    if layout == "mariadb":
+        mysqltest_runner = prepare_external_mariadb_runner(
+            mysqltest_runner, case_artifact / "mariadb-test-run.pl"
+        )
     vardir = Path(tempfile.mkdtemp(prefix="mysqweel-mtr-", dir="/tmp"))
     (vardir / "log").mkdir()
     # MTR copies its roughly 500 MiB std_data directory into every vardir by
@@ -680,6 +724,9 @@ def render_markdown(report: dict) -> str:
             f"| `{result['test']}` | `{result['feature']}` | {result.get('statements', 0)} | "
             f"{result.get('baseline', 'not-run')} | {result['mysqweel']} |"
         )
+
+    if report.get("runner_adaptation"):
+        lines.extend(["", f"Runner adaptation: {report['runner_adaptation']}"])
 
     failed_by_server: dict[str, dict] = {}
     for invocation in report.get("invocations", []):
@@ -879,6 +926,13 @@ def run(args: argparse.Namespace) -> int:
         "baseline_label": args.baseline_label,
         "baseline_version": args.baseline_version,
         "source_revision": args.source_revision,
+        "runner_adaptation": (
+            "The external feature probe runs SHOW VARIABLES in the configured database. "
+            "Both engines use the same adaptation; per-invocation mariadb-test-run.json "
+            "records the original and adapted runner hashes. Upstream test and result files "
+            "and the mysqltest binary are unchanged."
+            if args.mtr_layout == "mariadb" else None
+        ),
         "minimum_percent": args.minimum_percent,
         "counts": {
             "included": len(results),

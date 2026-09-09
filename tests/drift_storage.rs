@@ -24,7 +24,7 @@ fn snapshot_roundtrip_restores_rows() {
     let after_delete = engine.execute_sql("SELECT id FROM users").unwrap();
     assert_eq!(after_delete[0].rows.len(), 0);
 
-    engine.restore_snapshot(snap);
+    engine.restore_snapshot(snap).unwrap();
     let restored = engine.execute_sql("SELECT id FROM users").unwrap();
     assert_eq!(restored[0].rows.len(), 1);
 }

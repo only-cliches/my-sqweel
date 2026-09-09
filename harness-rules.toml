@@ -150,6 +150,41 @@ timeout_secs = 60
 approval_mode = "auto"
 reason = "Run the pinned MariaDB MTR compatibility baseline to completion"
 
+[[hostdo.commands]]
+argv = [
+    "cargo",
+    "build",
+    "--locked",
+    "--bin",
+    "sqwl",
+]
+cwd = "$WORKSPACE"
+timeout_secs = 60
+approval_mode = "auto"
+reason = "Build the transactional backend with the host sibling msql-srv dependency for upstream MariaDB testing"
+
+[[hostdo.commands]]
+argv = [
+    "docker",
+    "ps",
+    "--format",
+    "{{.Names}} {{.Image}} {{.Ports}}",
+]
+cwd = "$WORKSPACE"
+timeout_secs = 60
+approval_mode = "auto"
+reason = "Check the host Docker runtime for the pinned MariaDB upstream test runner"
+
+[[hostdo.commands]]
+argv = [
+    "bash",
+    "artifacts/run-mariadb-mtr-focused-host.sh",
+]
+cwd = "$WORKSPACE"
+timeout_secs = 60
+approval_mode = "auto"
+reason = "Retry the focused MariaDB upstream baseline now that Docker images are cached"
+
 [network]
 allowlist = [
     "domain=raw.githubusercontent.com",
@@ -176,4 +211,5 @@ allowlist = [
 denylist = [
     "domain=sdmntprsouthcentralus.oaiusercontent.com",
     "domain=sdmntprnorthcentralus.oaiusercontent.com",
+    "domain=sdmntprcentralus.oaiusercontent.com",
 ]

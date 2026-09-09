@@ -11,6 +11,12 @@ on:
       - tools/prepare_mariadb_mtr.sh
       - tests/mariadb-mtr-allowlist.txt
       - tests/mariadb-mtr-scope.txt
+      - tests/test_mysql_mtr_compat.py
+      - src/sql/engine/transaction.rs
+      - src/storage/transaction_image.rs
+      - src/server/mysql_wire.rs
+      - tests/transactions.rs
+      - tests/wire_transactions.rs
   workflow_dispatch: {}
   schedule:
     - cron: "23 5 * * 1"
@@ -190,6 +196,7 @@ jobs:
             artifacts/mariadb-mtr-discovery/audit/**/*.reject
             artifacts/mariadb-mtr-discovery/audit/**/mysqweel.log
             artifacts/mariadb-mtr-discovery/audit/**/my.cnf
+            artifacts/mariadb-mtr-discovery/audit/**/mariadb-test-run.json
             artifacts/mariadb-mtr-discovery/mariadb-mtr-focused-promotion-candidates.txt
             artifacts/mariadb-mtr-discovery/focused-audit/mtr-report.json
             artifacts/mariadb-mtr-discovery/focused-audit/mtr-report.md
@@ -199,4 +206,5 @@ jobs:
             artifacts/mariadb-mtr-discovery/focused-audit/**/*.reject
             artifacts/mariadb-mtr-discovery/focused-audit/**/mysqweel.log
             artifacts/mariadb-mtr-discovery/focused-audit/**/my.cnf
+            artifacts/mariadb-mtr-discovery/focused-audit/**/mariadb-test-run.json
           if-no-files-found: warn
