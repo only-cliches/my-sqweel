@@ -270,6 +270,12 @@ fn information_schema_aliases(query: &str) -> HashSet<String> {
         .flatten()
         .filter_map(|item| match item {
             sqlparser::ast::SelectItem::ExprWithAlias { alias, .. } => Some(alias.value),
+            sqlparser::ast::SelectItem::UnnamedExpr(sqlparser::ast::Expr::Identifier(name)) => {
+                Some(name.value)
+            }
+            sqlparser::ast::SelectItem::UnnamedExpr(sqlparser::ast::Expr::CompoundIdentifier(
+                names,
+            )) => names.last().map(|name| name.value.clone()),
             _ => None,
         })
         .collect()
@@ -1979,7 +1985,7 @@ mod tests {
     }
 
     #[test]
-    fn information_schema_wire_results_use_declared_names_for_unaliased_columns() {
+    fn information_schema_wire_results_preserve_explicitly_selected_column_names() {
         let mut row = Map::new();
         row.insert("column_name".to_string(), json!("id"));
         let mut results = vec![QueryResult {
@@ -1993,8 +1999,8 @@ mod tests {
             "SELECT column_name FROM information_schema.columns",
         );
 
-        assert_eq!(results[0].columns, ["COLUMN_NAME"]);
-        assert_eq!(results[0].rows[0].get("COLUMN_NAME"), Some(&json!("id")));
+        assert_eq!(results[0].columns, ["column_name"]);
+        assert_eq!(results[0].rows[0].get("column_name"), Some(&json!("id")));
     }
 
     #[test]

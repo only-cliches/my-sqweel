@@ -390,6 +390,17 @@ impl Catalog {
                 "ALTER TABLE {table} DROP INDEX {conditional}{index}"
             ));
         }
+        if let Some((mut table, next)) = parse_auto_increment_option(sql)? {
+            ensure!(self.is_admin(identity), "Administrative command denied");
+            DatabaseVisitor {
+                catalog: self,
+                identity,
+                database,
+                read_only: false,
+            }
+            .relation(&mut table)?;
+            return Ok(format!("ALTER TABLE {table} AUTO_INCREMENT={next}"));
+        }
         let renamed = normalize_rename(sql)?;
         let mut statements = parse_session_statement(renamed.as_deref().unwrap_or(sql))?;
         ensure!(
@@ -423,6 +434,14 @@ impl Catalog {
         {
             return Ok(formatted.replacen("CREATE INDEX", "CREATE OR REPLACE INDEX", 1));
         }
+        if upper.starts_with("ALTER TABLE ")
+            && upper
+                .trim_end_matches(';')
+                .trim_end()
+                .ends_with(", DISABLE KEYS")
+        {
+            return Ok(format!("{formatted}, DISABLE KEYS"));
+        }
         Ok(formatted)
     }
 }
@@ -431,12 +450,45 @@ impl Catalog {
 /// classification. Execution retains the original SQL so rewrites do not erase
 /// warning context or change CHECK/REPLACE semantics.
 pub(super) fn parse_session_statement(sql: &str) -> Result<Vec<Statement>> {
+    if let Some((table, next)) = parse_auto_increment_option(sql)? {
+        return Ok(crate::sql::parse(&format!(
+            "ALTER TABLE {table} SET TBLPROPERTIES ('auto_increment' = '{next}')"
+        ))?);
+    }
+
     if let Ok(statements) = crate::sql::parse(sql) {
         return Ok(statements);
     }
     let text = sql.trim().trim_end_matches(';').trim();
     let upper = text.to_ascii_uppercase();
-    let rewritten = if upper.starts_with("CHECK TABLE ") {
+    for prefix in [
+        "CREATE VIEW IF NOT EXISTS ",
+        "CREATE OR REPLACE VIEW IF NOT EXISTS ",
+    ] {
+        if upper.starts_with(prefix) {
+            let base = format!(
+                "{}{}",
+                prefix.replace("IF NOT EXISTS ", ""),
+                &text[prefix.len()..]
+            );
+            let mut statements = crate::sql::parse(&base)?;
+            if let [Statement::CreateView { if_not_exists, .. }] = statements.as_mut_slice() {
+                *if_not_exists = true;
+                return Ok(statements);
+            }
+            bail!("Expected one CREATE VIEW statement");
+        }
+    }
+    let rewritten = if upper.starts_with("ALTER TABLE ") && upper.ends_with(", DISABLE KEYS") {
+        let base = &text[..text.len() - ", DISABLE KEYS".len()];
+        let statements = crate::sql::parse(base)?;
+        ensure!(
+            matches!(statements.as_slice(), [Statement::AlterTable { operations, .. }]
+            if matches!(operations.as_slice(), [AlterTableOperation::RenameTable { .. }])),
+            "DISABLE KEYS compatibility requires a single table rename"
+        );
+        return Ok(statements);
+    } else if upper.starts_with("CHECK TABLE ") {
         format!("ANALYZE TABLE {}", &text["CHECK TABLE ".len()..])
     } else if upper.starts_with("CREATE OR REPLACE INDEX ") {
         format!("CREATE INDEX {}", &text["CREATE OR REPLACE INDEX ".len()..])
@@ -467,6 +519,32 @@ pub(super) fn parse_session_statement(sql: &str) -> Result<Vec<Statement>> {
         text.to_owned()
     };
     Ok(crate::sql::parse(&rewritten)?)
+}
+
+// Parse the complete option, including its table, before authorization. Never
+// discard the option and leave an incomplete ALTER TABLE for the generic parser.
+fn parse_auto_increment_option(sql: &str) -> Result<Option<(ObjectName, u64)>> {
+    use sqlparser::keywords::Keyword;
+    use sqlparser::parser::Parser;
+    let mut parser = Parser::new(&MySqlDialect {}).try_with_sql(sql)?;
+    if !parser.parse_keywords(&[Keyword::ALTER, Keyword::TABLE]) {
+        return Ok(None);
+    }
+    let table = parser.parse_object_name(false)?;
+    if !parser.parse_keyword(Keyword::AUTO_INCREMENT) {
+        return Ok(None);
+    }
+    let _ = parser.consume_token(&Token::Eq);
+    let Token::Number(value, _) = parser.next_token().token else {
+        bail!("AUTO_INCREMENT requires an unsigned integer");
+    };
+    let next = value.parse::<u64>()?;
+    let _ = parser.consume_token(&Token::SemiColon);
+    ensure!(
+        parser.peek_token().token == Token::EOF,
+        "unsupported trailing AUTO_INCREMENT options"
+    );
+    Ok(Some((table, next)))
 }
 
 struct MysqlStringEscapes;

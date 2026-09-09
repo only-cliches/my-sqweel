@@ -408,8 +408,8 @@ error-code, prepared-statement, and ORM-shaped suites exercise the supported sur
 - The scope includes `innodb/innodb_bug57255`: 18 statements exercising a transaction with 743
   inserted rows and cascading deletes. Rust tests cover rollback, savepoints, autocommit,
   session isolation, wire status, account persistence, and recovery.
-- The strict manifest remains **32 files / 381 statements**. Its earlier qualification predates
-  this transactional edition; the focused result does not establish a fresh strict-gate pass.
+- The strict manifest passes **32/32 files / 381 statements** locally against both MariaDB 10.11.7
+  and the transactional MySqweel backend, with zero infrastructure failures.
   Focused cases remain audit-only until CI qualification and promotion into
   [`tests/mariadb-mtr-allowlist.txt`](tests/mariadb-mtr-allowlist.txt).
 - The [discovery workflow](.github/workflows/mariadb-mtr-discovery.yml) inventories **5,585 files**,

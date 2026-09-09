@@ -612,3 +612,53 @@ fn conditional_index_drop_preserves_notes_and_table_scope() {
         1
     );
 }
+
+#[test]
+fn auto_increment_table_options_preserve_authorization_and_transaction_boundaries() {
+    let engine = Engine::new(EngineConfig::mysql_strict());
+    provision(&engine);
+    let mut admin = engine.session();
+    admin
+        .execute_sql("CREATE TABLE counters (id INT AUTO_INCREMENT PRIMARY KEY)")
+        .unwrap();
+    admin
+        .execute_sql("INSERT INTO counters VALUES (1), (2)")
+        .unwrap();
+    admin
+        .execute_sql("ALTER TABLE app.counters AUTO_INCREMENT=1")
+        .unwrap();
+    admin
+        .execute_sql("INSERT INTO counters VALUES (NULL)")
+        .unwrap();
+    assert_eq!(
+        admin
+            .execute_sql("SELECT MAX(id) AS id FROM counters")
+            .unwrap()[0]
+            .rows[0]["id"],
+        json!(3)
+    );
+    assert!(
+        admin
+            .execute_sql("ALTER TABLE shard_a.items AUTO_INCREMENT=1")
+            .is_err()
+    );
+    assert!(
+        admin
+            .execute_sql("ALTER TABLE counters AUTO_INCREMENT=1 garbage")
+            .is_err()
+    );
+    admin.execute_sql("BEGIN").unwrap();
+    assert!(
+        admin
+            .execute_sql("ALTER TABLE counters AUTO_INCREMENT=1")
+            .is_err()
+    );
+    admin.execute_sql("ROLLBACK").unwrap();
+    let mut tenant = authenticate(&engine, "tenant", "secret");
+    tenant.use_database("shard_a").unwrap();
+    assert!(
+        tenant
+            .execute_sql("ALTER TABLE items AUTO_INCREMENT=1")
+            .is_err()
+    );
+}

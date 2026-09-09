@@ -1140,6 +1140,7 @@ impl RawEngine {
             parse_sql = strip_create_table_index_prefixes(&parse_sql);
         }
         if statement_upper.starts_with("ALTER TABLE") {
+            parse_sql = strip_create_table_index_prefixes(&parse_sql);
             parse_sql = strip_alter_auto_increment(&parse_sql);
             parse_sql = strip_alter_order_by_clause(&parse_sql);
             parse_sql = strip_alter_execution_options(&parse_sql);

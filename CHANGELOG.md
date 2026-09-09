@@ -32,6 +32,8 @@ All notable changes to MySqweel will be documented in this file.
 
 ### Fixed
 
+- Preserved explicitly selected information-schema column names over prepared wire queries and restored authorization for table-level `ALTER TABLE ... AUTO_INCREMENT`, rename-with-`DISABLE KEYS`, prefix-key ALTER operations, and `CREATE VIEW IF NOT EXISTS` without bypassing database, privilege, or transaction restrictions.
+
 - Added a validated `--default-time-zone` startup offset inherited by new sessions, and pass each upstream MTR case’s required timezone when launching MySqweel. This fixes non-UTC cases such as `timezone4` without enabling global SQL settings or editing upstream tests.
 
 - Fixed unique-constraint name rewriting so identifiers ending in `unique` retain their explicit names in index metadata; updated empty-column metadata coverage to include `collation_name`.
@@ -52,8 +54,8 @@ All notable changes to MySqweel will be documented in this file.
 ### Verification status
 
 - The focused upstream audit contains 25 complete files and 339 direct SQL statements. MariaDB 10.11.7 and the transactional MySqweel backend both pass all 25 files and 339 statements locally, with no infrastructure failures. All 12 previously failing focused-audit files now pass; this does not claim a full MariaDB-suite or strict-manifest CI qualification.
-- Verified 41 transaction, wire, and database-isolation tests, two protocol packet tests covering transaction flags together with warning counts, and 28 MTR harness tests.
-- The strict manifest remains at 32 files. Earlier 100% compatibility results describe the pre-transaction edition and are not a fresh qualification of this backend or a passing CI run.
+- Verified the complete local pre-push check with MariaDB parity required: 281 Rust tests, 29 Python harness tests, and all benchmark targets pass. This includes the ORM introspection regression and transaction authorization checks.
+- Reverified the complete strict manifest locally against MariaDB 10.11.7 and the transactional backend: all 32 files and 381 statements pass on both engines, with zero infrastructure failures. This is a local verification result, not a claim about a subsequent CI run.
 
 ## 0.4.3 Aug 24, 2026
 
