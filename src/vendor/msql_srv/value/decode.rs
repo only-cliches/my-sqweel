@@ -1,5 +1,5 @@
-use crate::myc::constants::ColumnType;
-use crate::myc::io::ReadMysqlExt;
+use crate::vendor::msql_srv::myc::constants::ColumnType;
+use crate::vendor::msql_srv::myc::io::ReadMysqlExt;
 use byteorder::{LittleEndian, ReadBytesExt};
 use std::io;
 
@@ -286,9 +286,9 @@ impl<'a> From<Value<'a>> for Duration {
 #[allow(unused_imports)]
 mod tests {
     use super::Value;
-    use crate::myc;
-    use crate::myc::io::WriteMysqlExt;
-    use crate::{Column, ColumnFlags, ColumnType};
+    use crate::vendor::msql_srv::myc;
+    use crate::vendor::msql_srv::myc::io::WriteMysqlExt;
+    use crate::vendor::msql_srv::{Column, ColumnFlags, ColumnType};
     use chrono::{self, TimeZone};
     use myc::proto::MySerialize;
     use std::time;

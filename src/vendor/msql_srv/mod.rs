@@ -12,7 +12,7 @@
 //! have a chance to respond appropriately. For example, to write a shim that always responds to
 //! all commands with a "no results" reply:
 //!
-//! ```
+//! ```ignore
 //! # extern crate msql_srv;
 //! extern crate mysql;
 //! # use std::io;
@@ -81,6 +81,7 @@
 //!     jh.join().unwrap();
 //! }
 //! ```
+#![allow(dead_code, unused_imports)]
 #![deny(missing_docs)]
 #![deny(rust_2018_idioms)]
 
@@ -103,7 +104,7 @@ use std::net;
 
 use myc::constants::CapabilityFlags;
 
-pub use crate::myc::constants::{ColumnFlags, ColumnType, StatusFlags};
+pub use crate::vendor::msql_srv::myc::constants::{ColumnFlags, ColumnType, StatusFlags};
 
 mod commands;
 mod errorcodes;
@@ -135,10 +136,10 @@ pub struct Column {
     pub colflags: ColumnFlags,
 }
 
-pub use crate::errorcodes::ErrorKind;
-pub use crate::params::{ParamParser, ParamValue, Params};
-pub use crate::resultset::{InitWriter, QueryResultWriter, RowWriter, StatementMetaWriter};
-pub use crate::value::{ToMysqlValue, Value, ValueInner};
+pub use crate::vendor::msql_srv::errorcodes::ErrorKind;
+pub use crate::vendor::msql_srv::params::{ParamParser, ParamValue, Params};
+pub use crate::vendor::msql_srv::resultset::{InitWriter, QueryResultWriter, RowWriter, StatementMetaWriter};
+pub use crate::vendor::msql_srv::value::{ToMysqlValue, Value, ValueInner};
 
 /// Implementors of this trait can be used to drive a MySQL-compatible database backend.
 pub trait MysqlShim<W: Read + Write> {
@@ -255,7 +256,7 @@ impl<B: MysqlShim<S>, S: Read + Write + Clone> MysqlIntermediary<B, S> {
 }
 
 #[derive(Default)]
-struct StatementData {
+pub(crate) struct StatementData {
     long_data: HashMap<u16, Vec<u8>>,
     bound_types: Vec<(myc::constants::ColumnType, bool)>,
     params: u16,
@@ -437,7 +438,7 @@ impl<B: MysqlShim<RW>, RW: Read + Write> MysqlIntermediary<B, RW> {
     }
 
     fn run(mut self) -> Result<(), B::Error> {
-        use crate::commands::Command;
+        use crate::vendor::msql_srv::commands::Command;
 
         let mut stmts: HashMap<u32, _> = HashMap::new();
         while let Some((seq, packet)) = self.rw.next()? {

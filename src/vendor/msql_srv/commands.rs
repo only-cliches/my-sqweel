@@ -1,4 +1,4 @@
-use crate::myc::constants::{CapabilityFlags, Command as CommandByte};
+use crate::vendor::msql_srv::myc::constants::{CapabilityFlags, Command as CommandByte};
 
 #[derive(Debug)]
 #[allow(dead_code)] // The fields here are read, but only in tests. This keeps clippy quiet.
@@ -174,8 +174,8 @@ pub fn parse(i: &[u8]) -> nom::IResult<&[u8], Command<'_>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::myc::constants::{CapabilityFlags, UTF8_GENERAL_CI};
-    use crate::packet::PacketConn;
+    use crate::vendor::msql_srv::myc::constants::{CapabilityFlags, UTF8_GENERAL_CI};
+    use crate::vendor::msql_srv::packet::PacketConn;
     use std::io::Cursor;
 
     #[test]

@@ -1,6 +1,7 @@
-use crate::myc::constants::{ColumnFlags, ColumnType};
-use crate::myc::io::WriteMysqlExt;
-use crate::Column;
+use crate::vendor::msql_srv::myc;
+use crate::vendor::msql_srv::myc::constants::{ColumnFlags, ColumnType};
+use crate::vendor::msql_srv::myc::io::WriteMysqlExt;
+use crate::vendor::msql_srv::Column;
 use byteorder::{LittleEndian, WriteBytesExt};
 use std::io::{self, ErrorKind::Other, Write};
 
@@ -672,17 +673,17 @@ impl ToMysqlValue for myc::value::Value {
 #[allow(unused_imports)]
 mod tests {
     use super::ToMysqlValue;
-    use crate::myc::value;
-    use crate::myc::value::convert::from_value;
-    use crate::myc::value::Value;
-    use crate::{Column, ColumnFlags, ColumnType};
+    use crate::vendor::msql_srv::myc::value;
+    use crate::vendor::msql_srv::myc::value::convert::from_value;
+    use crate::vendor::msql_srv::myc::value::Value;
+    use crate::vendor::msql_srv::{Column, ColumnFlags, ColumnType};
     use chrono::{self, TimeZone};
     use std::time;
 
     mod roundtrip_text {
         use super::*;
 
-        use myc::{
+        use crate::vendor::msql_srv::myc::{
             io::ParseBuf,
             proto::MyDeserialize,
             value::{convert::FromValue, TextValue, ValueDeserializer},
@@ -750,7 +751,7 @@ mod tests {
     mod roundtrip_bin {
         use super::*;
 
-        use myc::{
+        use crate::vendor::msql_srv::myc::{
             io::ParseBuf,
             proto::MyDeserialize,
             value::{convert::FromValue, BinValue, ValueDeserializer},

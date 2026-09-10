@@ -1,5 +1,5 @@
-use crate::myc;
-use crate::{StatementData, Value};
+use crate::vendor::msql_srv::myc;
+use crate::vendor::msql_srv::{StatementData, Value};
 use std::collections::HashMap;
 use std::convert::TryFrom;
 

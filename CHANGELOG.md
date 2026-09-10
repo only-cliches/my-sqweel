@@ -59,6 +59,8 @@ All notable changes to MySqweel will be documented in this file.
 
 ### Compatibility and CI
 
+- Embedded the patched wire-server implementation and its upstream licenses in the published crate, fixing package builds that previously substituted the unpatched registry dependency. Added unpacked-crate verification to the pre-push and CI checks.
+
 - Enabled upstream discovery of basic transactions, autocommit, and savepoints while retaining exclusions for unsupported isolation levels, table/shared locks, and XA. Safe-harness discovery admits reviewed InnoDB cases without opening the entire engine suite. The pinned inventory now contains 319 candidates and 20,082 direct and sourced SQL statements across 5,585 inspected files.
 - Added the complete, hash-pinned `innodb/innodb_bug57255` transaction case to the focused MTR audit. Its 18 direct SQL statements include a transaction with 743 inserted rows followed by cascading deletes. It passes locally against both MariaDB 10.11.7 and MySqweel and remains audit-only pending CI qualification and strict-manifest promotion.
 - Fixed MTR startup for external servers without a selectable `mysql` database by staging a runner copy whose feature probe uses `SHOW VARIABLES` without `USE mysql`. Both engines use the same narrowly checked adaptation; upstream test/result files and the official `mysqltest` binary are unchanged. Per-invocation source and adapted runner hashes are recorded and uploaded with CI artifacts.

@@ -1741,18 +1741,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "msql-srv"
-version = "0.11.0"
-dependencies = [
- "byteorder",
- "chrono",
- "mysql_common 0.31.0",
- "nom",
- "rand 0.8.6",
- "rustls 0.22.4",
-]
-
-[[package]]
 name = "murmurhash32"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1766,6 +1754,7 @@ dependencies = [
  "argon2",
  "axum",
  "base64 0.22.1",
+ "byteorder",
  "bytes",
  "chrono",
  "crc32fast",
@@ -1776,14 +1765,17 @@ dependencies = [
  "jsonwebtoken",
  "md-5",
  "mlua",
- "msql-srv",
  "mysql",
+ "mysql_common 0.31.0",
+ "nom",
  "ordered-float 4.6.0",
  "parking_lot",
+ "rand 0.8.6",
  "rand_core 0.6.4",
  "rayon",
  "reqwest",
  "rmp",
+ "rustls 0.22.4",
  "serde",
  "serde_json",
  "sha1_smol",

@@ -81,3 +81,7 @@ python3 -m unittest discover -s tests -p 'test_*.py'
 echo "Running all targets with MariaDB parity required"
 export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"
 MARIADB_PARITY_REQUIRED=1 cargo test --all-targets --locked
+
+# Cargo verifies an unpacked archive, catching missing files and registry/path drift.
+echo "Verifying the publishable crate"
+cargo package --locked --allow-dirty

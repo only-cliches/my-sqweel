@@ -1,8 +1,8 @@
-use crate::myc::constants::{ColumnFlags, StatusFlags};
-use crate::packet::PacketConn;
-use crate::value::ToMysqlValue;
-use crate::writers;
-use crate::{Column, ErrorKind, StatementData};
+use crate::vendor::msql_srv::myc::constants::{ColumnFlags, StatusFlags};
+use crate::vendor::msql_srv::packet::PacketConn;
+use crate::vendor::msql_srv::value::ToMysqlValue;
+use crate::vendor::msql_srv::writers;
+use crate::vendor::msql_srv::{Column, ErrorKind, StatementData};
 use byteorder::WriteBytesExt;
 use std::borrow::Borrow;
 use std::collections::HashMap;
@@ -486,7 +486,7 @@ mod transaction_warning_tests {
         let columns = [Column {
             table: String::new(),
             column: "value".into(),
-            coltype: crate::ColumnType::MYSQL_TYPE_LONG,
+            coltype: crate::vendor::msql_srv::ColumnType::MYSQL_TYPE_LONG,
             colflags: ColumnFlags::empty(),
         }];
         result.start_with_warnings(&columns, 9).unwrap().finish().unwrap();

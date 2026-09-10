@@ -179,7 +179,7 @@ impl AsRef<[u8]> for Packet {
 use std::ops::Deref;
 
 #[cfg(feature = "tls")]
-use crate::tls;
+use crate::vendor::msql_srv::tls;
 
 impl Deref for Packet {
     type Target = [u8];

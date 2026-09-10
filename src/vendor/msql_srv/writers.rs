@@ -1,7 +1,7 @@
-use crate::myc::constants::StatusFlags;
-use crate::myc::io::WriteMysqlExt;
-use crate::packet::PacketConn;
-use crate::{Column, ErrorKind};
+use crate::vendor::msql_srv::myc::constants::StatusFlags;
+use crate::vendor::msql_srv::myc::io::WriteMysqlExt;
+use crate::vendor::msql_srv::packet::PacketConn;
+use crate::vendor::msql_srv::{Column, ErrorKind};
 use byteorder::{LittleEndian, WriteBytesExt};
 use std::io::{self, Read, Write};
 
@@ -85,7 +85,7 @@ where
 {
     let mut empty = true;
     for c in i {
-        use crate::myc::constants::UTF8_GENERAL_CI;
+        use crate::vendor::msql_srv::myc::constants::UTF8_GENERAL_CI;
         w.write_lenenc_str(b"def")?;
         w.write_lenenc_str(b"")?;
         w.write_lenenc_str(c.table.as_bytes())?;

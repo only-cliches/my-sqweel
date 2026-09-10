@@ -651,7 +651,10 @@ tools/prepush.sh
 The pre-push check requires either `MARIADB_COMPARE_URL` or a working Docker daemon. When Docker is
 used, it pulls and provisions the pinned `mariadb:10.11.7` image, shares that server across the suite,
 and removes it afterward. Unlike the default local suite, this command fails instead of silently
-skipping differential tests when MariaDB is unavailable.
+skipping differential tests when MariaDB is unavailable. It also runs `cargo package --locked --allow-dirty`
+to compile the unpacked publishable crate and catch packaging-only failures before a push.
+The patched wire-server implementation and its licenses are included directly in the crate, so
+registry builds use the same authentication and transaction protocol code as local builds.
 
 Enable the checked-in Git hook once per clone to run it automatically before every push:
 
@@ -739,7 +742,7 @@ src/schema/mod.rs                  Schema-hint model
 src/model.rs                       Stored-row model
 src/sql/engine/transaction/persistence.rs  Incremental committed-state persistence
 src/storage/mod.rs                 Embedded Lux storage, locking, and runtime lifecycle
-vendor/msql-srv/                   Vendored wire-server dependency
+src/vendor/msql_srv/              Embedded wire-server implementation
 tests/                            Engine, transaction, wire, ORM, and parity suites
 tests/mariadb-mtr-scope.txt         Focused upstream audit manifest
 tests/mariadb-mtr-allowlist.txt     Strict upstream gate manifest

@@ -1,3 +1,4 @@
+use crate::vendor::msql_srv;
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::net::TcpListener;
@@ -6,7 +7,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::Duration;
 
 use chrono::{Datelike, Timelike};
-use msql_srv::{
+use crate::vendor::msql_srv::{
     AuthenticationContext, Column, ColumnFlags, ColumnType, ErrorKind, InitWriter,
     MysqlIntermediary, MysqlShim, ParamParser, ParamValue, QueryResultWriter, StatementMetaWriter,
     StatusFlags, ToMysqlValue, ValueInner,
@@ -738,7 +739,6 @@ fn write_result<W: io::Read + io::Write>(
     out: QueryResult,
     query: Option<&str>,
 ) -> io::Result<()> {
-    #[cfg(msql_srv_warning_counts)]
     let warning_count = u16::try_from(out.warnings.len()).unwrap_or(u16::MAX);
     let mut columns = out.columns;
     if columns.is_empty()
@@ -748,14 +748,11 @@ fn write_result<W: io::Read + io::Write>(
     }
 
     if columns.is_empty() {
-        #[cfg(msql_srv_warning_counts)]
         return results.completed_with_warnings(
             out.rows_affected,
             out.last_insert_id,
             warning_count,
         );
-        #[cfg(not(msql_srv_warning_counts))]
-        return results.completed(out.rows_affected, out.last_insert_id);
     }
 
     let mut decimal_columns = query.map(mysql_decimal_columns).unwrap_or_default();
@@ -817,10 +814,7 @@ fn write_result<W: io::Read + io::Write>(
         return results.error(mysql_error_kind(&message), message.as_bytes());
     }
 
-    #[cfg(msql_srv_warning_counts)]
     let mut rw = results.start_with_warnings(&defs, warning_count)?;
-    #[cfg(not(msql_srv_warning_counts))]
-    let mut rw = results.start(&defs)?;
     for row in out.rows {
         write_row(
             &mut rw,
@@ -1846,7 +1840,7 @@ fn decode_mysql_time_parameter(bytes: &[u8]) -> Option<String> {
 mod tests {
     use std::sync::Arc;
 
-    use msql_srv::{Column, ColumnFlags, ColumnType};
+    use crate::vendor::msql_srv::{self, Column, ColumnFlags, ColumnType};
     use serde_json::{Map, json};
 
     use super::{
