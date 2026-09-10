@@ -2,7 +2,7 @@
 
 All notable changes to MySqweel will be documented in this file.
 
-## 0.4.4 Future
+## 0.4.4 Sep 9, 2026
 
 ### Transactions and persistence
 
