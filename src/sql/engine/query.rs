@@ -5688,11 +5688,13 @@ fn remap_set_row(
     source_columns: &[String],
     target_columns: &[String],
 ) -> Result<Map<String, Value>> {
+    let source_keys = row_keys_for_columns(source_columns);
     source_columns
         .iter()
+        .zip(source_keys.iter())
         .zip(target_columns)
-        .map(|(source, target)| {
-            row.get(source)
+        .map(|((source, key), target)| {
+            row.get(key)
                 .cloned()
                 .map(|value| (target.clone(), value))
                 .ok_or_else(|| anyhow!("set operation result is missing column: {source}"))

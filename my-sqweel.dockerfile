@@ -14,18 +14,19 @@ ENV RUSTUP_HOME=/usr/local/rustup
 ENV CARGO_HOME=/usr/local/cargo
 ENV PATH="${CARGO_HOME}/bin:${PATH}"
 
-# Use the MariaDB revision supplied by the base image's Ubuntu repositories.
-# The pinned 10.11.7 compatibility corpus is prepared separately by
-# tools/prepare_mariadb_mtr.sh. An exact revision can still be requested when
-# the configured repositories (for example, an APT snapshot) provide it.
-ARG MARIADB_PACKAGE_VERSION
+# Keep the image's comparison server aligned with the compatibility target.
+# Harness Hat currently uses Ubuntu 26.04, while Ubuntu packaged 10.11.7 for
+# 24.04; do not mix those distribution repositories. Install MariaDB's
+# official, architecture-specific binary tarball instead. Its checksum makes
+# the version pin reproducible and causes a failed download to fail the build.
+ARG TARGETARCH
+ARG MARIADB_VERSION=10.11.7
+ARG MARIADB_BINARY_SHA256_AMD64=5ea876f814f270bdb9118f0b6091757278de7d851b367d1213474331bebe8b61
+ENV MARIADB_HOME=/opt/mariadb
+ENV PATH="${MARIADB_HOME}/bin:${CARGO_HOME}/bin:${PATH}"
 
 RUN set -eu; \
     apt-get update -o APT::Update::Error-Mode=any; \
-    mariadb_version_suffix=""; \
-    if [ -n "${MARIADB_PACKAGE_VERSION:-}" ]; then \
-      mariadb_version_suffix="=${MARIADB_PACKAGE_VERSION}"; \
-    fi; \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       build-essential \
       make \
@@ -40,6 +41,7 @@ RUN set -eu; \
       sqlite3 \
       libsqlite3-dev \
       libssl-dev \
+      libaio1t64 \
       libnuma1 \
       libpcre2-8-0 \
       libpcre2-posix3 \
@@ -47,23 +49,33 @@ RUN set -eu; \
       liburing2 \
       perl \
       zlib1g \
-      "mariadb-client${mariadb_version_suffix}" \
-      "mariadb-server${mariadb_version_suffix}" \
-      "mariadb-test${mariadb_version_suffix}" \
-      "mariadb-test-data${mariadb_version_suffix}" \
       jq \
       shellcheck \
       direnv; \
-    if [ ! -e /usr/share/mysql/mysql-test ] && [ -d /usr/share/mariadb/mariadb-test ]; then \
-      mkdir -p /usr/share/mysql; \
-      ln -s /usr/share/mariadb/mariadb-test /usr/share/mysql/mysql-test; \
-    fi; \
-    test -x /usr/bin/mysqltest; \
-    test -x /usr/share/mysql/mysql-test/mariadb-test-run.pl; \
-    test -x /usr/share/mysql/mysql-test/lib/My/SafeProcess/my_safe_process; \
-    test -x /usr/sbin/mariadbd; \
-    /usr/bin/mysqltest --version; \
-    rm -rf /var/lib/apt/lists/*
+    case "${TARGETARCH:-$(dpkg --print-architecture)}" in \
+      amd64|x86_64) mariadb_arch=x86_64; mariadb_sha256="$MARIADB_BINARY_SHA256_AMD64" ;; \
+      *) echo "MariaDB ${MARIADB_VERSION} binary tarball is configured only for amd64; got ${TARGETARCH:-$(dpkg --print-architecture)}" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+      -o /tmp/mariadb.tar.gz \
+      "https://dlm.mariadb.com/3720296/MariaDB/mariadb-${MARIADB_VERSION}/bintar-linux-systemd-${mariadb_arch}/mariadb-${MARIADB_VERSION}-linux-systemd-${mariadb_arch}.tar.gz"; \
+    echo "${mariadb_sha256}  /tmp/mariadb.tar.gz" | sha256sum -c -; \
+    tar -xzf /tmp/mariadb.tar.gz -C /opt; \
+    mv "/opt/mariadb-${MARIADB_VERSION}-linux-systemd-${mariadb_arch}" "$MARIADB_HOME"; \
+    ln -s "$MARIADB_HOME/bin/mariadbd" /usr/local/bin/mariadbd; \
+    for tool in mariadb mariadb-admin mysql mysqladmin mysqltest; do \
+      if [ -x "$MARIADB_HOME/bin/$tool" ]; then ln -s "$MARIADB_HOME/bin/$tool" "/usr/local/bin/$tool"; fi; \
+    done; \
+    printf '%s\\n' '#!/bin/sh' \
+      'exec /opt/mariadb/scripts/mariadb-install-db --basedir=/opt/mariadb "$@"' \
+      > /usr/local/bin/mariadb-install-db; \
+    chmod 0755 /usr/local/bin/mariadb-install-db; \
+    test -x "$MARIADB_HOME/bin/mariadbd"; \
+    test -x "$MARIADB_HOME/bin/mysqltest"; \
+    test -d "$MARIADB_HOME/mysql-test"; \
+    mariadbd --version | grep -F "${MARIADB_VERSION}-MariaDB"; \
+    mysqltest --version; \
+    rm -rf /tmp/mariadb.tar.gz /var/lib/apt/lists/*
 
 # The helper starts a disposable local MariaDB instance for parity and MTR
 # runs when no external comparison server is supplied. The workspace remains

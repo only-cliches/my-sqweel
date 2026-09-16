@@ -99,6 +99,22 @@ def parse_manifest(path: Path) -> list[TestCase]:
     return cases
 
 
+def merge_manifests(cases: list[TestCase], directory: Path) -> list[TestCase]:
+    """Include promoted complete cases without silently changing an existing pin."""
+    if not directory.is_dir():
+        raise FileNotFoundError(f"additional manifest directory not found: {directory}")
+    merged = {case.name: case for case in cases}
+    for path in sorted(directory.glob("*.txt")):
+        for case in parse_manifest(path):
+            previous = merged.get(case.name)
+            if previous and (previous.test_sha256, previous.result_sha256, previous.feature) != (
+                case.test_sha256, case.result_sha256, case.feature
+            ):
+                raise ValueError(f"{path}: conflicting existing MTR pin for {case.name}")
+            merged.setdefault(case.name, case)
+    return list(merged.values())
+
+
 def mysql_test_file(suite_root: Path, name: str, layout: str = "mariadb") -> Path:
     mysql_test = suite_root / "mysql-test"
     if "/" not in name:
@@ -763,6 +779,9 @@ def run(args: argparse.Namespace) -> int:
     report_dir = args.report_dir.resolve()
     report_dir.mkdir(parents=True, exist_ok=True)
     cases = parse_manifest(allowlist)
+    additional = getattr(args, "additional_allowlist_dir", None)
+    if additional is not None:
+        cases = merge_manifests(cases, additional)
     validate_cases(suite_root, cases, args.mtr_layout)
 
     runner_name = "mariadb-test-run.pl" if args.mtr_layout == "mariadb" else "mysql-test-run.pl"
@@ -959,6 +978,8 @@ def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__)
     result.add_argument("--suite-root", type=Path, required=True)
     result.add_argument("--allowlist", type=Path, default=DEFAULT_ALLOWLIST)
+    result.add_argument("--additional-allowlist-dir", type=Path,
+                        help="include complete hash-pinned cases from *.txt manifests in this directory")
     result.add_argument("--report-dir", type=Path, default=Path("artifacts/mariadb-mtr"))
     result.add_argument("--target", choices=("baseline", "mysqweel", "both"), default="both")
     result.add_argument("--baseline-url", "--mysql-url", dest="baseline_url")

@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "id": "outer_join_null",
+  "provenance": {"kind": "original", "license": "MIT"},
+  "features": ["outer-join", "grouping", "null"],
+  "fixture_notes": "Two matches including NULL, one unmatched parent, and an orphan child distinguish COUNT(*) from COUNT(value).",
+  "determinism_notes": "Grouped results have a unique parent ID and explicit ordering.",
+  "setup": [
+    "CREATE TABLE parents (id INT PRIMARY KEY)",
+    "CREATE TABLE children (id INT PRIMARY KEY, parent_id INT, value INT)",
+    "INSERT INTO parents VALUES (1), (2)",
+    "INSERT INTO children VALUES (1, 1, 10), (2, 1, NULL), (3, 99, 20)"
+  ],
+  "steps": [{"sql": "SELECT p.id, COUNT(c.value) AS present_values, COUNT(*) AS joined_rows FROM parents p LEFT JOIN children c ON c.parent_id = p.id GROUP BY p.id ORDER BY p.id", "ordered": true}]
+}

@@ -728,6 +728,17 @@ When fixing a compatibility mismatch, add the smallest reproducing query to the 
 corpus or parity suite first. A useful report includes the schema, fixture rows, query, MariaDB
 version, expected result, and MySqweel result.
 
+For continuous discovery and local repair branches, see the
+[query coverage worker](tools/query_coverage/README.md). It combines GitHub application
+SQL with the existing upstream backlog, uses pinned MariaDB results, and adds offline
+regression fixtures. Discovery and reporting do not use a model; its `run` command
+explicitly starts bounded oh-my-pi sessions. Review-ready branches are not public
+coverage claims until integrated and qualified by CI.
+
+When working interactively in oh-my-pi, use `/skill:mysqweel-query-coverage`.
+The project-local skill makes the active model search public GitHub itself through
+the GitHub Code Search API; supply `GH_TOKEN` or `GITHUB_TOKEN`, not a repository list.
+
 ## Project layout
 
 ```text

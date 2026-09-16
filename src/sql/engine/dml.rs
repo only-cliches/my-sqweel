@@ -157,6 +157,9 @@ impl RawEngine {
                     return Err(anyhow!("Datetime function: datetime field overflow"));
                 }
                 let source_columns = select_result.columns.clone();
+                // Duplicate output names (e.g. `d.id, t.id`) are stored under
+                // disambiguated row keys; positional mapping must use them.
+                let source_keys = row_keys_for_columns(&source_columns);
                 let source_contexts = if on_duplicate.is_empty() {
                     Vec::new()
                 } else {
@@ -201,9 +204,9 @@ impl RawEngine {
                 for row in select_result.rows {
                     let mut data = Map::new();
                     for (idx, col) in columns.iter().enumerate() {
-                        let value = source_columns
+                        let value = source_keys
                             .get(idx)
-                            .and_then(|src_col| row.get(src_col).cloned())
+                            .and_then(|src_key| row.get(src_key).cloned())
                             .unwrap_or(Value::Null);
                         data.insert(col.clone(), value);
                     }

@@ -14,7 +14,7 @@ use crate::vendor::msql_srv::{
 };
 use serde_json::{Map, Value};
 
-use crate::sql::engine::{Engine, EngineSession, MysqlColumnType, QueryResult, QueryWarning};
+use crate::sql::engine::{row_keys_for_columns, Engine, EngineSession, MysqlColumnType, QueryResult, QueryWarning};
 
 #[derive(Clone)]
 pub struct WireServer {
@@ -434,8 +434,14 @@ impl Backend {
         let mut row = Map::new();
         for item in select.projection {
             let (column, value) = self.session_projection_value(&item)?;
+            let count = columns.iter().filter(|existing| *existing == &column).count() + 1;
+            let key = if count == 1 {
+                column.clone()
+            } else {
+                format!("{column}#{count}")
+            };
             columns.push(column.clone());
-            row.insert(column, value);
+            row.insert(key, value);
         }
         Some(QueryResult {
             rows_affected: 0,
@@ -1013,9 +1019,10 @@ fn write_row<W: io::Read + io::Write>(
     decimal_columns: &HashMap<String, usize>,
     float_columns: &HashMap<String, usize>,
 ) -> io::Result<()> {
-    for (index, key) in columns.iter().enumerate() {
+    let keys = row_keys_for_columns(columns);
+    for (index, name) in columns.iter().enumerate() {
         let definition = &definitions[index];
-        let value = row.get(key).unwrap_or(&Value::Null);
+        let value = row.get(&keys[index]).unwrap_or(&Value::Null);
         if let Value::String(value) = value
             && let Some(hex) = value.strip_prefix(crate::sql::engine::MYSQL_BINARY_SENTINEL)
         {
@@ -1042,12 +1049,10 @@ fn write_row<W: io::Read + io::Write>(
             }
             Value::Null => rw.write_col(Option::<String>::None)?,
             Value::Number(number) if definition.coltype == ColumnType::MYSQL_TYPE_NEWDECIMAL => {
-                let scale = decimal_columns.get(key).copied().unwrap_or(0);
-                rw.write_col(format_decimal_text(&number.to_string(), scale))?;
+                rw.write_col(format_decimal_text(&number.to_string(), decimal_columns.get(name).copied().unwrap_or(0)))?;
             }
             Value::String(value) if definition.coltype == ColumnType::MYSQL_TYPE_NEWDECIMAL => {
-                let scale = decimal_columns.get(key).copied().unwrap_or(0);
-                rw.write_col(format_decimal_text(value, scale))?;
+                rw.write_col(format_decimal_text(value, decimal_columns.get(name).copied().unwrap_or(0)))?;
             }
             Value::Bool(value) => {
                 write_numeric_column(rw, i64::from(*value), definition)?;
@@ -1066,7 +1071,7 @@ fn write_row<W: io::Read + io::Write>(
                     }
                 } else if definition.coltype == ColumnType::MYSQL_TYPE_FLOAT {
                     let value = number.as_f64().unwrap_or_default() as f32;
-                    if let Some(scale) = float_columns.get(key) {
+                    if let Some(scale) = float_columns.get(name) {
                         rw.write_col(format!("{value:.scale$}"))?;
                     } else {
                         rw.write_col(value)?;
@@ -1343,10 +1348,11 @@ fn validate_wire_rows(
     columns: &[String],
     definitions: &[Column],
 ) -> io::Result<()> {
+    let keys = row_keys_for_columns(columns);
     for row in rows {
         for (index, key) in columns.iter().enumerate() {
             let definition = &definitions[index];
-            let value = row.get(key).unwrap_or(&Value::Null);
+            let value = row.get(&keys[index]).unwrap_or(&Value::Null);
             match value {
                 Value::Null
                     if definition.colflags.contains(ColumnFlags::NOT_NULL_FLAG)

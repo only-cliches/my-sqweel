@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "window_rank_ties_null_points",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "code-golf/code-golf",
+      "commit": "b69c243fab15d1fd64750e0c3e7d3771cd33d884",
+      "path": "sql/a-schema.sql",
+      "url": "https://github.com/code-golf/code-golf/blob/b69c243fab15d1fd64750e0c3e7d3771cd33d884/sql/a-schema.sql",
+      "sha256": "9a850a4a941ccd06acf8a0e18aca21f8a01dbe22a08044b76e143e254bda5c91",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "ranks CTE of the CREATE MATERIALIZED VIEW rankings view (lines 363-375): count(*) OVER (PARTITION BY hole, lang, scoring), rank() OVER (PARTITION BY hole, lang, scoring ORDER BY points_for_lang DESC, strokes), and row_number() over the same partition with an extended unique ordering key (..., submitted)",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A tournament leaderboard ranks competitors inside a multi-column partition (hole, lang, scoring): rank() orders by a descending score where equal scores keep the same rank, while row_number() re-extends the same ordering with a unique timestamp so every competitor gets a distinct sequence number; count(*) over the partition counts all competitors in the group.",
+      "mysql_mariadb_translation": "Rewritten as an original league scoreboard (match_scores: team/season partition, player, nullable points). The ranking pattern itself is standard SQL and runs unchanged on MariaDB 10.11.7: rank() and dense_rank() keep their tie-skipping and no-skipping semantics on ORDER BY points DESC, row_number() gets a unique (points DESC, player) ordering key, and count(*) counts partition members. NULL points sort last under DESC in both engines, and each partition holds at most one NULL row so NULL peer semantics do not influence the observations."
+    },
+    "independently_authored": true
+  },
+  "features": ["window", "rank", "dense_rank", "row_number", "count", "partition", "null", "ties"],
+  "fixture_notes": "alpha/s1 and beta/s1 each contain a two-way tie on points (20,20 / 10,10) and one NULL-points player; alpha/s2 is a single-member partition; gamma/s1 holds one scored and one NULL row so a two-row partition with a NULL peer is covered. Tie pairs differ per partition so per-partition rank sequences cannot be confused with one another.",
+  "determinism_notes": "rank and dense_rank depend only on equality of the ORDER BY key, so tied points produce fixed values regardless of internal row order; row_number uses the unique (points DESC, player) key; the outer ORDER BY (team, season, points DESC, player) is unique. No clocks, randomness, or concurrency.",
+  "setup": [
+    "CREATE TABLE match_scores (id INT PRIMARY KEY, team VARCHAR(16) NOT NULL, season VARCHAR(8) NOT NULL, player VARCHAR(16) NOT NULL, points INT NULL)",
+    "INSERT INTO match_scores VALUES (1, 'alpha', 's1', 'p1', 20), (2, 'alpha', 's1', 'p2', 20), (3, 'alpha', 's1', 'p3', 10), (4, 'alpha', 's1', 'p4', NULL), (5, 'alpha', 's2', 'p1', 30), (6, 'beta', 's1', 'p1', 20), (7, 'beta', 's1', 'p2', 10), (8, 'beta', 's1', 'p3', 10), (9, 'beta', 's1', 'p4', NULL), (10, 'gamma', 's1', 'p1', 5), (11, 'gamma', 's1', 'p2', NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT team, season, player, points, count(*) OVER (PARTITION BY team, season) AS members, rank() OVER (PARTITION BY team, season ORDER BY points DESC) AS rank_desc, dense_rank() OVER (PARTITION BY team, season ORDER BY points DESC) AS dense_desc, row_number() OVER (PARTITION BY team, season ORDER BY points DESC, player) AS seq FROM match_scores ORDER BY team, season, points DESC, player",
+      "ordered": true
+    }
+  ]
+}

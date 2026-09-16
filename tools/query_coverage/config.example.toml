@@ -1,0 +1,37 @@
+# Copy outside tracked files and customize before running. Python 3.11+ required.
+state_dir = ".cache/query-coverage"
+# Select a commit that contains the runner and harness. HEAD resolves once per run.
+base_ref = "HEAD"
+agent_command = ["omp"]
+# Rootless Podman is also supported: ["podman"].
+container_command = ["docker"]
+model = "llama.cpp/Qwen3.8-27B"
+thinking = "xhigh"
+session_seconds = 1800
+verification_seconds = 1800
+statement_seconds = 10
+repair_attempts = 3
+poll_seconds = 60
+discovery_seconds = 3600
+github_limit = 10
+github_queries = [
+  "mysql extension:sql",
+  "mariadb extension:sql",
+  "postgresql extension:sql",
+  "postgres extension:sql",
+  "sqlite extension:sql",
+  "postgresql extension:py SELECT",
+  "sqlite extension:ts SELECT",
+]
+
+# Prepare the existing pinned MTR package with tools/prepare_mariadb_mtr.sh.
+# These must be absolute paths valid on the worker host. Empty disables MTR import.
+mtr_suite_root = ""
+mtr_args = []
+# Example arguments (use actual paths from --print-env):
+# mtr_args = [
+#   "--mtr-runner", "/absolute/mtr/mysql-test/mariadb-test-run.pl",
+#   "--mysqltest-bin", "/absolute/client/bin/mysqltest",
+#   "--client-bindir", "/absolute/client/bin",
+#   "--safe-process-bin", "/absolute/client/bin/mysqltest_safe_process",
+# ]

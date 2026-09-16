@@ -43,6 +43,7 @@ mod values;
 use compat::*;
 use ddl::*;
 pub(crate) use eval::MYSQL_BINARY_SENTINEL;
+pub(crate) use eval::row_keys_for_columns;
 pub(crate) use eval::json_compact_text;
 pub(crate) use eval::json_wire_text;
 use eval::*;

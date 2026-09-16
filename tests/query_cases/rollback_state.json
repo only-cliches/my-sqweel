@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "id": "rollback_state",
+  "provenance": {"kind": "original", "license": "MIT"},
+  "features": ["update", "delete", "transaction", "rollback"],
+  "fixture_notes": "Two rows distinguish an update and deletion from the restored state after rollback.",
+  "determinism_notes": "All reads use a unique primary-key order; transaction steps are sequential.",
+  "setup": ["CREATE TABLE items (id INT PRIMARY KEY, amount INT)", "INSERT INTO items VALUES (1, 10), (2, 20)"],
+  "steps": [
+    {"sql": "START TRANSACTION"},
+    {"sql": "UPDATE items SET amount = amount + 5 WHERE id = 1"},
+    {"sql": "DELETE FROM items WHERE id = 2"},
+    {"sql": "SELECT id, amount FROM items ORDER BY id", "ordered": true},
+    {"sql": "ROLLBACK"}
+  ],
+  "checks": [{"sql": "SELECT id, amount FROM items ORDER BY id", "ordered": true}]
+}

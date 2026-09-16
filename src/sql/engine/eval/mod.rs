@@ -180,6 +180,26 @@ pub(super) fn table_factor_name_full(factor: &TableFactor) -> Result<String> {
         _ => Err(anyhow!("unsupported table factor")),
     }
 }
+/// Row-map keys for a result's output columns. Rows are keyed by output
+/// column name, so a duplicated name (for example `t1.id, t2.id`) would
+/// otherwise overwrite earlier values; the kth occurrence (k > 1) is stored
+/// under `name#k`. Consumers that walk `columns` positionally must use these
+/// keys instead of the raw names.
+pub(crate) fn row_keys_for_columns(columns: &[String]) -> Vec<String> {
+    let mut seen: BTreeMap<String, u32> = BTreeMap::new();
+    columns
+        .iter()
+        .map(|name| {
+            let count = seen.entry(name.clone()).or_default();
+            *count += 1;
+            if *count == 1 {
+                name.clone()
+            } else {
+                format!("{name}#{count}")
+            }
+        })
+        .collect()
+}
 
 pub(super) fn project_row(
     projection: &[SelectItem],
@@ -200,12 +220,26 @@ where
     F: FnMut(&Expr) -> Result<Value>,
 {
     let mut out = Map::new();
+    // Duplicate output names must keep distinct row values; assign the kth
+    // occurrence the same disambiguated key `row_keys_for_columns` derives
+    // from the output column list.
+    let mut seen: BTreeMap<String, u32> = BTreeMap::new();
+    let mut key_for = |name: &str| -> String {
+        let count = seen.entry(name.to_string()).or_default();
+        *count += 1;
+        if *count == 1 {
+            name.to_string()
+        } else {
+            format!("{name}#{count}")
+        }
+    };
     for item in projection {
         match item {
             SelectItem::Wildcard(_) => {
                 for (column, value) in data {
                     if !column.contains('.') && !is_historical_column_marker(column) {
-                        out.insert(column.clone(), value.clone());
+                        let key = key_for(column);
+                        out.insert(key, value.clone());
                     }
                 }
             }
@@ -221,18 +255,20 @@ where
                     if let Some(output) = strip_prefix_case_insensitive(column, &qualified_prefix)
                         && !is_historical_column_marker(output)
                     {
-                        out.insert(output.to_string(), value.clone());
+                        let key = key_for(output);
+                        out.insert(key, value.clone());
                     }
                 }
             }
             SelectItem::UnnamedExpr(expr) => {
-                let key = projection_output_column_name(expr);
+                let key = key_for(&projection_output_column_name(expr));
                 let value = eval(expr)?;
                 out.insert(key, value);
             }
             SelectItem::ExprWithAlias { expr, alias } => {
+                let key = key_for(&alias.value);
                 let value = eval(expr)?;
-                out.insert(alias.value.clone(), value);
+                out.insert(key, value);
             }
         }
     }
@@ -599,9 +635,10 @@ pub(super) fn project_aggregate_item(
         }
         SelectItem::UnnamedExpr(expr) => {
             let column = projection_output_column_name(expr);
+            let key = aggregate_output_key(out, &column);
             let value =
                 aggregate_or_eval_expr(expr, group, base, last_insert_id, order_hints, eval)?;
-            out.insert(column, value);
+            out.insert(key, value);
         }
         SelectItem::ExprWithAlias { expr, alias } => {
             let value =
@@ -609,11 +646,29 @@ pub(super) fn project_aggregate_item(
             if aggregate_call(expr).is_some() {
                 out.insert(projection_expr_column_name(expr), value.clone());
             }
-            out.insert(alias.value.clone(), value);
+            let key = aggregate_output_key(out, &alias.value);
+            out.insert(key, value);
         }
         _ => {}
     }
     Ok(())
+}
+
+/// Next row-map key for an aggregate output name, matching
+/// `row_keys_for_columns` for the projected column list.
+fn aggregate_output_key(out: &Map<String, Value>, name: &str) -> String {
+    let used = out.keys().filter(|key| {
+        **key == *name
+            || key
+                .strip_prefix(name)
+                .is_some_and(|rest| rest.starts_with('#'))
+    });
+    let count = used.count() + 1;
+    if count == 1 {
+        name.to_string()
+    } else {
+        format!("{name}#{count}")
+    }
 }
 
 pub(super) fn aggregate_or_eval_expr(
@@ -2826,9 +2881,10 @@ pub(super) fn eval_binary_values(
 }
 
 pub(super) fn first_projected_value(row: &Map<String, Value>, columns: &[String]) -> Option<Value> {
-    columns
-        .first()
-        .and_then(|column| row.get(column).cloned())
+    row_keys_for_columns(columns)
+        .into_iter()
+        .next()
+        .and_then(|key| row.get(&key).cloned())
         .or_else(|| row.values().next().cloned())
 }
 
@@ -2837,9 +2893,9 @@ pub(super) fn projected_row_value(row: &Map<String, Value>, columns: &[String]) 
         return first_projected_value(row, columns).unwrap_or(Value::Null);
     }
     Value::Array(
-        columns
-            .iter()
-            .map(|column| row.get(column).cloned().unwrap_or(Value::Null))
+        row_keys_for_columns(columns)
+            .into_iter()
+            .map(|key| row.get(&key).cloned().unwrap_or(Value::Null))
             .collect(),
     )
 }

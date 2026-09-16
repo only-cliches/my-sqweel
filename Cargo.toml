@@ -85,6 +85,10 @@ name = "mysql_compatibility_corpus"
 path = "tests/mysql_compatibility_corpus.rs"
 
 [[test]]
+name = "query_coverage"
+path = "tests/query_coverage.rs"
+
+[[test]]
 name = "mysql_error_compatibility"
 path = "tests/mysql_error_compatibility.rs"
 

@@ -105,6 +105,7 @@ jobs:
             --target baseline \
             --suite-root "$MARIADB_MTR_ROOT" \
             --allowlist tests/mariadb-mtr-allowlist.txt \
+            --additional-allowlist-dir tests/query_coverage_mtr \
             --baseline-url "$MARIADB_COMPARE_URL" \
             --mysqltest-bin "$MYSQLTEST_BIN" \
             --client-bindir "$MYSQL_CLIENT_BINDIR" \
@@ -183,6 +184,7 @@ jobs:
             --target mysqweel \
             --suite-root "$MARIADB_MTR_ROOT" \
             --allowlist tests/mariadb-mtr-allowlist.txt \
+            --additional-allowlist-dir tests/query_coverage_mtr \
             --mysqltest-bin "$MYSQLTEST_BIN" \
             --client-bindir "$MYSQL_CLIENT_BINDIR" \
             --mysqweel-bin target/debug/sqwl \

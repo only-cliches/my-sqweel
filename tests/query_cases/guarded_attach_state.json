@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "guarded_attach_state",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "multica-ai/multica",
+      "commit": "a843b44a48b4cb3d94c08e0c56ddef1fc1105257",
+      "path": "server/pkg/db/queries/issue_label.sql",
+      "url": "https://github.com/multica-ai/multica/blob/a843b44a48b4cb3d94c08e0c56ddef1fc1105257/server/pkg/db/queries/issue_label.sql",
+      "sha256": "e5317c212d83b44cd63ceaf67fde76174208538aad6173850bfdf88e5efa5b4d",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "AttachLabelToIssueOnCreate in server/pkg/db/queries/issue_label.sql: UPDATE ... WHERE ... AND NOT EXISTS (junction row) AND EXISTS (workspace-scoped label of the matching resource type) followed by the idempotent junction INSERT ... WHERE EXISTS ... ON CONFLICT DO NOTHING",
+      "source_dialect": "postgresql",
+      "observed_pattern": "An application attach operation keeps an activity timestamp honest with a guarded UPDATE: last_activity moves to GREATEST(COALESCE(nullable, fallback), now()) only when the junction row does not already exist and the target label is valid in the same workspace; the companion junction INSERT is idempotent so rerunning the attach adds no row.",
+      "mysql_mariadb_translation": "Rewritten as an original knowledge-base scenario (kb_docs/kb_topics/kb_doc_topics). now() becomes the fixed literal '2026-09-15 12:00:00'; $1/::uuid parameters become concrete integer literals; the PostgreSQL data-modifying CTE plus ON CONFLICT DO NOTHING is translated to a WHERE NOT EXISTS guard on INSERT ... SELECT, which MariaDB 10.11.7 executes with the same observable final state; GREATEST and COALESCE keep their standard SQL forms."
+    },
+    "independently_authored": true
+  },
+  "features": ["subquery", "join", "null", "insert", "update", "delete"],
+  "fixture_notes": "Docs 7 and 9 take the NULL last_touched_at coalesce path (doc 9's fallback is ahead of the literal, doc 7's is behind); doc 10 has a stale non-NULL value; docs 8, 11, 12 already hold the junction row so the anti-join guard skips them; doc 13 is in another workspace and must be excluded by both the UPDATE workspace guard and the attach join.",
+  "determinism_notes": "All timestamps are literals; reads are ordered by primary key or by (doc_id, topic_id); the idempotent attach repeats the identical statement so its second observation is a stable zero-row insert.",
+  "setup": [
+    "CREATE TABLE kb_docs (id INT PRIMARY KEY, workspace_id INT, last_touched_at DATETIME NULL, modified_at DATETIME NOT NULL)",
+    "CREATE TABLE kb_topics (id INT PRIMARY KEY, workspace_id INT, name VARCHAR(32), kind VARCHAR(8))",
+    "CREATE TABLE kb_doc_topics (doc_id INT, topic_id INT, PRIMARY KEY (doc_id, topic_id))",
+    "INSERT INTO kb_docs VALUES (7, 1, NULL, '2026-09-15 10:00:00'), (8, 1, '2026-09-15 13:00:00', '2026-09-15 07:00:00'), (9, 1, NULL, '2026-09-15 14:00:00'), (10, 1, '2026-09-15 09:00:00', '2026-09-15 08:30:00'), (11, 1, '2026-09-15 09:30:00', '2026-09-15 06:00:00'), (12, 1, NULL, '2026-09-15 05:00:00'), (13, 2, NULL, '2026-09-15 04:00:00')",
+    "INSERT INTO kb_topics VALUES (11, 1, 'release', 'doc'), (12, 2, 'external', 'doc'), (13, 1, 'page-type', 'page')",
+    "INSERT INTO kb_doc_topics VALUES (8, 11), (11, 11), (12, 11)"
+  ],
+  "steps": [
+    {"sql": "UPDATE kb_docs SET last_touched_at = GREATEST(COALESCE(last_touched_at, modified_at), '2026-09-15 12:00:00') WHERE workspace_id = 1 AND NOT EXISTS (SELECT 1 FROM kb_doc_topics dt WHERE dt.doc_id = kb_docs.id AND dt.topic_id = 11) AND EXISTS (SELECT 1 FROM kb_topics t WHERE t.id = 11 AND t.workspace_id = kb_docs.workspace_id AND t.kind = 'doc')"},
+    {"sql": "INSERT INTO kb_doc_topics (doc_id, topic_id) SELECT d.id, t.id FROM kb_docs d JOIN kb_topics t ON t.workspace_id = d.workspace_id WHERE d.id IN (7, 8, 10, 13) AND t.id = 11 AND NOT EXISTS (SELECT 1 FROM kb_doc_topics x WHERE x.doc_id = d.id AND x.topic_id = t.id)"},
+    {"sql": "INSERT INTO kb_doc_topics (doc_id, topic_id) SELECT d.id, t.id FROM kb_docs d JOIN kb_topics t ON t.workspace_id = d.workspace_id WHERE d.id IN (7, 8, 10, 13) AND t.id = 11 AND NOT EXISTS (SELECT 1 FROM kb_doc_topics x WHERE x.doc_id = d.id AND x.topic_id = t.id)"},
+    {"sql": "DELETE FROM kb_doc_topics WHERE doc_id = 7 AND topic_id = 11 AND EXISTS (SELECT 1 FROM kb_docs d WHERE d.id = kb_doc_topics.doc_id AND d.workspace_id = 1)"}
+  ],
+  "checks": [
+    {"sql": "SELECT id, workspace_id, last_touched_at, modified_at FROM kb_docs ORDER BY id", "ordered": true},
+    {"sql": "SELECT doc_id, topic_id FROM kb_doc_topics ORDER BY doc_id, topic_id", "ordered": true}
+  ]
+}

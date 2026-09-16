@@ -7,7 +7,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use mysql::{Opts, Pool};
 
-pub const MYSQL_DOCKER_IMAGE: &str = "mysql:8.0.43";
+pub const MYSQL_DOCKER_IMAGE: &str = "mariadb:10.11.7";
 pub const MYSQL_DOCKER_PASSWORD: &str = "my-sqweel";
 pub const MYSQL_DOCKER_DATABASE: &str = "test";
 
@@ -39,6 +39,9 @@ impl Drop for DockerMysql {
 }
 
 pub fn mysql_compare_target() -> Option<MysqlTarget> {
+    if let Ok(url) = std::env::var("MARIADB_COMPARE_URL") {
+        return Some(MysqlTarget::External(url));
+    }
     if let Ok(url) = std::env::var("MYSQL_COMPARE_URL") {
         return Some(MysqlTarget::External(url));
     }
@@ -56,12 +59,16 @@ pub fn mysql_compare_target() -> Option<MysqlTarget> {
 }
 
 pub fn mysql_parity_required() -> bool {
-    std::env::var("MYSQL_PARITY_REQUIRED").is_ok_and(|value| {
-        matches!(
-            value.trim().to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes"
-        )
-    })
+    ["MARIADB_PARITY_REQUIRED", "MYSQL_PARITY_REQUIRED"]
+        .iter()
+        .any(|name| {
+            std::env::var(name).is_ok_and(|value| {
+                matches!(
+                    value.trim().to_ascii_lowercase().as_str(),
+                    "1" | "true" | "yes"
+                )
+            })
+        })
 }
 
 fn start_docker_mysql() -> Result<DockerMysql, String> {
