@@ -396,6 +396,37 @@ impl RawEngine {
                         returned_rows.push(existing.data.clone());
                     }
                     if existing.data != original_data {
+                        // A changed identity must move the stored row with it
+                        // (like the plain UPDATE path), or later conflict
+                        // detection looks for the new key and finds nothing.
+                        let (new_id, new_key) =
+                            self.updated_row_identity(table, existing, &existing.data);
+                        let rekeyed = new_key != *conflict_key;
+                        if rekeyed {
+                            existing.id = new_id;
+                        }
+                        existing.version += 1;
+                        existing.updated_at = Utc::now();
+                        let updated = existing.clone();
+                        if rekeyed
+                            && self.enforces_uniqueness()
+                            && table_rows.contains_key(&new_key)
+                        {
+                            return Err(anyhow!("primary key conflict on {table}: {new_key}"));
+                        }
+                        let final_key = if rekeyed {
+                            new_key
+                        } else {
+                            conflict_key.clone()
+                        };
+                        if persistent && rekeyed {
+                            rows_to_delete.insert(conflict_key.clone());
+                        }
+                        if rekeyed {
+                            table_rows.remove(conflict_key);
+                            table_rows.insert(final_key.clone(), updated);
+                        }
+                        let stored = &table_rows[&final_key];
                         remove_from_unique_lookup(
                             &mut unique_lookup,
                             unique_schema.as_deref(),
@@ -405,16 +436,14 @@ impl RawEngine {
                         add_to_unique_lookup(
                             &mut unique_lookup,
                             unique_schema.as_deref(),
-                            conflict_key,
-                            &existing.data,
+                            &final_key,
+                            &stored.data,
                         );
                         self.remove_row_from_indexes(table, conflict_key, &original_data);
-                        self.add_row_to_indexes(table, conflict_key, &existing.data);
-                        record_query_row_write(changed_cell_count(&original_data, &existing.data));
-                        existing.version += 1;
-                        existing.updated_at = Utc::now();
+                        self.add_row_to_indexes(table, &final_key, &stored.data);
+                        record_query_row_write(changed_cell_count(&original_data, &stored.data));
                         if persistent {
-                            rows_to_persist.insert(conflict_key.clone(), existing.clone());
+                            rows_to_persist.insert(final_key, stored.clone());
                         }
                         // MySQL reports two affected rows when ON DUPLICATE KEY
                         // UPDATE changes an existing row (and zero for a no-op).

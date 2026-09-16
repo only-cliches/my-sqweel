@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "id": "on_duplicate_key_quota_ledger",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "CUBRID/cubrid-testcases",
+      "commit": "1b16289d04c9da239dddbb1d8352f5ad49d471f5",
+      "path": "sql/_13_issues/_19_1h/cases/cbrd_22215.sql",
+      "url": "https://github.com/CUBRID/cubrid-testcases/blob/1b16289d04c9da239dddbb1d8352f5ad49d471f5/sql/_13_issues/_19_1h/cases/cbrd_22215.sql",
+      "sha256": "f533862e28e951480d8a7a24bd6f023cfdbc0ad4f5cb270c029bd7ba58198335",
+      "source_dialect": "mysql-compatible (CUBRID)"
+    },
+    "inspiration": {
+      "source_location": "the `insert into t(a) values(3),(1) on duplicate key update a=4` statements and the `insert into t(a) select ... on duplicate key update a=a-20` statement: a multi-row INSERT whose conflicting rows are updated in place, one of which moves the conflicting key itself while the new rows of the same statement are inserted",
+      "source_dialect": "mysql-compatible (CUBRID)",
+      "observed_pattern": "A multi-row INSERT mixes new rows and key-conflicting rows in a single statement; the conflicting rows are updated in place, including moving the conflicting key to a new value and applying a cumulative expression against the existing row's value, so the statement's final state cannot be described per-row without tracking which values came from the existing row and which from the incoming row",
+      "mysql_mariadb_translation": "Reauthored as a tenant quota ledger on a fresh INT primary-key table: the two-row VALUES list keeps one conflicting row and one new row in the same statement; the cumulative expression becomes hits = hits + VALUES(hits); the key move becomes tenant_id = tenant_id + 10; the CUBRID ON UPDATE CURRENT_TIMESTAMP columns are dropped because the case avoids clocks; a closing statement targets the moved row with the no-op update idiom hits = hits, so the no-change path (zero affected rows) and insert-versus-update are observable in the final state"
+    }
+  },
+  "features": [
+    "insert",
+    "on-duplicate-key-update",
+    "upsert",
+    "multi-row-values",
+    "primary-key-move",
+    "values-function",
+    "final-state"
+  ],
+  "fixture_notes": "Two seeded tenants: 1 (hits 10, cap 100) and 2 (hits 20, cap 200). Step 1 inserts a conflicting row for tenant 2 and a new row for tenant 3 in one statement, accumulating hits against the existing row and replacing cap from the incoming row. Step 2 conflicts on tenant 1 and moves its primary key to 11 while resetting hits and cap from literals. Step 3 conflicts on the moved tenant 11 with a no-op update (hits = hits), leaving the moved row untouched and reporting zero affected rows. The final state has exactly three rows keyed 11, 2, and 3.",
+  "determinism_notes": "No clocks, randomness, or concurrency; the final read orders by the unique primary key.",
+  "setup": [
+    "CREATE TABLE quotas (tenant_id INT PRIMARY KEY, hits INT NOT NULL, cap INT NOT NULL)",
+    "INSERT INTO quotas VALUES (1, 10, 100), (2, 20, 200)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO quotas (tenant_id, hits, cap) VALUES (2, 5, 999), (3, 7, 300) ON DUPLICATE KEY UPDATE hits = hits + VALUES(hits), cap = VALUES(cap)"
+    },
+    {
+      "sql": "INSERT INTO quotas (tenant_id, hits, cap) VALUES (1, 1, 1) ON DUPLICATE KEY UPDATE tenant_id = tenant_id + 10, hits = 0, cap = 1"
+    },
+    {
+      "sql": "INSERT INTO quotas (tenant_id, hits, cap) VALUES (11, 500, 1) ON DUPLICATE KEY UPDATE hits = hits"
+    },
+    {
+      "sql": "SELECT tenant_id, hits, cap FROM quotas ORDER BY tenant_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT tenant_id, hits, cap FROM quotas ORDER BY tenant_id",
+      "ordered": true
+    }
+  ]
+}

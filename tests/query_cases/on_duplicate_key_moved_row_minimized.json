@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "id": "on_duplicate_key_moved_row_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "CUBRID/cubrid-testcases",
+      "commit": "1b16289d04c9da239dddbb1d8352f5ad49d471f5",
+      "path": "sql/_13_issues/_19_1h/cases/cbrd_22215.sql",
+      "url": "https://github.com/CUBRID/cubrid-testcases/blob/1b16289d04c9da239dddbb1d8352f5ad49d471f5/sql/_13_issues/_19_1h/cases/cbrd_22215.sql",
+      "sha256": "f533862e28e951480d8a7a24bd6f023cfdbc0ad4f5cb270c029bd7ba58198335",
+      "source_dialect": "mysql-compatible (CUBRID)"
+    },
+    "inspiration": {
+      "source_location": "the `insert into t(a) values(3),(1) on duplicate key update a=4` statement: a key-conflicting row whose update moves the conflicting key, after which later statements must find the row under its new key",
+      "source_dialect": "mysql-compatible (CUBRID)",
+      "observed_pattern": "An ON DUPLICATE KEY UPDATE assignment that changes the conflicting key itself leaves the stored row identifiable only by the new key; any later statement targeting that key must resolve the moved row or it duplicates",
+      "mysql_mariadb_translation": "Reduced to a single-row ledger: one upsert moves the primary key from 1 to 11, and a second no-op upsert (note = note) targets the moved key, so a correct engine reports zero affected rows and a single final row while an engine that loses the moved key inserts a duplicate"
+    }
+  },
+  "features": [
+    "insert",
+    "on-duplicate-key-update",
+    "upsert",
+    "primary-key-move",
+    "final-state"
+  ],
+  "fixture_notes": "One row (id 1, note 10). Step 1 upserts id 1 and moves its primary key to 11 while resetting note. Step 2 upserts id 11 with a no-op assignment, leaving the moved row untouched. The final state is exactly one row keyed 11.",
+  "determinism_notes": "No clocks, randomness, or concurrency; the final read orders by the unique primary key.",
+  "setup": [
+    "CREATE TABLE ledger (id INT PRIMARY KEY, note INT NOT NULL)",
+    "INSERT INTO ledger VALUES (1, 10)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO ledger (id, note) VALUES (1, 1) ON DUPLICATE KEY UPDATE id = id + 10"
+    },
+    {
+      "sql": "INSERT INTO ledger (id, note) VALUES (11, 500) ON DUPLICATE KEY UPDATE note = note"
+    },
+    {
+      "sql": "SELECT id, note FROM ledger ORDER BY id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT id, note FROM ledger ORDER BY id",
+      "ordered": true
+    }
+  ]
+}
