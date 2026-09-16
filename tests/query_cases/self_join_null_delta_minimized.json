@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "id": "self_join_null_delta_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "tanelpoder/tpt-oracle",
+      "commit": "45f0a4e1550200ebb53c31b5dc9e5fbbacc2e734",
+      "path": "xbi.sql",
+      "url": "https://github.com/tanelpoder/tpt-oracle/blob/45f0a4e1550200ebb53c31b5dc9e5fbbacc2e734/xbi.sql",
+      "sha256": "c83cf2ddb81ab1482a41e34db6b22b609cea555c44c39cb707370ded00835b24",
+      "source_dialect": "oracle"
+    },
+    "inspiration": {
+      "source_location": "deltas CTE in the first WITH statement: parent operations self LEFT OUTER JOINed on chi.parent_id = par.id, grouped by parent, with par.last_elapsed_time - SUM(chi.last_elapsed_time) subtracted",
+      "source_dialect": "oracle",
+      "observed_pattern": "Minimized reproduction of the parent-minus-children pattern from self_join_null_delta: a two-row tree where the root's direct child is the only non-NULL aggregate, so the parent subtraction is a number while the leaf subtraction stays NULL. Before the fix, the self-join matched no rows at all, so every subtraction was NULL.",
+      "mysql_mariadb_translation": "Same translation as self_join_null_delta: plan operations become ledger entries, NVL stays out of this minimal case, and the raw nullable subtraction is projected so an empty aggregate is observable."
+    },
+    "independently_authored": true,
+    "minimized_from": "self_join_null_delta"
+  },
+  "features": ["self-join", "outer-join", "grouping", "null", "arithmetic"],
+  "fixture_notes": "Row 2 is the only child of row 1; row 1 must report 10 minus 3, row 2 must report NULL, not 7, because a self-join must match parent id against child parent_id, not the reverse.",
+  "determinism_notes": "Single read-only statement; ORDER BY the unique primary key.",
+  "setup": [
+    "CREATE TABLE entries (id INT PRIMARY KEY, parent_id INT, amount INT)",
+    "INSERT INTO entries VALUES (1, NULL, 10), (2, 1, 3)"
+  ],
+  "steps": [
+    {"sql": "SELECT p.id, p.amount - SUM(c.amount) AS unexplained FROM entries p LEFT JOIN entries c ON c.parent_id = p.id GROUP BY p.id, p.amount ORDER BY p.id", "ordered": true}
+  ]
+}

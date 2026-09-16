@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "id": "self_join_null_delta",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "tanelpoder/tpt-oracle",
+      "commit": "45f0a4e1550200ebb53c31b5dc9e5fbbacc2e734",
+      "path": "xbi.sql",
+      "url": "https://github.com/tanelpoder/tpt-oracle/blob/45f0a4e1550200ebb53c31b5dc9e5fbbacc2e734/xbi.sql",
+      "sha256": "c83cf2ddb81ab1482a41e34db6b22b609cea555c44c39cb707370ded00835b24",
+      "source_dialect": "oracle"
+    },
+    "inspiration": {
+      "source_location": "deltas CTE in the first WITH statement: SELECT par.id, par.last_elapsed_time - SUM(chi.last_elapsed_time) ... FROM sq par LEFT OUTER JOIN sq chi ON chi.parent_id = par.id GROUP BY par.id, par.last_elapsed_time, ...; the combined CTE then joins sq to deltas and wraps every self metric in NVL(self, own)",
+      "source_dialect": "oracle",
+      "observed_pattern": "An execution-plan renderer derives per-operation self time by subtracting the summed metrics of direct child operations from each parent operation: the plan table self LEFT OUTER JOINs on child.parent_id = parent.id, groups by the parent row, and the final projection falls back to the parent's own accumulated value with NVL because a parent with no matching child rows yields a NULL aggregate, and any arithmetic against that NULL aggregate stays NULL until coalesced.",
+      "mysql_mariadb_translation": "Rewritten as an original cost-ledger scenario over cost_entries: plan operations become cost entries in a tree whose parent_id is NULL for roots; last_elapsed_time becomes a nullable cost for pending entries; the Oracle LEFT OUTER JOIN is rewritten as a standard LEFT JOIN; NVL becomes COALESCE; SQL*Plus substitution variables become concrete fixture literals; the CTE chain (base, deltas) preserves the original structure; the final projection exposes both the raw nullable subtraction and the coalesced fallback so a zero-versus-null empty aggregate is observable in the result set."
+    },
+    "independently_authored": true
+  },
+  "features": ["ctes", "self-join", "outer-join", "grouping", "null", "arithmetic", "coalesce"],
+  "fixture_notes": "Nine cost entries form a three-level tree plus one orphan: entry 1 has children 2 (30), 4 (NULL), and 8 (10) so its sum is 40; entry 5 has only the NULL-cost child 6, so its sum is NULL and the fallback restores its own 40; entries 4 and 6 carry NULL cost themselves; entry 3 points at nonexistent parent 42; entry 8's child 9 contributes only to entry 8, not to entry 1, keeping the join direct-child-only.",
+  "determinism_notes": "Single read-only statement; ORDER BY the unique primary key; no clocks, randomness, or concurrency.",
+  "setup": [
+    "CREATE TABLE cost_entries (id INT PRIMARY KEY, parent_id INT, label VARCHAR(32), cost INT)",
+    "INSERT INTO cost_entries VALUES (1, NULL, 'alpha', 100), (2, 1, 'alpha-ops', 30), (3, 42, 'orphan', 7), (4, 1, 'alpha-pending', NULL), (5, NULL, 'beta', 40), (6, 5, 'beta-pending', NULL), (7, NULL, 'gamma', 25), (8, 1, 'alpha-sub', 10), (9, 8, 'alpha-sub-x', 4)"
+  ],
+  "steps": [
+    {"sql": "WITH base AS (SELECT id, parent_id, cost FROM cost_entries), deltas AS (SELECT p.id AS id, p.cost AS own_cost, p.cost - SUM(c.cost) AS unexplained_cost FROM base p LEFT JOIN base c ON c.parent_id = p.id GROUP BY p.id, p.cost) SELECT d.id, d.own_cost, d.unexplained_cost, COALESCE(d.unexplained_cost, d.own_cost) AS self_cost FROM deltas d ORDER BY d.id", "ordered": true}
+  ]
+}

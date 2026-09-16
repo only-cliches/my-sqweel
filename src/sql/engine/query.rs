@@ -1355,6 +1355,10 @@ impl RawEngine {
             return metadata;
         }
 
+        if let Some(metadata) = self.derived_column_metadata(select, expr, first_row) {
+            return metadata;
+        }
+
         let mut metadata = ColumnMetadata::from_value(
             output_name.clone(),
             first_row.and_then(|row| row.get(&output_name)),
@@ -1424,6 +1428,12 @@ impl RawEngine {
                     "LENGTH" | "CHAR_LENGTH" | "DATEDIFF" | "TIMESTAMPDIFF" => {
                         MysqlColumnType::BigInt
                     }
+                    "COALESCE" | "IFNULL" => self.widest_function_argument_type(
+                        function,
+                        select,
+                        first_row,
+                        metadata.column_type,
+                    ),
                     _ => metadata.column_type,
                 };
             }
@@ -1437,8 +1447,38 @@ impl RawEngine {
                     metadata.decimals = scale.len().min(u8::MAX as usize) as u8;
                 }
             }
-            Expr::Value(SqlValue::Boolean(_)) => metadata.column_type = MysqlColumnType::TinyInt,
             Expr::Value(SqlValue::Null) => metadata.column_type = MysqlColumnType::Null,
+            Expr::BinaryOp {
+                left,
+                op:
+                    BinaryOperator::Plus
+                    | BinaryOperator::Minus
+                    | BinaryOperator::Multiply
+                    | BinaryOperator::Divide
+                    | BinaryOperator::Modulo
+                    | BinaryOperator::MyIntegerDivide,
+                right,
+            } => {
+                // MariaDB widens arithmetic: integer operands yield BIGINT,
+                // a DECIMAL operand yields DECIMAL, and a floating operand
+                // yields DOUBLE.
+                let left_type = self
+                    .expression_metadata(select, left, String::new(), first_row)
+                    .column_type;
+                let right_type = self
+                    .expression_metadata(select, right, String::new(), first_row)
+                    .column_type;
+                let rank = numeric_type_rank(left_type).max(numeric_type_rank(right_type));
+                metadata.column_type = match rank {
+                    1 => MysqlColumnType::BigInt,
+                    2 => MysqlColumnType::Decimal,
+                    3 => MysqlColumnType::Double,
+                    _ => metadata.column_type,
+                };
+                if metadata.column_type == MysqlColumnType::Decimal {
+                    metadata.decimals = 0;
+                }
+            }
             _ => {}
         }
         for window in window_exprs(expr) {
@@ -1522,6 +1562,102 @@ impl RawEngine {
             }
         }
         None
+    }
+
+    /// Resolve a plain column reference that names a derived-table (subquery
+    /// or inlined CTE) output column by recursing into the factor's inner
+    /// projection.  MariaDB propagates the inner column's declared or
+    /// expression-derived type through derived tables; value inference alone
+    /// collapses every integer to LONGLONG and every all-NULL result to
+    /// VAR_STRING.
+    fn derived_column_metadata(
+        &self,
+        select: &Select,
+        expr: &Expr,
+        first_row: Option<&Map<String, Value>>,
+    ) -> Option<ColumnMetadata> {
+        let (qualifier, column) = match expr {
+            Expr::Identifier(column) => (None, column.value.as_str()),
+            Expr::CompoundIdentifier(parts) if parts.len() >= 2 => (
+                parts.get(parts.len() - 2).map(|part| part.value.as_str()),
+                parts.last()?.value.as_str(),
+            ),
+            _ => return None,
+        };
+        for table in &select.from {
+            for factor in std::iter::once(&table.relation)
+                .chain(table.joins.iter().map(|join| &join.relation))
+            {
+                let TableFactor::Derived {
+                    subquery, alias, ..
+                } = factor
+                else {
+                    continue;
+                };
+                let Some(alias) = alias.as_ref() else {
+                    continue;
+                };
+                if qualifier
+                    .is_some_and(|qualifier| !qualifier.eq_ignore_ascii_case(&alias.name.value))
+                {
+                    continue;
+                }
+                let SetExpr::Select(inner) = &*subquery.body else {
+                    continue;
+                };
+                for (index, item) in inner.projection.iter().enumerate() {
+                    let (inner_expr, inner_name) = match item {
+                        SelectItem::UnnamedExpr(inner_expr) => {
+                            (inner_expr, projection_output_column_name(inner_expr))
+                        }
+                        SelectItem::ExprWithAlias { expr, alias } => (expr, alias.value.clone()),
+                        SelectItem::Wildcard(_) | SelectItem::QualifiedWildcard(_, _) => continue,
+                    };
+                    // A declared derived-table column list renames the
+                    // positional projection output.
+                    let inner_name = alias
+                        .columns
+                        .get(index)
+                        .map(|column| column.name.value.clone())
+                        .unwrap_or(inner_name);
+                    if !inner_name.eq_ignore_ascii_case(column) {
+                        continue;
+                    }
+                    return Some(
+                        self.expression_metadata(inner, inner_expr, inner_name, first_row),
+                    );
+                }
+            }
+        }
+        None
+    }
+
+    /// MariaDB resolves COALESCE/IFNULL to the widest numeric argument type
+    /// (DECIMAL beats INT, DOUBLE beats both).  When no argument carries a
+    /// numeric type, the value-inferred type is retained.
+    fn widest_function_argument_type(
+        &self,
+        function: &sqlparser::ast::Function,
+        select: &Select,
+        first_row: Option<&Map<String, Value>>,
+        fallback: MysqlColumnType,
+    ) -> MysqlColumnType {
+        let Ok(arguments) = window_function_arguments(function) else {
+            return fallback;
+        };
+        let mut best = fallback;
+        let mut best_rank = 0u8;
+        for argument in arguments.into_iter().flatten() {
+            let argument_type = self
+                .expression_metadata(select, &argument, String::new(), first_row)
+                .column_type;
+            let rank = numeric_type_rank(argument_type);
+            if rank > best_rank {
+                best_rank = rank;
+                best = argument_type;
+            }
+        }
+        best
     }
 
     fn order_column_hint(&self, select: &Select, expr: &Expr) -> Option<ColumnHint> {
@@ -5126,6 +5262,20 @@ fn join_equi_keys(
         return None;
     };
     let (first, second) = required_equi_join_columns(expression)?;
+    // Exact qualified keys tie each column to the table factor that owns the
+    // alias. Without this, a self-join (two aliases over one table) falls
+    // through to unqualified lookups on both sides and the key sides can swap,
+    // pruning every row pair that the real ON expression would accept.
+    let first_left = left.get(&first).is_some();
+    let first_right = right.get(&first).is_some();
+    let second_left = left.get(&second).is_some();
+    let second_right = right.get(&second).is_some();
+    if first_left && !first_right && second_right && !second_left {
+        return Some((first, second));
+    }
+    if second_left && !second_right && first_right && !first_left {
+        return Some((second, first));
+    }
     if join_row_value(left, &first).is_some() && join_row_value(right, &second).is_some() {
         Some((first, second))
     } else if join_row_value(left, &second).is_some() && join_row_value(right, &first).is_some() {
@@ -5819,6 +5969,21 @@ fn resolve_named_window(
     match &definition.1 {
         NamedWindowExpr::WindowSpec(spec) => Ok(spec.clone()),
         NamedWindowExpr::NamedWindow(parent) => resolve_named_window(select, &parent.value, seen),
+    }
+}
+
+/// Rank numeric column types for MariaDB's widening lattice: integer
+/// promotion (BIGINT), then DECIMAL, then DOUBLE.  Non-numeric types rank
+/// zero so they never win a widening contest.
+fn numeric_type_rank(type_: MysqlColumnType) -> u8 {
+    match type_ {
+        MysqlColumnType::TinyInt
+        | MysqlColumnType::SmallInt
+        | MysqlColumnType::Integer
+        | MysqlColumnType::BigInt => 1,
+        MysqlColumnType::Decimal => 2,
+        MysqlColumnType::Float | MysqlColumnType::Double => 3,
+        _ => 0,
     }
 }
 
