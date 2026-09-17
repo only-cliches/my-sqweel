@@ -546,7 +546,7 @@ fn compatibility_cases(values: &str, related: &str) -> Vec<Case> {
             "window-lag",
             "windows",
             format!(
-                "SELECT id, LAG(amount, 1, 0) OVER (ORDER BY id) AS previous_amount FROM {values} ORDER BY id"
+                "SELECT id, LAG(amount, 1) OVER (ORDER BY id) AS previous_amount FROM {values} ORDER BY id"
             ),
         ),
         case(

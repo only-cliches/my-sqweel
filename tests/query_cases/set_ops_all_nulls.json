@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "set_ops_all_nulls",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "EnterpriseDB/mysql_fdw",
+      "commit": "40d54a0288588f52fcd060966f63dcb862e3e56d",
+      "path": "sql/select.sql",
+      "url": "https://github.com/EnterpriseDB/mysql_fdw/blob/40d54a0288588f52fcd060966f63dcb862e3e56d/sql/select.sql",
+      "sha256": "409b3b050ae729c46c7c22b014d3aec0b19c4c6ecd12fd6ca59cf8ddbbabcfe3",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Set-operator regression queries over foreign tables (lines 100-116): UNION ALL across two tables, INTERSECT and INTERSECT ALL on filtered operands (WHERE c1 >= 800 / c1 >= 400), EXCEPT and EXCEPT ALL on filtered operands (WHERE c1 > 900), each with an ORDER BY over the whole set",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL-oriented regression suite exercises the full set-operator family against duplicate-bearing rows and filtered operands: distinct UNION/INTERSECT/EXCEPT drop duplicates, while the ALL quantifiers keep multiset multiplicity (EXCEPT ALL cancels one matching row at a time, INTERSECT ALL keeps the minimum multiplicity), and a final ORDER BY sorts the combined result.",
+      "mysql_mariadb_translation": "Rewritten as an original access-grant audit scenario (grant_log/revoke_log/audit_snapshot with no primary key so re-grants keep duplicate rows). The set-operator syntax is already standard on MariaDB 10.11.7 and runs unchanged; WHERE-filtered operands become explicit table filters; a NULL resource (the default resource) is added so NULL-equality dedupe and NULLS-FIRST ascending ordering inside the set result are observed; a UNION-then-EXCEPT chain tests same-precedence left-to-right grouping, where the two possible groupings return different row counts on this data."
+    },
+    "independently_authored": true
+  },
+  "features": ["set-ops", "union", "union-all", "intersect", "intersect-all", "except", "except-all", "null", "multiset"],
+  "fixture_notes": "grant_log carries re-grant duplicates (ada/billing x2, grace/reports x2) so EXCEPT ALL and INTERSECT ALL produce different results from their distinct forms; revoke_log cancels one occurrence of four granted rows and none of the NULL grants; audit_snapshot duplicates grace/reports so INTERSECT ALL emits it twice while INTERSECT emits it once; ada's NULL grant survives every difference; the UNION-EXCEPT chain distinguishes (audit UNION grant) EXCEPT revoke from audit UNION (grant EXCEPT revoke).",
+  "determinism_notes": "Every result is ordered by (user, resource) with NULLs first under ascending order; the only repeated rows in any result are byte-identical, so intra-tie order is unobservable. No clocks, randomness, or concurrency.",
+  "setup": [
+    "CREATE TABLE grant_log (id INT NOT NULL, user VARCHAR(16) NOT NULL, resource VARCHAR(16) NULL)",
+    "CREATE TABLE revoke_log (id INT NOT NULL, user VARCHAR(16) NOT NULL, resource VARCHAR(16) NULL)",
+    "CREATE TABLE audit_snapshot (id INT NOT NULL, user VARCHAR(16) NOT NULL, resource VARCHAR(16) NULL)",
+    "INSERT INTO grant_log VALUES (1, 'ada', 'billing'), (2, 'ada', 'billing'), (3, 'ada', NULL), (4, 'grace', 'billing'), (5, 'grace', 'reports'), (6, 'grace', 'reports'), (7, 'lin', 'reports'), (8, 'lin', 'billing'), (9, 'margaret', 'billing'), (10, 'margaret', 'reports')",
+    "INSERT INTO revoke_log VALUES (1, 'ada', 'billing'), (2, 'grace', 'reports'), (3, 'lin', 'billing'), (4, 'margaret', 'reports')",
+    "INSERT INTO audit_snapshot VALUES (1, 'ada', 'billing'), (2, 'ada', NULL), (3, 'grace', 'billing'), (4, 'grace', 'reports'), (5, 'grace', 'reports'), (6, 'lin', 'reports'), (7, 'margaret', 'billing'), (8, 'margaret', 'reports')"
+  ],
+  "steps": [
+    {"sql": "SELECT user, resource FROM grant_log EXCEPT SELECT user, resource FROM revoke_log ORDER BY user, resource", "ordered": true},
+    {"sql": "SELECT user, resource FROM grant_log EXCEPT ALL SELECT user, resource FROM revoke_log ORDER BY user, resource", "ordered": true},
+    {"sql": "SELECT user, resource FROM grant_log INTERSECT ALL SELECT user, resource FROM audit_snapshot ORDER BY user, resource", "ordered": true},
+    {"sql": "SELECT user, resource FROM grant_log INTERSECT SELECT user, resource FROM audit_snapshot ORDER BY user, resource", "ordered": true},
+    {"sql": "SELECT user, resource FROM audit_snapshot UNION SELECT user, resource FROM grant_log EXCEPT SELECT user, resource FROM revoke_log ORDER BY user, resource", "ordered": true},
+    {"sql": "SELECT user, resource FROM grant_log UNION ALL SELECT user, resource FROM audit_snapshot ORDER BY user, resource", "ordered": true}
+  ]
+}

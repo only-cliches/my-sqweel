@@ -913,6 +913,12 @@ impl RawEngine {
         Ok(())
     }
 
+    /// MariaDB renders PERCENT_RANK/CUME_DIST as fixed-point decimals with
+    /// exactly ten fractional digits, rounded from the rational value.
+    fn round_rank_fraction(value: f64) -> f64 {
+        (value * 1e10).round() / 1e10
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn window_function_value(
         &self,
@@ -933,16 +939,16 @@ impl RawEngine {
             "RANK" => return Ok(integer(rank)),
             "DENSE_RANK" => return Ok(integer(dense_rank)),
             "PERCENT_RANK" => {
-                return Ok(number_from_f64(if partition.len() <= 1 {
+                let value = if partition.len() <= 1 {
                     0.0
                 } else {
                     (rank - 1) as f64 / (partition.len() - 1) as f64
-                }));
+                };
+                return Ok(number_from_f64(Self::round_rank_fraction(value)));
             }
             "CUME_DIST" => {
-                return Ok(number_from_f64(
-                    (peer_end + 1) as f64 / partition.len() as f64,
-                ));
+                let value = (peer_end + 1) as f64 / partition.len() as f64;
+                return Ok(number_from_f64(Self::round_rank_fraction(value)));
             }
             "NTILE" => {
                 let buckets = window_usize_argument(
@@ -1391,7 +1397,10 @@ impl RawEngine {
                         metadata.unsigned = true;
                         MysqlColumnType::BigInt
                     }
-                    "PERCENT_RANK" | "CUME_DIST" => MysqlColumnType::Double,
+                    "PERCENT_RANK" | "CUME_DIST" => {
+                        metadata.decimals = 10;
+                        MysqlColumnType::Decimal
+                    }
                     "UNIX_TIMESTAMP" => {
                         metadata.decimals = 0;
                         MysqlColumnType::Decimal
@@ -2975,16 +2984,23 @@ impl RawEngine {
             .visible_databases
             .iter()
             .map(|database| {
+                // MariaDB 10.11 defaults unadorned databases to latin1; only
+                // databases created with an explicit charset report utf8mb4.
+                let (charset, collation) = self
+                    .database_charsets
+                    .get(database)
+                    .cloned()
+                    .unwrap_or_else(|| ("latin1".to_string(), "latin1_swedish_ci".to_string()));
                 let mut row = Map::new();
                 row.insert("catalog_name".to_string(), Value::String("def".to_string()));
                 row.insert("schema_name".to_string(), Value::String(database.clone()));
                 row.insert(
                     "default_character_set_name".to_string(),
-                    Value::String("utf8mb4".to_string()),
+                    Value::String(charset),
                 );
                 row.insert(
                     "default_collation_name".to_string(),
-                    Value::String("utf8mb4_general_ci".to_string()),
+                    Value::String(collation),
                 );
                 row
             })
@@ -4199,8 +4215,7 @@ impl RawEngine {
             "Index_type",
             "Comment",
             "Index_comment",
-            "Visible",
-            "Expression",
+            "Ignored",
         ]
         .into_iter()
         .map(ToString::to_string)
@@ -4257,8 +4272,7 @@ impl RawEngine {
                                 .unwrap_or_default(),
                         ),
                     );
-                    row.insert("Visible".to_string(), Value::String("YES".to_string()));
-                    row.insert("Expression".to_string(), Value::Null);
+                    row.insert("Ignored".to_string(), Value::String("NO".to_string()));
                     rows.push(row);
                 }
             }
@@ -5611,18 +5625,55 @@ fn table_factor_base_name(factor: &TableFactor) -> Option<String> {
 }
 
 fn mysql_column_metadata_types(sql_type: Option<&str>) -> (String, String) {
-    let column_type = sql_type
+    let declared = sql_type
         .unwrap_or("text")
         .trim()
         .to_ascii_lowercase()
         .replace(", ", ",");
-    let data_type = column_type
-        .split(|character: char| character == '(' || character.is_ascii_whitespace())
-        .next()
-        .filter(|value| !value.is_empty())
-        .unwrap_or("text")
-        .to_string();
-    (column_type, data_type)
+    if declared.is_empty() {
+        return ("text".to_string(), "text".to_string());
+    }
+    let tokens: Vec<&str> = declared.split_whitespace().collect();
+    let head = tokens[0];
+    let (base, explicit_width) = match head.find('(') {
+        Some(open) => {
+            let close = head[open + 1..]
+                .find(')')
+                .map(|index| open + 1 + index)
+                .unwrap_or(head.len() - 1);
+            (head[..open].to_string(), Some(head[open + 1..close].to_string()))
+        }
+        None => (head.to_string(), None),
+    };
+    let flags = tokens[1..].join(" ");
+    let unsigned = flags.contains("unsigned");
+    let zerofill = flags.contains("zerofill");
+    // MariaDB reports integer types with their historical display widths.
+    let default_width = match (base.as_str(), unsigned || zerofill) {
+        ("tinyint", false) => Some("4"),
+        ("tinyint", true) => Some("3"),
+        ("smallint", false) => Some("6"),
+        ("smallint", true) => Some("5"),
+        ("mediumint", false) => Some("9"),
+        ("mediumint", true) => Some("8"),
+        ("int" | "integer", false) => Some("11"),
+        ("int" | "integer", true) => Some("10"),
+        ("bigint", _) => Some("20"),
+        ("year", _) => Some("4"),
+        _ => None,
+    };
+    let mut column_type = match explicit_width.or_else(|| default_width.map(str::to_string)) {
+        Some(width) => format!("{base}({width})"),
+        None => base.clone(),
+    };
+    if unsigned || zerofill {
+        column_type.push_str(" unsigned");
+    }
+    if zerofill {
+        column_type.push_str(" zerofill");
+    }
+    let data_type = if base.is_empty() { "text" } else { &base };
+    (column_type, data_type.to_string())
 }
 
 fn mysql_column_key(schema: &TableSchemaHint, column: &str) -> &'static str {

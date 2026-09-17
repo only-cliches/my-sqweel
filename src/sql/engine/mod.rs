@@ -56,6 +56,9 @@ const STORAGE_AUTO_INC_KEY: &str = "my-sqweel:auto_inc";
 const UNIQUE_SEPARATOR: char = '\u{1f}';
 const FK_FIELD_SEPARATOR: char = '\u{1e}';
 pub(crate) const JSON_NULL_SENTINEL: &str = "\0my_sqweel_json_null";
+/// Pre-rendered JSON_AGGREGATE text in MariaDB's aggregate style. The wire
+/// sends the suffix verbatim instead of re-serializing it.
+pub(crate) const JSON_AGGREGATE_TEXT_SENTINEL: &str = "\0my_sqweel_json_agg_text";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -647,6 +650,7 @@ impl<'a, T> IntoIterator for &'a SharedTable<T> {
 pub(super) struct RawEngine {
     database_name: String,
     visible_databases: Vec<String>,
+    database_charsets: BTreeMap<String, (String, String)>,
     cfg: EngineConfig,
     storage: Arc<dyn RedisStore>,
     schemas: DashMap<String, SharedValue<TableSchemaHint>>,
@@ -704,6 +708,7 @@ impl RawEngine {
         let engine = Self {
             database_name: "app".into(),
             visible_databases: vec!["app".into()],
+            database_charsets: BTreeMap::new(),
             cfg,
             storage,
             // Statement-private directories have no concurrent writers. DashMap

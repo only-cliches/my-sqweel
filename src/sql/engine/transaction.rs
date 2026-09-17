@@ -433,6 +433,7 @@ impl EngineSession {
             .filter(|name| state.catalog.check_database(&self.identity, name).is_ok())
             .map(str::to_owned)
             .collect();
+        raw.database_charsets = state.catalog.database_charsets().clone();
         if let Some(session) = &self.session_state {
             raw.copy_session_from(session);
         } else {
@@ -805,13 +806,19 @@ impl EngineSession {
                         return Err(anyhow!("filtered SHOW DATABASES is not supported"));
                     }
                     let state = self.shared.committed.lock();
-                    let rows = state
+                    let mut names: Vec<String> = state
                         .catalog
                         .database_names()
                         .filter(|name| state.catalog.check_database(&self.identity, name).is_ok())
-                        .map(|name| {
-                            Map::from_iter([("Database".into(), Value::String(name.into()))])
-                        })
+                        .map(str::to_owned)
+                        .collect();
+                    names.push("information_schema".to_string());
+                    names.sort_by(|left, right| {
+                        left.to_ascii_lowercase().cmp(&right.to_ascii_lowercase())
+                    });
+                    let rows = names
+                        .into_iter()
+                        .map(|name| Map::from_iter([("Database".into(), Value::String(name))]))
                         .collect();
                     results.push(QueryResult {
                         columns: vec!["Database".into()],
@@ -1146,6 +1153,7 @@ impl EngineSession {
                 .filter(|name| state.catalog.check_database(&self.identity, name).is_ok())
                 .map(str::to_owned)
                 .collect();
+            raw.database_charsets = state.catalog.database_charsets().clone();
             if let Some(session) = &self.session_state {
                 raw.copy_session_from(session);
             } else {
@@ -1347,6 +1355,7 @@ impl RawEngine {
         let raw = Self {
             database_name: self.database_name.clone(),
             visible_databases: self.visible_databases.clone(),
+            database_charsets: self.database_charsets.clone(),
             cfg: self.cfg.clone(),
             storage: Arc::new(PrivateStorage),
             schemas: self.schemas.clone(),

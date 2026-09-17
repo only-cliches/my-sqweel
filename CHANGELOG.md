@@ -2,6 +2,17 @@
 
 All notable changes to MySqweel will be documented in this file.
 
+## Unreleased
+
+### MariaDB 10.11.7 compatibility
+
+- Pre-rendered `JSON_ARRAYAGG`/`JSON_OBJECTAGG` results in MariaDB's aggregate style (array elements joined with `,`, object members joined with `, ` as `key:value`) and pass them verbatim over the wire instead of re-serializing them with `JSON_ARRAY`/`JSON_OBJECT` separators.
+- Ordered JSON column values by MariaDB's JSON ordering: type rank string < number < array < false < JSON null < true < object (SQL `NULL` sorts first), numbers compared as canonical decimal text, arrays and objects as compact canonical serialization.
+- Reported `CUME_DIST`/`PERCENT_RANK` as `DECIMAL` column metadata with ten fractional digits and rounded their values to ten decimal places, matching MariaDB's fixed-point rendering.
+- `SHOW INDEX` now emits MariaDB 10.11.7's 14-column output with a trailing `Ignored` column instead of MySQL 8's `Visible`/`Expression` columns.
+- Reported historical integer display widths (`INT(11)`, `BIGINT(20)`, ...) in column metadata, preserving explicit widths and `UNSIGNED`/`ZEROFILL` adjustments.
+- Parsed `CREATE DATABASE ... CHARACTER SET`/`COLLATE` and tracked the character set per database; databases without modifiers default to the `latin1`/`latin1_swedish_ci` build default, and `SHOW DATABASES` includes `information_schema` with case-insensitive ordering.
+
 ## 0.4.4 Sep 9, 2026
 
 ### Transactions and persistence

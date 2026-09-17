@@ -1319,7 +1319,10 @@ fn eval_aggregate_call_rows<'a>(
             if values.is_empty() {
                 Ok(Value::Null)
             } else {
-                Ok(Value::Array(values))
+                let text = mysql_json_agg_text(&Value::Array(values))?;
+                Ok(Value::String(
+                    JSON_AGGREGATE_TEXT_SENTINEL.to_string() + &text,
+                ))
             }
         }
         AggregateKind::JsonObjectAgg => {
@@ -1337,7 +1340,10 @@ fn eval_aggregate_call_rows<'a>(
                     object.insert(json_scalar_to_string(&key), value);
                 }
             }
-            Ok(Value::Object(object))
+            let text = mysql_json_agg_text(&Value::Object(object))?;
+            Ok(Value::String(
+                JSON_AGGREGATE_TEXT_SENTINEL.to_string() + &text,
+            ))
         }
     }
 }
@@ -1892,44 +1898,40 @@ fn declared_type_options(declared: &str) -> Vec<String> {
 }
 
 fn compare_json_order_values(left: &Value, right: &Value) -> Ordering {
-    fn rank(value: &Value) -> u8 {
-        match value {
-            Value::Null => 0,
-            Value::String(value) if is_json_null(value) => 0,
-            Value::Number(_) => 1,
-            Value::String(_) => 2,
-            Value::Object(_) => 3,
-            Value::Array(_) => 4,
-            Value::Bool(_) => 5,
-        }
-    }
-    let ranks = rank(left).cmp(&rank(right));
-    if ranks != Ordering::Equal {
-        return ranks;
-    }
-    match (left, right) {
-        (Value::String(left), Value::String(right))
-            if is_json_null(left) || is_json_null(right) =>
-        {
-            Ordering::Equal
-        }
-        (Value::Number(_), Value::Number(_)) => compare_f64_values(left, right),
-        (Value::String(left), Value::String(right)) => left.as_bytes().cmp(right.as_bytes()),
-        (Value::Bool(left), Value::Bool(right)) => left.cmp(right),
-        (Value::Array(left), Value::Array(right)) => left
-            .iter()
-            .zip(right)
-            .map(|(left, right)| compare_json_order_values(left, right))
-            .find(|ordering| *ordering != Ordering::Equal)
-            .unwrap_or_else(|| left.len().cmp(&right.len())),
-        (Value::Object(left), Value::Object(right)) => {
-            let left = serde_json::to_string(&public_json_value(&Value::Object(left.clone())))
-                .unwrap_or_default();
-            let right = serde_json::to_string(&public_json_value(&Value::Object(right.clone())))
-                .unwrap_or_default();
-            left.cmp(&right)
-        }
-        _ => Ordering::Equal,
+    json_order_key(left).cmp(&json_order_key(right))
+}
+
+/// MariaDB orders JSON documents by type rank, then by value:
+/// string < number < array < false < JSON null < true < object. Numbers
+/// compare as canonical decimal text, and arrays and objects compare as
+/// their compact canonical serialization.
+fn json_order_key(value: &Value) -> (u8, String) {
+    match value {
+        Value::Null => (0, String::new()),
+        Value::Bool(false) => (4, String::new()),
+        Value::Bool(true) => (6, String::new()),
+        Value::Number(number) => (2, number.to_string()),
+        Value::Array(_) => (
+            3,
+            serde_json::to_string(&public_json_value(value)).unwrap_or_default(),
+        ),
+        Value::Object(_) => (
+            7,
+            serde_json::to_string(&public_json_value(value)).unwrap_or_default(),
+        ),
+        Value::String(text) if is_json_null(text) => (5, String::new()),
+        Value::String(text) => match serde_json::from_str::<serde_json::Value>(text) {
+            Ok(doc) => match doc {
+                serde_json::Value::String(inner) => (1, inner),
+                serde_json::Value::Number(number) => (2, number.to_string()),
+                serde_json::Value::Array(_) => (3, doc.to_string()),
+                serde_json::Value::Object(_) => (7, doc.to_string()),
+                serde_json::Value::Null => (5, String::new()),
+                serde_json::Value::Bool(false) => (4, String::new()),
+                serde_json::Value::Bool(true) => (6, String::new()),
+            },
+            Err(_) => (1, text.clone()),
+        },
     }
 }
 

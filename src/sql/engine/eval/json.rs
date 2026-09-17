@@ -100,6 +100,43 @@ fn mysql_json_text(value: &Value) -> Result<String> {
     }
 }
 
+/// MariaDB renders JSON_ARRAYAGG/JSON_OBJECTAGG results with aggregate-style
+/// separators: arrays join with "," and objects join "key:value" pairs with
+/// ", " (unlike JSON_ARRAY/JSON_OBJECT, which add spaces after colons too).
+pub(crate) fn mysql_json_agg_text(value: &Value) -> Result<String> {
+    match value {
+        Value::Null => Ok("null".to_string()),
+        Value::Bool(value) => Ok(value.to_string()),
+        Value::Number(value) => Ok(value.to_string()),
+        Value::String(value) if is_json_null(value) => Ok("null".to_string()),
+        Value::String(value) => {
+            serde_json::to_string(value).map_err(|error| anyhow!("invalid JSON string: {error}"))
+        }
+        Value::Array(values) => Ok(format!(
+            "[{}]",
+            values
+                .iter()
+                .map(mysql_json_agg_text)
+                .collect::<Result<Vec<_>>>()?
+                .join(",")
+        )),
+        Value::Object(values) => Ok(format!(
+            "{{{}}}",
+            values
+                .iter()
+                .map(|(key, value)| {
+                    Ok(format!(
+                        "{}:{}",
+                        serde_json::to_string(key).unwrap_or_default(),
+                        mysql_json_agg_text(value)?
+                    ))
+                })
+                .collect::<Result<Vec<_>>>()?
+                .join(", ")
+        )),
+    }
+}
+
 pub(super) fn eval_json_unquote(
     arg: Option<&String>,
     data: &Map<String, Value>,
@@ -1119,6 +1156,12 @@ pub(crate) fn parse_json_document_value(value: Value) -> Value {
                         .map(mark_json_nulls)
                         .unwrap_or(Value::String(text))
                 })
+        }
+        Value::String(value) if value.starts_with(JSON_AGGREGATE_TEXT_SENTINEL) => {
+            let text = value.trim_start_matches(JSON_AGGREGATE_TEXT_SENTINEL);
+            serde_json::from_str::<Value>(text)
+                .map(mark_json_nulls)
+                .unwrap_or(Value::String(text.to_string()))
         }
         Value::String(value) => serde_json::from_str::<Value>(&value)
             .map(mark_json_nulls)

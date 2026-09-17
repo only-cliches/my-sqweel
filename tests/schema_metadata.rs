@@ -592,7 +592,7 @@ fn exposes_richer_information_schema_columns() {
     assert_eq!(id.get("column_key").unwrap().as_str().unwrap(), "PRI");
     assert_eq!(id.get("extra").unwrap().as_str().unwrap(), "auto_increment");
     assert_eq!(id.get("is_nullable").unwrap().as_str().unwrap(), "NO");
-    assert_eq!(id.get("column_type").unwrap().as_str().unwrap(), "bigint");
+    assert_eq!(id.get("column_type").unwrap().as_str().unwrap(), "bigint(20)");
     assert_eq!(id.get("data_type").unwrap().as_str().unwrap(), "bigint");
 
     let email = info[0]
@@ -750,7 +750,7 @@ fn information_schema_tables_lists_every_user_table() {
 }
 
 #[test]
-fn information_schema_schemata_returns_app_with_utf8mb4_defaults() {
+fn information_schema_schemata_reports_server_default_charset() {
     let _guard = test_lock();
     let engine = Engine::default();
     let rows = engine
@@ -769,11 +769,12 @@ fn information_schema_schemata_returns_app_with_utf8mb4_defaults() {
     assert_eq!(
         row.get("default_character_set_name")
             .and_then(|v| v.as_str()),
-        Some("utf8mb4")
+        Some("latin1")
     );
     assert_eq!(
-        row.get("default_collation_name").and_then(|v| v.as_str()),
-        Some("utf8mb4_general_ci")
+        row.get("default_collation_name")
+            .and_then(|v| v.as_str()),
+        Some("latin1_swedish_ci")
     );
 }
 

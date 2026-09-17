@@ -1,4 +1,4 @@
-use super::{Engine, EngineConfig, QueryEvent, QueryEventOptions, UniqueMode};
+use super::{Engine, EngineConfig, JSON_AGGREGATE_TEXT_SENTINEL, QueryEvent, QueryEventOptions, UniqueMode};
 use chrono::{Duration, NaiveDateTime, Utc};
 use serde_json::json;
 use std::time::Duration as StdDuration;
@@ -424,8 +424,14 @@ fn evaluates_extended_json_functions() {
         )
         .expect("JSON aggregate functions should execute");
     let row = &result[0].rows[0];
-    assert_eq!(row["scores"], json!([10, 20]));
-    assert_eq!(row["score_map"], json!({"Ada": 10, "Bob": 20}));
+    assert_eq!(
+        row["scores"],
+        json!(format!("{JSON_AGGREGATE_TEXT_SENTINEL}[10,20]"))
+    );
+    assert_eq!(
+        row["score_map"],
+        json!(format!("{JSON_AGGREGATE_TEXT_SENTINEL}{{\"Ada\":10, \"Bob\":20}}"))
+    );
 
     let result = engine
         .execute_sql(
@@ -538,7 +544,7 @@ fn order_by_uses_mysql_declared_type_rules_for_non_integer_columns() {
     );
     assert_eq!(
         ids("SELECT id FROM sort_types ORDER BY json_value, id"),
-        [3, 1, 2, 4]
+        [3, 2, 1, 4]
     );
     assert_eq!(
         ids("SELECT id FROM sort_types ORDER BY decimal_value, time_value DESC, id"),
@@ -622,7 +628,7 @@ fn compound_sorting_covers_precision_collation_temporal_enum_set_json_and_all_pa
     );
     assert_eq!(
         ids("SELECT id FROM sort_edges ORDER BY json_value ASC, id"),
-        [3, 1, 2, 5, 4]
+        [3, 2, 4, 1, 5]
     );
     assert_eq!(
         ids("SELECT id, decimal_value AS amount FROM sort_edges ORDER BY amount ASC, id"),

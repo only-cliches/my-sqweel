@@ -1088,6 +1088,14 @@ fn write_row<W: io::Read + io::Write>(
             {
                 rw.write_col("null")?;
             }
+            Value::String(value)
+                if definition.coltype == ColumnType::MYSQL_TYPE_JSON
+                    && let Some(text) = value
+                        .strip_prefix(crate::sql::engine::JSON_AGGREGATE_TEXT_SENTINEL)
+            =>
+            {
+                rw.write_col(text)?;
+            }
             Value::String(value) if definition.coltype == ColumnType::MYSQL_TYPE_JSON => {
                 if definition.table.is_empty() {
                     match serde_json::from_str::<serde_json::Value>(value) {

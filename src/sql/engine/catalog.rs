@@ -47,6 +47,8 @@ struct Account {
 pub(crate) struct Catalog {
     databases: BTreeSet<String>,
     users: BTreeMap<String, Account>,
+    #[serde(default)]
+    database_charsets: BTreeMap<String, (String, String)>,
 }
 
 impl Default for Catalog {
@@ -54,6 +56,7 @@ impl Default for Catalog {
         let mut catalog = Self {
             databases: BTreeSet::from(["app".into()]),
             users: BTreeMap::new(),
+            database_charsets: BTreeMap::new(),
         };
         catalog.set_admin_credentials("root", "");
         catalog
@@ -129,6 +132,10 @@ impl Catalog {
         self.databases.iter().map(String::as_str)
     }
 
+    pub(crate) fn database_charsets(&self) -> &BTreeMap<String, (String, String)> {
+        &self.database_charsets
+    }
+
     pub(crate) fn check_database(&self, identity: &Identity, database: &str) -> Result<()> {
         ensure!(
             self.databases.contains(database),
@@ -182,12 +189,24 @@ impl Catalog {
             AdminCommand::CreateDatabase {
                 name,
                 if_not_exists,
+                charset,
+                collation,
             } => {
                 if self.databases.contains(&name) {
                     ensure!(if_not_exists, "Database '{name}' already exists");
                     return Ok(CatalogEffect::None);
                 }
                 self.databases.insert(name.clone());
+                let charset = charset.unwrap_or_else(|| "latin1".to_string());
+                let collation = collation.unwrap_or_else(|| {
+                    (if charset == "utf8mb4" {
+                        "utf8mb4_general_ci"
+                    } else {
+                        "latin1_swedish_ci"
+                    })
+                    .to_string()
+                });
+                self.database_charsets.insert(name.clone(), (charset, collation));
                 Ok(CatalogEffect::CreateDatabase(name))
             }
             AdminCommand::DropDatabase { name, if_exists } => {
@@ -195,6 +214,7 @@ impl Catalog {
                     ensure!(if_exists, "Unknown database '{name}'");
                     return Ok(CatalogEffect::None);
                 }
+                self.database_charsets.remove(&name);
                 for account in self.users.values_mut() {
                     account.grants.remove(&name);
                 }
@@ -725,6 +745,8 @@ pub(crate) enum AdminCommand {
     CreateDatabase {
         name: String,
         if_not_exists: bool,
+        charset: Option<String>,
+        collation: Option<String>,
     },
     DropDatabase {
         name: String,
@@ -782,6 +804,7 @@ impl AdminCommand {
             if tokens.take_keyword("DATABASE") || tokens.take_keyword("SCHEMA") {
                 let if_not_exists = tokens.if_not_exists()?;
                 let name = tokens.database()?;
+                let mut charset = None;
                 if tokens.take_keyword("DEFAULT")
                     || tokens.peek_keyword("CHARACTER")
                     || tokens.peek_keyword("CHARSET")
@@ -796,13 +819,15 @@ impl AdminCommand {
                         tokens.identifier()?.eq_ignore_ascii_case("utf8mb4"),
                         "Only utf8mb4 databases are supported"
                     );
+                    charset = Some("utf8mb4".to_string());
                 }
+                let mut collation = None;
                 if tokens.take_keyword("COLLATE") {
                     tokens.take(&Token::Eq);
-                    let collation = tokens.identifier()?;
+                    let name = tokens.identifier()?;
                     ensure!(
                         matches!(
-                            collation.to_ascii_lowercase().as_str(),
+                            name.to_ascii_lowercase().as_str(),
                             "utf8mb4_unicode_ci"
                                 | "utf8mb4_general_ci"
                                 | "utf8mb4_bin"
@@ -810,10 +835,13 @@ impl AdminCommand {
                         ),
                         "Unsupported database collation"
                     );
+                    collation = Some(name.to_ascii_lowercase());
                 }
                 Self::CreateDatabase {
                     name,
                     if_not_exists,
+                    charset,
+                    collation,
                 }
             } else if tokens.take_keyword("USER") {
                 let if_not_exists = tokens.if_not_exists()?;
