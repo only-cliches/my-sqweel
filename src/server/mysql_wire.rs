@@ -777,7 +777,11 @@ fn write_result<W: io::Read + io::Write>(
                 })
                 .or_insert(metadata.decimals as usize);
         }
-        if metadata.column_type == MysqlColumnType::Float && metadata.decimals > 0 {
+        if matches!(
+            metadata.column_type,
+            MysqlColumnType::Float | MysqlColumnType::Double
+        ) && metadata.decimals > 0
+        {
             float_columns.insert(metadata.name.clone(), metadata.decimals as usize);
         }
     }
@@ -1085,7 +1089,12 @@ fn write_row<W: io::Read + io::Write>(
                         rw.write_col(value)?;
                     }
                 } else if definition.coltype == ColumnType::MYSQL_TYPE_DOUBLE {
-                    rw.write_col(number.as_f64().unwrap_or_default())?;
+                    let value = number.as_f64().unwrap_or_default();
+                    if let Some(scale) = float_columns.get(name) {
+                        rw.write_col(format!("{value:.scale$}"))?;
+                    } else {
+                        rw.write_col(value)?;
+                    }
                 } else {
                     rw.write_col(number.to_string())?;
                 }
