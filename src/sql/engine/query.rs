@@ -1446,7 +1446,7 @@ impl RawEngine {
                                         MysqlColumnType::Decimal
                                     }
                                     _ => {
-                                        metadata.decimals = 0;
+                                        metadata.decimals = 4;
                                         MysqlColumnType::Double
                                     }
                                 }

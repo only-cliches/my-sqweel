@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "id": "grouped_insert_select_summary",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "meob/my2Collector",
+      "commit": "2b230cc88bd56f1b834413694c21c3b6e929b36b",
+      "path": "my2.sql",
+      "url": "https://github.com/meob/my2Collector/blob/2b230cc88bd56f1b834413694c21c3b6e929b36b/my2.sql",
+      "sha256": "de901f7b068a4a968e6d9a0e8d8b1af684ae4c2273c9490656ac4bbb668e51e4",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "my2.sql:65-75",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "Operational collection statements insert grouped COUNT results into a summary table, repeating the shape for different grouping keys while retaining a capture timestamp.",
+      "mysql_mariadb_translation": "Rewritten as an original incident-log summary without stored procedures, system tables, clocks, or downloaded application data. A grouped INSERT ... SELECT writes per-owner COUNT(*) and SUM(duration_ms) results into a predeclared summary table; a NULL duration group verifies that SUM preserves MariaDB NULL semantics."
+    },
+    "independently_authored": true
+  },
+  "features": ["insert-select", "grouping", "count", "sum", "null", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "Owner alpha has three events totaling 200 milliseconds, beta has two totaling 50 milliseconds, and gamma has one event whose duration is NULL so its SUM remains NULL. The summary table starts empty and receives exactly one row per owner; all source rows are retained and an owner order makes the final state deterministic.",
+  "determinism_notes": "All source IDs and grouped owner names are fixed; the summary read is ordered by the primary-key owner. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE incident_log (event_id INT PRIMARY KEY, owner_name VARCHAR(16) NOT NULL, duration_ms INT NULL)",
+    "CREATE TABLE owner_summary (owner_name VARCHAR(16) PRIMARY KEY, event_count INT NOT NULL, total_duration_ms INT NULL)",
+    "INSERT INTO incident_log VALUES (1, 'alpha', 120), (2, 'alpha', NULL), (3, 'alpha', 80), (4, 'beta', 50), (5, 'beta', NULL), (6, 'gamma', NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO owner_summary (owner_name, event_count, total_duration_ms) SELECT owner_name, COUNT(*), SUM(duration_ms) FROM incident_log GROUP BY owner_name"
+    },
+    {
+      "sql": "SELECT owner_name, event_count, total_duration_ms FROM owner_summary ORDER BY owner_name",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT event_id, owner_name, duration_ms FROM incident_log ORDER BY event_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT owner_name, event_count, total_duration_ms FROM owner_summary ORDER BY owner_name",
+      "ordered": true
+    }
+  ]
+}
