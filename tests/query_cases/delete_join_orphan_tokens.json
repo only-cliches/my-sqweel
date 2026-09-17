@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "id": "delete_join_orphan_tokens",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Tatoeba/tatoeba2",
+      "commit": "0fbb4506ce071827f85375bd4c8c8f9c7cf23d41",
+      "path": "docs/database/updates/2016-01-31.sql",
+      "url": "https://github.com/Tatoeba/tatoeba2/blob/0fbb4506ce071827f85375bd4c8c9f7cf23d41/docs/database/updates/2016-01-31.sql",
+      "sha256": "370046f4ba3f5d2d5da6c5dfc9fc46162aa352253f3229a0c49a8a820ed7e278",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "docs/database/updates/2016-01-31.sql:1-5",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A cleanup migration deletes rows from a target table with MySQL's DELETE target FROM syntax, using a LEFT JOIN and a NULL test to remove rows whose referenced parent no longer exists.",
+      "mysql_mariadb_translation": "Rewritten as an original token cleanup: DELETE t FROM access_tokens t LEFT JOIN accounts a ... removes only revoked tokens whose account is missing, including a token with a NULL account_id, while preserving valid and non-revoked rows."
+    },
+    "independently_authored": true
+  },
+  "features": ["delete-join", "left-join", "orphan-cleanup", "null", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "Token 103 references a missing account and is revoked, so it is deleted; token 104 has a NULL account_id and is also deleted by the NULL-extended join row; token 102 is revoked but belongs to a valid account and remains; token 105 is orphaned but active and remains; token 101 is a valid active token and remains.",
+  "determinism_notes": "All account and token IDs are fixed; final rows are ordered by the unique token ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE accounts (account_id INT PRIMARY KEY, account_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE access_tokens (token_id INT PRIMARY KEY, account_id INT NULL, token_value VARCHAR(32) NOT NULL, revoked TINYINT NOT NULL)",
+    "INSERT INTO accounts VALUES (1, 'alpha'), (2, 'beta')",
+    "INSERT INTO access_tokens VALUES (101, 1, 'tok-alpha-live', 0), (102, 2, 'tok-beta-revoked', 1), (103, 99, 'tok-ghost-revoked', 1), (104, NULL, 'tok-unassigned', 1), (105, 98, 'tok-ghost-live', 0)"
+  ],
+  "steps": [
+    {
+      "sql": "DELETE t FROM access_tokens t LEFT JOIN accounts a ON a.account_id = t.account_id WHERE a.account_id IS NULL AND t.revoked = 1"
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT account_id, account_name FROM accounts ORDER BY account_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT token_id, account_id, token_value, revoked FROM access_tokens ORDER BY token_id",
+      "ordered": true
+    }
+  ]
+}
