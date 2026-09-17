@@ -1829,7 +1829,11 @@ impl DecimalParts {
 }
 
 fn decimal_parts(value: &Value) -> Option<DecimalParts> {
-    let mut raw = json_scalar_to_string(value).trim().to_string();
+    decimal_parts_str(&json_scalar_to_string(value))
+}
+
+fn decimal_parts_str(raw: &str) -> Option<DecimalParts> {
+    let mut raw = raw.trim().to_string();
     let sign = if raw.starts_with('-') {
         raw.remove(0);
         -1
@@ -1961,14 +1965,25 @@ fn binary_display_value(value: &str) -> Option<String> {
 
 fn mysql_cmp_non_null(left: &Value, right: &Value) -> Ordering {
     match (left, right) {
-        (Value::String(left), Value::String(right)) => binary_display_value(left)
-            .unwrap_or_else(|| left.clone())
-            .to_lowercase()
-            .cmp(
-                &binary_display_value(right)
-                    .unwrap_or_else(|| right.clone())
-                    .to_lowercase(),
-            ),
+        (Value::String(left), Value::String(right)) => {
+            // DECIMAL/NUMERIC column values, including the results of window
+            // and aggregate expressions derived from them, are stored as exact
+            // decimal strings. When both operands are exact decimal values,
+            // MariaDB compares them numerically rather than as text.
+            if let (Some(left_decimal), Some(right_decimal)) =
+                (decimal_parts_str(left), decimal_parts_str(right))
+            {
+                return compare_decimal_parts(&left_decimal, &right_decimal);
+            }
+            binary_display_value(left)
+                .unwrap_or_else(|| left.clone())
+                .to_lowercase()
+                .cmp(
+                    &binary_display_value(right)
+                        .unwrap_or_else(|| right.clone())
+                        .to_lowercase(),
+                )
+        }
         (Value::Number(_), Value::Number(_))
         | (Value::Number(_), Value::String(_))
         | (Value::String(_), Value::Number(_))

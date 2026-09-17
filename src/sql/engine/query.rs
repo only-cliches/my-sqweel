@@ -1443,6 +1443,25 @@ impl RawEngine {
                         first_row,
                         metadata.column_type,
                     ),
+                    "LAG" | "LEAD" | "FIRST_VALUE" | "LAST_VALUE" | "NTH_VALUE" => {
+                        // MariaDB returns the type of the first argument
+                        // from these value-returning window functions.
+                        if let Some(argument) = window_function_arguments(function)
+                            .ok()
+                            .and_then(|arguments| arguments.into_iter().next().flatten())
+                        {
+                            let argument_metadata = self.expression_metadata(
+                                select,
+                                &argument,
+                                String::new(),
+                                first_row,
+                            );
+                            metadata.decimals = argument_metadata.decimals;
+                            argument_metadata.column_type
+                        } else {
+                            metadata.column_type
+                        }
+                    }
                     _ => metadata.column_type,
                 };
             }
@@ -6072,6 +6091,27 @@ fn window_exprs(expr: &Expr) -> Vec<&Expr> {
             expressions.extend(window_exprs(right));
             expressions
         }
+        Expr::Case {
+            operand,
+            conditions,
+            results,
+            else_result,
+        } => {
+            let mut expressions = operand
+                .as_deref()
+                .into_iter()
+                .flat_map(window_exprs)
+                .collect::<Vec<_>>();
+            for (condition, result) in conditions.iter().zip(results) {
+                expressions.extend(window_exprs(condition));
+                expressions.extend(window_exprs(result));
+            }
+            if let Some(else_result) = else_result {
+                expressions.extend(window_exprs(else_result));
+            }
+            expressions
+        }
+        Expr::IsNull(inner) => window_exprs(inner),
         Expr::UnaryOp { expr, .. } | Expr::Nested(expr) => window_exprs(expr),
         _ => Vec::new(),
     }

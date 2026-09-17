@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "decimal_column_compare",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "WallyPons/YouTube",
+      "commit": "738cc2f1d3ceb753b079a54a87b325e426f6f630",
+      "path": "LagLead.sql",
+      "url": "https://github.com/WallyPons/YouTube/blob/738cc2f1d3ceb753b079a54a87b325e426f6f630/LagLead.sql",
+      "sha256": "988efa1cef58c9f9b343ca9ba076e1fc9f8baae143df9f1e2ff0a152b4c0ca29",
+      "source_dialect": "sqlserver"
+    },
+    "inspiration": {
+      "source_location": "Minimized from the CASE trend classification in the T-SQL sales tutorial (a per-row window result compared against the current row's decimal amount); reduced to the failing core: two DECIMAL column values ordered against each other in a WHERE filter. Independently authored schema and rows, no SQL copied from the source.",
+      "source_dialect": "sqlserver",
+      "observed_pattern": "A CASE expression compares a per-row window result against the current row's decimal amount to classify the trend as higher, lower, or equal. The minimal failing form is a filter comparing two DECIMAL column values, which must be ordered numerically rather than lexicographically.",
+      "mysql_mariadb_translation": "Both engines store DECIMAL values as fixed-scale decimal strings; MariaDB orders two DECIMAL column values numerically. The T-SQL query is replaced by an original two-column decimal table and a single SELECT filtered by a column-versus-column decimal comparison."
+    },
+    "independently_authored": true
+  },
+  "features": ["decimal", "comparison", "where-filter"],
+  "fixture_notes": "a=9.75 and b=14.25 reverse under lexicographic ordering ('9' > '1') while a < b holds numerically. WHERE a < b therefore returns the row only under numeric comparison; a text-based ordering of the decimal strings returns no rows.",
+  "determinism_notes": "Single row with unique values, no ordering ambiguity, no clocks, randomness, or concurrency.",
+  "setup": [
+    "CREATE TABLE decimal_pair (a DECIMAL(10,2) NOT NULL, b DECIMAL(10,2) NOT NULL)",
+    "INSERT INTO decimal_pair VALUES (9.75, 14.25)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT a, b FROM decimal_pair WHERE a < b",
+      "ordered": true
+    }
+  ]
+}

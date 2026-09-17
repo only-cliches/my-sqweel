@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "window_lag_lead_meter_trend",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "WallyPons/YouTube",
+      "commit": "738cc2f1d3ceb753b079a54a87b325e426f6f630",
+      "path": "LagLead.sql",
+      "url": "https://github.com/WallyPons/YouTube/blob/738cc2f1d3ceb753b079a54a87b325e426f6f630/LagLead.sql",
+      "sha256": "988efa1cef58c9f9b343ca9ba076e1fc9f8baae143df9f1e2ff0a152b4c0ca29",
+      "source_dialect": "sqlserver"
+    },
+    "inspiration": {
+      "source_location": "T-SQL sales tutorial script, steps 4-6: per-customer date-ordered LAG/LEAD with a default value, a CASE that re-evaluates the same LEAD window expression three times to classify the next amount as higher/lower/equal, and a combined LAG/LEAD query at offsets 1 and 2 over the same partition",
+      "source_dialect": "sqlserver",
+      "observed_pattern": "A per-entity time-series analysis keeps the current row and its neighbors side by side: LAG and LEAD at offset 1 expose previous/next values, a CASE expression compares the window result against the current row (higher, lower, or equal), and offsets of 2 reach two steps in either direction. Equal consecutive amounts make the equality branch reachable, and the partition edges make the LAG/LEAD fallback observable.",
+      "mysql_mariadb_translation": "Rewritten as an original meter-reading scenario (meter_readings with account, date, and decimal amount; no temp tables, IDENTITY, bracketed identifiers, or CONVERT date styles). MariaDB 10.11.7 accepts only two-argument LAG/LEAD, so the T-SQL third argument (default 0) is dropped and partition-edge rows return NULL instead of 0. The trend CASE has no ELSE, so the last reading of each account classifies as NULL. DATE values order the partitions deterministically, and duplicate consecutive amounts exercise the equality branch."
+    },
+    "independently_authored": true
+  },
+  "features": ["window", "lag", "lead", "partition-by", "case", "null", "decimal", "offset-2"],
+  "fixture_notes": "account 7 has six readings including one equal-consecutive pair (14.25 twice); account 8 has four readings beginning with an equal pair (22.10 twice); account 9 has three readings so offset-2 LAG/LEAD leave only the middle row with both neighbors non-NULL. The CASE in step 2 has no ELSE, so each account's final reading yields a NULL trend.",
+  "determinism_notes": "Every read orders by (account_id, reading_date), which is unique in the fixture; the window ordering key reading_date is unique within each account. No clocks, randomness, or concurrency.",
+  "setup": [
+    "CREATE TABLE meter_readings (reading_id INT NOT NULL, account_id INT NOT NULL, reading_date DATE NOT NULL, amount DECIMAL(10,2) NOT NULL)",
+    "INSERT INTO meter_readings VALUES (1, 7, '2026-03-02', 12.50), (2, 7, '2026-03-03', 14.25), (3, 7, '2026-03-04', 14.25), (4, 7, '2026-03-05', 9.75), (5, 7, '2026-03-06', 18.00), (6, 7, '2026-03-07', 11.40)",
+    "INSERT INTO meter_readings VALUES (7, 8, '2026-03-02', 22.10), (8, 8, '2026-03-03', 22.10), (9, 8, '2026-03-04', 30.55), (10, 8, '2026-03-05', 25.30)",
+    "INSERT INTO meter_readings VALUES (11, 9, '2026-03-02', 5.25), (12, 9, '2026-03-03', 8.75), (13, 9, '2026-03-04', 5.25)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT account_id, reading_date, amount, LAG(amount, 1) OVER (PARTITION BY account_id ORDER BY reading_date) AS previous_reading, LEAD(amount, 1) OVER (PARTITION BY account_id ORDER BY reading_date) AS next_reading FROM meter_readings ORDER BY account_id, reading_date",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT account_id, reading_date, amount, CASE WHEN LEAD(amount, 1) OVER (PARTITION BY account_id ORDER BY reading_date) > amount THEN 'up' WHEN LEAD(amount, 1) OVER (PARTITION BY account_id ORDER BY reading_date) < amount THEN 'down' WHEN LEAD(amount, 1) OVER (PARTITION BY account_id ORDER BY reading_date) = amount THEN 'flat' END AS trend FROM meter_readings ORDER BY account_id, reading_date",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT account_id, reading_date, amount, LAG(amount, 2) OVER (PARTITION BY account_id ORDER BY reading_date) AS two_ago, LEAD(amount, 2) OVER (PARTITION BY account_id ORDER BY reading_date) AS two_ahead FROM meter_readings ORDER BY account_id, reading_date",
+      "ordered": true
+    }
+  ]
+}
