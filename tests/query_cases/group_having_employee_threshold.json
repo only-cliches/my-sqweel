@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "group_having_employee_threshold",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "LinkedInLearning/complete-guide-to-sql-for-data-engineering-from-beginner-to-advanced-3338018",
+      "commit": "34c23e181271d4e61aad47bde8f6413996ce0129",
+      "path": "04_09.sql",
+      "url": "https://github.com/LinkedInLearning/complete-guide-to-sql-for-data-engineering-from-beginner-to-advanced-3338018/blob/34c23e181271d4e61aad47bde8f6413996ce0129/04_09.sql",
+      "sha256": "3f3a9bd4e73fb6966374c97f436cc409cff6bc60dfa4c98fb0616d2747551e05",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "04_09.sql:1 and 04_09.sql:4",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "Grouped reports use HAVING COUNT(...) to retain only groups whose membership meets a minimum threshold, including a joined category-level count.",
+      "mysql_mariadb_translation": "Rewritten as an original department staffing report with a LEFT JOIN and an active-employee predicate in the join condition. HAVING COUNT(employee_id) >= 2 keeps departments with at least two active employees, including a qualifying department whose SUM of nullable bonus points remains NULL."
+    },
+    "independently_authored": true
+  },
+  "features": ["grouping", "having", "count", "sum", "left-join", "null", "aggregate-filter", "deterministic-order"],
+  "fixture_notes": "Department 10 has three active employees and a bonus total of 25; department 20 has only one active employee because its second employee is inactive and is excluded by the JOIN predicate; department 30 has no employees and is filtered out by HAVING; department 40 has two active employees with NULL bonuses and remains because HAVING counts rows independently of SUM.",
+  "determinism_notes": "Department and employee IDs are fixed; the grouped report is ordered by the unique department ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE departments (department_id INT PRIMARY KEY, department_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE employees (employee_id INT PRIMARY KEY, department_id INT NOT NULL, employee_name VARCHAR(32) NOT NULL, active TINYINT NOT NULL, bonus_points INT NULL)",
+    "INSERT INTO departments VALUES (10, 'Alpha'), (20, 'Beta'), (30, 'Gamma'), (40, 'Delta')",
+    "INSERT INTO employees VALUES (101, 10, 'Ada', 1, 10), (102, 10, 'Bjarne', 1, NULL), (103, 10, 'Cora', 1, 15), (201, 20, 'Dijkstra', 1, 5), (202, 20, 'Edsger', 0, 20), (401, 40, 'Grace', 1, NULL), (402, 40, 'Hopper', 1, NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT d.department_id, d.department_name, COUNT(e.employee_id) AS active_employee_count, SUM(e.bonus_points) AS total_bonus_points FROM departments d LEFT JOIN employees e ON e.department_id = d.department_id AND e.active = 1 GROUP BY d.department_id, d.department_name HAVING COUNT(e.employee_id) >= 2 ORDER BY d.department_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT department_id, department_name FROM departments ORDER BY department_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT employee_id, department_id, employee_name, active, bonus_points FROM employees ORDER BY employee_id",
+      "ordered": true
+    }
+  ]
+}
