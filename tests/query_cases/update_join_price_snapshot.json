@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "update_join_price_snapshot",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "shanqiu127/Collaborative-Operation-Management-System",
+      "commit": "1dddd3352de8201ceb7522dfbaa5bf43b1140070",
+      "path": "db.sql",
+      "url": "https://github.com/shanqiu127/Collaborative-Operation-Management-System/blob/1dddd3352de8201ceb7522dfbaa5bf43b1140070/db.sql",
+      "sha256": "9c34b216642d439596bcfbcd6a37f3a72adb1bbe94327021ba8dbdeb0120de9a",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "db.sql:661-709",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A multi-table UPDATE LEFT JOINs a reference table, then fills snapshot fields from the most recent effective child price selected by a correlated scalar subquery with ORDER BY and LIMIT, falling back through joined defaults.",
+      "mysql_mariadb_translation": "Rewritten as an original order-line catalog: an UPDATE JOIN chooses the latest active purchase price at or before each order date, using purchase_id to break same-date ties, then COALESCE falls back to the catalog default and finally zero. A second correlated scalar lookup drives an explicit source label, while cancelled rows remain unchanged."
+    },
+    "independently_authored": true
+  },
+  "features": ["update-join", "left-join", "correlated-subquery", "scalar-subquery", "order-by-limit", "coalesce", "case", "decimal", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "Order 11 selects the higher purchase_id among two prices on the same date; order 12 selects the latest active price; order 13 falls back to the catalog default; order 14 has neither source and falls back to zero; cancelled order 15 is excluded and retains its sentinel values.",
+  "determinism_notes": "All product, price, and order identifiers and dates are fixed; the correlated price lookup orders by effective date and unique price ID, and final reads use primary-key order. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE catalog (product_id INT PRIMARY KEY, default_cost DECIMAL(10,2) NULL)",
+    "CREATE TABLE purchase_prices (price_id INT PRIMARY KEY, product_id INT NOT NULL, effective_on DATE NOT NULL, unit_cost DECIMAL(10,2) NULL, active TINYINT NOT NULL)",
+    "CREATE TABLE order_lines (line_id INT PRIMARY KEY, product_id INT NOT NULL, ordered_on DATE NOT NULL, quantity INT NOT NULL, cost_unit DECIMAL(10,2) NULL, cost_source VARCHAR(16) NULL, cancelled TINYINT NOT NULL)",
+    "INSERT INTO catalog VALUES (1, 9.50), (2, NULL), (3, 4.00)",
+    "INSERT INTO purchase_prices VALUES (101, 1, '2026-01-01', 8.00, 1), (102, 1, '2026-02-01', 7.50, 1), (103, 1, '2026-02-01', 7.25, 1), (104, 1, '2026-03-01', 6.90, 0), (201, 2, '2026-01-01', NULL, 1), (202, 2, '2026-02-20', 3.25, 1)",
+    "INSERT INTO order_lines VALUES (11, 1, '2026-02-15', 2, NULL, NULL, 0), (12, 2, '2026-03-01', 3, NULL, NULL, 0), (13, 3, '2026-03-01', 1, NULL, NULL, 0), (14, 4, '2026-03-01', 4, NULL, NULL, 0), (15, 1, '2026-02-15', 1, 99.99, 'sentinel', 1)"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE order_lines ol LEFT JOIN catalog c ON c.product_id = ol.product_id SET ol.cost_unit = COALESCE((SELECT p.unit_cost FROM purchase_prices p WHERE p.product_id = ol.product_id AND p.active = 1 AND p.effective_on <= ol.ordered_on ORDER BY p.effective_on DESC, p.price_id DESC LIMIT 1), c.default_cost, 0), ol.cost_source = CASE WHEN (SELECT p.unit_cost FROM purchase_prices p WHERE p.product_id = ol.product_id AND p.active = 1 AND p.effective_on <= ol.ordered_on ORDER BY p.effective_on DESC, p.price_id DESC LIMIT 1) IS NOT NULL THEN 'purchase' WHEN c.default_cost IS NOT NULL THEN 'catalog' ELSE 'zero' END WHERE ol.cancelled = 0"
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT line_id, product_id, ordered_on, quantity, cost_unit, cost_source, cancelled FROM order_lines ORDER BY line_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT price_id, product_id, effective_on, unit_cost, active FROM purchase_prices ORDER BY price_id",
+      "ordered": true
+    }
+  ]
+}
