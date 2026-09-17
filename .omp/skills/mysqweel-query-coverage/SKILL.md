@@ -1,6 +1,6 @@
 ---
 name: mysqweel-query-coverage
-description: Discover public GitHub SQL patterns yourself from MySQL/MariaDB, PostgreSQL, or SQLite; independently author a MySQL/MariaDB differential scenario; diagnose MySqweel mismatches; and prepare a local review branch. Use when asked to expand MySqweel SQL/query compatibility coverage or find real-world SQL patterns. No repository list is required.
+description: Discover public GitHub SQL patterns yourself from MySQL/MariaDB, PostgreSQL, or SQLite; independently author a MySQL/MariaDB differential scenario; diagnose MySqweel mismatches; and prepare an end-of-turn local commit. Use when asked to expand MySqweel SQL/query compatibility coverage or find real-world SQL patterns. No repository list is required.
 ---
 
 # MySqweel query coverage
@@ -135,10 +135,11 @@ Only after two identical baseline observations run the differential comparison.
   or new transaction isolation models autonomously. Park these with evidence.
 - All tests must pass, resolve any failing tests.
 
-Before making a local review commit, rerun the original and minimized cases three
-times from fresh fixtures, then run the repository's required checks. Commit only
-the source fix and independently authored, attributed test fixture. Never push, open a PR, or merge
-without the user asking.
+Before the end-of-turn commit, rerun the original and minimized cases three
+times from fresh fixtures, then run the repository's required checks. Work on the
+currently checked-out branch: do not create or switch to a review branch for this
+skill. Commit only the source fix and independently authored, attributed test fixture.
+Never push, open a PR, or merge without the user asking.
 
 Report the source URL and commit, source dialect, query location, observed pattern,
 MySQL/MariaDB translation, feature combination,
