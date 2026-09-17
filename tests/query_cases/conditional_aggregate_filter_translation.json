@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "conditional_aggregate_filter_translation",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "powa-team/powa-archivist",
+      "commit": "0eb01e198e84de445ca83d47b92dd6ac0a461dca",
+      "path": "sql/04_catalog.sql",
+      "url": "https://github.com/powa-team/powa-archivist/blob/0eb01e198e84de445ca83d47b92dd6ac0a461dca/sql/04_catalog.sql",
+      "sha256": "29cd15113ad2e4f6ff29ca3956e29e8bc34f9d0f2ff6182df17d76ca5c4d6686",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "sql/04_catalog.sql:22-26",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A catalog query computes multiple conditional counts from one filtered relation, separating rows where a timestamp is NULL from rows where it is present while retaining an unconditional count.",
+      "mysql_mariadb_translation": "Rewritten as an original support-team and incident-events scenario. PostgreSQL COUNT(*) FILTER (WHERE ...) expressions become SUM(CASE WHEN ... THEN 1 ELSE 0 END) and COUNT(CASE WHEN ... THEN event_id END); the fixture adds a LEFT JOIN, grouped teams, a NULL-extended team, and an independent event status/priority combination without copying the source schema or rows."
+    },
+    "independently_authored": true
+  },
+  "features": ["conditional-aggregate", "case", "left-join", "grouping", "null", "count", "sum", "deterministic-order"],
+  "fixture_notes": "Team 10 has one open high-priority event and one closed low-priority event; team 20 has two open events with only one high-priority event; team 30 has no events and exercises the NULL-extended join row; event 99 belongs to an unknown team and must not contribute to any team aggregate.",
+  "determinism_notes": "The grouped read is ordered by the unique team ID and contains no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE support_teams (team_id INT PRIMARY KEY, team_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE incident_events (event_id INT PRIMARY KEY, team_id INT NOT NULL, status VARCHAR(16) NOT NULL, priority VARCHAR(16) NOT NULL)",
+    "INSERT INTO support_teams VALUES (10, 'alpha'), (20, 'beta'), (30, 'gamma')",
+    "INSERT INTO incident_events VALUES (100, 10, 'open', 'high'), (101, 10, 'closed', 'low'), (200, 20, 'open', 'low'), (201, 20, 'open', 'high'), (999, 99, 'open', 'high')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT t.team_id, t.team_name, COUNT(e.event_id) AS total_events, SUM(CASE WHEN e.status = 'open' THEN 1 ELSE 0 END) AS open_events, SUM(CASE WHEN e.status = 'closed' THEN 1 ELSE 0 END) AS closed_events, COUNT(CASE WHEN e.priority = 'high' THEN e.event_id END) AS high_priority_events FROM support_teams t LEFT JOIN incident_events e ON e.team_id = t.team_id GROUP BY t.team_id, t.team_name ORDER BY t.team_id",
+      "ordered": true
+    }
+  ]
+}
