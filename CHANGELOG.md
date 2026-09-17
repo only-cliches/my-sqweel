@@ -4,6 +4,11 @@ All notable changes to MySqweel will be documented in this file.
 
 ## Unreleased
 
+### Development environment
+
+- Fixed the Harness Hat image's MariaDB initializer wrapper and installed checksum-pinned ncurses ABI-5 compatibility libraries required by the MariaDB 10.11.7 client.
+- Added a non-root MariaDB initialization and InnoDB TCP-query check during image builds. Installer downloads and temporary database files are removed on success or failure, and APT caches are cleared after installation.
+
 ### MariaDB 10.11.7 compatibility
 
 - Pre-rendered `JSON_ARRAYAGG`/`JSON_OBJECTAGG` results in MariaDB's aggregate style (array elements joined with `,`, object members joined with `, ` as `key:value`) and pass them verbatim over the wire instead of re-serializing them with `JSON_ARRAY`/`JSON_OBJECT` separators.

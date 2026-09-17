@@ -133,6 +133,7 @@ Only after two identical baseline observations run the differential comparison.
   alter expected results, change floors, or special-case fixture values.
 - Do not implement routines, triggers, administration, topology, storage architecture,
   or new transaction isolation models autonomously. Park these with evidence.
+- All tests must pass, resolve any failing tests.
 
 Before making a local review commit, rerun the original and minimized cases three
 times from fresh fixtures, then run the repository's required checks. Commit only

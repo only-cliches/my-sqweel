@@ -290,6 +290,7 @@ impl RawEngine {
                 offset,
                 last_insert_id,
                 &|expr, data, last_insert_id| self.eval_expr_ctx(expr, data, last_insert_id),
+                Some(&|select, rows| self.materialize_window_values(select, rows, last_insert_id)),
             )? {
                 return Ok(self.with_select_metadata(&select, result));
             }
@@ -416,6 +417,7 @@ impl RawEngine {
                 offset,
                 last_insert_id,
                 &|expr, data, last_insert_id| self.eval_expr_ctx(expr, data, last_insert_id),
+                Some(&|select, rows| self.materialize_window_values(select, rows, last_insert_id)),
             )? {
                 return Ok(self.with_select_metadata(&select, result));
             }
@@ -444,6 +446,7 @@ impl RawEngine {
                 offset,
                 last_insert_id,
                 &|expr, data, last_insert_id| self.eval_expr_ctx(expr, data, last_insert_id),
+                Some(&|select, rows| self.materialize_window_values(select, rows, last_insert_id)),
             )? {
                 return Ok(self.with_select_metadata(&select, result));
             }
@@ -559,6 +562,7 @@ impl RawEngine {
                 offset,
                 last_insert_id,
                 &|expr, data, id| self.eval_expr_ctx(expr, data, id),
+                Some(&|select, rows| self.materialize_window_values(select, rows, last_insert_id)),
             )? {
                 return Ok(self.with_select_metadata(&select, aggregate));
             }
@@ -625,6 +629,7 @@ impl RawEngine {
             offset,
             last_insert_id,
             &|expr, data, last_insert_id| self.eval_expr_ctx(expr, data, last_insert_id),
+            Some(&|select, rows| self.materialize_window_values(select, rows, last_insert_id)),
         )? {
             return Ok(self.with_select_metadata(&select, result));
         }
@@ -1071,7 +1076,10 @@ impl RawEngine {
                             .iter()
                             .map(json_to_f64_lossy)
                             .try_fold(0.0, |sum, value| value.map(|value| sum + value))?;
-                        Ok(number_from_f64(sum / aggregate_values.len() as f64))
+                        Ok(number_from_f64(round_aggregate(
+                            sum / aggregate_values.len() as f64,
+                            &aggregate_values,
+                        )))
                     }
                     "MIN" => Ok(aggregate_values
                         .into_iter()
@@ -1096,7 +1104,7 @@ impl RawEngine {
                                 .sum::<f64>()
                                 / numbers.len() as f64;
                             let value = variance.sqrt();
-                            Ok(number_from_f64((value * 10_000.0).round() / 10_000.0))
+                            Ok(number_from_f64(round_aggregate(value, &aggregate_values)))
                         }
                     }
                     _ => unreachable!(),
@@ -1406,12 +1414,62 @@ impl RawEngine {
                         MysqlColumnType::Decimal
                     }
                     "AVG" | "SUM" | "STD" | "STDDEV" => {
-                        metadata.decimals = if matches!(name.as_str(), "AVG" | "STD" | "STDDEV") {
-                            4
-                        } else {
-                            0
-                        };
-                        MysqlColumnType::Decimal
+                        // MariaDB 10.11.7 aggregate output types: SUM over an
+                        // exact input (INT, DECIMAL) returns DECIMAL carrying
+                        // the argument's scale (INT has scale 0); AVG widens
+                        // that scale by four; STD/STDDEV and any floating
+                        // input yield DOUBLE.
+                        let argument = window_function_arguments(function)
+                            .ok()
+                            .and_then(|arguments| arguments.into_iter().next().flatten())
+                            .map(|argument| {
+                                self.expression_metadata(select, &argument, String::new(), first_row)
+                            });
+                        match argument {
+                            Some(input)
+                                if matches!(
+                                    input.column_type,
+                                    MysqlColumnType::TinyInt
+                                        | MysqlColumnType::SmallInt
+                                        | MysqlColumnType::Integer
+                                        | MysqlColumnType::BigInt
+                                        | MysqlColumnType::Decimal
+                                ) =>
+                            {
+                                match name.as_str() {
+                                    "SUM" => {
+                                        metadata.decimals = input.decimals;
+                                        MysqlColumnType::Decimal
+                                    }
+                                    "AVG" => {
+                                        metadata.decimals = input.decimals.saturating_add(4);
+                                        MysqlColumnType::Decimal
+                                    }
+                                    _ => {
+                                        metadata.decimals = 0;
+                                        MysqlColumnType::Double
+                                    }
+                                }
+                            }
+                            Some(input)
+                                if matches!(
+                                    input.column_type,
+                                    MysqlColumnType::Float | MysqlColumnType::Double
+                                ) =>
+                            {
+                                metadata.decimals = 0;
+                                MysqlColumnType::Double
+                            }
+                            _ => {
+                                metadata.decimals =
+                                    if matches!(name.as_str(), "AVG" | "STD" | "STDDEV") {
+                                        4
+                                    } else {
+                                        0
+                                    };
+                                MysqlColumnType::Decimal
+                            }
+                        }
                     }
                     "ROUND" | "TRUNCATE" => MysqlColumnType::Decimal,
                     "CURRENT_DATE" | "CURDATE" | "DATE" => MysqlColumnType::Date,
@@ -1519,33 +1577,34 @@ impl RawEngine {
                 .last()
                 .map(|name| name.value.to_ascii_uppercase())
                 .unwrap_or_default();
-            if !matches!(name.as_str(), "AVG" | "STD" | "STDDEV") {
+            if !matches!(name.as_str(), "STD" | "STDDEV") {
                 continue;
             }
-            let approximate = matches!(name.as_str(), "STD" | "STDDEV")
-                && window_function_arguments(function)
-                    .ok()
-                    .and_then(|args| args.into_iter().next().flatten())
-                    .is_some_and(|arg| {
-                        let input =
-                            self.expression_metadata(select, &arg, String::new(), first_row);
-                        !matches!(
-                            input.column_type,
-                            MysqlColumnType::TinyInt
-                                | MysqlColumnType::SmallInt
-                                | MysqlColumnType::Integer
-                                | MysqlColumnType::BigInt
-                                | MysqlColumnType::Decimal
-                        )
-                    });
-            // Text and floating inputs use approximate numeric conversion. Their
-            // standard deviation has no fixed decimal scale (unlike exact inputs).
-            metadata.column_type = if approximate {
-                MysqlColumnType::Double
-            } else {
-                MysqlColumnType::Decimal
-            };
-            metadata.decimals = if approximate { 0 } else { 4 };
+            // AVG, and STD/STDDEV over exact or floating inputs, already
+            // carry their type and scale from the aggregate arm above. Only
+            // text and other inputs fall back to approximate DOUBLE here.
+            let approximate = window_function_arguments(function)
+                .ok()
+                .and_then(|args| args.into_iter().next().flatten())
+                .is_some_and(|arg| {
+                    let input =
+                        self.expression_metadata(select, &arg, String::new(), first_row);
+                    !matches!(
+                        input.column_type,
+                        MysqlColumnType::TinyInt
+                            | MysqlColumnType::SmallInt
+                            | MysqlColumnType::Integer
+                            | MysqlColumnType::BigInt
+                            | MysqlColumnType::Decimal
+                            | MysqlColumnType::Float
+                            | MysqlColumnType::Double
+                    )
+                });
+            if !approximate {
+                continue;
+            }
+            metadata.column_type = MysqlColumnType::Double;
+            metadata.decimals = 0;
         }
         metadata
     }
@@ -2906,6 +2965,7 @@ impl RawEngine {
             offset,
             0,
             &|expr, data, last_insert_id| self.eval_expr_ctx(expr, data, last_insert_id),
+            Some(&|select, rows| self.materialize_window_values(select, rows, 0)),
         )? {
             return Ok(self.with_select_metadata(select, result));
         }

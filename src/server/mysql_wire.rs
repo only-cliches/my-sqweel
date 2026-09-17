@@ -765,8 +765,16 @@ fn write_result<W: io::Read + io::Write>(
     let mut float_columns = HashMap::new();
     for metadata in &out.column_metadata {
         if metadata.column_type == MysqlColumnType::Decimal {
+            // Engine metadata is authoritative for computed decimal columns
+            // (SUM/AVG over DECIMAL); the SQL text heuristic only fills gaps
+            // where metadata carries no scale.
             decimal_columns
                 .entry(metadata.name.clone())
+                .and_modify(|current| {
+                    if metadata.decimals > 0 {
+                        *current = metadata.decimals as usize;
+                    }
+                })
                 .or_insert(metadata.decimals as usize);
         }
         if metadata.column_type == MysqlColumnType::Float && metadata.decimals > 0 {

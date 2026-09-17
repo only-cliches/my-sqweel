@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "window_sum_running_totals",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "EnterpriseDB/mysql_fdw",
+      "commit": "40d54a0288588f52fcd060966f63dcb862e3e56d",
+      "path": "sql/select.sql",
+      "url": "https://github.com/EnterpriseDB/mysql_fdw/blob/40d54a0288588f52fcd060966f63dcb862e3e56d/sql/select.sql",
+      "sha256": "409b3b050ae729c46c7c22b014d3aec0b19c4c6ecd12fd6ca59cf8ddbbabcfe3",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/select.sql:130-136, foreign-table window-clause checks: AVG, COUNT, and SUM over PARTITION BY c8 with deterministic ordering.",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A query suite applies multiple window aggregates over one partition key while preserving detail rows and an explicit order. The useful semantic combination is partition-wide aggregation alongside row-level window output; an independent fixture extends that shape with a unique-key running frame and rank ties.",
+      "mysql_mariadb_translation": "Rewritten as an original shop-orders scenario with integer order IDs, customer IDs, DATE values, and DECIMAL(10,2) amounts. The foreign-table names, source data, and surrounding PostgreSQL client setup are not copied. MariaDB 10.11.7 receives ordinary SUM, ROW_NUMBER, RANK, and DENSE_RANK window expressions with deterministic output ordering."
+    },
+    "independently_authored": true
+  },
+  "features": ["window", "sum-over", "partition-total", "running-total", "row-number", "rank", "dense-rank", "partition-by", "decimal", "ties"],
+  "fixture_notes": "Customer 1 has two orders on 2026-04-02, so the date-ordered running total must give both tied orders the same cumulative total and RANK 2; customer 3 has two identical orders on one date, so the tied rows share RANK 1 and DENSE_RANK 1 and the partition total doubles the amount. Customer 2 has unique dates for the plain rank progression. Amounts are chosen so exact decimal addition (12.50 + 21.00 + 8.75 = 42.25) is observable.",
+  "determinism_notes": "Every read orders by (customer_id, order_id), which is unique in the fixture. Window order keys are order_id (unique) or order_date (deliberate ties); no clocks, randomness, or concurrency.",
+  "setup": [
+    "CREATE TABLE shop_orders (order_id INT NOT NULL, customer_id INT NOT NULL, order_date DATE NOT NULL, amount DECIMAL(10,2) NOT NULL)",
+    "INSERT INTO shop_orders VALUES (1, 1, '2026-04-01', 12.50), (2, 1, '2026-04-02', 21.00), (3, 1, '2026-04-02', 8.75)",
+    "INSERT INTO shop_orders VALUES (4, 2, '2026-04-01', 5.00), (5, 2, '2026-04-03', 17.25), (6, 2, '2026-04-05', 9.10)",
+    "INSERT INTO shop_orders VALUES (7, 3, '2026-04-02', 4.40), (8, 3, '2026-04-02', 4.40)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT customer_id, order_id, amount, SUM(amount) OVER (PARTITION BY customer_id) AS customer_total FROM shop_orders ORDER BY customer_id, order_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT customer_id, order_id, amount, SUM(amount) OVER (PARTITION BY customer_id ORDER BY order_id) AS running_total, ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY order_id) AS seq FROM shop_orders ORDER BY customer_id, order_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT customer_id, order_id, order_date, amount, SUM(amount) OVER (PARTITION BY customer_id ORDER BY order_date) AS date_running, RANK() OVER (PARTITION BY customer_id ORDER BY order_date) AS rank_date, DENSE_RANK() OVER (PARTITION BY customer_id ORDER BY order_date) AS dense_date FROM shop_orders ORDER BY customer_id, order_id",
+      "ordered": true
+    }
+  ]
+}

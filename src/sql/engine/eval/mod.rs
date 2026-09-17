@@ -2,7 +2,7 @@ use super::*;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
-use sqlparser::ast::Function;
+use sqlparser::ast::{Function, FunctionArg};
 
 thread_local! {
     static EVAL_DATABASE: RefCell<String> = RefCell::new("app".into());
@@ -369,6 +369,7 @@ pub(super) fn aggregate_select_result(
     offset: Option<&Offset>,
     last_insert_id: u64,
     eval: &dyn Fn(&Expr, &Map<String, Value>, u64) -> Result<Value>,
+    window: Option<&dyn Fn(&Select, &mut Vec<Map<String, Value>>) -> Result<()>>,
 ) -> Result<Option<QueryResult>> {
     let group_by = group_by_exprs(select);
     if group_by.is_empty() && !projection_has_aggregate(&select.projection) {
@@ -398,14 +399,41 @@ pub(super) fn aggregate_select_result(
             .zip(order_hints)
             .filter_map(|(order, hint)| hint.clone().map(|hint| (order.expr.to_string(), hint))),
     );
+    // Output keys derive from projection item position, matching the
+    // disambiguation `row_keys_for_columns` applies to the result columns.
+    // Window items keep their key but are deferred until window
+    // materialization below.
+    let mut name_counts: BTreeMap<String, u32> = BTreeMap::new();
+    let item_keys: Vec<Option<String>> = select
+        .projection
+        .iter()
+        .map(|item| {
+            let name = match item {
+                SelectItem::UnnamedExpr(expr) => Some(projection_output_column_name(expr)),
+                SelectItem::ExprWithAlias { alias, .. } => Some(alias.value.clone()),
+                _ => None,
+            };
+            name.map(|name| {
+                let count = name_counts.entry(name.clone()).or_default();
+                *count += 1;
+                if *count == 1 {
+                    name
+                } else {
+                    format!("{name}#{count}")
+                }
+            })
+        })
+        .collect();
     let mut output = Vec::new();
+    let mut bases = Vec::new();
     for group in grouped {
         let base = group.first().cloned().unwrap_or_default();
         let mut row = Map::new();
 
-        for item in &select.projection {
+        for (item, key) in select.projection.iter().zip(item_keys.iter()) {
             project_aggregate_item(
                 item,
+                key.as_deref(),
                 &group,
                 &base,
                 last_insert_id,
@@ -443,6 +471,50 @@ pub(super) fn aggregate_select_result(
             )?;
         }
         output.push(row);
+        bases.push(base.clone());
+    }
+
+    // Window functions evaluate after GROUP BY/HAVING (SQL standard order),
+    // over the grouped rows: non-aggregate window inputs resolve to the
+    // group's base row, matching MariaDB.
+    if let Some(window) = window {
+        let mut contexts: Vec<Map<String, Value>> = output
+            .iter()
+            .zip(bases.iter())
+            .map(|(row, base)| {
+                let mut context = base.clone();
+                context.extend(row.clone());
+                context
+            })
+            .collect();
+        window(select, &mut contexts)?;
+        for ((row, context), base) in output.iter_mut().zip(contexts.iter()).zip(bases.iter()) {
+            for (key, value) in context {
+                if !base.contains_key(key) {
+                    row.insert(key.clone(), value.clone());
+                }
+            }
+        }
+        // Window items were deferred from projection: their values are
+        // cached above, so resolve them now under their output keys.
+        for ((row, context), (item, key)) in output
+            .iter_mut()
+            .zip(contexts.iter())
+            .zip(select.projection.iter().zip(item_keys.iter()))
+        {
+            let Some(key) = key else {
+                continue;
+            };
+            let expr = match item {
+                SelectItem::UnnamedExpr(expr) | SelectItem::ExprWithAlias { expr, .. } => expr,
+                _ => continue,
+            };
+            if !expr_has_window(expr) {
+                continue;
+            }
+            let value = eval(expr, context, last_insert_id)?;
+            row.insert(key.clone(), value);
+        }
     }
 
     if select.distinct.is_some() {
@@ -574,6 +646,42 @@ fn function_arguments_have_aggregate(arguments: &FunctionArguments) -> bool {
     })
 }
 
+pub(super) fn expr_has_window(expr: &Expr) -> bool {
+    match expr {
+        Expr::Function(function) if function.over.is_some() => true,
+        Expr::Function(function) => {
+            let FunctionArguments::List(arguments) = &function.args else {
+                return false;
+            };
+            arguments.args.iter().any(|argument| {
+                let arg = match argument {
+                    FunctionArg::Named { arg, .. }
+                    | FunctionArg::ExprNamed { arg, .. }
+                    | FunctionArg::Unnamed(arg) => arg,
+                };
+                matches!(arg, FunctionArgExpr::Expr(expr) if expr_has_window(expr))
+            })
+        }
+        Expr::BinaryOp { left, right, .. } => expr_has_window(left) || expr_has_window(right),
+        Expr::Case {
+            operand,
+            conditions,
+            results,
+            else_result,
+        } => {
+            operand.as_deref().is_some_and(expr_has_window)
+                || conditions.iter().any(expr_has_window)
+                || results.iter().any(expr_has_window)
+                || else_result.as_deref().is_some_and(expr_has_window)
+        }
+        Expr::IsNull(inner) => expr_has_window(inner),
+        Expr::UnaryOp { expr, .. } | Expr::Nested(expr) => expr_has_window(expr),
+        // Window functions inside subqueries belong to the subquery's scope.
+        Expr::Subquery(_) | Expr::Exists { .. } => false,
+        _ => false,
+    }
+}
+
 pub(super) fn group_rows(
     rows: Vec<Map<String, Value>>,
     group_by: &[Expr],
@@ -616,6 +724,7 @@ pub(super) fn group_rows(
 
 pub(super) fn project_aggregate_item(
     item: &SelectItem,
+    key: Option<&str>,
     group: &[Map<String, Value>],
     base: &Map<String, Value>,
     last_insert_id: u64,
@@ -634,41 +743,29 @@ pub(super) fn project_aggregate_item(
             );
         }
         SelectItem::UnnamedExpr(expr) => {
-            let column = projection_output_column_name(expr);
-            let key = aggregate_output_key(out, &column);
+            // Window items are resolved after materialization; their output
+            // key is reserved here and filled in by the window phase.
+            if expr_has_window(expr) {
+                return Ok(());
+            }
             let value =
                 aggregate_or_eval_expr(expr, group, base, last_insert_id, order_hints, eval)?;
-            out.insert(key, value);
+            out.insert(key.expect("expression item carries an output key").to_string(), value);
         }
-        SelectItem::ExprWithAlias { expr, alias } => {
+        SelectItem::ExprWithAlias { expr, alias: _ } => {
+            if expr_has_window(expr) {
+                return Ok(());
+            }
             let value =
                 aggregate_or_eval_expr(expr, group, base, last_insert_id, order_hints, eval)?;
             if aggregate_call(expr).is_some() {
                 out.insert(projection_expr_column_name(expr), value.clone());
             }
-            let key = aggregate_output_key(out, &alias.value);
-            out.insert(key, value);
+            out.insert(key.expect("expression item carries an output key").to_string(), value);
         }
         _ => {}
     }
     Ok(())
-}
-
-/// Next row-map key for an aggregate output name, matching
-/// `row_keys_for_columns` for the projected column list.
-fn aggregate_output_key(out: &Map<String, Value>, name: &str) -> String {
-    let used = out.keys().filter(|key| {
-        **key == *name
-            || key
-                .strip_prefix(name)
-                .is_some_and(|rest| rest.starts_with('#'))
-    });
-    let count = used.count() + 1;
-    if count == 1 {
-        name.to_string()
-    } else {
-        format!("{name}#{count}")
-    }
 }
 
 pub(super) fn aggregate_or_eval_expr(
@@ -1259,7 +1356,7 @@ fn eval_aggregate_call_rows<'a>(
                 .iter()
                 .map(json_to_f64_lossy)
                 .try_fold(0.0, |acc, value| value.map(|value| acc + value))?;
-            Ok(number_from_f64(sum / values.len() as f64))
+            Ok(number_from_f64(round_aggregate(sum / values.len() as f64, &values)))
         }
         AggregateKind::Std | AggregateKind::Variance => {
             if values.is_empty() {
@@ -1276,7 +1373,7 @@ fn eval_aggregate_call_rows<'a>(
                 .sum::<f64>()
                 / numbers.len() as f64;
             if call.kind == AggregateKind::Std {
-                Ok(number_from_f64(variance.sqrt()))
+                Ok(number_from_f64(round_aggregate(variance.sqrt(), &values)))
             } else {
                 Ok(number_from_f64(variance))
             }
@@ -1859,6 +1956,44 @@ fn decimal_parts_str(raw: &str) -> Option<DecimalParts> {
         integer: integer.to_string(),
         fraction: fraction.to_string(),
     })
+}
+
+/// MariaDB rounds AVG/STD over exact inputs to the input scale plus four
+/// fractional digits. Returns that input scale when every non-NULL input is
+/// an exact decimal (DECIMAL column string or integer), and `None` for
+/// floating or other inputs whose result keeps full DOUBLE precision.
+pub(super) fn exact_input_scale(values: &[Value]) -> Option<usize> {
+    let mut scale = 0_usize;
+    for value in values {
+        match value {
+            Value::String(raw) => {
+                let digits = raw.trim().trim_start_matches(['-', '+']);
+                let fraction = digits.split_once('.').map_or("", |(_, fraction)| fraction);
+                if !fraction.bytes().all(|byte| byte.is_ascii_digit()) {
+                    return None;
+                }
+                scale = scale.max(fraction.len());
+            }
+            Value::Number(number) => {
+                if number.as_f64().is_some_and(|value| value.fract() != 0.0) {
+                    return None;
+                }
+            }
+            _ => return None,
+        }
+    }
+    Some(scale)
+}
+
+/// Applies MariaDB's exact-input rounding rule (input scale + four fractional
+/// digits) to an AVG/STD result, leaving floating-input results untouched.
+pub(super) fn round_aggregate(value: f64, values: &[Value]) -> f64 {
+    let Some(scale) = exact_input_scale(values) else {
+        return value;
+    };
+    let scale = (scale + 4).min(22);
+    let factor = 10_f64.powi(scale as i32);
+    (value * factor).round() / factor
 }
 
 fn compare_enum_values(left: &Value, right: &Value, declared: &str) -> Ordering {
