@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "correlated_exists_author_filter",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "SangHakLee/T_MySQL",
+      "commit": "98eb7db3e1be8d4d51f0b5a0c6122c1054aa623c",
+      "path": "day3.sql",
+      "url": "https://github.com/SangHakLee/T_MySQL/blob/98eb7db3e1be8d4d51f0b5a0c6122c1054aa623c/day3.sql",
+      "sha256": "a80faeb948044ef1ffdb748c56b6edd3fb1987e190fa2b6718465725a6b8b152",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "day3.sql:94 and day3.sql:100",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A parent row is filtered by correlated EXISTS subqueries whose inner rows compare a child key to the current outer row, including separate existence checks for related history and management records.",
+      "mysql_mariadb_translation": "Rewritten as an original submission catalog: an author qualifies only when a correlated EXISTS finds an accepted submission and a correlated NOT EXISTS finds no held submission. One accepted submission has a NULL score to verify that EXISTS depends on row presence and status, not a non-NULL projected value."
+    },
+    "independently_authored": true
+  },
+  "features": ["correlated-subquery", "exists", "not-exists", "semi-join", "anti-semi-join", "null", "deterministic-order"],
+  "fixture_notes": "Ada has an accepted submission and a draft with a NULL score, so she qualifies; Bjarne has an accepted submission whose score is NULL and a rejected submission, so row existence still qualifies him; Cora has no accepted submission; Dijkstra has both an accepted and a held submission, so NOT EXISTS excludes him.",
+  "determinism_notes": "Author IDs and submission IDs are fixed; the result is ordered by the unique author ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE authors (author_id INT PRIMARY KEY, author_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE submissions (submission_id INT PRIMARY KEY, author_id INT NOT NULL, status VARCHAR(16) NOT NULL, score INT NULL)",
+    "INSERT INTO authors VALUES (1, 'Ada'), (2, 'Bjarne'), (3, 'Cora'), (4, 'Dijkstra')",
+    "INSERT INTO submissions VALUES (101, 1, 'accepted', 100), (102, 1, 'draft', NULL), (201, 2, 'accepted', NULL), (202, 2, 'rejected', 40), (301, 3, 'draft', 90), (401, 4, 'accepted', 80), (402, 4, 'held', 70)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT a.author_id, a.author_name FROM authors a WHERE EXISTS (SELECT 1 FROM submissions s WHERE s.author_id = a.author_id AND s.status = 'accepted') AND NOT EXISTS (SELECT 1 FROM submissions h WHERE h.author_id = a.author_id AND h.status = 'held') ORDER BY a.author_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT author_id, author_name FROM authors ORDER BY author_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT submission_id, author_id, status, score FROM submissions ORDER BY submission_id",
+      "ordered": true
+    }
+  ]
+}
