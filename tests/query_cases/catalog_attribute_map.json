@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "catalog_attribute_map",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "antlr/grammars-v4",
+      "commit": "20efa537586610f5aebd584429ac1b5993a30381",
+      "path": "sql/mysql/Positive-Technologies/examples/dml_select.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/20efa537586610f5aebd584429ac1b5993a30381/sql/mysql/Positive-Technologies/examples/dml_select.sql",
+      "sha256": "0266157173bc9d8eabd9d01dcf389a0df5c8311ec1cc29863c4c893a5f3c9e23",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/mysql/Positive-Technologies/examples/dml_select.sql:181",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped MySQL query folds key/value attribute rows into one JSON object per owning identifier with JSON_OBJECTAGG.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored catalog attribute report. Products are joined to their attribute rows, JSON_OBJECTAGG builds one attribute map per product, and deterministic product ordering stabilizes the result set. The schema, rows, key names, values, and reporting purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "json-objectagg",
+    "inner-join",
+    "grouping",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Products 10, 20, and 30 each have one non-NULL attribute. One key per product removes JSON_OBJECTAGG member-order ambiguity while retaining one grouped JSON object per catalog item.",
+  "determinism_notes": "The report orders by the unique product ID. Each aggregate has one unique attribute key, and no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE catalog_products (product_id INT PRIMARY KEY, product_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE catalog_attributes (attribute_id INT PRIMARY KEY, product_id INT NOT NULL, attribute_name VARCHAR(32) NOT NULL, attribute_value VARCHAR(64) NOT NULL)",
+    "INSERT INTO catalog_products VALUES (10, 'desk'), (20, 'lamp'), (30, 'chair')",
+    "INSERT INTO catalog_attributes VALUES (100, 10, 'finish', 'oak'), (200, 20, 'watts', '9'), (300, 30, 'material', 'steel')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT p.product_id, p.product_name, JSON_OBJECTAGG(a.attribute_name, a.attribute_value) AS attributes FROM catalog_products p INNER JOIN catalog_attributes a ON a.product_id = p.product_id GROUP BY p.product_id, p.product_name ORDER BY p.product_id",
+      "ordered": true
+    }
+  ]
+}

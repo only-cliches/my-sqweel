@@ -1553,7 +1553,7 @@ fn eval_aggregate_call_rows<'a>(
             if values.is_empty() {
                 return Ok(Value::Null);
             }
-            let mut object = Map::new();
+            let mut members = Vec::with_capacity(values.len());
             for value in values {
                 let Value::Array(mut pair) = value else {
                     continue;
@@ -1561,10 +1561,14 @@ fn eval_aggregate_call_rows<'a>(
                 if pair.len() == 2 {
                     let value = pair.pop().unwrap_or(Value::Null);
                     let key = pair.pop().unwrap_or(Value::Null);
-                    object.insert(json_scalar_to_string(&key), value);
+                    members.push(format!(
+                        "{}:{}",
+                        serde_json::to_string(&json_scalar_to_string(&key))?,
+                        mysql_json_agg_text(&value)?
+                    ));
                 }
             }
-            let text = mysql_json_agg_text(&Value::Object(object))?;
+            let text = format!("{{{}}}", members.join(", "));
             Ok(Value::String(
                 JSON_AGGREGATE_TEXT_SENTINEL.to_string() + &text,
             ))

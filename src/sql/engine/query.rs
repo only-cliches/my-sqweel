@@ -1519,8 +1519,8 @@ impl RawEngine {
                         MysqlColumnType::DateTime
                     }
                     "FIELD" => MysqlColumnType::Integer,
+                    "JSON_ARRAYAGG" | "JSON_OBJECTAGG" => MysqlColumnType::Blob,
                     "JSON_ARRAY"
-                    | "JSON_ARRAYAGG"
                     | "JSON_ARRAY_APPEND"
                     | "JSON_ARRAY_INSERT"
                     | "JSON_EXTRACT"
@@ -1530,7 +1530,6 @@ impl RawEngine {
                     | "JSON_MERGE_PATCH"
                     | "JSON_MERGE_PRESERVE"
                     | "JSON_OBJECT"
-                    | "JSON_OBJECTAGG"
                     | "JSON_REMOVE"
                     | "JSON_REPLACE"
                     | "JSON_SEARCH"
