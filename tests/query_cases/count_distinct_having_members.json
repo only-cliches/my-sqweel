@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "count_distinct_having_members",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "en-wl/wordlist",
+      "commit": "1e5b7d3a72f47a71da5d28686c1dd4b397178485",
+      "path": "libscowl/views.sql",
+      "url": "https://github.com/en-wl/wordlist/blob/1e5b7d3a72f47a71da5d28686c1dd4b397178485/libscowl/views.sql",
+      "sha256": "20615ffcddc39093a7418838d2f5239166692827b2dea7aecac4d3e38f955853",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "libscowl/views.sql:29 (duplicate_lemma_check)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped duplicate check filters groups with HAVING COUNT(DISTINCT group_id) greater than one.",
+      "mysql_mariadb_translation": "Rewritten as a team membership report. A LEFT JOIN retains teams with no assignments before HAVING filters to teams with at least two distinct active members; duplicate assignment rows and NULL member IDs exercise COUNT(DISTINCT) semantics. The fixture schema, rows, and output purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "count-distinct",
+    "having",
+    "left-join",
+    "grouping",
+    "duplicate-rows",
+    "null",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Team 10 has two distinct active members plus a duplicate assignment and an inactive assignment; team 20 has one active member plus a NULL member ID; team 30 has no assignments; team 40 has exactly two distinct active members. HAVING must retain only teams 10 and 40.",
+  "determinism_notes": "The report is ordered by the unique team ID and uses no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE teams (team_id INT PRIMARY KEY, team_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE team_members (assignment_id INT PRIMARY KEY, team_id INT NOT NULL, member_id INT, active TINYINT NOT NULL)",
+    "INSERT INTO teams VALUES (10, 'atlas'), (20, 'beacon'), (30, 'cinder'), (40, 'delta')",
+    "INSERT INTO team_members VALUES (100, 10, 501, 1), (101, 10, 501, 1), (102, 10, 502, 1), (103, 10, 503, 0), (200, 20, 601, 1), (201, 20, NULL, 1), (400, 40, 701, 1), (401, 40, 702, 1)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT t.team_id, t.team_name, COUNT(DISTINCT tm.member_id) AS active_member_count FROM teams t LEFT JOIN team_members tm ON tm.team_id = t.team_id AND tm.active = 1 GROUP BY t.team_id, t.team_name HAVING COUNT(DISTINCT tm.member_id) >= 2 ORDER BY t.team_id",
+      "ordered": true
+    }
+  ]
+}
