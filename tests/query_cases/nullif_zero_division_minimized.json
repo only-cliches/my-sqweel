@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "id": "nullif_zero_division_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "nilenso/postgresql-monitoring",
+      "commit": "48176f6df0dffc86f45ae3a342052f1bcbffcaa1",
+      "path": "monitor.sql",
+      "url": "https://github.com/nilenso/postgresql-monitoring/blob/48176f6df0dffc86f45ae3a342052f1bcbffcaa1/monitor.sql",
+      "sha256": "b5382da8e699f3a9ca0bd44eac37b55922452ff9d02c8e0ceddd333984605be5",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "monitor.sql:4-13 (NULLIF denominator guards)",
+      "source_dialect": "postgresql",
+      "observed_pattern": "Minimized reproduction of the denominator guard: a nonzero numerator divided by NULLIF(zero, zero) must yield NULL rather than a numeric zero or a division error.",
+      "mysql_mariadb_translation": "Reduced to one table and two fixed rows while retaining ROUND and the NULLIF-protected division; the zero denominator row isolates the mismatch from joins, aggregates, and COALESCE."
+    },
+    "independently_authored": true,
+    "minimized_from": "nullif_capacity_ratio"
+  },
+  "features": ["nullif", "division", "round", "zero-denominator", "deterministic-order"],
+  "fixture_notes": "Row 1 has a zero denominator and must return NULL; row 2 has denominator 2 and must return 2.50. The case isolates the zero-denominator behavior from the original report.",
+  "determinism_notes": "The single read-only query is ordered by the unique row ID and uses no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE ratio_inputs (input_id INT PRIMARY KEY, numerator INT NOT NULL, denominator INT NOT NULL)",
+    "INSERT INTO ratio_inputs VALUES (1, 5, 0), (2, 5, 2)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT input_id, ROUND(numerator / NULLIF(denominator, 0), 2) AS ratio FROM ratio_inputs ORDER BY input_id",
+      "ordered": true
+    }
+  ]
+}

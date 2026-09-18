@@ -3899,6 +3899,9 @@ pub(super) fn eval_function_text(
                 .map(|arg| eval_scalar_text(arg, data, last_insert_id))
                 .transpose()?
                 .unwrap_or(Value::Null);
+            if value == Value::Null {
+                return Ok(Value::Null);
+            }
             let places = args
                 .get(1)
                 .map(|arg| eval_scalar_text(arg, data, last_insert_id))

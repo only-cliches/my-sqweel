@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "id": "nullif_capacity_ratio",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "nilenso/postgresql-monitoring",
+      "commit": "48176f6df0dffc86f45ae3a342052f1bcbffcaa1",
+      "path": "monitor.sql",
+      "url": "https://github.com/nilenso/postgresql-monitoring/blob/48176f6df0dffc86f45ae3a342052f1bcbffcaa1/monitor.sql",
+      "sha256": "b5382da8e699f3a9ca0bd44eac37b55922452ff9d02c8e0ceddd333984605be5",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "monitor.sql:4-13 (cache ratio queries)",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A monitoring query guards a percentage denominator with NULLIF so a zero total produces NULL instead of a division-by-zero error, both for row-level values and aggregate totals.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored capacity utilization report. A LEFT JOIN preserves an unused target, COALESCE makes its usage total zero, and NULLIF turns the zero-capacity target's percentage into NULL while normal targets receive a rounded percentage. PostgreSQL system views and prepared statements are omitted; the fixture schema, rows, and output purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "nullif",
+    "division",
+    "round",
+    "coalesce",
+    "left-join",
+    "grouping",
+    "sum",
+    "zero-denominator",
+    "null-preservation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Target 1 has capacity 100 and 50 requests for 50.00 percent utilization; target 2 has five requests but zero capacity and must produce a NULL percentage; target 3 has capacity 200 and no usage, so COALESCE supplies zero requests and the percentage is 0.00.",
+  "determinism_notes": "The report is ordered by the unique target ID. All capacities, usage values, and IDs are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE capacity_targets (target_id INT PRIMARY KEY, target_name VARCHAR(32) NOT NULL, capacity INT NOT NULL)",
+    "CREATE TABLE target_usage (usage_id INT PRIMARY KEY, target_id INT NOT NULL, requests INT NOT NULL)",
+    "INSERT INTO capacity_targets VALUES (1, 'atlas', 100), (2, 'beacon', 0), (3, 'cinder', 200)",
+    "INSERT INTO target_usage VALUES (10, 1, 20), (11, 1, 30), (20, 2, 5)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT t.target_id, t.target_name, COALESCE(SUM(u.requests), 0) AS total_requests, ROUND(COALESCE(SUM(u.requests), 0) * 100 / NULLIF(t.capacity, 0), 2) AS utilization_pct FROM capacity_targets t LEFT JOIN target_usage u ON u.target_id = t.target_id GROUP BY t.target_id, t.target_name, t.capacity ORDER BY t.target_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT target_id, target_name, capacity FROM capacity_targets ORDER BY target_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT usage_id, target_id, requests FROM target_usage ORDER BY usage_id",
+      "ordered": true
+    }
+  ]
+}
