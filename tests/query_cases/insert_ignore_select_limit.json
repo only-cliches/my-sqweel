@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "id": "insert_ignore_select_limit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "learning-mysql-2nd/learning-mysql-2nd",
+      "commit": "11eeb0229eae77fec564d2485e976aaf7a94c027",
+      "path": "ch07/snippets.sql",
+      "url": "https://github.com/learning-mysql-2nd/learning-mysql-2nd/blob/11eeb0229eae77fec564d2485e976aaf7a94c027/ch07/snippets.sql",
+      "sha256": "f4e7b3218f17492216afa8bd508a5f10b48fe28698704a5237b1607da04d176a",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "ch07/snippets.sql:51-53",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL INSERT IGNORE selects a bounded source subset into a target table so duplicate-key rows are skipped while the selected non-conflicting rows are loaded.",
+      "mysql_mariadb_translation": "Reauthored as a catalog-feed load with an explicit priority and primary-key tie-breaker. INSERT IGNORE ... SELECT uses ORDER BY and LIMIT to select the top three feed rows; one selected row conflicts with an existing catalog key and is ignored, while the other selected rows are inserted. The source schema, names, and values are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": ["insert-ignore", "insert-select", "order-by-limit", "primary-key-conflict", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "The feed ranks SKU 30 first, SKU 20 second, SKU 10 third, and SKU 40 fourth. SKU 10 already exists in the live catalog, so the LIMIT 3 source subset still inserts only SKUs 30 and 20; SKU 10 remains unchanged and SKU 40 is not selected.",
+  "determinism_notes": "Priority descending plus unique SKU ascending defines the selected source subset. All values are fixed and there are no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE catalog_feed (sku INT PRIMARY KEY, label VARCHAR(32) NOT NULL, priority INT NOT NULL)",
+    "CREATE TABLE live_catalog (sku INT PRIMARY KEY, label VARCHAR(32) NOT NULL, priority INT NOT NULL)",
+    "INSERT INTO catalog_feed VALUES (10, 'ten-new', 80), (20, 'twenty', 90), (30, 'thirty', 90), (40, 'forty', 70)",
+    "INSERT INTO live_catalog VALUES (10, 'ten-existing', 5)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT IGNORE INTO live_catalog (sku, label, priority) SELECT sku, label, priority FROM catalog_feed ORDER BY priority DESC, sku LIMIT 3"
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT sku, label, priority FROM live_catalog ORDER BY sku",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT sku, label, priority FROM catalog_feed ORDER BY sku",
+      "ordered": true
+    }
+  ]
+}
