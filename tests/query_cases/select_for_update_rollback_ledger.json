@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "id": "select_for_update_rollback_ledger",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "pgr0ss/pgledger",
+      "commit": "5e2c1fe2ee7bf471ddca3097e1c1acbb17b562a6",
+      "path": "pgledger.sql",
+      "url": "https://github.com/pgr0ss/pgledger/blob/5e2c1fe2ee7bf471ddca3097e1c1acbb17b562a6/pgledger.sql",
+      "sha256": "fc41721e718630c5d98e39788045c4e75cba5db922ef6bf00c63973933960720",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "pgledger.sql:220-225",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A ledger transfer locks all participating account rows with SELECT ... FOR UPDATE in a stable account order before applying balance changes, preventing conflicting transfers from observing stale balances.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored audit-ledger transaction. START TRANSACTION followed by an ordered SELECT ... FOR UPDATE locks two account rows, paired updates move a fixed amount between them, and a read exposes the intermediate balances before ROLLBACK restores the original state. PostgreSQL procedural loops and composite parameters are replaced with standard MariaDB literals and one ordered row-lock query; the schema, names, values, and rollback purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["transaction", "select-for-update", "ordered-lock-read", "multiple-updates", "rollback", "intermediate-state", "final-state", "deterministic-order"],
+  "fixture_notes": "Accounts 1 and 2 are selected and locked in account order, then 15 units move from account 1 to account 2 inside the transaction. Account 3 is not selected or changed. The intermediate read shows the transfer, while ROLLBACK must restore all three original balances.",
+  "determinism_notes": "The locking read and every balance read use the unique account_id order. All balances and mutations are fixed; one connection executes the transaction sequentially with no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE ledger_accounts (account_id INT PRIMARY KEY, account_name VARCHAR(32) NOT NULL, balance INT NOT NULL)",
+    "INSERT INTO ledger_accounts VALUES (1, 'alpha', 100), (2, 'beta', 40), (3, 'gamma', 75)"
+  ],
+  "steps": [
+    {
+      "sql": "START TRANSACTION"
+    },
+    {
+      "sql": "SELECT account_id, balance FROM ledger_accounts WHERE account_id IN (1, 2) ORDER BY account_id FOR UPDATE",
+      "ordered": true
+    },
+    {
+      "sql": "UPDATE ledger_accounts SET balance = balance - 15 WHERE account_id = 1"
+    },
+    {
+      "sql": "UPDATE ledger_accounts SET balance = balance + 15 WHERE account_id = 2"
+    },
+    {
+      "sql": "SELECT account_id, balance FROM ledger_accounts ORDER BY account_id",
+      "ordered": true
+    },
+    {
+      "sql": "ROLLBACK"
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT account_id, account_name, balance FROM ledger_accounts ORDER BY account_id",
+      "ordered": true
+    }
+  ]
+}

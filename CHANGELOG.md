@@ -22,6 +22,8 @@ All notable changes to MySqweel will be documented in this file.
 - Added deterministic, GitHub-attributed query-coverage scenarios for NULL-aware outer and self joins, correlated `EXISTS`/`NOT EXISTS` guards, grouped `HAVING`/`COUNT(DISTINCT)`/conditional aggregates/`GROUP_CONCAT`/`ROLLUP`, set operators with `ALL` semantics, decimal comparisons, `NULLIF`/`COALESCE` guarded arithmetic, monthly `DATE_FORMAT` reporting, and ranking, running-total, `LAG`, and `LEAD` windows.
 - Added DML and transaction scenarios for grouped and recursive `INSERT ... SELECT`, `INSERT IGNORE`, `REPLACE`, `ON DUPLICATE KEY UPDATE` (including moved keys and aggregate sources), `UPDATE`/`DELETE` joins and ordered `LIMIT` batches, `RETURNING`, `ROLLBACK`, and nested savepoints; each fixture checks deterministic intermediate or final state and includes minimized regressions where needed.
 - Added GitHub-attributed differential coverage for `DELETE ... RETURNING` combined with correlated `NOT EXISTS` cleanup guards and nullable returned columns, including final-state checks that preserve held and active rows.
+- Added GitHub-attributed differential coverage for an ordered `SELECT ... FOR UPDATE` inside a transaction, paired balance updates, intermediate-state observation, and rollback to the original ledger state.
+- Parked an `UPDATE ... RETURNING` coverage candidate because MariaDB 10.11.7 returns syntax error 1064 for that form; no invalid fixture was retained.
 
 ## 0.4.4 Sep 9, 2026
 
