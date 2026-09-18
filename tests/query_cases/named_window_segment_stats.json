@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "named_window_segment_stats",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "SpiderOak/nimbus.io",
+      "commit": "3ce4feef219d1d50e6257a3948a678cba28b42c0",
+      "path": "sql/gc.sql",
+      "url": "https://github.com/SpiderOak/nimbus.io/blob/3ce4feef219d1d50e6257a3948a678cba28b42c0/sql/gc.sql",
+      "sha256": "9f918e7d411f2dc9fffc4f51646300ea5efc57d1e852174abd4a0907f5d270f2",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/gc.sql:124-161 (gc_archive_batches view)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A view defines several named windows once, then reuses partition-only, ordered, and bounded-frame definitions across row-number, count, and minimum window calculations.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored segment ledger. The large view and archive-specific columns are omitted; three named windows expose one partition-only count, one ordered row number, and one running SUM with an explicit ROWS frame. IDs provide deterministic ordering and the schema and values are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["named-window", "window-frame", "row-number", "count", "sum", "partition", "deterministic-order"],
+  "fixture_notes": "Region 1 has three segments with values 10, -2, and 7, producing running totals 10, 8, and 15; region 2 has two segments producing 4 and 10. The partition-only count restarts per region while the ordered windows use the unique segment ID.",
+  "determinism_notes": "Region IDs and segment IDs are fixed and unique; each named window has an explicit partition/order definition where ordering is needed, and the final read is ordered by both IDs. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE segment_events (segment_id INT PRIMARY KEY, region_id INT NOT NULL, amount INT NOT NULL)",
+    "INSERT INTO segment_events VALUES (101, 1, 10), (102, 1, -2), (103, 1, 7), (201, 2, 4), (202, 2, 6)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT region_id, segment_id, amount, ROW_NUMBER() OVER ordered_segments AS sequence_no, COUNT(*) OVER region_partition AS region_count, SUM(amount) OVER running_segments AS running_amount FROM segment_events WINDOW region_partition AS (PARTITION BY region_id), ordered_segments AS (PARTITION BY region_id ORDER BY segment_id ASC), running_segments AS (PARTITION BY region_id ORDER BY segment_id ASC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) ORDER BY region_id, segment_id",
+      "ordered": true
+    }
+  ]
+}
