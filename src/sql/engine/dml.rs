@@ -688,6 +688,8 @@ impl RawEngine {
         from: Option<TableWithJoins>,
         selection: Option<Expr>,
         returning: Option<Vec<SelectItem>>,
+        order_by: Vec<OrderByExpr>,
+        limit: Option<Expr>,
     ) -> Result<QueryResult> {
         if from.is_some() {
             return Err(anyhow!("UPDATE ... FROM is not supported yet"));
@@ -711,8 +713,54 @@ impl RawEngine {
         let mut pending_rows_written = 0_usize;
         let mut pending_cells_written = 0_usize;
         let mut warnings = Vec::new();
+        let selected_keys = if order_by.is_empty() && limit.is_none() {
+            None
+        } else {
+            if !table.joins.is_empty() {
+                return Err(anyhow!(
+                    "ORDER BY and LIMIT are supported only for single-table UPDATE"
+                ));
+            }
+            let mut candidates = Vec::new();
+            let materialization_plan = self
+                .schemas
+                .get(&table_name)
+                .map(|schema| super::query::RowMaterializationPlan::from_schema(&schema));
+            let (_, table_alias) = table_factor_name_and_alias(&table.relation)?;
+            for (key, row) in &current_rows {
+                let base_view = materialization_plan.as_ref().map_or_else(
+                    || self.current_schema_row(&table_name, &row.data),
+                    |plan| self.current_schema_row_with_plan(&row.data, plan),
+                );
+                let mut view = base_view.clone();
+                add_qualified_columns(&mut view, &table_name, &base_view);
+                if let Some(alias) = &table_alias {
+                    add_qualified_columns(&mut view, alias, &base_view);
+                }
+                if self.matches_selection_ctx(selection.as_ref(), &view, 0)? {
+                    candidates.push((key.clone(), row.clone(), view));
+                }
+            }
+            let schema = self.schemas.get(&table_name).map(|schema| schema.clone());
+            sort_delete_candidates(&mut candidates, &order_by, schema.as_deref())?;
+            if let Some(limit) = limit.as_ref() {
+                candidates.truncate(expr_to_usize(limit)?);
+            }
+            Some(
+                candidates
+                    .into_iter()
+                    .map(|(key, _, _)| key)
+                    .collect::<BTreeSet<_>>(),
+            )
+        };
 
         for (old_key, current_row) in &current_rows {
+            if let Some(selected_keys) = &selected_keys
+                && !selected_keys.contains(old_key)
+            {
+                next_rows.insert(old_key.clone(), current_row.clone());
+                continue;
+            }
             if !self.enforces_uniqueness() && deleted_keys.contains(old_key) {
                 continue;
             }

@@ -514,11 +514,13 @@ impl EngineSession {
             Err(error) => {
                 // Compatibility rewrites still pass the same complete authorization
                 // visitor; parser failure never grants a bypass to the raw executor.
-                if catalog::parse_session_statement(sql).is_ok() {
+                let Some(raw) = state.databases.get(&self.database) else {
+                    return Err(error);
+                };
+                let rewritten = raw.rewrite_sql_for_parser(sql);
+                if rewritten == sql {
                     return Err(error);
                 }
-                let raw = state.databases.get(&self.database).ok_or(error)?;
-                let rewritten = raw.rewrite_sql_for_parser(sql);
                 let normalized = state.catalog.authorize_and_normalize(
                     &self.identity,
                     &self.database,

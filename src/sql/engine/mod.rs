@@ -846,6 +846,13 @@ impl RawEngine {
                     out.push(result);
                     continue;
                 }
+                if let Some(result) = self.execute_update_order_limit_compat(&raw)? {
+                    self.capture_eval_user_variables();
+                    self.record_found_rows(&raw, &result);
+                    self.store_last_rows_affected(&raw, &result);
+                    out.push(result);
+                    continue;
+                }
                 let statements = if self.can_parse_without_compat_rewrites(&raw) {
                     match self.parsed_select_cache.lock().get_or_parse(&raw) {
                         Ok(statements) => statements,
@@ -1224,7 +1231,7 @@ impl RawEngine {
                 .replace("ADD FULLTEXT KEY", "ADD KEY")
                 .replace("add fulltext key", "add key");
         }
-        rewrite_group_by_with_rollup(&parse_sql)
+        rewrite_group_by_with_rollup(&rewrite_update_order_limit_for_parser(&parse_sql))
     }
 
     fn rewrite_insert_target(&self, sql: &str) -> String {
@@ -1403,7 +1410,15 @@ impl RawEngine {
                 selection,
                 returning,
                 ..
-            } => self.update_rows(table, assignments, from, selection, returning),
+            } => self.update_rows(
+                table,
+                assignments,
+                from,
+                selection,
+                returning,
+                Vec::new(),
+                None,
+            ),
             Statement::Delete(delete) => self.delete_rows(delete),
             Statement::Drop {
                 object_type: sqlparser::ast::ObjectType::Table,
@@ -1671,6 +1686,62 @@ impl RawEngine {
             self.index_comments
                 .insert(format!("{table}:{name}"), comment);
         }
+    }
+
+    fn execute_update_order_limit_compat(&self, sql: &str) -> Result<Option<QueryResult>> {
+        let trimmed = sql.trim().trim_end_matches(';').trim();
+        let upper = trimmed.to_ascii_uppercase();
+        if !upper.starts_with("UPDATE ") {
+            return Ok(None);
+        }
+        let order_by_at = find_top_level_keyword(&upper, "ORDER BY");
+        let limit_at = find_top_level_keyword(&upper, "LIMIT");
+        let Some(suffix_at) = [order_by_at, limit_at].into_iter().flatten().min() else {
+            return Ok(None);
+        };
+        let base = trimmed[..suffix_at].trim();
+        let suffix = trimmed[suffix_at..].trim();
+        let statement = super::parse(&self.rewrite_sql_for_parser(base))?
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow!("missing UPDATE statement"))?;
+        validate_statement_support(&statement)?;
+        let Statement::Update {
+            table,
+            assignments,
+            from,
+            selection,
+            returning,
+            ..
+        } = statement
+        else {
+            return Err(anyhow!("invalid UPDATE statement"));
+        };
+
+        let suffix_query = super::parse(&format!(
+            "SELECT * FROM __my_sqweel_update_target {suffix}"
+        ))?
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow!("invalid UPDATE ordering or limit"))?;
+        let Statement::Query(query) = suffix_query else {
+            return Err(anyhow!("invalid UPDATE ordering or limit"));
+        };
+        let order_by = query
+            .order_by
+            .map(|order_by| order_by.exprs)
+            .unwrap_or_default();
+        let limit = query.limit;
+        self.update_rows(
+            table,
+            assignments,
+            from,
+            selection,
+            returning,
+            order_by,
+            limit,
+        )
+        .map(Some)
     }
 
     fn execute_compat_statement(&self, sql: &str) -> Result<Option<QueryResult>> {
@@ -4199,6 +4270,19 @@ fn rewrite_group_by_with_rollup(sql: &str) -> String {
         expressions,
         &sql[rollup + "WITH ROLLUP".len()..]
     )
+}
+
+fn rewrite_update_order_limit_for_parser(sql: &str) -> String {
+    let upper = sql.to_ascii_uppercase();
+    if !upper.trim_start().starts_with("UPDATE ") {
+        return sql.to_string();
+    }
+    let order_by_at = find_top_level_keyword(&upper, "ORDER BY");
+    let limit_at = find_top_level_keyword(&upper, "LIMIT");
+    let Some(suffix_at) = [order_by_at, limit_at].into_iter().flatten().min() else {
+        return sql.to_string();
+    };
+    sql[..suffix_at].trim_end().to_string()
 }
 
 fn find_top_level_keyword(sql: &str, keyword: &str) -> Option<usize> {

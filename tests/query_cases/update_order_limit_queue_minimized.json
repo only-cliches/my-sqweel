@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "id": "update_order_limit_queue_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "dml/update/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/dml/update/mysql.sql",
+      "sha256": "e6a13493e1863b0278c167f5e5869d46a383a2e47a2cb9fc0a840a813dbc43e0",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "dml/update/mysql.sql:21-23",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A filtered UPDATE orders eligible rows and limits the mutation to a bounded batch.",
+      "mysql_mariadb_translation": "Minimized to a queue table where only the lowest-ID queued row is marked claimed by UPDATE ... ORDER BY ... LIMIT; the schema and rows are independently authored."
+    },
+    "independently_authored": true
+  },
+  "features": ["update-order-by-limit", "filtered-update", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "Two queued rows distinguish the selected first row from the queued row outside the LIMIT; a completed row verifies the filter.",
+  "determinism_notes": "The unique ID ascending order defines the one-row update batch. All values are fixed and there are no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE queue (id INT PRIMARY KEY, state VARCHAR(16) NOT NULL)",
+    "INSERT INTO queue VALUES (7, 'queued'), (9, 'queued'), (11, 'completed')"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE queue SET state = 'claimed' WHERE state = 'queued' ORDER BY id ASC LIMIT 1",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT id, state FROM queue ORDER BY id",
+      "ordered": true
+    }
+  ]
+}

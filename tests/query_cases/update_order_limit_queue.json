@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "id": "update_order_limit_queue",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "dml/update/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/dml/update/mysql.sql",
+      "sha256": "e6a13493e1863b0278c167f5e5869d46a383a2e47a2cb9fc0a840a813dbc43e0",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "dml/update/mysql.sql:21-23",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL UPDATE filters eligible rows, orders the target rows by a stable column, and applies LIMIT so only the first bounded batch is modified.",
+      "mysql_mariadb_translation": "Reauthored as a support queue claim: UPDATE changes both the state and attempt count for the two highest-urgency queued items, ordering ties by the unique work-item ID. The fixture uses a new schema, rows, and state transition without copying the source query."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "update-order-by-limit",
+    "filtered-update",
+    "multiple-assignments",
+    "deterministic-order",
+    "dml-final-state"
+  ],
+  "fixture_notes": "Work items 101 and 102 are the two highest-urgency queued rows and must transition to claimed with one additional attempt each; item 103 is queued but outside the LIMIT, item 104 is lower urgency, and completed item 105 is ineligible despite its urgency.",
+  "determinism_notes": "Urgency descending plus unique work-item ID ascending defines the update batch. All values are fixed and there are no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE work_items (id INT PRIMARY KEY, state VARCHAR(16) NOT NULL, urgency INT NOT NULL, attempts INT NOT NULL)",
+    "INSERT INTO work_items VALUES (101, 'queued', 90, 0), (102, 'queued', 90, 2), (103, 'queued', 80, 1), (104, 'queued', 70, 4), (105, 'completed', 100, 7)"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE work_items SET state = 'claimed', attempts = attempts + 1 WHERE state = 'queued' ORDER BY urgency DESC, id ASC LIMIT 2",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT id, state, urgency, attempts FROM work_items ORDER BY id",
+      "ordered": true
+    }
+  ]
+}
