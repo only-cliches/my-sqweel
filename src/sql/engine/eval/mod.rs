@@ -3315,6 +3315,32 @@ where
                     .map(|value| value.unwrap_or(Value::Null))
             }
         })()),
+        "ELT" => Some((|| {
+            let index = args
+                .first()
+                .map(|arg| eval_arg(arg))
+                .transpose()?
+                .unwrap_or(Value::Null);
+            if index == Value::Null {
+                return Ok(Value::Null);
+            }
+            let index = json_to_f64_lossy(&index)? as i64;
+            let Some(offset) = index
+                .checked_sub(1)
+                .and_then(|value| usize::try_from(value).ok())
+            else {
+                return Ok(Value::Null);
+            };
+            let Some(choice) = args.iter().skip(1).nth(offset) else {
+                return Ok(Value::Null);
+            };
+            let value = eval_arg(choice)?;
+            if value == Value::Null {
+                Ok(Value::Null)
+            } else {
+                Ok(Value::String(json_scalar_to_string(&value)))
+            }
+        })()),
         "IF" => Some((|| {
             let condition = args
                 .first()
@@ -4008,6 +4034,36 @@ pub(super) fn eval_function_text(
                     }
                 }
                 Ok(Value::Number(Number::from(found)))
+            }
+        }
+        "ELT" => {
+            let index = args
+                .first()
+                .map(|arg| eval_scalar_text(arg, data, last_insert_id))
+                .transpose()?
+                .unwrap_or(Value::Null);
+            if index == Value::Null {
+                Ok(Value::Null)
+            } else {
+                let index = json_to_f64_lossy(&index)? as i64;
+                let Some(offset) = index
+                    .checked_sub(1)
+                    .and_then(|value| usize::try_from(value).ok())
+                else {
+                    return Ok(Value::Null);
+                };
+                let Some(choice_index) = offset.checked_add(1) else {
+                    return Ok(Value::Null);
+                };
+                let Some(choice) = args.get(choice_index) else {
+                    return Ok(Value::Null);
+                };
+                let value = eval_scalar_text(choice, data, last_insert_id)?;
+                if value == Value::Null {
+                    Ok(Value::Null)
+                } else {
+                    Ok(Value::String(json_scalar_to_string(&value)))
+                }
             }
         }
         "POSITION" => {
