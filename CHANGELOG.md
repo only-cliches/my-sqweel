@@ -19,6 +19,8 @@ All notable changes to MySqweel will be documented in this file.
 - Parsed `CREATE DATABASE ... CHARACTER SET`/`COLLATE` and tracked the character set per database; databases without modifiers default to the `latin1`/`latin1_swedish_ci` build default, and `SHOW DATABASES` includes `information_schema` with case-insensitive ordering.
 - Preserved decimal scale through nested arithmetic around window aggregates and applied declared text-column semantics to `BETWEEN`, fixing `win_insert_select` and `unique` MariaDB MTR parity cases.
 - Preserved duplicate projected values while normalizing wire result headers, fixing null-safe equality joins in `func_equal`.
+- Added deterministic, GitHub-attributed query-coverage scenarios for NULL-aware outer and self joins, correlated `EXISTS`/`NOT EXISTS` guards, grouped `HAVING`/`COUNT(DISTINCT)`/conditional aggregates/`GROUP_CONCAT`/`ROLLUP`, set operators with `ALL` semantics, decimal comparisons, `NULLIF`/`COALESCE` guarded arithmetic, monthly `DATE_FORMAT` reporting, and ranking, running-total, `LAG`, and `LEAD` windows.
+- Added DML and transaction scenarios for grouped and recursive `INSERT ... SELECT`, `INSERT IGNORE`, `REPLACE`, `ON DUPLICATE KEY UPDATE` (including moved keys and aggregate sources), `UPDATE`/`DELETE` joins and ordered `LIMIT` batches, `RETURNING`, `ROLLBACK`, and nested savepoints; each fixture checks deterministic intermediate or final state and includes minimized regressions where needed.
 
 ## 0.4.4 Sep 9, 2026
 

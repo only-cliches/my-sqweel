@@ -74,6 +74,13 @@ example, PostgreSQL `$1` parameters to concrete fixture literals, `::type` to `C
 PostGIS, SQLite PRAGMAs, virtual tables, PostgreSQL extensions, and any translation
 that would change behavior materially.
 
+## Changelog
+
+At the end of every query-coverage turn, update `CHANGELOG.md` in the current
+unreleased section. Record every fixture, minimized case, and source fix added
+or discovered during that turn using concise, semantic, evidence-backed wording.
+Do not end a turn with query-coverage changes omitted from the changelog.
+
 ## Build and compare a case
 
 Use `tests/query_cases/outer_join_null.json` and `rollback_state.json` as examples.
