@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "id": "team_membership_age_report",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "pamelaborges/dio-bd-relacional",
+      "commit": "5097f3b7feab1c35d5ea6850c0074e5bd99b5221",
+      "path": "aula5-2.sql",
+      "url": "https://github.com/pamelaborges/dio-bd-relacional/blob/5097f3b7feab1c35d5ea6850c0074e5bd99b5221/aula5-2.sql",
+      "sha256": "774b269f41891aad7cc6b24b835142f74f66bea5456084bdf46c02cefb3d6794",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "aula5-2.sql:3-17",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL report computes average, minimum, and maximum ages by applying TIMESTAMPDIFF(YEAR, birth_date, CURRENT_DATE()) inside aggregate functions.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored team-membership tenure report. The query applies TIMESTAMPDIFF(YEAR, joined_on, a fixed report date) inside COUNT, AVG, MIN, and MAX aggregates grouped by team. A fixed date replaces the source's current-date dependency, and the schema, rows, labels, and reporting purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "timestampdiff-year",
+    "nested-date-function-aggregate",
+    "grouping",
+    "null-safe-deterministic-order"
+  ],
+  "fixture_notes": "The report date is 2026-01-01. Team 10 has memberships producing tenure values 7 and 6; team 20 has values 0 and 1. The aggregate averages are therefore 6.5 and 0.5, with matching minimum and maximum bounds.",
+  "determinism_notes": "All joined dates and the report date are fixed literals; the result is ordered by the unique team ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE team_memberships (membership_id INT PRIMARY KEY, team_id INT NOT NULL, joined_on DATE NOT NULL)",
+    "INSERT INTO team_memberships VALUES (101, 10, '2018-06-30'), (102, 10, '2020-01-01'), (201, 20, '2025-12-31'), (202, 20, '2024-01-02')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT team_id, COUNT(*) AS member_count, AVG(TIMESTAMPDIFF(YEAR, joined_on, '2026-01-01')) AS avg_tenure_years, MIN(TIMESTAMPDIFF(YEAR, joined_on, '2026-01-01')) AS min_tenure_years, MAX(TIMESTAMPDIFF(YEAR, joined_on, '2026-01-01')) AS max_tenure_years FROM team_memberships GROUP BY team_id ORDER BY team_id",
+      "ordered": true
+    }
+  ]
+}
