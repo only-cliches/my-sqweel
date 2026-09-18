@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "union_all_outer_limit_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "union_all_outer_limit_candidates",
+    "source": {
+      "kind": "github",
+      "repository": "osm-search/Nominatim",
+      "commit": "d6211ccd538d50cce5e87b48d2090a5f4183b60e",
+      "path": "lib-sql/functions/importance.sql",
+      "url": "https://github.com/osm-search/Nominatim/blob/d6211ccd538d50cce5e87b48d2090a5f4183b60e/lib-sql/functions/importance.sql",
+      "sha256": "33ef31c2603c0947bb6a64c6973601fc4382ddfda7ac0cecbeb4eacf81c1ac56",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "lib-sql/functions/importance.sql:122-131",
+      "source_dialect": "postgresql",
+      "observed_pattern": "Minimized reproduction of a UNION ALL-derived result whose outer ORDER BY and LIMIT preserve the combined rows while exposing the derived columns' MariaDB metadata.",
+      "mysql_mariadb_translation": "Reduced to one INT table, two UNION ALL branches, two integer branch literals, and one outer ordered LIMIT. The case removes filtering, labels, scores, duplicate source tables, and inactive rows while retaining the derived-set metadata mismatch."
+    },
+    "independently_authored": true,
+    "minimized_from": "union_all_outer_limit_candidates"
+  },
+  "features": ["union-all", "derived-table", "outer-order-limit", "metadata", "deterministic-order"],
+  "fixture_notes": "The INT id and integer origin columns are projected through a UNION ALL derived table; the ordered outer LIMIT returns two rows while keeping both branch occurrences.",
+  "determinism_notes": "The outer order uses id and origin, which uniquely orders every returned row. Fixed rows only; no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE mini_candidates (id INT PRIMARY KEY, label VARCHAR(16) NOT NULL)",
+    "INSERT INTO mini_candidates VALUES (1, 'alpha'), (2, 'beta')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT id, origin FROM (SELECT id, 1 AS origin FROM mini_candidates UNION ALL SELECT id, 2 AS origin FROM mini_candidates) AS combined ORDER BY id, origin LIMIT 2",
+      "ordered": true
+    }
+  ]
+}

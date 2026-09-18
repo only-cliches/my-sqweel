@@ -1553,6 +1553,12 @@ impl RawEngine {
             Expr::Value(SqlValue::Number(number, _)) => {
                 metadata.column_type = if number.contains(['.', 'e', 'E']) {
                     MysqlColumnType::Decimal
+                } else if number
+                    .parse::<i64>()
+                    .ok()
+                    .is_some_and(|value| i32::MIN as i64 <= value && value <= i32::MAX as i64)
+                {
+                    MysqlColumnType::Integer
                 } else {
                     MysqlColumnType::BigInt
                 };
@@ -1679,6 +1685,38 @@ impl RawEngine {
         None
     }
 
+    fn derived_projection<'a>(
+        body: &'a SetExpr,
+        alias_columns: &[sqlparser::ast::TableAliasColumnDef],
+        column: &str,
+    ) -> Option<(&'a Select, &'a Expr, String)> {
+        match body {
+            SetExpr::Query(query) => Self::derived_projection(&query.body, alias_columns, column),
+            SetExpr::SetOperation { left, .. } => {
+                Self::derived_projection(left, alias_columns, column)
+            }
+            SetExpr::Select(inner) => {
+                for (index, item) in inner.projection.iter().enumerate() {
+                    let (inner_expr, mut inner_name) = match item {
+                        SelectItem::UnnamedExpr(inner_expr) => {
+                            (inner_expr, projection_output_column_name(inner_expr))
+                        }
+                        SelectItem::ExprWithAlias { expr, alias } => (expr, alias.value.clone()),
+                        SelectItem::Wildcard(_) | SelectItem::QualifiedWildcard(_, _) => continue,
+                    };
+                    if let Some(alias) = alias_columns.get(index) {
+                        inner_name = alias.name.value.clone();
+                    }
+                    if inner_name.eq_ignore_ascii_case(column) {
+                        return Some((inner, inner_expr, inner_name));
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
     /// Resolve a plain column reference that names a derived-table (subquery
     /// or inlined CTE) output column by recursing into the factor's inner
     /// projection.  MariaDB propagates the inner column's declared or
@@ -1717,31 +1755,12 @@ impl RawEngine {
                 {
                     continue;
                 }
-                let SetExpr::Select(inner) = &*subquery.body else {
+                let Some((inner, inner_expr, inner_name)) =
+                    Self::derived_projection(&subquery.body, &alias.columns, column)
+                else {
                     continue;
                 };
-                for (index, item) in inner.projection.iter().enumerate() {
-                    let (inner_expr, inner_name) = match item {
-                        SelectItem::UnnamedExpr(inner_expr) => {
-                            (inner_expr, projection_output_column_name(inner_expr))
-                        }
-                        SelectItem::ExprWithAlias { expr, alias } => (expr, alias.value.clone()),
-                        SelectItem::Wildcard(_) | SelectItem::QualifiedWildcard(_, _) => continue,
-                    };
-                    // A declared derived-table column list renames the
-                    // positional projection output.
-                    let inner_name = alias
-                        .columns
-                        .get(index)
-                        .map(|column| column.name.value.clone())
-                        .unwrap_or(inner_name);
-                    if !inner_name.eq_ignore_ascii_case(column) {
-                        continue;
-                    }
-                    return Some(
-                        self.expression_metadata(inner, inner_expr, inner_name, first_row),
-                    );
-                }
+                return Some(self.expression_metadata(inner, inner_expr, inner_name, first_row));
             }
         }
         None

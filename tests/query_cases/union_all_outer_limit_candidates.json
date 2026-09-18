@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "union_all_outer_limit_candidates",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "osm-search/Nominatim",
+      "commit": "d6211ccd538d50cce5e87b48d2090a5f4183b60e",
+      "path": "lib-sql/functions/importance.sql",
+      "url": "https://github.com/osm-search/Nominatim/blob/d6211ccd538d50cce5e87b48d2090a5f4183b60e/lib-sql/functions/importance.sql",
+      "sha256": "33ef31c2603c0947bb6a64c6973601fc4382ddfda7ac0cecbeb4eacf81c1ac56",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "lib-sql/functions/importance.sql:122-131",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A lookup combines direct and redirected matches with UNION ALL, then applies one outer ORDER BY and LIMIT so the highest-ranked candidate from the combined multiset is selected.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored search-candidate ranking query. Two active candidate sources are combined with UNION ALL in a derived table, duplicate candidate rows remain visible, and an outer deterministic score/candidate/origin order applies LIMIT 4 after combination. PostgreSQL procedural variables, geographic names, and source tables are replaced with fixed MariaDB fixture tables and literals; the schema, rows, and reporting purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["union-all", "derived-table", "outer-order-limit", "duplicate-preservation", "multiset", "deterministic-order"],
+  "fixture_notes": "Candidate 2 appears in both source tables and must remain duplicated after UNION ALL. The combined scores rank candidate 1 first, candidate 5 second, then both candidate-2 rows; candidate 3 and candidate 6 fall outside the outer LIMIT 4. Inactive candidate 4 is filtered from its branch before combination.",
+  "determinism_notes": "The outer order uses score descending, candidate_id ascending, and origin ascending, which uniquely orders every combined row before LIMIT. All values are fixed with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE direct_matches (match_id INT PRIMARY KEY, candidate_id INT NOT NULL, label VARCHAR(32) NOT NULL, score INT NOT NULL, active TINYINT NOT NULL)",
+    "CREATE TABLE redirect_matches (match_id INT PRIMARY KEY, candidate_id INT NOT NULL, label VARCHAR(32) NOT NULL, score INT NOT NULL, active TINYINT NOT NULL)",
+    "INSERT INTO direct_matches VALUES (101, 1, 'alpha', 90, 1), (102, 2, 'beta', 80, 1), (103, 3, 'gamma', 75, 1), (104, 4, 'delta', 99, 0)",
+    "INSERT INTO redirect_matches VALUES (201, 2, 'beta', 85, 1), (202, 5, 'epsilon', 88, 1), (203, 6, 'zeta', 70, 1)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT candidate_id, label, score, origin FROM (SELECT candidate_id, label, score, 1 AS origin FROM direct_matches WHERE active = 1 UNION ALL SELECT candidate_id, label, score, 2 AS origin FROM redirect_matches WHERE active = 1) AS candidates ORDER BY score DESC, candidate_id ASC, origin ASC LIMIT 4",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT match_id, candidate_id, label, score, active FROM direct_matches ORDER BY match_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT match_id, candidate_id, label, score, active FROM redirect_matches ORDER BY match_id",
+      "ordered": true
+    }
+  ]
+}
