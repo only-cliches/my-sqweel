@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "report_label_membership_find_in_set",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "KarthickJoyous/mysql-notes",
+      "commit": "e6fbfc8bfe9cbf42d45ba242cdb904a1d64951c6",
+      "path": "FIND_IN_SET-FIELD.sql",
+      "url": "https://github.com/KarthickJoyous/mysql-notes/blob/e6fbfc8bfe9cbf42d45ba242cdb904a1d64951c6/FIND_IN_SET-FIELD.sql",
+      "sha256": "b0219fe0d53061c6750a60bdcbbe8be34a7d5b4c2b1acb3477e81fb51253f281",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "FIND_IN_SET-FIELD.sql: documented SELECT examples and filtering use cases",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL filter uses FIND_IN_SET to test whether a selected label occurs in a comma-separated value column, while the function also exposes the one-based position of the match.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored report-visibility query. Fixed report rows expose positions for two requested labels and a second ordered query filters reports matching either label; NULL, empty, and nonmatching lists remain in the source data to exercise zero and NULL results. The schema, labels, and reporting purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "find-in-set",
+    "comma-separated-membership",
+    "or-filter",
+    "null-and-empty-inputs",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Reports 10 and 20 match ops; reports 10 and 30 match finance. Report 40 has a NULL label list and report 50 has an empty list, so FIND_IN_SET returns NULL for the NULL list and 0 for the empty or missing membership cases.",
+  "determinism_notes": "All report IDs, labels, and comma-separated lists are fixed; both result sets are ordered by the unique report ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE saved_reports (report_id INT PRIMARY KEY, report_title VARCHAR(32) NOT NULL, audience_labels VARCHAR(64) NULL)",
+    "INSERT INTO saved_reports VALUES (10, 'Quarterly finance', 'ops,finance'), (20, 'Operations runbook', 'ops,qa'), (30, 'Finance archive', 'finance,legal'), (40, 'Unclassified note', NULL), (50, 'Empty audience', '')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT report_id, FIND_IN_SET('ops', audience_labels) AS ops_position, FIND_IN_SET('finance', audience_labels) AS finance_position FROM saved_reports ORDER BY report_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT report_id, report_title FROM saved_reports WHERE FIND_IN_SET('ops', audience_labels) > 0 OR FIND_IN_SET('finance', audience_labels) > 0 ORDER BY report_id",
+      "ordered": true
+    }
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "report_label_membership_find_in_set_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "KarthickJoyous/mysql-notes",
+      "commit": "e6fbfc8bfe9cbf42d45ba242cdb904a1d64951c6",
+      "path": "FIND_IN_SET-FIELD.sql",
+      "url": "https://github.com/KarthickJoyous/mysql-notes/blob/e6fbfc8bfe9cbf42d45ba242cdb904a1d64951c6/FIND_IN_SET-FIELD.sql",
+      "sha256": "b0219fe0d53061c6750a60bdcbbe8be34a7d5b4c2b1acb3477e81fb51253f281",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "FIND_IN_SET-FIELD.sql: documented SELECT examples",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "FIND_IN_SET returns the one-based position of a string in a comma-separated list and returns zero when the value is absent.",
+      "mysql_mariadb_translation": "Minimized independently authored scalar regression with one matching lookup, one missing lookup, and one NULL lookup. It isolates FIND_IN_SET result semantics without table access, filtering, or multiple report rows."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "find-in-set",
+    "null-and-missing-membership"
+  ],
+  "fixture_notes": "The matching label is the second list member, the missing label returns zero, and a NULL needle returns NULL.",
+  "determinism_notes": "All literals are fixed and the scalar projection has no environmental inputs.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT FIND_IN_SET('beta', 'alpha,beta,gamma') AS matching_position, FIND_IN_SET('omega', 'alpha,beta,gamma') AS missing_position, FIND_IN_SET(NULL, 'alpha,beta,gamma') AS null_position",
+      "ordered": true
+    }
+  ]
+}

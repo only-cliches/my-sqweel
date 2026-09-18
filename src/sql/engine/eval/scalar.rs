@@ -278,6 +278,22 @@ pub(super) fn eval_position_values(needle: Value, haystack: Value) -> Result<Val
         .unwrap_or(0);
     Ok(Value::Number(Number::from(pos)))
 }
+pub(super) fn eval_find_in_set_values(needle: Value, list: Value) -> Result<Value> {
+    if needle == Value::Null || list == Value::Null {
+        return Ok(Value::Null);
+    }
+    let needle = json_scalar_to_string(&needle);
+    if needle.contains(',') {
+        return Ok(Value::Number(Number::from(0)));
+    }
+    let list = json_scalar_to_string(&list);
+    let position = list
+        .split(',')
+        .position(|candidate| candidate == needle)
+        .map(|index| index as u64 + 1)
+        .unwrap_or(0);
+    Ok(Value::Number(Number::from(position)))
+}
 
 pub(super) fn eval_substring_values(
     value: Value,

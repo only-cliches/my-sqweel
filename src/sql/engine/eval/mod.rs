@@ -3341,6 +3341,19 @@ where
                 Ok(Value::String(json_scalar_to_string(&value)))
             }
         })()),
+        "FIND_IN_SET" => Some((|| {
+            let needle = args
+                .first()
+                .map(|arg| eval_arg(arg))
+                .transpose()?
+                .unwrap_or(Value::Null);
+            let list = args
+                .get(1)
+                .map(|arg| eval_arg(arg))
+                .transpose()?
+                .unwrap_or(Value::Null);
+            eval_find_in_set_values(needle, list)
+        })()),
         "IF" => Some((|| {
             let condition = args
                 .first()
@@ -4065,6 +4078,19 @@ pub(super) fn eval_function_text(
                     Ok(Value::String(json_scalar_to_string(&value)))
                 }
             }
+        }
+        "FIND_IN_SET" => {
+            let needle = args
+                .first()
+                .map(|arg| eval_scalar_text(arg, data, last_insert_id))
+                .transpose()?
+                .unwrap_or(Value::Null);
+            let list = args
+                .get(1)
+                .map(|arg| eval_scalar_text(arg, data, last_insert_id))
+                .transpose()?
+                .unwrap_or(Value::Null);
+            eval_find_in_set_values(needle, list)
         }
         "POSITION" => {
             reject_invalid_binary_charset_conversion(&args)?;

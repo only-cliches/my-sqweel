@@ -1535,7 +1535,7 @@ impl RawEngine {
                     "DATE_ADD" | "DATE_SUB" | "ADDDATE" | "SUBDATE" => {
                         MysqlColumnType::DateTime
                     }
-                    "FIELD" => MysqlColumnType::Integer,
+                    "FIELD" | "FIND_IN_SET" => MysqlColumnType::Integer,
                     "JSON_ARRAYAGG" | "JSON_OBJECTAGG" => MysqlColumnType::Blob,
                     "JSON_ARRAY"
                     | "JSON_ARRAY_APPEND"
