@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "id": "device_mask_xor_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "functions/math-functions/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/functions/math-functions/mysql.sql",
+      "sha256": "1ae89c2cf88cff05a89ab492839fdca54fe4bda6144020df3d6e6e389aa455c7",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "functions/math-functions/mysql.sql:60",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped MySQL query computes a bitwise XOR aggregate over integer values.",
+      "mysql_mariadb_translation": "Minimized independently authored regression with one device group and two masks. It isolates BIT_XOR aggregate recognition and result behavior without NULL rows or multiple groups."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "bit-xor-aggregate",
+    "grouping",
+    "deterministic-order"
+  ],
+  "fixture_notes": "One device combines masks 5 and 3, so MariaDB returns checksum 6. The single group isolates BIT_XOR support.",
+  "determinism_notes": "The query orders by the unique device ID; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE mini_device_masks (sample_id INT PRIMARY KEY, device_id INT NOT NULL, feature_mask INT NOT NULL)",
+    "INSERT INTO mini_device_masks VALUES (1, 7, 5), (2, 7, 3)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT device_id, BIT_XOR(feature_mask) AS checksum FROM mini_device_masks GROUP BY device_id ORDER BY device_id",
+      "ordered": true
+    }
+  ]
+}

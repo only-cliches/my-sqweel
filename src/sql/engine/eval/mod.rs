@@ -1182,6 +1182,7 @@ enum AggregateKind {
     Variance,
     BitOr,
     BitAnd,
+    BitXor,
     Min,
     Max,
     GroupConcat,
@@ -1231,6 +1232,7 @@ fn aggregate_call(expr: &Expr) -> Option<AggregateCall> {
         "VARIANCE" | "VAR_POP" => AggregateKind::Variance,
         "BIT_OR" => AggregateKind::BitOr,
         "BIT_AND" => AggregateKind::BitAnd,
+        "BIT_XOR" => AggregateKind::BitXor,
         "MIN" => AggregateKind::Min,
         "MAX" => AggregateKind::Max,
         "GROUP_CONCAT" => AggregateKind::GroupConcat,
@@ -1505,7 +1507,7 @@ fn eval_aggregate_call_rows<'a>(
                 Ok(number_from_f64(variance))
             }
         }
-        AggregateKind::BitOr | AggregateKind::BitAnd => {
+        AggregateKind::BitOr | AggregateKind::BitAnd | AggregateKind::BitXor => {
             let mut result = if call.kind == AggregateKind::BitAnd {
                 -1_i64
             } else {
@@ -1515,6 +1517,8 @@ fn eval_aggregate_call_rows<'a>(
                 let value = json_to_f64_lossy(&value)? as i64;
                 if call.kind == AggregateKind::BitAnd {
                     result &= value;
+                } else if call.kind == AggregateKind::BitXor {
+                    result ^= value;
                 } else {
                     result |= value;
                 }

@@ -33,6 +33,7 @@ All notable changes to MySqweel will be documented in this file.
 - Added GitHub-attributed `SUBSTRING_INDEX` coverage for expanding comma-separated article labels through a derived `UNION ALL` numbers relation, delimiter counting with `CHAR_LENGTH`/`REPLACE`, NULL and empty-list filtering, and deterministic position ordering; MariaDB 10.11.7 and MySqweel matched without a source fix.
 - Added GitHub-attributed `JSON_OBJECTAGG` coverage for grouped catalog attribute maps and a minimized two-key metadata/order regression; matched MariaDB 10.11.7's `BLOB` metadata and input-order JSON serialization by preserving aggregate member order and stripping aggregate wire sentinels for non-JSON result metadata.
 - Added GitHub-attributed `STDDEV_POP` coverage for nested daily averages and fixed two-day spread buckets, including a minimized aggregate/metadata regression; fixed population-standard-deviation recognition, MariaDB-compatible precision propagation, and `FLOOR` decimal metadata.
+- Added GitHub-attributed `BIT_XOR` coverage for grouped device masks with NULL aggregate input, including a minimized aggregate regression; fixed `BIT_XOR` recognition and evaluation through the existing bitwise aggregate path.
 - Parked an `UPDATE ... RETURNING` coverage candidate because MariaDB 10.11.7 returns syntax error 1064 for that form; no invalid fixture was retained.
 
 ## 0.4.4 Sep 9, 2026
