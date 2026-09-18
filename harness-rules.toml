@@ -212,4 +212,11 @@ denylist = [
     "domain=sdmntprsouthcentralus.oaiusercontent.com",
     "domain=sdmntprnorthcentralus.oaiusercontent.com",
     "domain=sdmntprcentralus.oaiusercontent.com",
+    "domain=api.commandcode.ai",
+    "domain=api.kilo.ai",
+    "domain=coding-intl.dashscope.aliyuncs.com",
+    "domain=api.venice.ai",
+    "domain=zenmux.ai",
+    "domain=catalog.stencil.so",
+    "domain=hyper.charm.land",
 ]
