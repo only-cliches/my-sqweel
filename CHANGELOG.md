@@ -30,6 +30,7 @@ All notable changes to MySqweel will be documented in this file.
 - Added GitHub-attributed named-window coverage reusing partition-only, ordered, and explicit-frame definitions across row numbering, counts, and running sums; MariaDB 10.11.7 and MySqweel matched without a source fix.
 - Added GitHub-attributed `DATE_ADD`/`EXTRACT` coverage for deterministic maintenance timestamps, including a minimized negative `HOUR_MINUTE` regression; fixed MySQL composite interval parsing and datetime/integer result metadata.
 - Added GitHub-attributed `FIELD` custom-order coverage for a deterministic dispatch queue, including unknown and `NULL` states plus a minimized metadata regression; fixed `FIELD` result metadata to match MariaDB's integer type.
+- Added GitHub-attributed `SUBSTRING_INDEX` coverage for expanding comma-separated article labels through a derived `UNION ALL` numbers relation, delimiter counting with `CHAR_LENGTH`/`REPLACE`, NULL and empty-list filtering, and deterministic position ordering; MariaDB 10.11.7 and MySqweel matched without a source fix.
 - Parked an `UPDATE ... RETURNING` coverage candidate because MariaDB 10.11.7 returns syntax error 1064 for that form; no invalid fixture was retained.
 
 ## 0.4.4 Sep 9, 2026

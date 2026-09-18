@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "id": "article_label_split",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "bbrumm/databasestar",
+      "commit": "d765e294b27ae6f51a73169ec44d7895b3f8af40",
+      "path": "posts/sample_data_string_split.sql",
+      "url": "https://github.com/bbrumm/databasestar/blob/d765e294b27ae6f51a73169ec44d7895b3f8af40/posts/sample_data_string_split.sql",
+      "sha256": "a8b10c054c86a94724bc44da231e75deefff5a3d4f895b0a71614875555fb83f",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "posts/sample_data_string_split.sql:125-142 (Example 4)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A numbers relation joins each movie row to the positions represented in a comma-separated category string, while nested SUBSTRING_INDEX calls extract one category and CHAR_LENGTH minus REPLACE counts available delimiters.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored article-label report. The derived UNION ALL numbers relation expands at most five labels per article, the join predicate suppresses positions beyond each comma-separated list, and deterministic article/position ordering exposes each extracted label. The schema, rows, output columns, and reporting purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "substring-index",
+    "derived-union-all",
+    "char-length",
+    "replace",
+    "inner-join",
+    "null-filter",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Articles 10, 20, and 30 contain three, one, and five labels respectively; article 40 has an empty label list and article 50 has NULL labels, so neither produces extracted rows. The numbers relation intentionally exposes positions one through five.",
+  "determinism_notes": "The report orders by unique article ID and label position. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE articles (article_id INT PRIMARY KEY, title VARCHAR(64) NOT NULL, labels VARCHAR(255))",
+    "INSERT INTO articles VALUES (10, 'deploy guide', 'ops,api,db'), (20, 'release notes', 'draft'), (30, 'incident runbook', 'alert,triage,owner,mitigate,resolve'), (40, 'empty index', ''), (50, 'missing index', NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT a.article_id, a.title, n.position, SUBSTRING_INDEX(SUBSTRING_INDEX(a.labels, ',', n.position), ',', -1) AS label FROM articles a INNER JOIN (SELECT 1 AS position UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5) n ON CHAR_LENGTH(a.labels) - CHAR_LENGTH(REPLACE(a.labels, ',', '')) >= n.position - 1 WHERE a.labels IS NOT NULL AND a.labels <> '' ORDER BY a.article_id, n.position",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT article_id, labels FROM articles WHERE article_id IN (40, 50) ORDER BY article_id",
+      "ordered": true
+    }
+  ]
+}
