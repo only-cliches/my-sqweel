@@ -2,7 +2,7 @@
 
 All notable changes to MySqweel will be documented in this file.
 
-## Unreleased
+## 0.5.0 Unreleased
 
 ### Development environment
 
@@ -17,6 +17,8 @@ All notable changes to MySqweel will be documented in this file.
 - `SHOW INDEX` now emits MariaDB 10.11.7's 14-column output with a trailing `Ignored` column instead of MySQL 8's `Visible`/`Expression` columns.
 - Reported historical integer display widths (`INT(11)`, `BIGINT(20)`, ...) in column metadata, preserving explicit widths and `UNSIGNED`/`ZEROFILL` adjustments.
 - Parsed `CREATE DATABASE ... CHARACTER SET`/`COLLATE` and tracked the character set per database; databases without modifiers default to the `latin1`/`latin1_swedish_ci` build default, and `SHOW DATABASES` includes `information_schema` with case-insensitive ordering.
+- Preserved decimal scale through nested arithmetic around window aggregates and applied declared text-column semantics to `BETWEEN`, fixing `win_insert_select` and `unique` MariaDB MTR parity cases.
+- Preserved duplicate projected values while normalizing wire result headers, fixing null-safe equality joins in `func_equal`.
 
 ## 0.4.4 Sep 9, 2026
 
@@ -82,8 +84,10 @@ All notable changes to MySqweel will be documented in this file.
 - Fixed MTR startup for external servers without a selectable `mysql` database by staging a runner copy whose feature probe uses `SHOW VARIABLES` without `USE mysql`. Both engines use the same narrowly checked adaptation; upstream test/result files and the official `mysqltest` binary are unchanged. Per-invocation source and adapted runner hashes are recorded and uploaded with CI artifacts.
 - Updated MTR setup to preserve MySqweel's default `app` database, recreate the separate `test` database, and avoid unsupported global settings. Discovery also runs when transaction backend and wire tests change.
 - Updated external-server timezone handling for transactional sessions, which reject global settings. Hash-pinned tests with fixed POSIX `GMT` offsets apply the equivalent SQL timezone to MariaDB. For MySqweel, the runner verifies the session default and fails explicitly if it differs from the required timezone.
+- Removed environment-dependent `information_schema.schemata` parity assumptions by creating an explicit `utf8mb4` fixture database and cleaning it up after the test.
 
 ### Verification status
+- Requalified the current 0.5.0 repair locally with MariaDB parity required: 58 Python harness tests, all Rust targets, and publishable-crate verification pass. Targeted probes for `win_insert_select`, `unique`, and `func_equal` match MariaDB; the strict full-suite MTR run remains a CI gate.
 
 - The results below predate the current storage, execution, command-dispatch, metadata, and wire-listener changes. They remain historical checkpoints; the current working tree has not been requalified by these runs.
 
