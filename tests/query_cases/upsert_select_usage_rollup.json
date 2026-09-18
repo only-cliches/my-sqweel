@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "id": "upsert_select_usage_rollup",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "shockerli/Notes",
+      "commit": "ab692c415b98da64528d57ba6856add8d78dc3cd",
+      "path": "MySQL_Note.sql",
+      "url": "https://github.com/shockerli/Notes/blob/ab692c415b98da64528d57ba6856add8d78dc3cd/MySQL_Note.sql",
+      "sha256": "ea4fec2cd49faedee8b86a80642b3d053f23adc112367a32ae4e4e0833d10c0a",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL_Note.sql:528",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "The documented INSERT syntax permits a SELECT source followed by ON DUPLICATE KEY UPDATE for loading or refreshing rows from a query.",
+      "mysql_mariadb_translation": "Rewritten as a grouped usage rollup. INSERT ... SELECT aggregates event rows per account, inserts new account totals, and adds the incoming aggregate to an existing total on a primary-key conflict using VALUES(...). The fixture schema, rows, and reporting purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "insert-select",
+    "grouping",
+    "sum",
+    "on-duplicate-key-update",
+    "upsert",
+    "values-function",
+    "null",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Account 10 already has 100 units and receives a grouped incoming total of 12; account 20 is inserted with 9 units; account 30 is inserted with a NULL total because all of its event units are NULL. The source events remain unchanged.",
+  "determinism_notes": "The grouped source has one row per account and the final reads are ordered by the unique account ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE usage_events (event_id INT PRIMARY KEY, account_id INT NOT NULL, units INT NULL)",
+    "CREATE TABLE account_usage (account_id INT PRIMARY KEY, total_units INT NULL)",
+    "INSERT INTO usage_events VALUES (1, 10, 5), (2, 10, 7), (3, 20, 9), (4, 30, NULL)",
+    "INSERT INTO account_usage VALUES (10, 100)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO account_usage (account_id, total_units) SELECT account_id, SUM(units) FROM usage_events GROUP BY account_id ON DUPLICATE KEY UPDATE total_units = total_units + VALUES(total_units)"
+    },
+    {
+      "sql": "SELECT account_id, total_units FROM account_usage ORDER BY account_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT event_id, account_id, units FROM usage_events ORDER BY event_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT account_id, total_units FROM account_usage ORDER BY account_id",
+      "ordered": true
+    }
+  ]
+}
