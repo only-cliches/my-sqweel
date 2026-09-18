@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "incident_note_normalization",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "sivers/sivers",
+      "commit": "30fad4940afa3c0b980573d08a327e6ac1251028",
+      "path": "o/clean_name.sql",
+      "url": "https://github.com/sivers/sivers/blob/30fad4940afa3c0b980573d08a327e6ac1251028/o/clean_name.sql",
+      "sha256": "61220ca48170b842300c256e93890e4e61dafe45bb4fc78cd0f3d8110620cf32",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "o/clean_name.sql:1-7",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A nested regular-expression cleanup first collapses whitespace and then strips HTML tags before returning a normalized text value.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored incident-note report. MariaDB REGEXP_REPLACE calls collapse POSIX whitespace and remove markup, while TRIM removes outer padding; PostgreSQL's replacement flags and function wrapper are replaced with MariaDB scalar expressions. The table, rows, labels, and reporting purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "regexp-replace",
+    "nested-string-normalization",
+    "trim",
+    "null-input",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Notes 401 and 402 contain repeated whitespace and HTML-like tags; note 403 is NULL and note 404 has no markup. REGEXP_REPLACE removes tags and collapses internal whitespace before TRIM preserves one normalized sentence per non-NULL note.",
+  "determinism_notes": "All note IDs and text values are fixed; output is ordered by the unique note ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE incident_notes (note_id INT PRIMARY KEY, note_text VARCHAR(255) NULL)",
+    "INSERT INTO incident_notes VALUES (401, '  Rotate   API   key <urgent>  '), (402, '<p>Ship  patch</p>\n after  review'), (403, NULL), (404, 'NoMarkup')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT note_id, TRIM(REGEXP_REPLACE(REGEXP_REPLACE(note_text, '<[^>]+>', ''), '[[:space:]]+', ' ')) AS normalized_note FROM incident_notes ORDER BY note_id",
+      "ordered": true
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "incident_note_normalization_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "sivers/sivers",
+      "commit": "30fad4940afa3c0b980573d08a327e6ac1251028",
+      "path": "o/clean_name.sql",
+      "url": "https://github.com/sivers/sivers/blob/30fad4940afa3c0b980573d08a327e6ac1251028/o/clean_name.sql",
+      "sha256": "61220ca48170b842300c256e93890e4e61dafe45bb4fc78cd0f3d8110620cf32",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "o/clean_name.sql:6 (inner REGEXP_REPLACE)",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A scalar REGEXP_REPLACE collapses a run of whitespace into one separator before surrounding cleanup.",
+      "mysql_mariadb_translation": "Minimized independently authored scalar regression using MariaDB's POSIX whitespace class and three-argument REGEXP_REPLACE form; the source function, PostgreSQL replacement flag, and HTML cleanup are removed."
+    },
+    "independently_authored": true,
+    "minimized_from": "incident_note_normalization"
+  },
+  "features": [
+    "regexp-replace",
+    "whitespace-normalization",
+    "minimized-regression"
+  ],
+  "fixture_notes": "One fixed string with repeated spaces isolates MariaDB's scalar REGEXP_REPLACE behavior and result metadata.",
+  "determinism_notes": "The scalar literal and regular expression are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT REGEXP_REPLACE('alpha   beta', '[[:space:]]+', ' ') AS normalized_note",
+      "ordered": true
+    }
+  ]
+}

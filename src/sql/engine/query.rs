@@ -1451,6 +1451,7 @@ impl RawEngine {
                         MysqlColumnType::BigInt
                     }
                     "GROUP_CONCAT" => MysqlColumnType::Blob,
+                    "REGEXP_REPLACE" => MysqlColumnType::LongBlob,
                     "PERCENT_RANK" | "CUME_DIST" => {
                         metadata.decimals = 10;
                         MysqlColumnType::Decimal
@@ -1584,6 +1585,15 @@ impl RawEngine {
                     }
                     _ => metadata.column_type,
                 };
+            }
+            Expr::Trim { expr, .. } => {
+                let nested = self.expression_metadata(select, expr, String::new(), first_row);
+                metadata.column_type = nested.column_type;
+                metadata.nullable = nested.nullable;
+                metadata.unsigned = nested.unsigned;
+                metadata.decimals = nested.decimals;
+                metadata.character_set = nested.character_set;
+                metadata.collation = nested.collation;
             }
             Expr::Nested(inner) => {
                 let nested = self.expression_metadata(select, inner, String::new(), first_row);
@@ -5822,6 +5832,7 @@ fn column_hint_from_metadata(metadata: &ColumnMetadata) -> ColumnHint {
         MysqlColumnType::Binary => "BINARY",
         MysqlColumnType::VarBinary => "VARBINARY",
         MysqlColumnType::Blob => "BLOB",
+        MysqlColumnType::LongBlob => "LONG_BLOB",
         MysqlColumnType::Json => "JSON",
         MysqlColumnType::Bit => "BIT",
     };

@@ -2,6 +2,7 @@ use super::*;
 use md5::{Digest, Md5};
 use sha1_smol::Sha1;
 use sha2::Sha256;
+use regex::{NoExpand, Regex};
 
 pub(super) fn eval_arg(
     arg: Option<&String>,
@@ -370,6 +371,24 @@ pub(super) fn eval_substring_index_values(value: Value, delimiter: Value, count:
         parts[start..].join(&delimiter)
     };
     Value::String(result)
+}
+
+pub(super) fn eval_regexp_replace_values(values: &[Value]) -> Result<Value> {
+    let [subject, pattern, replacement, ..] = values else {
+        return Err(anyhow!("REGEXP_REPLACE requires three arguments"));
+    };
+    if subject == &Value::Null || pattern == &Value::Null || replacement == &Value::Null {
+        return Ok(Value::Null);
+    }
+    let subject = json_scalar_to_string(subject);
+    let pattern = json_scalar_to_string(pattern);
+    let replacement = json_scalar_to_string(replacement);
+    let regex = Regex::new(&pattern).map_err(|error| anyhow!("invalid regular expression: {error}"))?;
+    Ok(Value::String(
+        regex
+            .replace_all(&subject, NoExpand(replacement.as_str()))
+            .into_owned(),
+    ))
 }
 
 pub(super) fn eval_repeat(

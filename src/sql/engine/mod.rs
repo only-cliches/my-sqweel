@@ -422,6 +422,7 @@ pub enum MysqlColumnType {
     Binary,
     VarBinary,
     Blob,
+    LongBlob,
     Json,
     Bit,
 }

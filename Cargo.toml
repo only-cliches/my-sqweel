@@ -206,6 +206,9 @@ features = ["getrandom"]
 [dependencies.rayon]
 version = "1"
 
+[dependencies.regex]
+version = "1"
+
 [dependencies.reqwest]
 version = "0.12"
 features = [
