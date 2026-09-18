@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "insert_ignore_returning",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "samuelcolvin/smokeshow",
+      "commit": "6e982a3d08dca518fc27cc6075c0d33916edba56",
+      "path": "limits_db.sql",
+      "url": "https://github.com/samuelcolvin/smokeshow/blob/6e982a3d08dca518fc27cc6075c0d33916edba56/limits_db.sql",
+      "sha256": "5033f4d27d8e543b9d659148c11f2120d429c94ae5f7ee8f4d9c9030394d4b37",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "limits_db.sql:32-34",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A PostgreSQL insert attempts a row, ignores a uniqueness conflict, and uses RETURNING to expose the generated identifier only when a row was actually inserted.",
+      "mysql_mariadb_translation": "Reauthored as an original multi-row site-quota load. PostgreSQL ON CONFLICT DO NOTHING RETURNING becomes MariaDB INSERT IGNORE ... RETURNING; the PL/pgSQL quota procedure, timestamps, schema names, and source values are omitted. One existing primary-key row is ignored, one new row is returned, and a final ordered read verifies that the ignored row stayed unchanged."
+    },
+    "independently_authored": true
+  },
+  "features": ["insert-ignore", "returning", "multi-row-insert", "primary-key-conflict", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "Site 10 already exists and conflicts on the primary key, so INSERT IGNORE must neither return nor modify it. Site 20 is new and must be the only returned row and the only additional final row.",
+  "determinism_notes": "All identifiers and values are fixed; the RETURNING result is compared unordered and the final state is ordered by the primary key. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE site_quotas (site_id INT PRIMARY KEY, public_key VARCHAR(32) NOT NULL UNIQUE, auth_key VARCHAR(32) NOT NULL, quota_mb INT NOT NULL)",
+    "INSERT INTO site_quotas VALUES (10, 'alpha-site', 'alpha-key', 100)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT IGNORE INTO site_quotas (site_id, public_key, auth_key, quota_mb) VALUES (10, 'alpha-site', 'replacement-key', 900), (20, 'beta-site', 'beta-key', 250) RETURNING site_id, public_key, auth_key, quota_mb",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT site_id, public_key, auth_key, quota_mb FROM site_quotas ORDER BY site_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT site_id, public_key, auth_key, quota_mb FROM site_quotas ORDER BY site_id",
+      "ordered": true
+    }
+  ]
+}
