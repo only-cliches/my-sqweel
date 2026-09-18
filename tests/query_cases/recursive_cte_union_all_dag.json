@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "id": "recursive_cte_union_all_dag",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "postgrespro/aqo",
+      "commit": "4a7fcd7291a8c4209c9102d1736f9f754d311cf2",
+      "path": "sql/cleanup_bgworker.sql",
+      "url": "https://github.com/postgrespro/aqo/blob/4a7fcd7291a8c4209c9102d1736f9f754d311cf2/sql/cleanup_bgworker.sql",
+      "sha256": "b2e6cdf278759e1fb896687f4adcd3e7b1599a8f0f0607ed3e4295ab99e72120",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "sql/cleanup_bgworker.sql:4-10 and repeated recursive data-loading blocks at lines 43-50 and 56-61",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A recursive CTE seeds typed rows with a VALUES anchor, extends them through UNION ALL, and feeds the complete result into an INSERT ... SELECT statement.",
+      "mysql_mariadb_translation": "Rewritten as an original dependency-graph reachability load: INSERT INTO ... WITH RECURSIVE seeds one root node, follows directed edges for two levels, and stores the ordered depth rows. The graph deliberately reaches one leaf through two paths so UNION ALL multiplicity is observable; PostgreSQL-only extension setup and application tables are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["recursive-cte", "union-all", "values-anchor", "insert-select", "graph-traversal", "duplicate-rows", "deterministic-order"],
+  "fixture_notes": "Root 1 reaches node 4 through both 1-2-4 and 1-3-4, so MariaDB stores two identical (1, 4, 2) rows under UNION ALL; the unkeyed destination table preserves that multiplicity. The depth guard makes the finite traversal explicit.",
+  "determinism_notes": "All graph IDs, edges, and depth bounds are fixed; checks order by the unique traversal columns plus node ID, and no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE graph_nodes (node_id INT PRIMARY KEY, label VARCHAR(16) NOT NULL)",
+    "CREATE TABLE graph_edges (parent_id INT NOT NULL, child_id INT NOT NULL)",
+    "CREATE TABLE graph_reachability (root_id INT NOT NULL, node_id INT NOT NULL, depth INT NOT NULL)",
+    "INSERT INTO graph_nodes VALUES (1, 'root'), (2, 'left'), (3, 'right'), (4, 'shared-leaf')",
+    "INSERT INTO graph_edges VALUES (1, 2), (1, 3), (2, 4), (3, 4)"
+  ],
+  "steps": [
+    {"sql": "INSERT INTO graph_reachability (root_id, node_id, depth) WITH RECURSIVE reach(root_id, node_id, depth) AS (SELECT node_id AS root_id, node_id AS traversed_id, 0 AS depth FROM graph_nodes WHERE node_id = 1 UNION ALL SELECT r.root_id, e.child_id AS traversed_id, r.depth + 1 AS depth FROM reach r JOIN graph_edges e ON e.parent_id = r.node_id WHERE r.depth < 2) SELECT root_id, node_id, depth FROM reach", "ordered": false}
+  ],
+  "checks": [
+    {"sql": "SELECT root_id, node_id, depth FROM graph_reachability ORDER BY root_id, node_id, depth", "ordered": true},
+    {"sql": "SELECT node_id, COUNT(*) AS visits FROM graph_reachability GROUP BY node_id ORDER BY node_id", "ordered": true}
+  ]
+}

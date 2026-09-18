@@ -183,6 +183,7 @@ impl RawEngine {
                 op: sqlparser::ast::SetOperator::Union,
                 left,
                 right,
+                set_quantifier,
                 ..
             } = body
             else {
@@ -214,18 +215,29 @@ impl RawEngine {
                 if next.rows.is_empty() {
                     break;
                 }
-                let mut fresh = Vec::new();
-                let mut seen = accumulated
-                    .rows
-                    .iter()
-                    .map(encode_json_row)
-                    .collect::<HashSet<_>>();
-                for row in next.rows {
-                    let row = remap_set_row(&row, &next.columns, &accumulated.columns)?;
-                    if seen.insert(encode_json_row(&row)) {
-                        fresh.push(row);
+                // Recursive UNION ALL preserves multiplicity from separate
+                // paths; UNION uses distinct set semantics.
+                let fresh = if set_quantifier == sqlparser::ast::SetQuantifier::All {
+                    next.rows
+                        .into_iter()
+                        .map(|row| remap_set_row(&row, &next.columns, &accumulated.columns))
+                        .collect::<Result<Vec<_>>>()?
+                } else {
+                    let mut fresh = Vec::new();
+                    let mut seen = accumulated
+                        .rows
+                        .iter()
+                        .map(encode_json_row)
+                        .collect::<HashSet<_>>();
+                    for row in next.rows {
+                        let row =
+                            remap_set_row(&row, &next.columns, &accumulated.columns)?;
+                        if seen.insert(encode_json_row(&row)) {
+                            fresh.push(row);
+                        }
                     }
-                }
+                    fresh
+                };
                 if fresh.is_empty() {
                     break;
                 }

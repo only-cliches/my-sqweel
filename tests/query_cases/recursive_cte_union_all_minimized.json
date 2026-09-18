@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "id": "recursive_cte_union_all_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "postgrespro/aqo",
+      "commit": "4a7fcd7291a8c4209c9102d1736f9f754d311cf2",
+      "path": "sql/cleanup_bgworker.sql",
+      "url": "https://github.com/postgrespro/aqo/blob/4a7fcd7291a8c4209c9102d1736f9f754d311cf2/sql/cleanup_bgworker.sql",
+      "sha256": "b2e6cdf278759e1fb896687f4adcd3e7b1599a8f0f0607ed3e4295ab99e72120",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "sql/cleanup_bgworker.sql:4-10",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A recursive CTE uses a VALUES seed and UNION ALL to produce successive rows from the previous frontier.",
+      "mysql_mariadb_translation": "Minimized to an original four-node directed graph: a leaf is reached through two distinct paths from one root, and COUNT(*) over the recursive result exposes whether UNION ALL preserves duplicate rows."
+    },
+    "independently_authored": true
+  },
+  "features": ["recursive-cte", "union-all", "duplicate-rows", "aggregate", "deterministic-order"],
+  "fixture_notes": "The two paths 1-2-4 and 1-3-4 produce five traversal rows in total, including two identical (4, 2) rows; the minimal query has no INSERT layer or extra node table.",
+  "determinism_notes": "Fixed edge IDs and a fixed depth bound; COUNT(*) returns one deterministic row, and no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE mini_edges (parent_id INT NOT NULL, child_id INT NOT NULL)",
+    "INSERT INTO mini_edges VALUES (1, 2), (1, 3), (2, 4), (3, 4)"
+  ],
+  "steps": [
+    {"sql": "WITH RECURSIVE reach(node_id, depth) AS (SELECT 1, 0 UNION ALL SELECT e.child_id, r.depth + 1 FROM reach r JOIN mini_edges e ON e.parent_id = r.node_id WHERE r.depth < 2) SELECT COUNT(*) AS visits FROM reach", "ordered": true}
+  ]
+}

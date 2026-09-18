@@ -131,14 +131,23 @@ impl RawEngine {
                 if query_text.contains("FROM T1,T1") || query_text.contains("FROM T1, T1") {
                     return Err(anyhow!("not unique table/alias: 't1'"));
                 }
+                // Apply the shortcut only to an empty schema-backed source
+                // that is not a CTE; CTE names can shadow actual tables.
                 let select_result = if select
                     .from
                     .first()
                     .and_then(|source| table_factor_name_and_alias(&source.relation).ok())
                     .is_some_and(|(source_table, _)| {
-                        self.rows
-                            .get(&source_table)
-                            .is_none_or(|rows| rows.is_empty())
+                        self.schemas.contains_key(&source_table)
+                            && !query.with.as_ref().is_some_and(|with| {
+                                with.cte_tables.iter().any(|cte| {
+                                    cte.alias.name.value.eq_ignore_ascii_case(&source_table)
+                                })
+                            })
+                            && self
+                                .rows
+                                .get(&source_table)
+                                .is_some_and(|rows| rows.is_empty())
                     }) {
                     QueryResult::default()
                 } else {
