@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "campaign_distinct_spend",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "EnterpriseDB/mysql_fdw",
+      "commit": "40d54a0288588f52fcd060966f63dcb862e3e56d",
+      "path": "sql/aggregate_pushdown.sql",
+      "url": "https://github.com/EnterpriseDB/mysql_fdw/blob/40d54a0288588f52fcd060966f63dcb862e3e56d/sql/aggregate_pushdown.sql",
+      "sha256": "79a27cff52df6b1edd55cd25256e026b94010b82f5c4c967390eea0c7e664ded",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/aggregate_pushdown.sql:115-127",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "Aggregate pushdown cases use SUM(DISTINCT ...) both as a scalar aggregate and alongside a join, grouping expression, and NULL-aware filter.",
+      "mysql_mariadb_translation": "Rewritten as an original campaign-spend report. A LEFT JOIN groups spend by campaign and projects ordinary SUM, SUM(DISTINCT), and COUNT(DISTINCT) together; duplicate amounts must contribute once to the distinct total, while NULL-only and NULL-containing campaigns exercise aggregate NULL semantics without copying the source schema or rows."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "sum-distinct",
+    "count-distinct",
+    "left-join",
+    "grouping",
+    "null",
+    "aggregate",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Campaign 10 has two 125-cent charges and one 250-cent charge, so SUM counts 500 while SUM(DISTINCT) counts 375 and COUNT(DISTINCT) counts two values. Campaign 20 has duplicate 300-cent charges plus one NULL. Campaign 30 has no spend rows and must retain NULL SUM results through the LEFT JOIN.",
+  "determinism_notes": "Campaign IDs and spend IDs are fixed; the grouped report is ordered by the unique campaign ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE campaigns (campaign_id INT PRIMARY KEY, campaign_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE campaign_spend (spend_id INT PRIMARY KEY, campaign_id INT NOT NULL, channel VARCHAR(16) NOT NULL, amount_cents INT NULL)",
+    "INSERT INTO campaigns VALUES (10, 'launch'), (20, 'retention'), (30, 'brand')",
+    "INSERT INTO campaign_spend VALUES (1, 10, 'search', 125), (2, 10, 'social', 125), (3, 10, 'video', 250), (4, 10, 'display', NULL), (5, 20, 'search', 300), (6, 20, 'social', 300), (7, 20, 'video', NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT c.campaign_id, c.campaign_name, SUM(s.amount_cents) AS total_cents, SUM(DISTINCT s.amount_cents) AS distinct_cents, COUNT(DISTINCT s.amount_cents) AS distinct_amounts FROM campaigns c LEFT JOIN campaign_spend s ON s.campaign_id = c.campaign_id GROUP BY c.campaign_id, c.campaign_name ORDER BY c.campaign_id",
+      "ordered": true
+    }
+  ]
+}

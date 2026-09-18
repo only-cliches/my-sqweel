@@ -41,6 +41,7 @@ All notable changes to MySqweel will be documented in this file.
 - Added GitHub-attributed `INTERVAL` coverage for decimal shipment SLA brackets with CASE labels and NULL input, including a minimized threshold regression; fixed parser rewriting for both `INTERVAL(` and `INTERVAL (` forms, MariaDB's `-1` result for NULL input, and integer metadata.
 - Added GitHub-attributed PostgreSQL-inspired `REGEXP_REPLACE` coverage for nested whitespace/tag normalization over NULL-aware incident notes, including a minimized scalar regression; fixed three-argument evaluation, `LONG_BLOB` metadata propagation through `TRIM`, and wire `LONG_BLOB` support.
 - Added GitHub-attributed bounded `ROWS BETWEEN 2 PRECEDING AND CURRENT ROW` window coverage for three-row `AVG`/`SUM` delivery metrics with NULL input and deterministic date ties; MariaDB 10.11.7 and MySqweel matched without a source fix.
+- Added GitHub-attributed `SUM(DISTINCT ...)` coverage for grouped campaign spend through a NULL-preserving left join, including duplicate and NULL amount semantics; MariaDB 10.11.7 and MySqweel matched without a source fix.
 - Parked GitHub-attributed `GROUPING()` plus `GROUP BY ... WITH ROLLUP` coverage from the MariaDB seed query because MariaDB 10.11.7 returns error 1305 / SQLSTATE `42000` for `GROUPING()`; no invalid fixture was retained.
 - Parked an `UPDATE ... RETURNING` coverage candidate because MariaDB 10.11.7 returns syntax error 1064 for that form; no invalid fixture was retained.
 
