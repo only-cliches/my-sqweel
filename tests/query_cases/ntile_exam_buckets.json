@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "ntile_exam_buckets",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "AmirNBA9/SQLAssistant",
+      "commit": "03ef2bd105c4e45af6271487c580cd1496d14517",
+      "path": "Query/OVER Clause.sql",
+      "url": "https://github.com/AmirNBA9/SQLAssistant/blob/03ef2bd105c4e45af6271487c580cd1496d14517/Query/OVER%20Clause.sql",
+      "sha256": "39775c445652205c7c8b8ac0d493dbcfa2f8dea49fd2769c6b6418a7c187c5cc",
+      "source_dialect": "sqlserver"
+    },
+    "inspiration": {
+      "source_location": "Query/OVER Clause.sql:25-47 (NTILE example)",
+      "source_dialect": "sqlserver",
+      "observed_pattern": "A window query divides each exam's ordered scores into equally sized buckets with NTILE, restarting the bucket numbering for every exam partition.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored exam-results report. SQL Server table variables, IDENTITY, bracketed identifiers, and batch separators are omitted; NTILE(3) partitions by exam and orders descending scores with a student-ID tie breaker so bucket assignment is deterministic."
+    },
+    "independently_authored": true
+  },
+  "features": ["window", "ntile", "partition", "deterministic-tie-order", "bucketed-ranking"],
+  "fixture_notes": "Exam 101 has five results, so NTILE(3) produces bucket sizes 2, 2, and 1; students 2 and 3 tie on score and the student ID breaks that tie. Exam 202 has three results and exercises a fresh partition with one result per bucket.",
+  "determinism_notes": "Scores and student IDs are fixed; the window order and outer order are both unique. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE exam_results (result_id INT PRIMARY KEY, exam_id INT NOT NULL, student_id INT NOT NULL, score INT NOT NULL)",
+    "INSERT INTO exam_results VALUES (1, 101, 11, 95), (2, 101, 12, 90), (3, 101, 13, 90), (4, 101, 14, 80), (5, 101, 15, 70), (6, 202, 21, 88), (7, 202, 22, 88), (8, 202, 23, 60)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT exam_id, student_id, score, NTILE(3) OVER (PARTITION BY exam_id ORDER BY score DESC, student_id ASC) AS bucket FROM exam_results ORDER BY exam_id, bucket, student_id",
+      "ordered": true
+    }
+  ]
+}
