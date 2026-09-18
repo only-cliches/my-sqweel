@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "id": "recursive_window_deltas",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "modfin/tap",
+      "commit": "173440dc28778f9d216d85804e511b6bf6600518",
+      "path": "indicator/rsi.sql",
+      "url": "https://github.com/modfin/tap/blob/173440dc28778f9d216d85804e511b6bf6600518/indicator/rsi.sql",
+      "sha256": "50f99c9216da8cbc855f3f6f14fd819a7ad52ba2488fdcb63e921d6da7c3184b",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "indicator/rsi.sql:10-36",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A window-numbered input relation supplies a stable sequence, then a recursive UNION ALL CTE joins each row to its immediate predecessor to calculate a running step value.",
+      "mysql_mariadb_translation": "Rewritten as an original sensor delta report. A numbered CTE orders fixed readings by timestamp and ID; a recursive UNION ALL CTE starts at sequence one and joins each next reading to the prior delta row, calculating the change from the previous reading. PostgreSQL functions, FILTER aggregates, LATERAL subqueries, parameters, and financial indicator semantics are omitted."
+    },
+    "independently_authored": true
+  },
+  "features": ["cte", "recursive-cte", "union-all", "row-number", "recursive-self-join", "deterministic-order"],
+  "fixture_notes": "Four readings are ordered by measured_at and reading_id. The first row has delta 0; each later row subtracts the immediately preceding reading, including a negative change and a repeated value. The ordered source relation is stable before recursion.",
+  "determinism_notes": "The window order and final order both use measured_at plus the unique reading_id. All values are fixed with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE sensor_readings (reading_id INT PRIMARY KEY, measured_at DATE NOT NULL, reading INT NOT NULL)",
+    "INSERT INTO sensor_readings VALUES (11, '2026-01-01', 10), (12, '2026-01-02', 14), (13, '2026-01-03', 9), (14, '2026-01-04', 9)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH RECURSIVE numbered AS (SELECT reading_id, measured_at, reading, ROW_NUMBER() OVER (ORDER BY measured_at ASC, reading_id ASC) AS sequence_no FROM sensor_readings), deltas AS (SELECT reading_id, measured_at, reading, sequence_no, 0 AS delta FROM numbered WHERE sequence_no = 1 UNION ALL SELECT current.reading_id, current.measured_at, current.reading, current.sequence_no, current.reading - prior.reading AS delta FROM deltas prior JOIN numbered current ON current.sequence_no = prior.sequence_no + 1) SELECT reading_id, measured_at, reading, sequence_no, delta FROM deltas ORDER BY measured_at, reading_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {"sql": "SELECT reading_id, measured_at, reading FROM sensor_readings ORDER BY measured_at, reading_id", "ordered": true}
+  ]
+}

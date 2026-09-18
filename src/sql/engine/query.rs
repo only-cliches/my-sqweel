@@ -172,13 +172,32 @@ impl RawEngine {
     }
 
     fn expand_recursive_common_table_expressions(&self, mut query: Query) -> Result<Query> {
+        let ordinary_ctes = query.with.as_ref().map(|with| {
+            let mut ordinary = with.clone();
+            ordinary.recursive = false;
+            ordinary
+                .cte_tables
+                .retain(|cte| !query_references_cte(&cte.query, &cte.alias.name.value));
+            ordinary
+        });
         let Some(with) = query.with.as_mut() else {
             return Ok(query);
         };
         for cte in &mut with.cte_tables {
             let cte_name = cte.alias.name.value.clone();
+            // WITH RECURSIVE may contain ordinary CTEs before recursive ones.
+            if !query_references_cte(&cte.query, &cte_name) {
+                continue;
+            }
             let cte_columns = cte.alias.columns.clone();
-            let body = cte.query.body.as_ref().clone();
+            let mut cte_query = (*cte.query).clone();
+            if let Some(ordinary) = ordinary_ctes.clone()
+                && !ordinary.cte_tables.is_empty()
+            {
+                cte_query.with = Some(ordinary);
+                cte_query = inline_common_table_expressions(cte_query)?;
+            }
+            let body = cte_query.body.as_ref().clone();
             let SetExpr::SetOperation {
                 op: sqlparser::ast::SetOperator::Union,
                 left,
@@ -1717,6 +1736,33 @@ impl RawEngine {
         }
     }
 
+    fn derived_values_metadata(
+        &self,
+        outer_select: &Select,
+        body: &SetExpr,
+        alias_columns: &[sqlparser::ast::TableAliasColumnDef],
+        column: &str,
+        first_row: Option<&Map<String, Value>>,
+    ) -> Option<ColumnMetadata> {
+        let body = match body {
+            SetExpr::Query(query) => &query.body,
+            _ => body,
+        };
+        let SetExpr::Values(values) = body else {
+            return None;
+        };
+        let index = alias_columns
+            .iter()
+            .position(|alias| alias.name.value.eq_ignore_ascii_case(column))?;
+        let inner_expr = values.rows.first()?.get(index)?;
+        Some(self.expression_metadata(
+            outer_select,
+            inner_expr,
+            column.to_string(),
+            first_row,
+        ))
+    }
+
     /// Resolve a plain column reference that names a derived-table (subquery
     /// or inlined CTE) output column by recursing into the factor's inner
     /// projection.  MariaDB propagates the inner column's declared or
@@ -1754,6 +1800,15 @@ impl RawEngine {
                     .is_some_and(|qualifier| !qualifier.eq_ignore_ascii_case(&alias.name.value))
                 {
                     continue;
+                }
+                if let Some(metadata) = self.derived_values_metadata(
+                    select,
+                    &subquery.body,
+                    &alias.columns,
+                    column,
+                    first_row,
+                ) {
+                    return Some(metadata);
                 }
                 let Some((inner, inner_expr, inner_name)) =
                     Self::derived_projection(&subquery.body, &alias.columns, column)
@@ -6469,16 +6524,26 @@ fn values_query(result: &QueryResult) -> Query {
             result
                 .columns
                 .iter()
-                .map(|column| match row.get(column).unwrap_or(&Value::Null) {
-                    Value::Null => Expr::Value(SqlValue::Null),
-                    Value::Bool(value) => Expr::Value(SqlValue::Boolean(*value)),
-                    Value::Number(value) => Expr::Value(SqlValue::Number(value.to_string(), false)),
-                    Value::String(value) => {
-                        Expr::Value(SqlValue::SingleQuotedString(value.clone()))
+                .enumerate()
+                .map(|(index, column)| {
+                    let expr = match row.get(column).unwrap_or(&Value::Null) {
+                        Value::Null => Expr::Value(SqlValue::Null),
+                        Value::Bool(value) => Expr::Value(SqlValue::Boolean(*value)),
+                        Value::Number(value) => {
+                            Expr::Value(SqlValue::Number(value.to_string(), false))
+                        }
+                        Value::String(value) => {
+                            Expr::Value(SqlValue::SingleQuotedString(value.clone()))
+                        }
+                        value => Expr::Value(SqlValue::SingleQuotedString(
+                            json_wire_text(value).unwrap_or_default(),
+                        )),
+                    };
+                    if let Some(metadata) = result.column_metadata.get(index) {
+                        recursive_value_cast(expr, metadata)
+                    } else {
+                        expr
                     }
-                    value => Expr::Value(SqlValue::SingleQuotedString(
-                        json_wire_text(value).unwrap_or_default(),
-                    )),
                 })
                 .collect::<Vec<_>>()
         })
@@ -6487,6 +6552,77 @@ fn values_query(result: &QueryResult) -> Query {
         explicit_row: false,
         rows,
     }))
+}
+
+fn recursive_value_cast(expr: Expr, metadata: &ColumnMetadata) -> Expr {
+    let data_type = match metadata.column_type {
+        MysqlColumnType::TinyInt => {
+            if metadata.unsigned {
+                sqlparser::ast::DataType::UnsignedTinyInt(None)
+            } else {
+                sqlparser::ast::DataType::TinyInt(None)
+            }
+        }
+        MysqlColumnType::SmallInt => {
+            if metadata.unsigned {
+                sqlparser::ast::DataType::UnsignedSmallInt(None)
+            } else {
+                sqlparser::ast::DataType::SmallInt(None)
+            }
+        }
+        MysqlColumnType::Integer => {
+            if metadata.unsigned {
+                sqlparser::ast::DataType::UnsignedInt(None)
+            } else {
+                sqlparser::ast::DataType::Int(None)
+            }
+        }
+        MysqlColumnType::BigInt => {
+            if metadata.unsigned {
+                sqlparser::ast::DataType::UnsignedBigInt(None)
+            } else {
+                sqlparser::ast::DataType::BigInt(None)
+            }
+        }
+        MysqlColumnType::Date => sqlparser::ast::DataType::Date,
+        _ => return expr,
+    };
+    Expr::Cast {
+        kind: sqlparser::ast::CastKind::Cast,
+        expr: Box::new(expr),
+        data_type,
+        format: None,
+    }
+}
+
+fn query_references_cte(query: &Query, name: &str) -> bool {
+    struct Reference<'a> {
+        name: &'a str,
+    }
+
+    impl Visitor for Reference<'_> {
+        type Break = ();
+
+        fn pre_visit_table_factor(
+            &mut self,
+            factor: &TableFactor,
+        ) -> std::ops::ControlFlow<Self::Break> {
+            let TableFactor::Table { name, .. } = factor else {
+                return std::ops::ControlFlow::Continue(());
+            };
+            if name.0.len() == 1 && name.0[0].value.eq_ignore_ascii_case(self.name) {
+                std::ops::ControlFlow::Break(())
+            } else {
+                std::ops::ControlFlow::Continue(())
+            }
+        }
+    }
+
+    let mut visitor = Reference { name };
+    matches!(
+        <Query as sqlparser::ast::Visit>::visit(query, &mut visitor),
+        std::ops::ControlFlow::Break(())
+    )
 }
 
 fn replace_recursive_reference(

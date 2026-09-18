@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "recursive_window_deltas_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "recursive_window_deltas",
+    "source": {
+      "kind": "github",
+      "repository": "modfin/tap",
+      "commit": "173440dc28778f9d216d85804e511b6bf6600518",
+      "path": "indicator/rsi.sql",
+      "url": "https://github.com/modfin/tap/blob/173440dc28778f9d216d85804e511b6bf6600518/indicator/rsi.sql",
+      "sha256": "50f99c9216da8cbc855f3f6f14fd819a7ad52ba2488fdcb63e921d6da7c3184b",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "indicator/rsi.sql:10-36",
+      "source_dialect": "postgresql",
+      "observed_pattern": "Minimized reproduction of a recursive UNION ALL CTE consuming a window-numbered relation to walk one row at a time.",
+      "mysql_mariadb_translation": "Reduced to two fixed integer rows, one ROW_NUMBER window, and a recursive predecessor join. The delta arithmetic, dates, and source indicator logic are removed while the mixed nonrecursive and recursive CTE structure remains."
+    },
+    "independently_authored": true,
+    "minimized_from": "recursive_window_deltas"
+  },
+  "features": ["cte", "recursive-cte", "union-all", "row-number", "recursive-self-join", "metadata", "deterministic-order"],
+  "fixture_notes": "The nonrecursive numbered CTE precedes the recursive walk CTE and supplies sequence 1 then sequence 2. The case isolates mixed CTE handling from reading values and date ordering.",
+  "determinism_notes": "The unique reading_id orders ROW_NUMBER and the final result. Fixed rows only; no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE mini_readings (reading_id INT PRIMARY KEY)",
+    "INSERT INTO mini_readings VALUES (41), (42)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH RECURSIVE numbered AS (SELECT reading_id, ROW_NUMBER() OVER (ORDER BY reading_id) AS sequence_no FROM mini_readings), walk AS (SELECT reading_id, sequence_no FROM numbered WHERE sequence_no = 1 UNION ALL SELECT current.reading_id, current.sequence_no FROM walk prior JOIN numbered current ON current.sequence_no = prior.sequence_no + 1) SELECT reading_id, sequence_no FROM walk ORDER BY sequence_no",
+      "ordered": true
+    }
+  ]
+}
