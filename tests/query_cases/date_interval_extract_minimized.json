@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "id": "date_interval_extract_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "Eished/sql_notes",
+      "commit": "d5af8fef28436fac0228d084c149f7fcbc82b369",
+      "path": "SQL/select.sql",
+      "url": "https://github.com/Eished/sql_notes/blob/d5af8fef28436fac0228d084c149f7fcbc82b369/SQL/select.sql",
+      "sha256": "b2d1bcf07b06aad177ce8739d8eb4c49382ec5a27a1bfb3986e4b39976765e95",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "SQL/select.sql:379-389 (DATE_ADD interval arithmetic)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A scalar DATE_ADD expression subtracts a compound HOUR_MINUTE interval from a timestamp.",
+      "mysql_mariadb_translation": "Reduced to one independently authored maintenance timestamp and the negative HOUR_MINUTE expression; the original report's day, month, and EXTRACT projections are removed so the parser mismatch is isolated."
+    },
+    "independently_authored": true,
+    "minimized_from": "date_interval_extract_report"
+  },
+  "features": ["date-add", "interval-hour-minute", "datetime", "minimized-regression"],
+  "fixture_notes": "One fixed maintenance timestamp is sufficient to expose the compound negative interval syntax while removing the original report's multiple rows and unrelated projections.",
+  "determinism_notes": "The single row and timestamp are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE interval_inputs (input_id INT PRIMARY KEY, started_at DATETIME NOT NULL)",
+    "INSERT INTO interval_inputs VALUES (1, '2026-02-15 23:45:00')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT input_id, DATE_ADD(started_at, INTERVAL '-1:30' HOUR_MINUTE) AS shifted_at FROM interval_inputs ORDER BY input_id",
+      "ordered": true
+    }
+  ]
+}

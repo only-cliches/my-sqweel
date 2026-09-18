@@ -5,11 +5,12 @@ use sqlparser::dialect::MySqlDialect;
 use sqlparser::parser::Parser;
 
 pub fn parse(sql: &str) -> Result<Vec<Statement>, sqlparser::parser::ParserError> {
-    match Parser::parse_sql(&MySqlDialect {}, sql) {
+    let parser_sql = rewrite_mysql_compound_intervals(sql);
+    match Parser::parse_sql(&MySqlDialect {}, &parser_sql) {
         Ok(statements) => Ok(statements),
         Err(err) => {
-            if let Some(rewritten) =
-                rewrite_user_variable_assignments(sql).or_else(|| rewrite_drop_index_on_table(sql))
+            if let Some(rewritten) = rewrite_user_variable_assignments(&parser_sql)
+                .or_else(|| rewrite_drop_index_on_table(&parser_sql))
             {
                 Parser::parse_sql(&MySqlDialect {}, &rewritten)
             } else {
@@ -17,6 +18,81 @@ pub fn parse(sql: &str) -> Result<Vec<Statement>, sqlparser::parser::ParserError
             }
         }
     }
+}
+
+fn rewrite_mysql_compound_intervals(sql: &str) -> String {
+    let bytes = sql.as_bytes();
+    let mut output = Vec::with_capacity(bytes.len());
+    let needle = b"HOUR_MINUTE";
+    let mut index = 0;
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut in_backtick = false;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if (in_single || in_double) && byte == b'\\' && index + 1 < bytes.len() {
+            output.extend_from_slice(&bytes[index..index + 2]);
+            index += 2;
+            continue;
+        }
+        if in_single && byte == b'\'' {
+            output.push(byte);
+            if index + 1 < bytes.len() && bytes[index + 1] == b'\'' {
+                output.push(b'\'');
+                index += 2;
+            } else {
+                in_single = false;
+                index += 1;
+            }
+            continue;
+        }
+        if in_double && byte == b'"' {
+            output.push(byte);
+            if index + 1 < bytes.len() && bytes[index + 1] == b'"' {
+                output.push(b'"');
+                index += 2;
+            } else {
+                in_double = false;
+                index += 1;
+            }
+            continue;
+        }
+        if in_backtick && byte == b'`' {
+            output.push(byte);
+            if index + 1 < bytes.len() && bytes[index + 1] == b'`' {
+                output.push(b'`');
+                index += 2;
+            } else {
+                in_backtick = false;
+                index += 1;
+            }
+            continue;
+        }
+        if !in_single && !in_double && !in_backtick {
+            match byte {
+                b'\'' => in_single = true,
+                b'"' => in_double = true,
+                b'`' => in_backtick = true,
+                _ => {}
+            }
+            if index + needle.len() <= bytes.len()
+                && bytes[index..index + needle.len()].eq_ignore_ascii_case(needle)
+                && !bytes
+                    .get(index.wrapping_sub(1))
+                    .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+                && !bytes
+                    .get(index + needle.len())
+                    .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+            {
+                output.extend_from_slice(b"HOUR TO MINUTE");
+                index += needle.len();
+                continue;
+            }
+        }
+        output.push(byte);
+        index += 1;
+    }
+    String::from_utf8(output).expect("SQL input must be UTF-8")
 }
 
 /// sqlparser does not accept MySQL's expression assignment operator (`:=`)

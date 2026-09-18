@@ -28,6 +28,7 @@ All notable changes to MySqweel will be documented in this file.
 - Added GitHub-attributed recursive CTE coverage for a window-numbered sensor delta walk, including a minimized mixed ordinary/recursive CTE regression; fixed recursive expansion and preserved integer/date metadata through recursive materialization.
 - Added GitHub-attributed `NTILE(3)` window coverage across two exam partitions with deterministic tie ordering; MariaDB 10.11.7 and MySqweel matched without a source fix.
 - Added GitHub-attributed named-window coverage reusing partition-only, ordered, and explicit-frame definitions across row numbering, counts, and running sums; MariaDB 10.11.7 and MySqweel matched without a source fix.
+- Added GitHub-attributed `DATE_ADD`/`EXTRACT` coverage for deterministic maintenance timestamps, including a minimized negative `HOUR_MINUTE` regression; fixed MySQL composite interval parsing and datetime/integer result metadata.
 - Parked an `UPDATE ... RETURNING` coverage candidate because MariaDB 10.11.7 returns syntax error 1064 for that form; no invalid fixture was retained.
 
 ## 0.4.4 Sep 9, 2026

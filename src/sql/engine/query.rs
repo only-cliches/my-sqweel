@@ -1429,6 +1429,9 @@ impl RawEngine {
                 };
                 metadata = ColumnMetadata::from_declared(output_name, "", &hint);
             }
+            Expr::Extract { .. } => {
+                metadata.column_type = MysqlColumnType::Integer;
+            }
             Expr::Function(function) => {
                 let name = function
                     .name
@@ -1512,6 +1515,9 @@ impl RawEngine {
                     "CURRENT_DATE" | "CURDATE" | "DATE" => MysqlColumnType::Date,
                     "CURRENT_TIME" | "CURTIME" | "TIME" => MysqlColumnType::Time,
                     "NOW" | "CURRENT_TIMESTAMP" => MysqlColumnType::DateTime,
+                    "DATE_ADD" | "DATE_SUB" | "ADDDATE" | "SUBDATE" => {
+                        MysqlColumnType::DateTime
+                    }
                     "JSON_ARRAY"
                     | "JSON_ARRAYAGG"
                     | "JSON_ARRAY_APPEND"

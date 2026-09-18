@@ -4755,6 +4755,7 @@ fn rewrite_interval_function(sql: &str) -> String {
         .replace("interval (", "interval_func(")
 }
 
+
 fn rewrite_interval_cast(sql: &str) -> String {
     let upper = sql.to_ascii_uppercase();
     let mut output = String::with_capacity(sql.len());

@@ -656,6 +656,30 @@ pub(super) fn parse_mysql_interval(raw: &str) -> Option<MysqlInterval> {
     let trimmed = raw.trim();
     let body = strip_ascii_prefix(trimmed, "INTERVAL")?.trim();
     let (amount_text, unit_text) = split_interval_amount_and_unit(body)?;
+    if unit_text.trim().eq_ignore_ascii_case("HOUR TO MINUTE") {
+        let amount_text = amount_text
+            .trim()
+            .trim_matches('\'')
+            .trim_matches('"');
+        let negative = amount_text.starts_with('-');
+        let amount_text = amount_text.trim_start_matches(['+', '-']);
+        let (hours, minutes) = amount_text.split_once(':')?;
+        let hours = hours.parse::<i64>().ok()?;
+        let minutes = minutes.parse::<i64>().ok()?;
+        if !(0..60).contains(&minutes) {
+            return None;
+        }
+        let amount = hours.checked_mul(60)?.checked_add(minutes)?;
+        let amount = if negative {
+            amount.checked_neg()?
+        } else {
+            amount
+        };
+        return Some(MysqlInterval {
+            amount,
+            unit: MysqlIntervalUnit::Minute,
+        });
+    }
     let amount = amount_text
         .trim()
         .trim_matches('\'')

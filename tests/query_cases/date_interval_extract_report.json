@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "date_interval_extract_report",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Eished/sql_notes",
+      "commit": "d5af8fef28436fac0228d084c149f7fcbc82b369",
+      "path": "SQL/select.sql",
+      "url": "https://github.com/Eished/sql_notes/blob/d5af8fef28436fac0228d084c149f7fcbc82b369/SQL/select.sql",
+      "sha256": "b2d1bcf07b06aad177ce8739d8eb4c49382ec5a27a1bfb3986e4b39976765e95",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "SQL/select.sql:379-414 (DATE_ADD and EXTRACT examples)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A scalar query combines DATE_ADD with day, year, and HOUR_MINUTE intervals, then uses EXTRACT to project calendar components from timestamp expressions.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored maintenance schedule report. NOW() is replaced with fixed DATETIME column values; DATE_ADD computes due, renewal, and preparation timestamps, including a negative HOUR_MINUTE interval, while EXTRACT returns year, month, day, and hour parts. The source schema, names, and values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["date-add", "interval-day", "interval-month", "interval-hour-minute", "extract", "datetime", "deterministic-order"],
+  "fixture_notes": "Job 101 starts on January 31 to exercise MariaDB's end-of-month month-add behavior; job 102 starts on February 15. The negative HOUR_MINUTE interval subtracts 90 minutes, and all calendar parts come from fixed DATETIME values.",
+  "determinism_notes": "All timestamps and job IDs are fixed; the output is ordered by the unique job ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE maintenance_jobs (job_id INT PRIMARY KEY, asset VARCHAR(32) NOT NULL, scheduled_at DATETIME NOT NULL)",
+    "INSERT INTO maintenance_jobs VALUES (101, 'compressor-a', '2026-01-31 10:30:00'), (102, 'pump-b', '2026-02-15 23:45:00')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT job_id, asset, scheduled_at, DATE_ADD(scheduled_at, INTERVAL 2 DAY) AS due_at, DATE_ADD(scheduled_at, INTERVAL 1 MONTH) AS renewal_at, DATE_ADD(scheduled_at, INTERVAL '-1:30' HOUR_MINUTE) AS prep_at, EXTRACT(YEAR FROM scheduled_at) AS scheduled_year, EXTRACT(MONTH FROM scheduled_at) AS scheduled_month, EXTRACT(DAY FROM scheduled_at) AS scheduled_day, EXTRACT(HOUR FROM scheduled_at) AS scheduled_hour FROM maintenance_jobs ORDER BY job_id",
+      "ordered": true
+    }
+  ]
+}
