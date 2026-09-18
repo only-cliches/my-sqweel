@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "id": "group_concat_project_tags",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Miazzy/oa-front-service",
+      "commit": "f367f349f157fc30216246046f9a74ef4d29a879",
+      "path": "sql/view.sql",
+      "url": "https://github.com/Miazzy/oa-front-service/blob/f367f349f157fc30216246046f9a74ef4d29a879/sql/view.sql",
+      "sha256": "2ed9a02aff18171005ef20bee46eee9d4062d14994e86c1d50636208250ae1eb",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/view.sql:9 (v_table_info)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped view combines CONCAT expressions with GROUP_CONCAT and a custom separator to serialize the child records associated with each parent key.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored project-tag report. A LEFT JOIN preserves projects without tags; CASE filters inactive tags, CONCAT builds tag labels, DISTINCT removes duplicate labels, ORDER BY makes the concatenation deterministic, and COUNT exposes the full joined-row count separately. The fixture schema, rows, and output purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "group-concat",
+    "distinct",
+    "concat",
+    "case",
+    "left-join",
+    "grouping",
+    "null",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Project 10 has duplicate active tags plus one inactive tag; project 20 has active tags plus a NULL tag name; project 30 has no tags; orphan tag 99 must not contribute to any project aggregate.",
+  "determinism_notes": "The grouped report is ordered by the unique project ID, and GROUP_CONCAT orders tag names descending with tag ID ascending as a tie-breaker before applying its custom separator. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE projects (project_id INT PRIMARY KEY, project_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE project_tags (tag_id INT PRIMARY KEY, project_id INT NOT NULL, tag_name VARCHAR(32), active TINYINT NOT NULL)",
+    "INSERT INTO projects VALUES (10, 'alpha'), (20, 'beta'), (30, 'gamma')",
+    "INSERT INTO project_tags VALUES (100, 10, 'blue', 1), (101, 10, 'green', 1), (102, 10, 'blue', 1), (103, 10, 'retired', 0), (200, 20, 'ops', 1), (201, 20, 'api', 1), (202, 20, NULL, 1), (999, 99, 'orphan', 1)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT p.project_id, GROUP_CONCAT(DISTINCT CASE WHEN t.active = 1 THEN CONCAT(t.tag_id, ':', t.tag_name) END ORDER BY t.tag_name DESC, t.tag_id ASC SEPARATOR '|') AS active_tags, COUNT(t.tag_id) AS joined_tags FROM projects p LEFT JOIN project_tags t ON t.project_id = p.project_id GROUP BY p.project_id ORDER BY p.project_id",
+      "ordered": true
+    }
+  ]
+}

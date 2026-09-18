@@ -1422,6 +1422,7 @@ impl RawEngine {
                         metadata.unsigned = true;
                         MysqlColumnType::BigInt
                     }
+                    "GROUP_CONCAT" => MysqlColumnType::Blob,
                     "PERCENT_RANK" | "CUME_DIST" => {
                         metadata.decimals = 10;
                         MysqlColumnType::Decimal

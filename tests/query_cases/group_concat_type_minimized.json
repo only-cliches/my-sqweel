@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "id": "group_concat_type_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "group_concat_project_tags",
+    "source": {
+      "kind": "github",
+      "repository": "Miazzy/oa-front-service",
+      "commit": "f367f349f157fc30216246046f9a74ef4d29a879",
+      "path": "sql/view.sql",
+      "url": "https://github.com/Miazzy/oa-front-service/blob/f367f349f157fc30216246046f9a74ef4d29a879/sql/view.sql",
+      "sha256": "2ed9a02aff18171005ef20bee46eee9d4062d14994e86c1d50636208250ae1eb",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/view.sql:9 (v_table_info)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped view uses GROUP_CONCAT to serialize multiple child values into one result column.",
+      "mysql_mariadb_translation": "Reduced to an independently authored ordered label aggregation so the result type remains observable while unrelated joins, filtering, and duplicate data are removed."
+    },
+    "independently_authored": true
+  },
+  "features": ["group-concat", "order-by", "deterministic-order", "metadata"],
+  "fixture_notes": "Two labels make the aggregate nonempty and the explicit order makes the result deterministic; the case isolates MariaDB's GROUP_CONCAT BLOB result metadata.",
+  "determinism_notes": "The aggregate has an explicit rank order and uses no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE group_labels (label_id INT PRIMARY KEY, label VARCHAR(32) NOT NULL, rank_value INT NOT NULL)",
+    "INSERT INTO group_labels VALUES (1, 'alpha', 10), (2, 'beta', 20)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT GROUP_CONCAT(label ORDER BY rank_value DESC SEPARATOR '|') AS labels FROM group_labels",
+      "ordered": true
+    }
+  ]
+}
