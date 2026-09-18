@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "replace_select_refresh",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "repository": "antlr/grammars-v4",
+      "commit": "20efa537586610f5aebd584429ac1b5993a30381",
+      "path": "sql/mysql/Oracle/examples/dml_replace.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/20efa537586610f5aebd584429ac1b5993a30381/sql/mysql/Oracle/examples/dml_replace.sql",
+      "sha256": "2f4683b6674d81f31fee8709e5d05eae062e2c83f5ee11f02503a7279b6dfcdb",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/mysql/Oracle/examples/dml_replace.sql:5",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL REPLACE statement reads rows from one table and loads them into another table, replacing rows whose unique key already exists while inserting new keys.",
+      "mysql_mariadb_translation": "Reauthored as a device registry refresh. REPLACE INTO reads the non-paused rows from a staging table into the live registry; one selected device conflicts and is fully replaced, one selected device is inserted, and a paused source row is excluded. The schema, names, values, and filtering condition are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "replace-into",
+    "replace-select",
+    "filtered-insert-select",
+    "primary-key-replacement",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Staged device 10 replaces the live row with the same primary key, including its label, state, and revision; staged device 20 is new and is inserted; paused device 30 is filtered out; existing live device 40 remains untouched.",
+  "determinism_notes": "All device IDs and values are fixed; final reads are ordered by the unique device ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE device_stage (device_id INT PRIMARY KEY, label VARCHAR(32) NOT NULL, state VARCHAR(16) NOT NULL, revision INT NOT NULL)",
+    "CREATE TABLE device_registry (device_id INT PRIMARY KEY, label VARCHAR(32) NOT NULL, state VARCHAR(16) NOT NULL, revision INT NOT NULL)",
+    "INSERT INTO device_stage VALUES (10, 'sensor-a-new', 'ready', 3), (20, 'sensor-b', 'ready', 1), (30, 'sensor-c', 'paused', 8)",
+    "INSERT INTO device_registry VALUES (10, 'sensor-a-old', 'retired', 2), (40, 'sensor-d', 'ready', 6)"
+  ],
+  "steps": [
+    {
+      "sql": "REPLACE INTO device_registry (device_id, label, state, revision) SELECT device_id, label, state, revision FROM device_stage WHERE state <> 'paused'",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT device_id, label, state, revision FROM device_registry ORDER BY device_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT device_id, label, state, revision FROM device_stage ORDER BY device_id",
+      "ordered": true
+    }
+  ]
+}
