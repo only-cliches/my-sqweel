@@ -24,6 +24,7 @@ All notable changes to MySqweel will be documented in this file.
 - Added GitHub-attributed differential coverage for `DELETE ... RETURNING` combined with correlated `NOT EXISTS` cleanup guards and nullable returned columns, including final-state checks that preserve held and active rows.
 - Added GitHub-attributed differential coverage for an ordered `SELECT ... FOR UPDATE` inside a transaction, paired balance updates, intermediate-state observation, and rollback to the original ledger state.
 - Added GitHub-attributed differential coverage for `UNION ALL` candidate pagination through a derived table, preserving duplicate rows, deterministic outer ordering/`LIMIT`, and MariaDB `INT` metadata; fixed integer-literal width inference and derived set-operation metadata propagation, with a minimized regression fixture.
+- Added GitHub-attributed differential coverage for a ranked `UNION ALL` badge report combining window `COUNT`/`RANK`/`ROW_NUMBER` results with an aggregate-derived solo-badge branch; MariaDB 10.11.7 and MySqweel matched without a source fix.
 - Parked an `UPDATE ... RETURNING` coverage candidate because MariaDB 10.11.7 returns syntax error 1064 for that form; no invalid fixture was retained.
 
 ## 0.4.4 Sep 9, 2026

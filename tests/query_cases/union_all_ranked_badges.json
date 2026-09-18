@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "union_all_ranked_badges",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "code-golf/code-golf",
+      "commit": "1dfd5536b3609c3e9c405c6021241933c3e8581b",
+      "path": "sql/a-schema.sql",
+      "url": "https://github.com/code-golf/code-golf/blob/1dfd5536b3609c3e9c405c6021241933c3e8581b/sql/a-schema.sql",
+      "sha256": "9a850a4a941ccd06acf8a0e18aca21f8a01dbe22a08044b76e143e254bda5c91",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "sql/a-schema.sql:306-328",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A reusable ranked CTE computes partition counts, tie-preserving ranks, and unique row numbers, then UNION ALL combines filtered ranked rows with aggregate-derived special badge rows.",
+      "mysql_mariadb_translation": "Rewritten as an original league badge report. Active qualifier and wildcard score sources are combined with UNION ALL, a ranked CTE computes COUNT, RANK, and ROW_NUMBER per division, and a final UNION ALL adds one solo badge for divisions with exactly one competitor. PostgreSQL materialized views, enum casts, application tables, and source data are replaced with fixed MariaDB tables and literals."
+    },
+    "independently_authored": true
+  },
+  "features": ["cte", "union-all", "window-count", "window-rank", "window-row-number", "aggregate-union-branch", "tie-preservation", "deterministic-order"],
+  "fixture_notes": "North has two tied top scores from different source tables and a lower-ranked competitor; south has exactly one active competitor and therefore receives both its ranked row and a solo badge; inactive rows must not enter the combined CTE. UNION ALL preserves the source rows before ranking and the duplicate solo/ranked output for south.",
+  "determinism_notes": "Each source has fixed IDs and submission order. Window ordering uses score descending, submitted_order ascending, and player_id ascending; final output orders by division, badge, rank, sequence, and player ID. No clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE qualifier_scores (entry_id INT PRIMARY KEY, player_id INT NOT NULL, division VARCHAR(16) NOT NULL, score INT NOT NULL, submitted_order INT NOT NULL, active TINYINT NOT NULL)",
+    "CREATE TABLE wildcard_scores (entry_id INT PRIMARY KEY, player_id INT NOT NULL, division VARCHAR(16) NOT NULL, score INT NOT NULL, submitted_order INT NOT NULL, active TINYINT NOT NULL)",
+    "INSERT INTO qualifier_scores VALUES (1, 101, 'north', 90, 1, 1), (2, 102, 'north', 90, 2, 1), (3, 201, 'south', 70, 1, 1), (4, 301, 'east', 88, 1, 0)",
+    "INSERT INTO wildcard_scores VALUES (11, 103, 'north', 80, 3, 1), (12, 202, 'south', 65, 2, 0), (13, 302, 'east', 92, 2, 1)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH combined_scores AS (SELECT player_id, division, score, submitted_order FROM qualifier_scores WHERE active = 1 UNION ALL SELECT player_id, division, score, submitted_order FROM wildcard_scores WHERE active = 1), ranked AS (SELECT player_id, division, score, submitted_order, COUNT(*) OVER (PARTITION BY division) AS competitors, RANK() OVER (PARTITION BY division ORDER BY score DESC) AS rank_in_division, ROW_NUMBER() OVER (PARTITION BY division ORDER BY score DESC, submitted_order ASC, player_id ASC) AS sequence_no FROM combined_scores) SELECT player_id, division, score, rank_in_division, sequence_no, 'ranked' AS badge FROM ranked WHERE rank_in_division <= 2 UNION ALL SELECT MIN(player_id), division, MAX(score), 1 AS rank_in_division, 0 AS sequence_no, 'solo' AS badge FROM ranked WHERE competitors = 1 GROUP BY division HAVING COUNT(*) = 1 ORDER BY division, badge, rank_in_division, sequence_no, player_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {"sql": "SELECT entry_id, player_id, division, score, submitted_order, active FROM qualifier_scores ORDER BY entry_id", "ordered": true},
+    {"sql": "SELECT entry_id, player_id, division, score, submitted_order, active FROM wildcard_scores ORDER BY entry_id", "ordered": true}
+  ]
+}
