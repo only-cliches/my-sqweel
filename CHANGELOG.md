@@ -21,6 +21,7 @@ All notable changes to MySqweel will be documented in this file.
 - Preserved duplicate projected values while normalizing wire result headers, fixing null-safe equality joins in `func_equal`.
 - Added deterministic, GitHub-attributed query-coverage scenarios for NULL-aware outer and self joins, correlated `EXISTS`/`NOT EXISTS` guards, grouped `HAVING`/`COUNT(DISTINCT)`/conditional aggregates/`GROUP_CONCAT`/`ROLLUP`, set operators with `ALL` semantics, decimal comparisons, `NULLIF`/`COALESCE` guarded arithmetic, monthly `DATE_FORMAT` reporting, and ranking, running-total, `LAG`, and `LEAD` windows.
 - Added DML and transaction scenarios for grouped and recursive `INSERT ... SELECT`, `INSERT IGNORE`, `REPLACE`, `ON DUPLICATE KEY UPDATE` (including moved keys and aggregate sources), `UPDATE`/`DELETE` joins and ordered `LIMIT` batches, `RETURNING`, `ROLLBACK`, and nested savepoints; each fixture checks deterministic intermediate or final state and includes minimized regressions where needed.
+- Added GitHub-attributed differential coverage for `DELETE ... RETURNING` combined with correlated `NOT EXISTS` cleanup guards and nullable returned columns, including final-state checks that preserve held and active rows.
 
 ## 0.4.4 Sep 9, 2026
 

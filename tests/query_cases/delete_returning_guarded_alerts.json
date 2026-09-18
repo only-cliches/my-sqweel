@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "id": "delete_returning_guarded_alerts",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "laurenz/oracle_fdw",
+      "commit": "f5f9e2143377063d5d72eee42407513a100cecbd",
+      "path": "sql/oracle_fdw.sql",
+      "url": "https://github.com/laurenz/oracle_fdw/blob/f5f9e2143377063d5d72eee42407513a100cecbd/sql/oracle_fdw.sql",
+      "sha256": "8036f556947c8c479b9a4533e6973e3266df76a90b1e6aeeb77801e6100b22a5",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "sql/oracle_fdw.sql:350-353",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A DELETE statement uses RETURNING to expose the complete row that was removed, allowing a caller to observe the deleted record from the same write operation.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored alert cleanup. DELETE ... RETURNING removes expired alerts only when a correlated NOT EXISTS guard finds no hold record, returns the deleted identifiers and nullable account values, and a final ordered read verifies that held and active alerts remain. PostgreSQL whole-row syntax is replaced with an explicit MariaDB projection; the schema, names, rows, and cleanup purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["delete-returning", "correlated-not-exists", "null", "dml-result-rows", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "Alerts 101 and 104 are expired and unheld, so both are deleted and returned; alert 104 retains a NULL account_id in the returned row. Alert 102 is expired but held and must remain, alert 103 is active and must remain, and an orphan hold has no effect.",
+  "determinism_notes": "The returned rows are compared unordered because DELETE does not promise row order; the final alert and hold reads are ordered by their unique IDs. All values are fixed and there are no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE alerts (alert_id INT PRIMARY KEY, account_id INT NULL, state VARCHAR(16) NOT NULL, message VARCHAR(64) NOT NULL)",
+    "CREATE TABLE alert_holds (alert_id INT PRIMARY KEY, hold_reason VARCHAR(32) NOT NULL)",
+    "INSERT INTO alerts VALUES (101, 7, 'expired', 'old-session'), (102, 8, 'expired', 'legal-review'), (103, 9, 'active', 'current-session'), (104, NULL, 'expired', 'unassigned')",
+    "INSERT INTO alert_holds VALUES (102, 'legal-review'), (999, 'orphan-hold')"
+  ],
+  "steps": [
+    {
+      "sql": "DELETE FROM alerts WHERE state = 'expired' AND NOT EXISTS (SELECT 1 FROM alert_holds h WHERE h.alert_id = alerts.alert_id) RETURNING alert_id, account_id, state, message",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT alert_id, account_id, state, message FROM alerts ORDER BY alert_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT alert_id, account_id, state, message FROM alerts ORDER BY alert_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT alert_id, hold_reason FROM alert_holds ORDER BY alert_id",
+      "ordered": true
+    }
+  ]
+}
