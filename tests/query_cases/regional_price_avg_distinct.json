@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "id": "regional_price_avg_distinct",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "jiaGuYuan/StudyNote",
+      "commit": "4b9e867f65207b3cd1866a42ddc31bfa0e613c52",
+      "path": "mysql_笔记.sql",
+      "url": "https://github.com/jiaGuYuan/StudyNote/blob/4b9e867f65207b3cd1866a42ddc31bfa0e613c52/mysql_%E7%AC%94%E8%AE%B0.sql",
+      "sha256": "1e6f3778ceefaa4841b0e0e9fe72cf941aab603dd0e1b3700925ef6e24c03867",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "mysql_笔记.sql:70-72",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A product report uses AVG(DISTINCT ...) to average only unique product prices instead of counting repeated prices multiple times.",
+      "mysql_mariadb_translation": "Rewritten as an original regional pricing report. A LEFT JOIN groups decimal prices by region and projects ordinary AVG, AVG(DISTINCT), and COUNT(DISTINCT) together; duplicate prices, NULL prices, and a region with no products make the distinct-average and NULL aggregate behavior observable without copying the source schema or rows."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "avg-distinct",
+    "avg",
+    "count-distinct",
+    "left-join",
+    "grouping",
+    "null",
+    "decimal",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Region 10 has prices 100.00, 100.00, 160.00, and NULL, so ordinary AVG is 120.00 while AVG(DISTINCT) is 130.00. Region 20 has two distinct non-NULL prices and one NULL; region 30 has no products and must retain NULL aggregate results through the LEFT JOIN.",
+  "determinism_notes": "Region IDs and product IDs are fixed; the grouped report is ordered by the unique region ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE sales_regions (region_id INT PRIMARY KEY, region_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE regional_prices (product_id INT PRIMARY KEY, region_id INT NOT NULL, product_name VARCHAR(32) NOT NULL, list_price DECIMAL(10,2) NULL)",
+    "INSERT INTO sales_regions VALUES (10, 'north'), (20, 'south'), (30, 'central')",
+    "INSERT INTO regional_prices VALUES (1, 10, 'starter', 100.00), (2, 10, 'standard', 100.00), (3, 10, 'premium', 160.00), (4, 10, 'custom', NULL), (5, 20, 'starter', 200.00), (6, 20, 'premium', 260.00), (7, 20, 'custom', NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT r.region_id, r.region_name, AVG(p.list_price) AS average_price, AVG(DISTINCT p.list_price) AS distinct_average_price, COUNT(DISTINCT p.list_price) AS distinct_price_points FROM sales_regions r LEFT JOIN regional_prices p ON p.region_id = r.region_id GROUP BY r.region_id, r.region_name ORDER BY r.region_id",
+      "ordered": true
+    }
+  ]
+}

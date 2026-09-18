@@ -1466,7 +1466,7 @@ impl RawEngine {
                         // the argument's scale (INT has scale 0); AVG widens
                         // that scale by four; STD/STDDEV and any floating
                         // input yield DOUBLE.
-                        let argument = window_function_arguments(function)
+                        let argument = function_arguments(function)
                             .ok()
                             .and_then(|arguments| arguments.into_iter().next().flatten())
                             .map(|argument| {
@@ -6292,13 +6292,10 @@ fn numeric_type_rank(type_: MysqlColumnType) -> u8 {
     }
 }
 
-fn window_function_arguments(function: &sqlparser::ast::Function) -> Result<Vec<Option<Expr>>> {
+fn function_arguments(function: &sqlparser::ast::Function) -> Result<Vec<Option<Expr>>> {
     let FunctionArguments::List(arguments) = &function.args else {
         return Ok(Vec::new());
     };
-    if arguments.duplicate_treatment.is_some() {
-        return Err(anyhow!("DISTINCT window aggregates are not supported"));
-    }
     arguments
         .args
         .iter()
@@ -6314,6 +6311,16 @@ fn window_function_arguments(function: &sqlparser::ast::Function) -> Result<Vec<
             }
         })
         .collect()
+}
+
+fn window_function_arguments(function: &sqlparser::ast::Function) -> Result<Vec<Option<Expr>>> {
+    if let FunctionArguments::List(arguments) = &function.args
+        && arguments.duplicate_treatment.is_some()
+        && function.over.is_some()
+    {
+        return Err(anyhow!("DISTINCT window aggregates are not supported"));
+    }
+    function_arguments(function)
 }
 
 fn window_exprs(expr: &Expr) -> Vec<&Expr> {
