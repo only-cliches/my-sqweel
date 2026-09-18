@@ -40,6 +40,7 @@ All notable changes to MySqweel will be documented in this file.
 - Added GitHub-attributed `MAKE_SET` coverage for bitmask-driven profile feature materialization with `UPDATE` final-state checks, NULL label omission, and zero-mask output, including a minimized scalar regression; fixed `MAKE_SET` scalar evaluation and `VAR_STRING` metadata to match MariaDB.
 - Added GitHub-attributed `INTERVAL` coverage for decimal shipment SLA brackets with CASE labels and NULL input, including a minimized threshold regression; fixed parser rewriting for both `INTERVAL(` and `INTERVAL (` forms, MariaDB's `-1` result for NULL input, and integer metadata.
 - Added GitHub-attributed PostgreSQL-inspired `REGEXP_REPLACE` coverage for nested whitespace/tag normalization over NULL-aware incident notes, including a minimized scalar regression; fixed three-argument evaluation, `LONG_BLOB` metadata propagation through `TRIM`, and wire `LONG_BLOB` support.
+- Parked GitHub-attributed `GROUPING()` plus `GROUP BY ... WITH ROLLUP` coverage from the MariaDB seed query because MariaDB 10.11.7 returns error 1305 / SQLSTATE `42000` for `GROUPING()`; no invalid fixture was retained.
 - Parked an `UPDATE ... RETURNING` coverage candidate because MariaDB 10.11.7 returns syntax error 1064 for that form; no invalid fixture was retained.
 
 ## 0.4.4 Sep 9, 2026
