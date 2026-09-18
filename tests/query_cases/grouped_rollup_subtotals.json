@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "grouped_rollup_subtotals",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "AgentKazy/mysql-course",
+      "commit": "20b7c2d2d1f300037554c8136a084f8498c222e6",
+      "path": "267. WITH ROLLUP.sql",
+      "url": "https://github.com/AgentKazy/mysql-course/blob/20b7c2d2d1f300037554c8136a084f8498c222e6/267.%20WITH%20ROLLUP.sql",
+      "sha256": "4d78733f71a49c38a8c9cf06a4644423f663fa9804f04333a605673e6dadf789",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "267. WITH ROLLUP.sql:34-44",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped aggregate over three dimensions uses WITH ROLLUP to emit detail rows, progressively coarser subtotals, and a grand total with NULL markers for rolled-up grouping columns.",
+      "mysql_mariadb_translation": "Reauthored as a four-row branch-channel sales ledger using two grouping dimensions and integer measures. The query keeps the public pattern's multi-column GROUP BY ... WITH ROLLUP shape while avoiding the source schema, names, and values; unordered comparison canonicalizes the subtotal rows because MariaDB does not guarantee their presentation order."
+    },
+    "independently_authored": true
+  },
+  "features": ["group-by-rollup", "multi-column-grouping", "aggregate", "null-subtotals", "deterministic-content"],
+  "fixture_notes": "Each branch has one online and one store row. ROLLUP must emit four detail rows, one subtotal per branch with channel NULL, and one grand total with both grouping columns NULL; the source data itself contains no NULL grouping values.",
+  "determinism_notes": "The fixture uses fixed integer literals and no clocks, randomness, sleeps, or concurrent connections. The result is compared unordered because subtotal presentation order is not part of the SQL contract.",
+  "setup": [
+    "CREATE TABLE branch_sales (branch VARCHAR(16) NOT NULL, channel VARCHAR(16) NOT NULL, units INT NOT NULL, revenue INT NOT NULL)",
+    "INSERT INTO branch_sales VALUES ('north', 'online', 3, 45), ('north', 'store', 2, 28), ('south', 'online', 4, 60), ('south', 'store', 1, 14)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT branch, channel, SUM(units) AS units_sold, SUM(revenue) AS revenue_total FROM branch_sales GROUP BY branch, channel WITH ROLLUP",
+      "ordered": false
+    }
+  ]
+}

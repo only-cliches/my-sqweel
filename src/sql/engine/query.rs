@@ -1132,6 +1132,11 @@ impl RawEngine {
         }
         result.column_metadata =
             self.select_result_metadata(select, &result.columns, result.rows.first());
+        if eval::has_rollup_group_by(select) {
+            for metadata in &mut result.column_metadata {
+                metadata.nullable = true;
+            }
+        }
         result
     }
 

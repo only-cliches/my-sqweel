@@ -1224,7 +1224,7 @@ impl RawEngine {
                 .replace("ADD FULLTEXT KEY", "ADD KEY")
                 .replace("add fulltext key", "add key");
         }
-        parse_sql
+        rewrite_group_by_with_rollup(&parse_sql)
     }
 
     fn rewrite_insert_target(&self, sql: &str) -> String {
@@ -4176,6 +4176,29 @@ impl EmptyStringFallback for String {
             self
         }
     }
+}
+
+fn rewrite_group_by_with_rollup(sql: &str) -> String {
+    let upper = sql.to_ascii_uppercase();
+    let Some(group_by) = find_top_level_keyword(&upper, "GROUP BY") else {
+        return sql.to_string();
+    };
+    let group_start = group_by + "GROUP BY".len();
+    let Some(rollup_offset) = find_top_level_keyword(&upper[group_start..], "WITH ROLLUP")
+    else {
+        return sql.to_string();
+    };
+    let rollup = group_start + rollup_offset;
+    let expressions = sql[group_start..rollup].trim();
+    if expressions.is_empty() {
+        return sql.to_string();
+    }
+    format!(
+        "{}GROUP BY ROLLUP({}){}",
+        &sql[..group_by],
+        expressions,
+        &sql[rollup + "WITH ROLLUP".len()..]
+    )
 }
 
 fn find_top_level_keyword(sql: &str, keyword: &str) -> Option<usize> {

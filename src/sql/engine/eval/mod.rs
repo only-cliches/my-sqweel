@@ -1,8 +1,10 @@
 use super::*;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::ops::ControlFlow;
 
-use sqlparser::ast::{Function, FunctionArg};
+use sqlparser::ast::{Function, FunctionArg, Visit, Visitor};
+
 
 thread_local! {
     static EVAL_DATABASE: RefCell<String> = RefCell::new("app".into());
@@ -371,10 +373,12 @@ pub(super) fn aggregate_select_result(
     eval: &dyn Fn(&Expr, &Map<String, Value>, u64) -> Result<Value>,
     window: Option<&dyn Fn(&Select, &mut Vec<Map<String, Value>>) -> Result<()>>,
 ) -> Result<Option<QueryResult>> {
+    let rollup = rollup_exprs(select);
     let group_by = group_by_exprs(select);
     if group_by.is_empty() && !projection_has_aggregate(&select.projection) {
         return Ok(None);
     }
+
 
     let mut rows = std::mem::take(rows);
     for item in &select.projection {
@@ -391,7 +395,8 @@ pub(super) fn aggregate_select_result(
             }
         }
     }
-    let grouped = group_rows(rows, &group_by, last_insert_id, eval)?;
+    let grouped = group_rows(rows, &group_by, last_insert_id, eval, rollup.is_some())?;
+
     let mut order_hint_map = column_hints.clone();
     order_hint_map.extend(
         order_by
@@ -426,16 +431,17 @@ pub(super) fn aggregate_select_result(
         .collect();
     let mut output = Vec::new();
     let mut bases = Vec::new();
-    for group in grouped {
-        let base = group.first().cloned().unwrap_or_default();
+    for aggregate_group in grouped {
+        let group = &aggregate_group.rows;
+        let base = &aggregate_group.base;
         let mut row = Map::new();
 
         for (item, key) in select.projection.iter().zip(item_keys.iter()) {
             project_aggregate_item(
                 item,
                 key.as_deref(),
-                &group,
-                &base,
+                group,
+                base,
                 last_insert_id,
                 &order_hint_map,
                 eval,
@@ -447,8 +453,8 @@ pub(super) fn aggregate_select_result(
             context.extend(row.clone());
             materialize_aggregate_exprs(
                 having,
-                &group,
-                &base,
+                group,
+                base,
                 last_insert_id,
                 &order_hint_map,
                 eval,
@@ -462,8 +468,8 @@ pub(super) fn aggregate_select_result(
         for order in order_by {
             materialize_aggregate_exprs(
                 &order.expr,
-                &group,
-                &base,
+                group,
+                base,
                 last_insert_id,
                 &order_hint_map,
                 eval,
@@ -539,17 +545,46 @@ pub(super) fn aggregate_select_result(
     }))
 }
 
+pub(super) fn group_by_exprs(select: &Select) -> Vec<Expr> {
+    rollup_exprs(select).unwrap_or_else(|| match &select.group_by {
+        sqlparser::ast::GroupByExpr::Expressions(exprs, _) => exprs.clone(),
+        sqlparser::ast::GroupByExpr::All(_) => Vec::new(),
+    })
+}
+
+fn rollup_exprs(select: &Select) -> Option<Vec<Expr>> {
+    let sqlparser::ast::GroupByExpr::Expressions(exprs, _) = &select.group_by else {
+        return None;
+    };
+    let [Expr::Function(function)] = exprs.as_slice() else {
+        return None;
+    };
+    let name = function.name.0.last()?.value.as_str();
+    if !name.eq_ignore_ascii_case("ROLLUP") {
+        return None;
+    }
+    let FunctionArguments::List(arguments) = &function.args else {
+        return None;
+    };
+    arguments
+        .args
+        .iter()
+        .map(|argument| match argument {
+            FunctionArg::Unnamed(FunctionArgExpr::Expr(expr)) => Some(expr.clone()),
+            _ => None,
+        })
+        .collect()
+}
+pub(super) fn has_rollup_group_by(select: &Select) -> bool {
+    rollup_exprs(select).is_some()
+}
+
 pub(super) fn deduplicate_rows(rows: &mut Vec<Map<String, Value>>) {
     let mut seen = HashSet::new();
     rows.retain(|row| seen.insert(encode_json_row(row)));
 }
 
-pub(super) fn group_by_exprs(select: &Select) -> Vec<Expr> {
-    match &select.group_by {
-        sqlparser::ast::GroupByExpr::Expressions(exprs, _) => exprs.clone(),
-        sqlparser::ast::GroupByExpr::All(_) => Vec::new(),
-    }
-}
+
 
 pub(super) fn projection_has_aggregate(projection: &[SelectItem]) -> bool {
     projection.iter().any(|item| match item {
@@ -682,14 +717,21 @@ pub(super) fn expr_has_window(expr: &Expr) -> bool {
     }
 }
 
-pub(super) fn group_rows(
+struct AggregateGroup {
+    rows: Vec<Map<String, Value>>,
+    base: Map<String, Value>,
+}
+
+fn group_rows(
     rows: Vec<Map<String, Value>>,
     group_by: &[Expr],
     last_insert_id: u64,
     eval: &dyn Fn(&Expr, &Map<String, Value>, u64) -> Result<Value>,
-) -> Result<Vec<Vec<Map<String, Value>>>> {
-    if group_by.is_empty() {
-        return Ok(vec![rows]);
+    rollup: bool,
+) -> Result<Vec<AggregateGroup>> {
+    if group_by.is_empty() && !rollup {
+        let base = rows.first().cloned().unwrap_or_default();
+        return Ok(vec![AggregateGroup { rows, base }]);
     }
 
     let mut positions = HashMap::<String, usize>::new();
@@ -711,15 +753,100 @@ pub(super) fn group_rows(
         });
         grouped[position].push(row);
     }
-    let mut grouped = group_keys.into_iter().zip(grouped).collect::<Vec<_>>();
-    grouped.sort_by(|(left, _), (right, _)| {
+    let mut detail = group_keys.into_iter().zip(grouped).collect::<Vec<_>>();
+    detail.sort_by(|(left, _), (right, _)| {
         left.iter()
             .zip(right)
             .map(|(left, right)| compare_json_values(left, right))
             .find(|ordering| *ordering != Ordering::Equal)
             .unwrap_or_else(|| left.len().cmp(&right.len()))
     });
-    Ok(grouped.into_iter().map(|(_, rows)| rows).collect())
+    if !rollup {
+        return Ok(detail
+            .into_iter()
+            .map(|(_, rows)| {
+                let base = rows.first().cloned().unwrap_or_default();
+                AggregateGroup { rows, base }
+            })
+            .collect());
+    }
+
+    let mut output = Vec::new();
+    for level in (0..=group_by.len()).rev() {
+        let mut positions = HashMap::<String, usize>::new();
+        let mut group_keys = Vec::<Vec<Value>>::new();
+        let mut grouped = Vec::<Vec<Map<String, Value>>>::new();
+        for (key, rows) in &detail {
+            let key_parts = key[..level]
+                .iter()
+                .map(encode_json_value)
+                .collect::<Vec<_>>();
+            let position = *positions.entry(key_parts.join("|")).or_insert_with(|| {
+                grouped.push(Vec::new());
+                group_keys.push(key[..level].to_vec());
+                grouped.len() - 1
+            });
+            grouped[position].extend(rows.iter().cloned());
+        }
+        let mut grouped = group_keys.into_iter().zip(grouped).collect::<Vec<_>>();
+        grouped.sort_by(|(left, _), (right, _)| {
+            left.iter()
+                .zip(right)
+                .map(|(left, right)| compare_json_values(left, right))
+                .find(|ordering| *ordering != Ordering::Equal)
+                .unwrap_or_else(|| left.len().cmp(&right.len()))
+        });
+        for (_, rows) in grouped {
+            let mut base = rows.first().cloned().unwrap_or_default();
+            for expr in &group_by[level..] {
+                nullify_group_expr_columns(&mut base, expr);
+            }
+            output.push(AggregateGroup { rows, base });
+        }
+    }
+    Ok(output)
+}
+
+fn nullify_group_expr_columns(base: &mut Map<String, Value>, expr: &Expr) {
+    struct ColumnCollector {
+        columns: HashSet<String>,
+    }
+
+    impl Visitor for ColumnCollector {
+        type Break = ();
+
+        fn pre_visit_expr(&mut self, expr: &Expr) -> ControlFlow<Self::Break> {
+            match expr {
+                Expr::Identifier(identifier) if !identifier.value.starts_with('@') => {
+                    self.columns.insert(identifier.value.clone());
+                }
+                Expr::CompoundIdentifier(identifiers) => {
+                    if let Some(identifier) = identifiers.last() {
+                        self.columns.insert(identifier.value.clone());
+                    }
+                }
+                _ => {}
+            }
+            ControlFlow::Continue(())
+        }
+    }
+
+    let mut collector = ColumnCollector {
+        columns: HashSet::new(),
+    };
+    let _ = Visit::visit(expr, &mut collector);
+    let keys = base
+        .keys()
+        .filter(|key| {
+            collector
+                .columns
+                .contains(key.rsplit('.').next().unwrap_or(key))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    for key in keys {
+        base.insert(key, Value::Null);
+    }
 }
 
 pub(super) fn project_aggregate_item(
