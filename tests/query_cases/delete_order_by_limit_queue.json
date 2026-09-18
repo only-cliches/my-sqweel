@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "delete_order_by_limit_queue",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "shockerli/Notes",
+      "commit": "ab692c415b98da64528d57ba6856add8d78dc3cd",
+      "path": "MySQL_Note.sql",
+      "url": "https://github.com/shockerli/Notes/blob/ab692c415b98da64528d57ba6856add8d78dc3cd/MySQL_Note.sql",
+      "sha256": "ea4fec2cd49faedee8b86a80642b3d053f23adc112367a32ae4e4e0833d10c0a",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL_Note.sql:542-548",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL DELETE can combine a filter with ORDER BY and LIMIT so a bounded, deterministic subset of matching rows is removed instead of every matching row.",
+      "mysql_mariadb_translation": "Reauthored as a delivery queue purge. Ready messages are ordered by descending urgency and ascending queue ID, and only the first two are deleted; a held message with higher urgency and later ready messages remain. The schema, names, values, and state predicate are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "delete-order-by-limit",
+    "filtered-delete",
+    "deterministic-tie-break",
+    "affected-rows",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Ready queue entries 101, 102, and 106 share the highest urgency, so the unique queue ID tie-break selects 101 and 102 for the LIMIT 2 purge; ready entry 103 remains, held entry 104 is filtered out despite higher urgency, and low-priority ready entry 105 remains.",
+  "determinism_notes": "Urgency descending plus unique queue ID ascending defines the deleted subset; final rows are ordered by the unique queue ID. All values are fixed and there are no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE delivery_queue (queue_id INT PRIMARY KEY, channel VARCHAR(16) NOT NULL, state VARCHAR(12) NOT NULL, urgency INT NOT NULL)",
+    "INSERT INTO delivery_queue VALUES (101, 'email', 'ready', 80), (102, 'sms', 'ready', 80), (103, 'push', 'ready', 60), (104, 'email', 'held', 99), (105, 'sms', 'ready', 40), (106, 'push', 'ready', 80)"
+  ],
+  "steps": [
+    {
+      "sql": "DELETE FROM delivery_queue WHERE state = 'ready' ORDER BY urgency DESC, queue_id ASC LIMIT 2",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT queue_id, channel, state, urgency FROM delivery_queue ORDER BY queue_id",
+      "ordered": true
+    }
+  ]
+}
