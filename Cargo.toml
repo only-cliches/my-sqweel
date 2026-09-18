@@ -12,7 +12,7 @@
 [package]
 edition = "2024"
 name = "my-sqweel"
-version = "0.4.4"
+version = "0.5.0"
 
 include = [
     "/Cargo.lock",
@@ -30,7 +30,7 @@ autobins = false
 autoexamples = false
 autotests = false
 autobenches = false
-description = "Streamlined, embeddable MySQL for applications, integration testing, and QA."
+description = "Streamlined, embeddable MySQL/MariaDB for applications, integration testing, and QA."
 readme = "README.md"
 license = "MIT"
 repository = "https://github.com/only-cliches/my-sqweel"

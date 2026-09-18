@@ -207,6 +207,7 @@ allowlist = [
     "domain=ports.ubuntu.com",
     "domain=archive.ubuntu.com",
     "domain=packages.ubuntu.com",
+    "domain=productionresultssa10.blob.core.windows.net",
 ]
 denylist = [
     "domain=sdmntprsouthcentralus.oaiusercontent.com",
