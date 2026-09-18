@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "id": "field_priority_dispatch_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "Vorschlag-bit/01_db",
+      "commit": "6067c9560de2093759dbf8769fe0f1f8910244ed",
+      "path": "02_order by.sql",
+      "url": "https://github.com/Vorschlag-bit/01_db/blob/6067c9560de2093759dbf8769fe0f1f8910244ed/02_order%20by.sql",
+      "sha256": "fe89a6facd41c7fb0f67f410a344d8436db57c749416bba674dbcc21bc97660c",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "02_order by.sql:24-28 (FIELD expression)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A FIELD expression returns the position of a value in an explicit list.",
+      "mysql_mariadb_translation": "Reduced to one independently authored dispatch state and one FIELD projection; ordering, extra rows, and NULL handling are removed so the result-type mismatch is isolated."
+    },
+    "independently_authored": true,
+    "minimized_from": "field_priority_dispatch"
+  },
+  "features": ["field-function", "minimized-regression"],
+  "fixture_notes": "One fixed state is enough to expose FIELD's MariaDB integer metadata while retaining the explicit custom-order list.",
+  "determinism_notes": "The single row and state are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE field_inputs (input_id INT PRIMARY KEY, state VARCHAR(16) NOT NULL)",
+    "INSERT INTO field_inputs VALUES (1, 'urgent')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT input_id, FIELD(state, 'queued', 'blocked', 'urgent') AS state_rank FROM field_inputs ORDER BY input_id",
+      "ordered": true
+    }
+  ]
+}

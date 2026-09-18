@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "field_priority_dispatch",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Vorschlag-bit/01_db",
+      "commit": "6067c9560de2093759dbf8769fe0f1f8910244ed",
+      "path": "02_order by.sql",
+      "url": "https://github.com/Vorschlag-bit/01_db/blob/6067c9560de2093759dbf8769fe0f1f8910244ed/02_order%20by.sql",
+      "sha256": "fe89a6facd41c7fb0f67f410a344d8436db57c749416bba674dbcc21bc97660c",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "02_order by.sql:24-37 (FIELD expressions and FIELD-based ordering)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A report uses FIELD(column, ...) to assign a custom order and sorts the result by that expression in descending order.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored dispatch queue report. FIELD ranks ticket states, descending order prioritizes urgent work, and ticket_id provides a deterministic tie-breaker. Unknown and NULL states retain MariaDB's zero FIELD rank; the source schema, names, and values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["field-function", "custom-order", "null", "unknown-category", "deterministic-order"],
+  "fixture_notes": "The state list ranks queued below blocked below urgent; an unlisted state and NULL both produce FIELD rank zero. Duplicate queued ranks require ticket_id as a deterministic tie-breaker.",
+  "determinism_notes": "All ticket IDs, labels, and states are fixed; the result orders by the unique ticket ID after the custom FIELD rank. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE dispatch_tickets (ticket_id INT PRIMARY KEY, title VARCHAR(32) NOT NULL, state VARCHAR(16) NULL)",
+    "INSERT INTO dispatch_tickets VALUES (101, 'cache purge', 'queued'), (102, 'auth outage', 'urgent'), (103, 'billing retry', 'blocked'), (104, 'report export', 'queued'), (105, 'legacy sync', 'unknown'), (106, 'docs refresh', NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT ticket_id, title, state, FIELD(state, 'queued', 'blocked', 'urgent') AS state_rank FROM dispatch_tickets ORDER BY FIELD(state, 'queued', 'blocked', 'urgent') DESC, ticket_id",
+      "ordered": true
+    }
+  ]
+}
