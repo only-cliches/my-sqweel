@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "id": "replace_returning_registry",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "OneBusAway/maglev",
+      "commit": "6924cc759e0e2a66383d4df85f1e66c82cb82563",
+      "path": "gtfsdb/query.sql",
+      "url": "https://github.com/OneBusAway/maglev/blob/6924cc759e0e2a66383d4df85f1e66c82cb82563/gtfsdb/query.sql",
+      "sha256": "77c7a813d3b2e777facc26f8116b8525890c28a9ba44bb6168400a63e336a6ac",
+      "source_dialect": "sqlite"
+    },
+    "inspiration": {
+      "source_location": "gtfsdb/query.sql:35-48 (CreateAgency)",
+      "source_dialect": "sqlite",
+      "observed_pattern": "A SQLite INSERT OR REPLACE statement writes a complete row for an existing key or inserts a new key, then RETURNING exposes the resulting rows from the same write operation.",
+      "mysql_mariadb_translation": "Reauthored as a plan-registry refresh. SQLite INSERT OR REPLACE becomes MariaDB REPLACE INTO with concrete values and an explicit RETURNING projection; an existing primary-key row is fully replaced, a new row is inserted, both resulting rows are returned, and an ordered final read verifies that the old replacement values are gone. The schema, names, values, and projection are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "replace-into",
+    "returning",
+    "multi-row-replace",
+    "primary-key-replacement",
+    "dml-result-rows",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Plan 7 already exists with legacy values and is fully replaced by the returned canary row; plan 13 is new and is inserted and returned; plan 11 remains untouched. The replacement changes every projected non-key field so REPLACE semantics are distinguishable from an update that might preserve omitted values.",
+  "determinism_notes": "The RETURNING result is compared unordered because the statement does not promise row order; the final registry read is ordered by the unique plan ID. All values are fixed and there are no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE plan_registry (plan_id INT PRIMARY KEY, plan_code VARCHAR(16) NOT NULL UNIQUE, seat_limit INT NOT NULL, rollout VARCHAR(16) NOT NULL)",
+    "INSERT INTO plan_registry VALUES (7, 'basic-legacy', 10, 'legacy'), (11, 'team-stable', 25, 'stable')"
+  ],
+  "steps": [
+    {
+      "sql": "REPLACE INTO plan_registry (plan_id, plan_code, seat_limit, rollout) VALUES (7, 'basic-canary', 20, 'canary'), (13, 'pro-stable', 100, 'stable') RETURNING plan_id, plan_code, seat_limit, rollout",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT plan_id, plan_code, seat_limit, rollout FROM plan_registry ORDER BY plan_id",
+      "ordered": true
+    }
+  ]
+}
