@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "id": "monthly_payment_revenue",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "777DheerajGupta/SQL-Project",
+      "commit": "cc53d3c7b8609a3ccfd44fda61c8d46dfabe8f18",
+      "path": "SQL Project.sql",
+      "url": "https://github.com/777DheerajGupta/SQL-Project/blob/cc53d3c7b8609a3ccfd44fda61c8d46dfabe8f18/SQL%20Project.sql",
+      "sha256": "e4bfb9376b271fc256e5cd2234d5b07fc45328367aa560d71e92f97a9b08fcf4",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "SQL Project.sql:7-16 (Q1: Monthly Revenue Trend)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A delivered-order report derives a month bucket with DATE_FORMAT, counts distinct orders, rounds payment aggregates, groups by the month alias, and orders the monthly results.",
+      "mysql_mariadb_translation": "Rewritten as an original monthly payment report. Fixed order timestamps create month buckets; multiple payment rows per order require COUNT(DISTINCT), NULL payment values exercise AVG and SUM behavior, and a pending order is excluded. The fixture schema, rows, and output purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "date-format",
+    "count-distinct",
+    "round",
+    "sum",
+    "avg",
+    "decimal",
+    "inner-join",
+    "grouping",
+    "where-filter",
+    "null",
+    "deterministic-order"
+  ],
+  "fixture_notes": "January has two delivered orders and three non-NULL payment rows totaling 35.00; February has two delivered orders, payment values 8.00 and 12.00 plus one NULL payment, totaling 20.00 with an average of 10.00. A pending order with a large payment must be excluded.",
+  "determinism_notes": "All timestamps, statuses, amounts, and IDs are fixed; monthly results are ordered by the derived month string. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE sales_orders (order_id INT PRIMARY KEY, customer_id INT NOT NULL, purchased_at DATETIME NOT NULL, status VARCHAR(16) NOT NULL)",
+    "CREATE TABLE order_payments (payment_id INT PRIMARY KEY, order_id INT NOT NULL, amount DECIMAL(10, 2) NULL)",
+    "INSERT INTO sales_orders VALUES (100, 1, '2024-01-05 10:00:00', 'delivered'), (101, 1, '2024-01-31 18:30:00', 'delivered'), (102, 2, '2024-02-01 09:15:00', 'delivered'), (103, 3, '2024-02-20 12:00:00', 'pending'), (104, 2, '2024-02-28 20:45:00', 'delivered')",
+    "INSERT INTO order_payments VALUES (1000, 100, 20.00), (1001, 100, 5.00), (1010, 101, 10.00), (1020, 102, 8.00), (1030, 103, 99.00), (1040, 104, 12.00), (1041, 104, NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT DATE_FORMAT(o.purchased_at, '%Y-%m-01') AS order_month, COUNT(DISTINCT o.order_id) AS delivered_orders, ROUND(SUM(p.amount), 2) AS gross_revenue, ROUND(AVG(p.amount), 2) AS average_payment FROM sales_orders o INNER JOIN order_payments p ON p.order_id = o.order_id WHERE o.status = 'delivered' GROUP BY order_month ORDER BY order_month",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT order_id, customer_id, purchased_at, status FROM sales_orders ORDER BY order_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT payment_id, order_id, amount FROM order_payments ORDER BY payment_id",
+      "ordered": true
+    }
+  ]
+}
