@@ -3707,7 +3707,7 @@ pub(super) fn eval_function_text(
                 .transpose()?
                 .unwrap_or(Value::Null);
             if value == Value::Null {
-                return Ok(Value::Null);
+                return Ok(Value::Number(Number::from(-1_i64)));
             }
             let value = json_to_f64_lossy(&value)?;
             let mut result = 0_i64;

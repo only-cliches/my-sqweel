@@ -1071,6 +1071,7 @@ impl RawEngine {
             "TRIM(BOTH FROM ",
             "UNION (",
             "INTERVAL (",
+            "INTERVAL(",
             " SRID 0",
         ];
         !REWRITE_MARKERS.iter().any(|marker| upper.contains(marker))
@@ -4748,11 +4749,52 @@ fn strip_index_comments(sql: &str) -> String {
 
 fn rewrite_interval_function(sql: &str) -> String {
     let upper = sql.to_ascii_uppercase();
-    if !upper.contains("INTERVAL (") {
-        return sql.to_string();
+    let mut output = String::with_capacity(sql.len());
+    let mut source_start = 0;
+    let mut cursor = 0;
+    let mut in_single = false;
+    let mut in_double = false;
+    while cursor < sql.len() {
+        let Some(character) = sql[cursor..].chars().next() else {
+            break;
+        };
+        if character == '\'' && !in_double {
+            in_single = !in_single;
+        } else if character == '"' && !in_single {
+            in_double = !in_double;
+        }
+        if !in_single
+            && !in_double
+            && upper[cursor..].starts_with("INTERVAL")
+            && !sql[..cursor]
+                .chars()
+                .next_back()
+                .is_some_and(|value| value.is_ascii_alphanumeric() || value == '_')
+        {
+            let name_end = cursor + "INTERVAL".len();
+            let mut open = name_end;
+            while open < sql.len() {
+                let Some(next) = sql[open..].chars().next() else {
+                    break;
+                };
+                if next.is_whitespace() {
+                    open += next.len_utf8();
+                } else {
+                    break;
+                }
+            }
+            if sql.as_bytes().get(open) == Some(&b'(') {
+                output.push_str(&sql[source_start..cursor]);
+                output.push_str("INTERVAL_FUNC(");
+                cursor = open + 1;
+                source_start = cursor;
+                continue;
+            }
+        }
+        cursor += character.len_utf8();
     }
-    sql.replace("INTERVAL (", "INTERVAL_FUNC(")
-        .replace("interval (", "interval_func(")
+    output.push_str(&sql[source_start..]);
+    output
 }
 
 

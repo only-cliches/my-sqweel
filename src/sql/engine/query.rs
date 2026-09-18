@@ -1537,6 +1537,7 @@ impl RawEngine {
                     }
                     "FIELD" | "FIND_IN_SET" => MysqlColumnType::Integer,
                     "MAKE_SET" => MysqlColumnType::VarChar,
+                    "INTERVAL_FUNC" => MysqlColumnType::Integer,
                     "JSON_ARRAYAGG" | "JSON_OBJECTAGG" => MysqlColumnType::Blob,
                     "JSON_ARRAY"
                     | "JSON_ARRAY_APPEND"

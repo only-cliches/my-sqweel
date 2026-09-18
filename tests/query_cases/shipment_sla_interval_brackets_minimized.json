@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "shipment_sla_interval_brackets_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "haiqiang-zhang/AST-SQL-Dialects-Testing-Between-DBMSs",
+      "commit": "b9f074972e6f83a3fbf767fb0c8763132b8f5e54",
+      "path": "test_case/mysql/test/func_set.sql",
+      "url": "https://github.com/haiqiang-zhang/AST-SQL-Dialects-Testing-Between-DBMSs/blob/b9f074972e6f83a3fbf767fb0c8763132b8f5e54/test_case/mysql/test/func_set.sql",
+      "sha256": "74c6d971bdfbf7c191fee9920b50043f33dcff716d72782c9df3ae1ffc81c87d",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "test_case/mysql/test/func_set.sql:2 (INTERVAL scalar expression)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "INTERVAL returns the bracket index for a value against an ordered list of numeric boundaries.",
+      "mysql_mariadb_translation": "Minimized independently authored scalar regression with one decimal value between the first two thresholds. It isolates INTERVAL's numeric bracket result without CASE, table state, or multiple rows."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "interval-function",
+    "decimal-thresholds"
+  ],
+  "fixture_notes": "The value 13.25 is greater than 7 and less than 14, so MariaDB returns bracket index 2.",
+  "determinism_notes": "All numeric literals are fixed and the scalar projection has no environmental inputs.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT INTERVAL(13.25, 3, 7, 14, 30) AS bracket_index",
+      "ordered": true
+    }
+  ]
+}
