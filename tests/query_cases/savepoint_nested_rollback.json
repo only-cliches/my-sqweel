@@ -1,0 +1,99 @@
+{
+  "version": 1,
+  "id": "savepoint_nested_rollback",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "boringcollege/postgres-by-example",
+      "commit": "ffde0d358722498e37982b57bdbd711871a61c43",
+      "path": "source/savepoints.sql",
+      "url": "https://github.com/boringcollege/postgres-by-example/blob/ffde0d358722498e37982b57bdbd711871a61c43/source/savepoints.sql",
+      "sha256": "8cce27ca3e385f421eb02554b0c8f99f719363f22758bfa8d8d6e87d9748e553",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "source/savepoints.sql:1-19",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A transaction can establish multiple savepoints, roll back to an inner savepoint while preserving earlier work, then roll back to an outer savepoint and release it before committing the remaining changes.",
+      "mysql_mariadb_translation": "Reauthored as a moderation queue transaction. START TRANSACTION replaces the source BEGIN; an update before the outer savepoint survives both rollbacks, an inserted queue row is removed by the outer rollback, a deletion is undone by the inner rollback, and a later update remains after RELEASE SAVEPOINT and COMMIT. SAVEPOINT, ROLLBACK TO SAVEPOINT, and RELEASE SAVEPOINT are standard transaction controls supported by MariaDB 10.11.7. The schema, names, values, and mutation sequence are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "transaction",
+    "savepoint",
+    "nested-savepoints",
+    "rollback-to-savepoint",
+    "release-savepoint",
+    "intermediate-state",
+    "final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Queue item 11 is changed before the outer savepoint and must remain working after both rollbacks; item 12 is deleted after the inner savepoint and restored by the inner rollback, then changed after the outer rollback; item 13 is inserted after the outer savepoint and must disappear when rolling back to it. The final commit retains only the intended updates to items 11 and 12.",
+  "determinism_notes": "All item IDs and statuses are fixed; each intermediate and final read is ordered by the unique item ID. One connection executes the transaction sequentially, with no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE moderation_queue (item_id INT PRIMARY KEY, status VARCHAR(16) NOT NULL)",
+    "INSERT INTO moderation_queue VALUES (11, 'queued'), (12, 'queued')"
+  ],
+  "steps": [
+    {
+      "sql": "START TRANSACTION",
+      "ordered": false
+    },
+    {
+      "sql": "UPDATE moderation_queue SET status = 'working' WHERE item_id = 11",
+      "ordered": false
+    },
+    {
+      "sql": "SAVEPOINT before_batch",
+      "ordered": false
+    },
+    {
+      "sql": "INSERT INTO moderation_queue VALUES (13, 'queued')",
+      "ordered": false
+    },
+    {
+      "sql": "SAVEPOINT before_cleanup",
+      "ordered": false
+    },
+    {
+      "sql": "DELETE FROM moderation_queue WHERE item_id = 12",
+      "ordered": false
+    },
+    {
+      "sql": "ROLLBACK TO SAVEPOINT before_cleanup",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT item_id, status FROM moderation_queue ORDER BY item_id",
+      "ordered": true
+    },
+    {
+      "sql": "ROLLBACK TO SAVEPOINT before_batch",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT item_id, status FROM moderation_queue ORDER BY item_id",
+      "ordered": true
+    },
+    {
+      "sql": "UPDATE moderation_queue SET status = 'reviewed' WHERE item_id = 12",
+      "ordered": false
+    },
+    {
+      "sql": "RELEASE SAVEPOINT before_batch",
+      "ordered": false
+    },
+    {
+      "sql": "COMMIT",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT item_id, status FROM moderation_queue ORDER BY item_id",
+      "ordered": true
+    }
+  ]
+}
