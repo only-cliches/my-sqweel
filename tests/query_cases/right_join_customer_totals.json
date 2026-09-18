@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "id": "right_join_customer_totals",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "sraoss/pg_ivm",
+      "commit": "b3ec178a803bbf9333beb558dc704e41113e4bcf",
+      "path": "sql/outer_join.sql",
+      "url": "https://github.com/sraoss/pg_ivm/blob/b3ec178a803bbf9333beb558dc704e41113e4bcf/sql/outer_join.sql",
+      "sha256": "98ac5915e1ed00b55a67ca333db966647c62a8a1ce7c7824ac56ec5610f8be35",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "sql/outer_join.sql:1052-1056",
+      "source_dialect": "postgresql",
+      "observed_pattern": "An outer-join regression query uses RIGHT JOIN in a chained join and orders the resulting nullable columns to make preserved right-side rows observable.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored customer totals report. RIGHT JOIN preserves a customer with no orders, COUNT measures matched order IDs, and COALESCE turns the NULL aggregate for that preserved row into zero. The fixture schema, rows, and reporting purpose are new; PostgreSQL-only view and regression machinery are omitted."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "right-join",
+    "grouping",
+    "count",
+    "sum",
+    "coalesce",
+    "null-preservation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Customer 1 has two orders, one with a NULL total; customer 2 has one order totaling 7; customer 3 has no orders and must remain in the RIGHT JOIN result with order_count 0 and revenue 0.",
+  "determinism_notes": "The report is ordered by the unique customer ID. All values are fixed and there are no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE customers (customer_id INT PRIMARY KEY, customer_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE customer_orders (order_id INT PRIMARY KEY, customer_id INT NOT NULL, order_total INT NULL)",
+    "INSERT INTO customers VALUES (1, 'atlas'), (2, 'beacon'), (3, 'cinder')",
+    "INSERT INTO customer_orders VALUES (10, 1, 25), (11, 1, NULL), (20, 2, 7)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT c.customer_id, c.customer_name, COUNT(o.order_id) AS order_count, COALESCE(SUM(o.order_total), 0) AS revenue FROM customer_orders o RIGHT JOIN customers c ON o.customer_id = c.customer_id GROUP BY c.customer_id, c.customer_name ORDER BY c.customer_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT customer_id, customer_name FROM customers ORDER BY customer_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT order_id, customer_id, order_total FROM customer_orders ORDER BY order_id",
+      "ordered": true
+    }
+  ]
+}
