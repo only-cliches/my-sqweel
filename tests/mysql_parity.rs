@@ -1161,6 +1161,15 @@ fn parity_with_mysql_for_information_schema() {
     let children_fk = format!("fk_children_parents_{pid}");
     let composite = format!("wdb_info_composite_{pid}");
     let late_pk = format!("wdb_info_late_pk_{pid}");
+    let charset_schema = format!("wdb_info_charset_{pid}");
+
+    assert_exec_succeeds(
+        &mut mysql_conn,
+        &mut whatever_conn,
+        &format!(
+            "CREATE DATABASE {charset_schema} CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci"
+        ),
+    );
 
     for sql in [
         format!("DROP TABLE IF EXISTS {children}"),
@@ -1317,15 +1326,15 @@ fn parity_with_mysql_for_information_schema() {
         ),
     );
 
-    // information_schema.schemata — projecting columns shared between
-    // backends. catalog_name = 'def' and utf8mb4 defaults are stable. The
-    // schema name itself differs (app vs the connection DB), so we filter
-    // by whatever names exist on each side.
+    // information_schema.schemata — use a database explicitly created with
+    // the same charset on both servers; service-image defaults differ.
     assert_query_parity_unordered(
         &mut mysql_conn,
         &mut whatever_conn,
-        "SELECT catalog_name, default_character_set_name FROM information_schema.schemata \
-         WHERE default_character_set_name = 'utf8mb4' AND catalog_name = 'def' LIMIT 1",
+        &format!(
+            "SELECT catalog_name, default_character_set_name \
+             FROM information_schema.schemata WHERE schema_name = '{charset_schema}'"
+        ),
     );
 
     // information_schema.character_sets — utf8mb4 row must exist with the
@@ -1377,6 +1386,8 @@ fn parity_with_mysql_for_information_schema() {
         let _ = mysql_conn.query_drop(&sql);
         let _ = whatever_conn.query_drop(&sql);
     }
+    let _ = mysql_conn.query_drop(format!("DROP DATABASE IF EXISTS {charset_schema}"));
+    let _ = whatever_conn.query_drop(format!("DROP DATABASE IF EXISTS {charset_schema}"));
 }
 
 #[test]

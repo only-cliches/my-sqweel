@@ -2404,8 +2404,18 @@ pub(super) fn eval_in_values(value: Value, candidates: Vec<Value>, negated: bool
 }
 
 pub(super) fn eval_between_values(value: Value, low: Value, high: Value, negated: bool) -> Value {
-    let lower = comparison_value(&value, &low, BinaryOperator::GtEq);
-    let upper = comparison_value(&value, &high, BinaryOperator::LtEq);
+    eval_between_values_with_hint(value, low, high, negated, None)
+}
+
+pub(super) fn eval_between_values_with_hint(
+    value: Value,
+    low: Value,
+    high: Value,
+    negated: bool,
+    hint: Option<&ColumnHint>,
+) -> Value {
+    let lower = comparison_value_with_hint(&value, &low, BinaryOperator::GtEq, hint);
+    let upper = comparison_value_with_hint(&value, &high, BinaryOperator::LtEq, hint);
     let result = sql_and_values(lower, upper);
     if negated {
         sql_not_value(result)
@@ -2415,10 +2425,19 @@ pub(super) fn eval_between_values(value: Value, low: Value, high: Value, negated
 }
 
 fn comparison_value(left: &Value, right: &Value, operator: BinaryOperator) -> Value {
+    comparison_value_with_hint(left, right, operator, None)
+}
+
+fn comparison_value_with_hint(
+    left: &Value,
+    right: &Value,
+    operator: BinaryOperator,
+    hint: Option<&ColumnHint>,
+) -> Value {
     if left == &Value::Null || right == &Value::Null {
         return Value::Null;
     }
-    let ordering = mysql_cmp_non_null(left, right);
+    let ordering = compare_order_values(left, right, hint);
     let result = match operator {
         BinaryOperator::Gt => ordering.is_gt(),
         BinaryOperator::GtEq => !ordering.is_lt(),

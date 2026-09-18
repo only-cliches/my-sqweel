@@ -4066,12 +4066,14 @@ fn preserve_select_result_headers(sql: &str, result: &mut QueryResult) {
         .map(|column| normalize_result_header(column))
         .collect::<Vec<_>>();
     if normalized_columns != result.columns {
+        let old_keys = row_keys_for_columns(&result.columns);
+        let new_keys = row_keys_for_columns(&normalized_columns);
         for row in &mut result.rows {
             let old = row.clone();
             row.clear();
-            for (old_name, new_name) in result.columns.iter().zip(&normalized_columns) {
-                if let Some(value) = old.get(old_name) {
-                    row.insert(new_name.clone(), value.clone());
+            for (old_key, new_key) in old_keys.iter().zip(&new_keys) {
+                if let Some(value) = old.get(old_key) {
+                    row.insert(new_key.clone(), value.clone());
                 }
             }
         }
@@ -4164,12 +4166,14 @@ fn preserve_select_result_headers(sql: &str, result: &mut QueryResult) {
     if headers.iter().eq(&result.columns) {
         return;
     }
+    let old_keys = row_keys_for_columns(&result.columns);
+    let new_keys = row_keys_for_columns(&headers);
     for row in &mut result.rows {
         let old = row.clone();
         row.clear();
-        for (old_name, new_name) in result.columns.iter().zip(&headers) {
-            if let Some(value) = old.get(old_name) {
-                row.insert(new_name.clone(), value.clone());
+        for (old_key, new_key) in old_keys.iter().zip(&new_keys) {
+            if let Some(value) = old.get(old_key) {
+                row.insert(new_key.clone(), value.clone());
             }
         }
     }

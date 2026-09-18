@@ -1540,6 +1540,15 @@ impl RawEngine {
                     _ => metadata.column_type,
                 };
             }
+            Expr::Nested(inner) => {
+                let nested = self.expression_metadata(select, inner, String::new(), first_row);
+                metadata.column_type = nested.column_type;
+                metadata.nullable = nested.nullable;
+                metadata.unsigned = nested.unsigned;
+                metadata.decimals = nested.decimals;
+                metadata.character_set = nested.character_set;
+                metadata.collation = nested.collation;
+            }
             Expr::Value(SqlValue::Number(number, _)) => {
                 metadata.column_type = if number.contains(['.', 'e', 'E']) {
                     MysqlColumnType::Decimal
@@ -1564,14 +1573,15 @@ impl RawEngine {
             } => {
                 // MariaDB widens arithmetic: integer operands yield BIGINT,
                 // a DECIMAL operand yields DECIMAL, and a floating operand
-                // yields DOUBLE.
-                let left_type = self
-                    .expression_metadata(select, left, String::new(), first_row)
-                    .column_type;
-                let right_type = self
-                    .expression_metadata(select, right, String::new(), first_row)
-                    .column_type;
-                let rank = numeric_type_rank(left_type).max(numeric_type_rank(right_type));
+                // yields DOUBLE. Preserve the widest decimal scale too; for
+                // example, `1000 + AVG(int_column) OVER (...)` must retain
+                // AVG's four fractional digits.
+                let left_metadata =
+                    self.expression_metadata(select, left, String::new(), first_row);
+                let right_metadata =
+                    self.expression_metadata(select, right, String::new(), first_row);
+                let rank = numeric_type_rank(left_metadata.column_type)
+                    .max(numeric_type_rank(right_metadata.column_type));
                 metadata.column_type = match rank {
                     1 => MysqlColumnType::BigInt,
                     2 => MysqlColumnType::Decimal,
@@ -1579,7 +1589,7 @@ impl RawEngine {
                     _ => metadata.column_type,
                 };
                 if metadata.column_type == MysqlColumnType::Decimal {
-                    metadata.decimals = 0;
+                    metadata.decimals = left_metadata.decimals.max(right_metadata.decimals);
                 }
             }
             _ => {}
@@ -2824,7 +2834,14 @@ impl RawEngine {
                 let v = self.eval_expr_ctx(expr, data, last_insert_id)?;
                 let lo = self.eval_expr_ctx(low, data, last_insert_id)?;
                 let hi = self.eval_expr_ctx(high, data, last_insert_id)?;
-                Ok(eval_between_values(v, lo, hi, *negated))
+                let hint = self.comparison_column_hint(expr);
+                Ok(eval::eval_between_values_with_hint(
+                    v,
+                    lo,
+                    hi,
+                    *negated,
+                    hint.as_ref(),
+                ))
             }
             Expr::Case {
                 operand,
@@ -2903,6 +2920,34 @@ impl RawEngine {
             }
             _ => eval_expr(expr, data, last_insert_id),
         }
+    }
+    fn comparison_column_hint(&self, expr: &Expr) -> Option<ColumnHint> {
+        let expr = match expr {
+            Expr::Nested(inner) => inner,
+            _ => expr,
+        };
+        let (table, column) = match expr {
+            Expr::Identifier(identifier) => (None, identifier.value.as_str()),
+            Expr::CompoundIdentifier(parts) if parts.len() >= 2 => (
+                parts.get(parts.len() - 2).map(|part| part.value.as_str()),
+                parts.last()?.value.as_str(),
+            ),
+            _ => return None,
+        };
+        if let Some(table) = table
+            && let Some(schema) = self.schemas.get(table)
+            && let Some(hint) = schema.columns.get(column)
+        {
+            return Some(hint.clone());
+        }
+        self.schemas.iter().find_map(|entry| {
+            entry
+                .value()
+                .columns
+                .get(column)
+                .filter(|_| table.is_none())
+                .cloned()
+        })
     }
 
     pub(super) fn matches_selection_ctx(
