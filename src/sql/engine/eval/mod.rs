@@ -1227,7 +1227,7 @@ fn aggregate_call(expr: &Expr) -> Option<AggregateCall> {
         "COUNT" => AggregateKind::Count,
         "SUM" => AggregateKind::Sum,
         "AVG" => AggregateKind::Avg,
-        "STD" | "STDDEV" => AggregateKind::Std,
+        "STD" | "STDDEV" | "STDDEV_POP" => AggregateKind::Std,
         "VARIANCE" | "VAR_POP" => AggregateKind::Variance,
         "BIT_OR" => AggregateKind::BitOr,
         "BIT_AND" => AggregateKind::BitAnd,

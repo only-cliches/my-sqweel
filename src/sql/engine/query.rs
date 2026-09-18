@@ -1432,6 +1432,12 @@ impl RawEngine {
             Expr::Extract { .. } => {
                 metadata.column_type = MysqlColumnType::Integer;
             }
+            Expr::Floor { expr, .. } => {
+                let argument =
+                    self.expression_metadata(select, expr, String::new(), first_row);
+                metadata.column_type = MysqlColumnType::Decimal;
+                metadata.decimals = argument.decimals;
+            }
             Expr::Function(function) => {
                 let name = function
                     .name
@@ -1453,7 +1459,7 @@ impl RawEngine {
                         metadata.decimals = 0;
                         MysqlColumnType::Decimal
                     }
-                    "AVG" | "SUM" | "STD" | "STDDEV" => {
+                    "AVG" | "SUM" | "STD" | "STDDEV" | "STDDEV_POP" => {
                         // MariaDB 10.11.7 aggregate output types: SUM over an
                         // exact input (INT, DECIMAL) returns DECIMAL carrying
                         // the argument's scale (INT has scale 0); AVG widens
@@ -1485,6 +1491,11 @@ impl RawEngine {
                                         metadata.decimals = input.decimals.saturating_add(4);
                                         MysqlColumnType::Decimal
                                     }
+                                    "STDDEV_POP" => {
+                                        metadata.decimals =
+                                            input.decimals.saturating_add(4);
+                                        MysqlColumnType::Double
+                                    }
                                     _ => {
                                         metadata.decimals = 4;
                                         MysqlColumnType::Double
@@ -1497,7 +1508,12 @@ impl RawEngine {
                                     MysqlColumnType::Float | MysqlColumnType::Double
                                 ) =>
                             {
-                                metadata.decimals = 0;
+                                metadata.decimals =
+                                    if name == "STDDEV_POP" { 6 } else { 0 };
+                                MysqlColumnType::Double
+                            }
+                            _ if name == "STDDEV_POP" => {
+                                metadata.decimals = 6;
                                 MysqlColumnType::Double
                             }
                             _ => {
@@ -1511,6 +1527,7 @@ impl RawEngine {
                             }
                         }
                     }
+                    "FLOOR" => MysqlColumnType::Decimal,
                     "ROUND" | "TRUNCATE" => MysqlColumnType::Decimal,
                     "CURRENT_DATE" | "CURDATE" | "DATE" => MysqlColumnType::Date,
                     "CURRENT_TIME" | "CURTIME" | "TIME" => MysqlColumnType::Time,

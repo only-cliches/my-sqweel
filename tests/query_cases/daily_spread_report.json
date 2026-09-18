@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "daily_spread_report",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "adlai/scalpl",
+      "commit": "9b52a87e19a34d7053462787a26fa88e94bc7b18",
+      "path": "firstque.sql",
+      "url": "https://github.com/adlai/scalpl/blob/9b52a87e19a34d7053462787a26fa88e94bc7b18/firstque.sql",
+      "sha256": "dbb0d58c213ab23b55eb0e889a6b9b7d9b470c119ee33b3505247d56377761c8",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "firstque.sql:5-42",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A derived query first computes daily averages, then an outer grouped query applies STDDEV_POP to those daily aggregates for a coarser reporting period.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored fixed-epoch sensor spread report. The inner query averages readings per day bucket, the outer query groups pairs of day buckets and computes population standard deviation, and fixed integer ordering replaces the source's clock-dependent date window. The schema, rows, buckets, and reporting purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "stddev-pop",
+    "nested-derived-aggregate",
+    "avg",
+    "floor-bucketing",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Sensor readings occupy three fixed epoch-day buckets. Daily averages are 12, 23, and 33; the outer two-day buckets therefore have population spreads 5.5 and 0. The epoch values avoid clocks and timezone-dependent current-time behavior.",
+  "determinism_notes": "Both query levels use fixed integer epoch arithmetic, and the final report orders by the unique period bucket. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE sensor_ticks (tick_id INT PRIMARY KEY, captured_epoch BIGINT NOT NULL, reading DECIMAL(10,2) NOT NULL)",
+    "INSERT INTO sensor_ticks VALUES (1, 0, 10.00), (2, 3600, 14.00), (3, 86400, 20.00), (4, 90000, 26.00), (5, 172800, 30.00), (6, 176400, 36.00)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT FLOOR(daily.day_bucket / 2) AS period_bucket, STDDEV_POP(daily.daily_avg) AS spread FROM (SELECT FLOOR(captured_epoch / 86400) AS day_bucket, AVG(reading) AS daily_avg FROM sensor_ticks GROUP BY FLOOR(captured_epoch / 86400)) daily GROUP BY FLOOR(daily.day_bucket / 2) ORDER BY period_bucket",
+      "ordered": true
+    }
+  ]
+}

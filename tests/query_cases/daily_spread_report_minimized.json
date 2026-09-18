@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "id": "daily_spread_report_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "adlai/scalpl",
+      "commit": "9b52a87e19a34d7053462787a26fa88e94bc7b18",
+      "path": "firstque.sql",
+      "url": "https://github.com/adlai/scalpl/blob/9b52a87e19a34d7053462787a26fa88e94bc7b18/firstque.sql",
+      "sha256": "dbb0d58c213ab23b55eb0e889a6b9b7d9b470c119ee33b3505247d56377761c8",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "firstque.sql:5-42",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped MySQL query applies STDDEV_POP to numeric rows for a report bucket.",
+      "mysql_mariadb_translation": "Minimized independently authored regression with one grouped value set. It isolates the STDDEV_POP aggregate name and result metadata without the original time expressions or nested daily aggregate."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "stddev-pop",
+    "grouping",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Bucket 4 contains values 10 and 14, so MariaDB returns a population spread of 2. The single group isolates STDDEV_POP support.",
+  "determinism_notes": "The query orders by the unique bucket value; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE mini_spread (bucket INT NOT NULL, reading DECIMAL(10,2) NOT NULL)",
+    "INSERT INTO mini_spread VALUES (4, 10.00), (4, 14.00)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT bucket, STDDEV_POP(reading) AS spread FROM mini_spread GROUP BY bucket ORDER BY bucket",
+      "ordered": true
+    }
+  ]
+}
