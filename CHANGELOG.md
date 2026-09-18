@@ -37,6 +37,7 @@ All notable changes to MySqweel will be documented in this file.
 - Added GitHub-attributed `TIMESTAMPDIFF(YEAR)` coverage for grouped team-tenure reporting with `COUNT`/`AVG`/`MIN`/`MAX` and a fixed report date, plus a minimized scalar date-difference case; MariaDB 10.11.7 and MySqweel matched without a source fix.
 - Added GitHub-attributed `ELT` query coverage for deterministic `INSERT ... SELECT` status snapshots with NULL and out-of-range indexes, including a minimized string-selection regression; fixed `ELT` evaluation in direct and textual scalar paths to match MariaDB.
 - Added GitHub-attributed `FIND_IN_SET` coverage for comma-separated report-label membership with positional projections, OR filtering, NULL lists, and empty lists, including a minimized NULL/missing-membership regression; fixed scalar evaluation and integer metadata to match MariaDB.
+- Added GitHub-attributed `MAKE_SET` coverage for bitmask-driven profile feature materialization with `UPDATE` final-state checks, NULL label omission, and zero-mask output, including a minimized scalar regression; fixed `MAKE_SET` scalar evaluation and `VAR_STRING` metadata to match MariaDB.
 - Parked an `UPDATE ... RETURNING` coverage candidate because MariaDB 10.11.7 returns syntax error 1064 for that form; no invalid fixture was retained.
 
 ## 0.4.4 Sep 9, 2026

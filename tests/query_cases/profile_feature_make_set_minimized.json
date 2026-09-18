@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "profile_feature_make_set_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "TrinityCore/TrinityCore",
+      "commit": "9fe7fe44df9943d3ea72f1e3f0cd877b16a10dae",
+      "path": "sql/old/7/world/19061_2019_07_15/2018_09_15_00_world.sql",
+      "url": "https://github.com/TrinityCore/TrinityCore/blob/9fe7fe44df9943d3ea72f1e3f0cd877b16a10dae/sql/old/7/world/19061_2019_07_15/2018_09_15_00_world.sql",
+      "sha256": "550727ccb5fa6086cc04d2960028e41a299fabe0e2783703b7b48cafd4b50156",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "2018_09_15_00_world.sql:7-8 (MAKE_SET expression)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "MAKE_SET maps set bits in a numeric mask to comma-separated positional labels and omits NULL labels.",
+      "mysql_mariadb_translation": "Minimized independently authored scalar regression with two selected non-NULL bits, one selected NULL slot, and an unselected bit. It isolates MAKE_SET's ordering and NULL omission without UPDATE or table state."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "make-set-bitmask",
+    "null-member-omission"
+  ],
+  "fixture_notes": "Mask 13 selects bits zero, two, and three; the first and third labels remain while the selected NULL label is omitted, yielding north,south.",
+  "determinism_notes": "All mask and label literals are fixed and the scalar projection has no environmental inputs.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT MAKE_SET(13, 'north', 'east', 'south', NULL) AS selected_labels",
+      "ordered": true
+    }
+  ]
+}

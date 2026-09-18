@@ -3354,6 +3354,14 @@ where
                 .unwrap_or(Value::Null);
             eval_find_in_set_values(needle, list)
         })()),
+        "MAKE_SET" => Some((|| {
+            let bits = args
+                .first()
+                .map(|arg| eval_arg(arg))
+                .transpose()?
+                .unwrap_or(Value::Null);
+            eval_make_set_values(bits, args.iter().skip(1).map(eval_arg))
+        })()),
         "IF" => Some((|| {
             let condition = args
                 .first()
@@ -4091,6 +4099,19 @@ pub(super) fn eval_function_text(
                 .transpose()?
                 .unwrap_or(Value::Null);
             eval_find_in_set_values(needle, list)
+        }
+        "MAKE_SET" => {
+            let bits = args
+                .first()
+                .map(|arg| eval_scalar_text(arg, data, last_insert_id))
+                .transpose()?
+                .unwrap_or(Value::Null);
+            eval_make_set_values(
+                bits,
+                args.iter()
+                    .skip(1)
+                    .map(|arg| eval_scalar_text(arg, data, last_insert_id)),
+            )
         }
         "POSITION" => {
             reject_invalid_binary_charset_conversion(&args)?;

@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "id": "profile_feature_make_set",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "TrinityCore/TrinityCore",
+      "commit": "9fe7fe44df9943d3ea72f1e3f0cd877b16a10dae",
+      "path": "sql/old/7/world/19061_2019_07_15/2018_09_15_00_world.sql",
+      "url": "https://github.com/TrinityCore/TrinityCore/blob/9fe7fe44df9943d3ea72f1e3f0cd877b16a10dae/sql/old/7/world/19061_2019_07_15/2018_09_15_00_world.sql",
+      "sha256": "550727ccb5fa6086cc04d2960028e41a299fabe0e2783703b7b48cafd4b50156",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "2018_09_15_00_world.sql:7-8 (UPDATE ... MAKE_SET)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL migration materializes a comma-separated difficulty label from a bitmask with MAKE_SET during an UPDATE, omitting labels whose corresponding arguments are NULL.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored profile-feature migration. Fixed profile masks are converted to ordered feature labels, including a zero mask, a NULL label slot, and multiple selected bits; final-state checks verify both the source masks and updated strings. The source game schema, names, and values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "make-set-bitmask",
+    "update-final-state",
+    "null-member-omission",
+    "empty-mask",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Bit zero is search, bit one is export, bit two is billing, bit three intentionally has a NULL label, and bit four is admin. Masks 5, 10, 0, 3, and 16 therefore produce search,billing; export; an empty string; search,export; and admin. The zero-mask row starts with a stale label so the UPDATE changes every row and MariaDB reports all five affected rows.",
+  "determinism_notes": "All profile IDs, masks, labels, and update expressions are fixed; final rows are ordered by the unique profile ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE feature_profiles (profile_id INT PRIMARY KEY, feature_mask INT NOT NULL, feature_names VARCHAR(128) NOT NULL DEFAULT '')",
+    "INSERT INTO feature_profiles VALUES (101, 5, ''), (102, 10, ''), (103, 0, 'pending'), (104, 3, ''), (105, 16, '')"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE feature_profiles SET feature_names = MAKE_SET(feature_mask, 'search', 'export', 'billing', NULL, 'admin')"
+    },
+    {
+      "sql": "SELECT profile_id, feature_names FROM feature_profiles ORDER BY profile_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT profile_id, feature_mask FROM feature_profiles ORDER BY profile_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT profile_id, feature_names FROM feature_profiles ORDER BY profile_id",
+      "ordered": true
+    }
+  ]
+}

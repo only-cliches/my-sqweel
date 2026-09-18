@@ -294,6 +294,30 @@ pub(super) fn eval_find_in_set_values(needle: Value, list: Value) -> Result<Valu
         .unwrap_or(0);
     Ok(Value::Number(Number::from(position)))
 }
+pub(super) fn eval_make_set_values<I>(bits: Value, values: I) -> Result<Value>
+where
+    I: IntoIterator<Item = Result<Value>>,
+{
+    if bits == Value::Null {
+        return Ok(Value::Null);
+    }
+    let bits = value_to_i64(&bits).unwrap_or(0) as u64;
+    let mut out = String::new();
+    for (index, value) in values.into_iter().enumerate() {
+        let value = value?;
+        if index >= u64::BITS as usize
+            || bits & (1_u64 << index) == 0
+            || value == Value::Null
+        {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push(',');
+        }
+        out.push_str(&json_scalar_to_string(&value));
+    }
+    Ok(Value::String(out))
+}
 
 pub(super) fn eval_substring_values(
     value: Value,
