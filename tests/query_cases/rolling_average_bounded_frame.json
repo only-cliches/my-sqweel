@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "rolling_average_bounded_frame",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Malekpour99/handouts",
+      "commit": "3cab2b1611732cab26b403ddfd301c9402d7732e",
+      "path": "Database/MySQL-Commands.sql",
+      "url": "https://github.com/Malekpour99/handouts/blob/3cab2b1611732cab26b403ddfd301c9402d7732e/Database/MySQL-Commands.sql",
+      "sha256": "cdfbc53059cfd54a7a9a4f9e09ed43d3dbcd3c24ad4f73143b4e7cb2981598b9",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Database/MySQL-Commands.sql:393-398",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A sales query calculates a three-row rolling average with an ordered window frame bounded by two preceding rows and the current row.",
+      "mysql_mariadb_translation": "Rewritten as an original delivery-metrics report. The fixture orders by a date plus unique reading ID, combines bounded-frame AVG and SUM windows, and includes a NULL measurement and a tied date so frame membership and NULL aggregate handling are observable without copying the source schema or rows."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "window",
+    "bounded-frame",
+    "rows-between",
+    "avg-over",
+    "sum-over",
+    "null",
+    "decimal",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Six delivery readings are ordered by measured date and unique reading ID. The third reading is NULL and the final two share a date; the three-row frame must follow row position, AVG must ignore the NULL value, and SUM must retain the decimal total.",
+  "determinism_notes": "The window and final order use measured_on plus the unique reading_id. All values are fixed with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE delivery_metrics (reading_id INT PRIMARY KEY, measured_on DATE NOT NULL, units DECIMAL(10,2) NULL)",
+    "INSERT INTO delivery_metrics VALUES (1, '2026-05-01', 10.00), (2, '2026-05-02', 20.00), (3, '2026-05-03', NULL), (4, '2026-05-04', 40.00), (5, '2026-05-05', 50.00), (6, '2026-05-05', 70.00)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT reading_id, measured_on, units, AVG(units) OVER (ORDER BY measured_on, reading_id ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) AS rolling_avg_3, SUM(units) OVER (ORDER BY measured_on, reading_id ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) AS rolling_sum_3 FROM delivery_metrics ORDER BY measured_on, reading_id",
+      "ordered": true
+    }
+  ]
+}
