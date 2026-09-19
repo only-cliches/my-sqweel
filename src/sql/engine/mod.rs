@@ -4964,20 +4964,32 @@ fn rewrite_insert_set(sql: &str) -> String {
     else {
         return sql.to_string();
     };
-    let Some(set_offset) = upper.find(" SET ") else {
+    let Some(set_offset) = find_top_level_keyword(&upper, "SET") else {
         return sql.to_string();
     };
     let target = sql[prefix.len()..set_offset].trim();
-    let assignments = &sql[set_offset + " SET ".len()..];
-    let returning = assignments
-        .to_ascii_uppercase()
-        .find(" RETURNING ")
-        .map(|offset| assignments[offset..].trim().to_string());
-    let assignments = returning
-        .as_ref()
-        .map(|returning| &assignments[..assignments.len() - returning.len()])
-        .unwrap_or(assignments)
-        .trim();
+    let assignments = &sql[set_offset + "SET".len()..];
+    let upper_assignments = assignments.to_ascii_uppercase();
+    let (assignments, returning) =
+        if let Some(offset) = find_top_level_keyword(&upper_assignments, "RETURNING") {
+            (
+                assignments[..offset].trim_end(),
+                Some(assignments[offset..].trim()),
+            )
+        } else {
+            (assignments.trim(), None)
+        };
+    let upper_assignments = assignments.to_ascii_uppercase();
+    let (assignments, duplicate) =
+        if let Some(offset) = find_top_level_keyword(&upper_assignments, "ON DUPLICATE KEY UPDATE")
+        {
+            (
+                assignments[..offset].trim_end(),
+                Some(assignments[offset..].trim()),
+            )
+        } else {
+            (assignments, None)
+        };
     let mut columns = Vec::<String>::new();
     let mut values = Vec::<String>::new();
     for assignment in split_compat_assignments(assignments) {
@@ -4998,15 +5010,21 @@ fn rewrite_insert_set(sql: &str) -> String {
     if columns.is_empty() {
         return sql.to_string();
     }
-    let rewritten = format!(
+    let mut rewritten = format!(
         "{} {target} ({}) VALUES ({})",
         prefix.trim_end(),
         columns.join(", "),
         values.join(", ")
     );
-    returning.map_or(rewritten.clone(), |returning| {
-        format!("{rewritten} {returning}")
-    })
+    if let Some(duplicate) = duplicate {
+        rewritten.push(' ');
+        rewritten.push_str(duplicate);
+    }
+    if let Some(returning) = returning {
+        rewritten.push(' ');
+        rewritten.push_str(returning);
+    }
+    rewritten
 }
 
 fn rewrite_outer_parenthesized_select(sql: &str) -> String {

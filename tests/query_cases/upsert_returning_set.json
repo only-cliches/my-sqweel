@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "upsert_returning_set",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "mariadb-corporation/mariadb-qa",
+      "commit": "3df9229d1fe6f423929bbf3b29b4f7566b015dc9",
+      "path": "BUGS/MDEV-35725.sql",
+      "url": "https://github.com/mariadb-corporation/mariadb-qa/blob/3df9229d1fe6f423929bbf3b29b4f7566b015dc9/BUGS/MDEV-35725.sql",
+      "sha256": "6bf6d4d746ddd221ed7f7a8f1cf9e75dd7d6cdcedb8eb0073608fa59fd1fce32",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "BUGS/MDEV-35725.sql:5-8",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "MariaDB can combine INSERT ... SET assignment syntax, ON DUPLICATE KEY UPDATE default-value replacement, and RETURNING to expose the resulting row from both conflict and insert paths.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored notification-attempt ledger. A conflicting SET-form upsert resets mutable fields to their column defaults and returns the updated row; a second SET-form upsert inserts a new attempt and returns its resulting values. The source's zero-width SET column and VALUE expression are replaced with ordinary typed columns and explicit returned fields."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "insert-set",
+    "on-duplicate-key-update",
+    "default-assignment",
+    "returning",
+    "conflict-and-insert-paths",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Attempt 10 already exists and its conflicting upsert resets retry_count and state to their defaults while returning the updated row. Attempt 11 is new and returns its explicitly inserted values. The final ordered ledger must contain exactly both attempts.",
+  "determinism_notes": "Attempt IDs, codes, states, and retry counts are fixed; each single-row RETURNING result and the final ledger are deterministic with no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE notification_attempts (attempt_id INT PRIMARY KEY, attempt_code VARCHAR(32) NOT NULL UNIQUE, retry_count INT NOT NULL DEFAULT 0, attempt_state VARCHAR(16) NOT NULL DEFAULT 'queued')",
+    "INSERT INTO notification_attempts VALUES (10, 'email-10', 3, 'pending')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO notification_attempts SET attempt_id = 10, attempt_code = 'email-10', retry_count = 5, attempt_state = 'retrying' ON DUPLICATE KEY UPDATE retry_count = DEFAULT, attempt_state = DEFAULT RETURNING attempt_id, retry_count, attempt_state",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO notification_attempts SET attempt_id = 11, attempt_code = 'sms-11', retry_count = 4, attempt_state = 'sent' ON DUPLICATE KEY UPDATE retry_count = DEFAULT, attempt_state = DEFAULT RETURNING attempt_id, retry_count, attempt_state",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT attempt_id, attempt_code, retry_count, attempt_state FROM notification_attempts ORDER BY attempt_id",
+      "ordered": true
+    }
+  ]
+}

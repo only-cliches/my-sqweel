@@ -404,6 +404,7 @@ impl RawEngine {
                             eval_insert_update_value(&assignment.value, &existing_context, &data)?;
                         existing.data.insert(col, value);
                     }
+                    self.apply_defaults(table, &mut existing.data)?;
                     if returning {
                         returned_rows.push(existing.data.clone());
                     }

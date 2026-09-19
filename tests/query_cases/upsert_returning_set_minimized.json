@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "id": "upsert_returning_set_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "upsert_returning_set",
+    "source": {
+      "kind": "github",
+      "repository": "mariadb-corporation/mariadb-qa",
+      "commit": "3df9229d1fe6f423929bbf3b29b4f7566b015dc9",
+      "path": "BUGS/MDEV-35725.sql",
+      "url": "https://github.com/mariadb-corporation/mariadb-qa/blob/3df9229d1fe6f423929bbf3b29b4f7566b015dc9/BUGS/MDEV-35725.sql",
+      "sha256": "6bf6d4d746ddd221ed7f7a8f1cf9e75dd7d6cdcedb8eb0073608fa59fd1fce32",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "BUGS/MDEV-35725.sql:5-8",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "MariaDB can combine INSERT ... SET assignment syntax, ON DUPLICATE KEY UPDATE default-value replacement, and RETURNING to expose the resulting row.",
+      "mysql_mariadb_translation": "Minimized independently authored regression with one existing integer row. A SET-form conflicting upsert assigns DEFAULT and returns the row, isolating parser normalization and default-value materialization from the original ledger's second insert path."
+    },
+    "independently_authored": true,
+    "minimized_from": "upsert_returning_set"
+  },
+  "features": [
+    "insert-set",
+    "on-duplicate-key-update",
+    "default-assignment",
+    "returning",
+    "minimized-regression"
+  ],
+  "fixture_notes": "The existing row starts with retry_count 3; the conflicting upsert must return and store the column default 0.",
+  "determinism_notes": "One fixed row and one fixed upsert are used; no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE mini_attempts (attempt_id INT PRIMARY KEY, retry_count INT NOT NULL DEFAULT 0)",
+    "INSERT INTO mini_attempts VALUES (10, 3)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO mini_attempts SET attempt_id = 10, retry_count = 5 ON DUPLICATE KEY UPDATE retry_count = DEFAULT RETURNING attempt_id, retry_count",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT attempt_id, retry_count FROM mini_attempts ORDER BY attempt_id",
+      "ordered": true
+    }
+  ]
+}
