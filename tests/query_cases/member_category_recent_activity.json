@@ -1,0 +1,67 @@
+{
+  "version": 1,
+  "id": "member_category_recent_activity",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Youtube-NikitaTymoshenko/sql-course",
+      "commit": "b204c86b5c1fb1b5e7c587ab1f2afc9bcd4a9afc",
+      "path": "11_join_cte.sql",
+      "url": "https://github.com/Youtube-NikitaTymoshenko/sql-course/blob/b204c86b5c1fb1b5e7c587ab1f2afc9bcd4a9afc/11_join_cte.sql",
+      "sha256": "1610aab5ae2efe34b3ef96ba08cd48d4bf1eeda4a3bdfaff5f622eaeb331a75b",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "11_join_cte.sql:1-21",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A qualification CTE counts distinct categories across several LEFT JOINs, keeps groups with HAVING, and a second date-filtered CTE restricts the final rows through an IN subquery.",
+      "mysql_mariadb_translation": "Rewritten as an original member-activity report. A member qualifies after checking out items from at least two distinct categories; a separate recent-orders CTE limits the report to members active in a fixed date range. Duplicate checkout rows, members without enough categories, and qualifying members without recent orders exercise distinct counting, LEFT JOIN preservation, HAVING, and CTE-backed semi-join filtering."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "cte",
+    "multiple-left-joins",
+    "count-distinct",
+    "having",
+    "in-subquery",
+    "date-range-filter",
+    "duplicate-rows",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Member 10 has duplicate checkout rows spanning three categories and a recent order; member 20 has two categories but only an old order; member 30 has one category and a recent order; member 40 has no checkouts and a recent order. Only member 10 should survive both CTE filters.",
+  "determinism_notes": "Member IDs and order dates are fixed, and the final report is ordered by member ID. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE members (member_id INT PRIMARY KEY, member_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE categories (category_id INT PRIMARY KEY, category_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE items (item_id INT PRIMARY KEY, category_id INT NOT NULL, item_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE checkouts (checkout_id INT PRIMARY KEY, member_id INT NOT NULL, item_id INT NOT NULL)",
+    "CREATE TABLE orders (order_id INT PRIMARY KEY, member_id INT NOT NULL, ordered_on DATE NOT NULL)",
+    "INSERT INTO members VALUES (10, 'Ada'), (20, 'Bjarne'), (30, 'Cora'), (40, 'Dijkstra')",
+    "INSERT INTO categories VALUES (1, 'Books'), (2, 'Games'), (3, 'Music')",
+    "INSERT INTO items VALUES (101, 1, 'SQL Patterns'), (102, 1, 'Query Tuning'), (201, 2, 'Logic Quest'), (301, 3, 'Jazz Atlas')",
+    "INSERT INTO checkouts VALUES (1001, 10, 101), (1002, 10, 101), (1003, 10, 201), (1004, 10, 301), (2001, 20, 101), (2002, 20, 201), (3001, 30, 301)",
+    "INSERT INTO orders VALUES (5001, 10, '2026-05-10'), (5002, 20, '2026-01-15'), (5003, 30, '2026-05-12'), (5004, 40, '2026-05-14')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH qualifying_members AS (SELECT m.member_id, m.member_name, COUNT(DISTINCT c.category_id) AS category_count FROM members m LEFT JOIN checkouts ch ON ch.member_id = m.member_id LEFT JOIN items i ON i.item_id = ch.item_id LEFT JOIN categories c ON c.category_id = i.category_id GROUP BY m.member_id, m.member_name HAVING COUNT(DISTINCT c.category_id) >= 2), recent_orders AS (SELECT member_id FROM orders WHERE ordered_on BETWEEN '2026-05-01' AND '2026-05-31') SELECT q.member_id, q.member_name, q.category_count FROM qualifying_members q WHERE q.member_id IN (SELECT r.member_id FROM recent_orders r) ORDER BY q.member_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT member_id, member_name FROM members ORDER BY member_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT checkout_id, member_id, item_id FROM checkouts ORDER BY checkout_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT order_id, member_id, ordered_on FROM orders ORDER BY order_id",
+      "ordered": true
+    }
+  ]
+}

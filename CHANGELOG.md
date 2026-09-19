@@ -122,6 +122,9 @@ All notable changes to MySqweel will be documented in this file.
 - Added GitHub-attributed `SHA2` coverage for an independently authored credential-event import with variable 224/256/384/512-bit digest lengths, `INSERT ... SELECT`, and NULL propagation; fixed SHA2 hash-length dispatch to match MariaDB 10.11.7, including a minimized scalar regression.
 - Added GitHub-attributed `JSON_TYPE` coverage for an independently authored payload audit spanning object, array, string, integer, decimal, boolean, JSON `null`, and SQL `NULL` values with deterministic `UPDATE` final state; fixed boolean type classification and no-op `UPDATE` affected-row accounting to match MariaDB 10.11.7.
 - Added the minimized GitHub-attributed `JSON_TYPE('true')` scalar regression; MariaDB 10.11.7 and MySqweel now both return `BOOLEAN` across repeated fresh differential runs.
+- Parked the GitHub-attributed `GROUP_CONCAT ... SEPARATOR` candidate from `Miazzy/oa-front-service` because existing `group_concat_project_tags.json` already covers the same ordered grouped concatenation semantics; no duplicate fixture was retained.
+- Parked the GitHub-attributed `BoardGameArchive` candidate because its second query mixes SQL Server-only `TOP`, `GETDATE()`, `DATEDIFF`, and `DATEADD` forms with the MySQL-labelled source; translating it would change semantics, so no fixture was retained.
+- Added GitHub-attributed CTE qualification coverage for an independently authored member-activity report combining distinct category counts across multiple `LEFT JOIN`s, `HAVING`, a date-filtered CTE, and an `IN` semi-join; MariaDB 10.11.7 and MySqweel matched across repeated fresh differential runs without a source fix.
 
 ## 0.4.4 Sep 9, 2026
 
