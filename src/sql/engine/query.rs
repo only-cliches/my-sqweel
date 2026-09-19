@@ -2474,7 +2474,7 @@ impl RawEngine {
             .collect()
     }
 
-    fn rows_for_table_factor(&self, factor: &TableFactor) -> Result<TableFactorRows> {
+    pub(super) fn rows_for_table_factor(&self, factor: &TableFactor) -> Result<TableFactorRows> {
         match factor {
             TableFactor::Table { name, alias, .. } => {
                 let table = object_name(name)?;
@@ -6226,9 +6226,9 @@ fn remap_set_row(
         .collect()
 }
 
-struct TableFactorRows {
-    rows: Vec<Map<String, Value>>,
-    nulls: Map<String, Value>,
+pub(super) struct TableFactorRows {
+    pub(super) rows: Vec<Map<String, Value>>,
+    pub(super) nulls: Map<String, Value>,
 }
 
 struct WindowLayout {

@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "id": "monitor_event_rollup_update",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "ZoneMinder/zoneminder",
+      "commit": "54694d6bba9dbcfa2d207916cda00a28f23c9ae5",
+      "path": "db/zm_update-1.35.14.sql",
+      "url": "https://github.com/ZoneMinder/zoneminder/blob/54694d6bba9dbcfa2d207916cda00a28f23c9ae5/db/zm_update-1.35.14.sql",
+      "sha256": "3bdba96ecdc944c904b9e047f79e84531ab8ea899c2fae027426ef14d9e6a3c7",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "db/zm_update-1.35.14.sql: UPDATE Monitor_Status INNER JOIN (SELECT MonitorId, COUNT(Id), SUM(IF(...)) ... GROUP BY MonitorId)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL maintenance update joins a grouped event aggregate to target rows and sets cumulative and conditional count and byte-sum fields in one statement.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored monitor event rollup. A derived grouped aggregate counts events, conditionally counts critical events, and sums active payload bytes before an UPDATE JOIN stores the snapshot. Fixed rows, sentinel values, and an orphan event replace the source schema, clock expressions, and migration DDL."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "update-join",
+    "derived-aggregate",
+    "conditional-sum",
+    "if-expression",
+    "coalesce",
+    "grouping",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Monitor 11 receives three events including one archived event and one NULL payload; monitor 22 receives two active events; monitor 33 has no events and retains sentinel snapshot values; event 999 is orphaned and cannot update any monitor.",
+  "determinism_notes": "All monitor and event identifiers, flags, and payload sizes are fixed. Final reads use primary-key ordering; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE service_monitors (monitor_id INT PRIMARY KEY, monitor_name VARCHAR(32) NOT NULL, total_events INT NOT NULL, critical_events INT NOT NULL, active_bytes INT NOT NULL)",
+    "CREATE TABLE service_events (event_id INT PRIMARY KEY, monitor_id INT NOT NULL, severity VARCHAR(16) NOT NULL, payload_bytes INT NULL, archived TINYINT NOT NULL)",
+    "INSERT INTO service_monitors VALUES (11, 'atlas', -1, -1, -1), (22, 'beacon', -2, -2, -2), (33, 'cinder', 77, 66, 555)",
+    "INSERT INTO service_events VALUES (101, 11, 'critical', 100, 0), (102, 11, 'info', 20, 1), (103, 11, 'critical', NULL, 0), (201, 22, 'warning', 50, 0), (202, 22, 'info', 30, 0), (999, 99, 'critical', 1000, 0)"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE service_monitors m JOIN (SELECT monitor_id, COUNT(event_id) AS total_events, SUM(IF(severity = 'critical', 1, 0)) AS critical_events, SUM(IF(archived = 0, COALESCE(payload_bytes, 0), 0)) AS active_bytes FROM service_events GROUP BY monitor_id) e ON e.monitor_id = m.monitor_id SET m.total_events = e.total_events, m.critical_events = e.critical_events, m.active_bytes = e.active_bytes"
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT monitor_id, monitor_name, total_events, critical_events, active_bytes FROM service_monitors ORDER BY monitor_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT event_id, monitor_id, severity, payload_bytes, archived FROM service_events ORDER BY event_id",
+      "ordered": true
+    }
+  ]
+}

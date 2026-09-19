@@ -990,31 +990,16 @@ impl RawEngine {
 
         let mut current = vec![left_map];
         for join in &table.joins {
-            let (right_table, right_alias) = table_factor_name_and_alias(&join.relation)?;
-            let right_rows = self
-                .rows
-                .get(&right_table)
-                .map(|rows| rows.clone())
-                .unwrap_or_default();
-            let right_plan = self
-                .schemas
-                .get(&right_table)
-                .map(|schema| super::query::RowMaterializationPlan::from_schema(&schema));
+            let right_factor = self.rows_for_table_factor(&join.relation)?;
+            let right_rows = right_factor.rows;
+            let right_nulls = right_factor.nulls;
             let mut next = Vec::new();
 
             for candidate in &current {
                 let mut matched = false;
-                for right_row in right_rows.values() {
-                    let right_data = right_plan.as_ref().map_or_else(
-                        || self.current_schema_row(&right_table, &right_row.data),
-                        |plan| self.current_schema_row_with_plan(&right_row.data, plan),
-                    );
+                for right_data in &right_rows {
                     let mut combined = candidate.clone();
-                    add_qualified_columns(&mut combined, &right_table, &right_data);
-                    if let Some(alias) = &right_alias {
-                        add_qualified_columns(&mut combined, alias, &right_data);
-                    }
-                    for (key, value) in &right_data {
+                    for (key, value) in right_data {
                         combined.entry(key.clone()).or_insert_with(|| value.clone());
                     }
                     if self.join_matches_ctx(&join.join_operator, &combined)? {
@@ -1024,12 +1009,7 @@ impl RawEngine {
                 }
 
                 if !matched && matches!(join.join_operator, JoinOperator::LeftOuter(_)) {
-                    let right_nulls = self.current_schema_null_row(&right_table);
                     let mut combined = candidate.clone();
-                    add_qualified_columns(&mut combined, &right_table, &right_nulls);
-                    if let Some(alias) = &right_alias {
-                        add_qualified_columns(&mut combined, alias, &right_nulls);
-                    }
                     for (key, value) in &right_nulls {
                         combined.entry(key.clone()).or_insert_with(|| value.clone());
                     }

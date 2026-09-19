@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "id": "monitor_event_rollup_update_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "monitor_event_rollup_update",
+    "source": {
+      "kind": "github",
+      "repository": "ZoneMinder/zoneminder",
+      "commit": "54694d6bba9dbcfa2d207916cda00a28f23c9ae5",
+      "path": "db/zm_update-1.35.14.sql",
+      "url": "https://github.com/ZoneMinder/zoneminder/blob/54694d6bba9dbcfa2d207916cda00a28f23c9ae5/db/zm_update-1.35.14.sql",
+      "sha256": "3bdba96ecdc944c904b9e047f79e84531ab8ea899c2fae027426ef14d9e6a3c7",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "db/zm_update-1.35.14.sql: UPDATE Monitor_Status INNER JOIN (SELECT MonitorId, COUNT(Id) ... GROUP BY MonitorId)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped derived table supplies per-parent counts to an UPDATE JOIN.",
+      "mysql_mariadb_translation": "Reduced to one monitor, two events, one COUNT aggregate, and one derived-table UPDATE JOIN; conditional sums, NULL payloads, unrelated rows, and extra snapshot columns are removed while the unsupported join shape remains."
+    },
+    "independently_authored": true,
+    "minimized_from": "monitor_event_rollup_update"
+  },
+  "features": [
+    "update-join",
+    "derived-aggregate",
+    "grouping",
+    "minimized-regression",
+    "deterministic-order"
+  ],
+  "fixture_notes": "One monitor has two fixed events and starts with a sentinel total; the derived COUNT must replace that sentinel with two.",
+  "determinism_notes": "All identifiers and values are fixed; final reads use primary-key ordering with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE mini_monitors (monitor_id INT PRIMARY KEY, total_events INT NOT NULL)",
+    "CREATE TABLE mini_events (event_id INT PRIMARY KEY, monitor_id INT NOT NULL)",
+    "INSERT INTO mini_monitors VALUES (1, -1)",
+    "INSERT INTO mini_events VALUES (10, 1), (11, 1)"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE mini_monitors m JOIN (SELECT monitor_id, COUNT(event_id) AS total_events FROM mini_events GROUP BY monitor_id) e ON e.monitor_id = m.monitor_id SET m.total_events = e.total_events"
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT monitor_id, total_events FROM mini_monitors ORDER BY monitor_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT event_id, monitor_id FROM mini_events ORDER BY event_id",
+      "ordered": true
+    }
+  ]
+}
