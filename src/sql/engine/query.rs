@@ -1460,12 +1460,13 @@ impl RawEngine {
                         metadata.decimals = 0;
                         MysqlColumnType::Decimal
                     }
-                    "AVG" | "SUM" | "STD" | "STDDEV" | "STDDEV_POP" | "VAR_POP" | "VARIANCE" => {
+                    "AVG" | "SUM" | "STD" | "STDDEV" | "STDDEV_POP" | "STDDEV_SAMP"
+                    | "VAR_POP" | "VARIANCE" => {
                         // MariaDB 10.11.7 aggregate output types: SUM over an
                         // exact input (INT, DECIMAL) returns DECIMAL carrying
                         // the argument's scale (INT has scale 0); AVG widens
-                        // that scale by four; STD/STDDEV, VAR_POP, and any
-                        // floating input yield DOUBLE.
+                        // that scale by four; STD/STDDEV, STDDEV_SAMP, VAR_POP,
+                        // and any floating input yield DOUBLE.
                         let argument = function_arguments(function)
                             .ok()
                             .and_then(|arguments| arguments.into_iter().next().flatten())
@@ -1492,7 +1493,7 @@ impl RawEngine {
                                         metadata.decimals = input.decimals.saturating_add(4);
                                         MysqlColumnType::Decimal
                                     }
-                                    "STDDEV_POP" => {
+                                    "STDDEV_POP" | "STDDEV_SAMP" => {
                                         metadata.decimals =
                                             input.decimals.saturating_add(4);
                                         MysqlColumnType::Double
@@ -1514,11 +1515,20 @@ impl RawEngine {
                                     MysqlColumnType::Float | MysqlColumnType::Double
                                 ) =>
                             {
-                                metadata.decimals =
-                                    if name == "STDDEV_POP" { 6 } else { 0 };
+                                metadata.decimals = if matches!(
+                                    name.as_str(),
+                                    "STDDEV_POP" | "STDDEV_SAMP"
+                                ) {
+                                    6
+                                } else {
+                                    0
+                                };
                                 MysqlColumnType::Double
                             }
-                            _ if name == "STDDEV_POP" => {
+                            _ if matches!(
+                                name.as_str(),
+                                "STDDEV_POP" | "STDDEV_SAMP"
+                            ) => {
                                 metadata.decimals = 6;
                                 MysqlColumnType::Double
                             }

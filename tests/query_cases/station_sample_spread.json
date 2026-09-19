@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "station_sample_spread",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "functions/aggregate/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/functions/aggregate/mysql.sql",
+      "sha256": "0160718d9ccf135c9938eaf3879a37c672cd171e68065046c953d55e95a33425",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "functions/aggregate/mysql.sql:151-153",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL aggregate report uses STDDEV_SAMP to calculate sample standard deviation rather than population standard deviation.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored station calibration report. Voltage samples are grouped by station, a NULL-only group verifies that the aggregate returns NULL without usable samples, and fixed decimal readings make sample-versus-population semantics deterministic without copying the source schema or rows."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "stddev-samp-aggregate",
+    "grouping",
+    "decimal-input",
+    "null-aggregate-input",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Station 10 has readings 10.00 and 14.00 plus NULL, so sample standard deviation is sqrt(8). Station 20 has readings 3.00, 9.00, and 12.00, so sample standard deviation is sqrt(21). Station 30 has only NULL and must return NULL.",
+  "determinism_notes": "Station IDs and sample IDs are fixed; the grouped report is ordered by the unique station ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE station_voltage_samples (sample_id INT PRIMARY KEY, station_id INT NOT NULL, voltage DECIMAL(10,2) NULL)",
+    "INSERT INTO station_voltage_samples VALUES (101, 10, 10.00), (102, 10, 14.00), (103, 10, NULL), (201, 20, 3.00), (202, 20, 9.00), (203, 20, 12.00), (301, 30, NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT station_id, STDDEV_SAMP(voltage) AS sample_spread FROM station_voltage_samples GROUP BY station_id ORDER BY station_id",
+      "ordered": true
+    }
+  ]
+}

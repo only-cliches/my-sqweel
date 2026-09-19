@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "station_sample_spread_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "functions/aggregate/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/functions/aggregate/mysql.sql",
+      "sha256": "0160718d9ccf135c9938eaf3879a37c672cd171e68065046c953d55e95a33425",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "functions/aggregate/mysql.sql:151-153",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped MySQL query computes sample standard deviation with STDDEV_SAMP.",
+      "mysql_mariadb_translation": "Reduced to one independently authored station group with two DECIMAL readings and one NULL reading. It isolates STDDEV_SAMP recognition, sample-versus-population math, and NULL omission without joins or multiple groups."
+    },
+    "independently_authored": true,
+    "minimized_from": "station_sample_spread"
+  },
+  "features": [
+    "stddev-samp-aggregate",
+    "grouping",
+    "decimal-input",
+    "null-aggregate-input",
+    "minimized-regression"
+  ],
+  "fixture_notes": "The single station has readings 10.00 and 14.00 plus NULL, so sample standard deviation is sqrt(8); the NULL must be ignored.",
+  "determinism_notes": "Sample IDs and the single station ID are fixed; the result is ordered by the unique station ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE mini_station_voltage (sample_id INT PRIMARY KEY, station_id INT NOT NULL, voltage DECIMAL(10,2) NULL)",
+    "INSERT INTO mini_station_voltage VALUES (1, 10, 10.00), (2, 10, 14.00), (3, 10, NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT station_id, STDDEV_SAMP(voltage) AS sample_spread FROM mini_station_voltage GROUP BY station_id ORDER BY station_id",
+      "ordered": true
+    }
+  ]
+}
