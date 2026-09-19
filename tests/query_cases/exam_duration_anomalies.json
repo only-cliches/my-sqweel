@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "exam_duration_anomalies",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "anqizhaoaz/Managing-Big-Data-with-MySQL",
+      "commit": "796c3e9480820fbeb9292c165438669becc8f9f0",
+      "path": "mysql_exercise_04.sql",
+      "url": "https://github.com/anqizhaoaz/Managing-Big-Data-with-MySQL/blob/796c3e9480820fbeb9292c165438669becc8f9f0/mysql_exercise_04.sql",
+      "sha256": "dc6ac68e2146459b6401462b32f76eeba80e5761d8b31c5d16ab42907e9ef49a",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "mysql_exercise_04.sql: Question 6-14",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL training exercise calculates TIMESTAMPDIFF in minutes, aggregates durations, finds minimum and maximum values, and investigates negative-duration data-quality anomalies.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored grouped exam-session duration audit. Fixed start and end timestamps exercise minute differences, negative and zero durations, NULL endpoints, COUNT of measured sessions, AVG/MIN/MAX, anomaly counts, CASE classification, and deterministic group ordering; the source tables, rows, labels, and answers are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "timestampdiff-minute",
+    "grouped-aggregates",
+    "negative-duration",
+    "zero-duration",
+    "null-propagation",
+    "count-expression",
+    "case-classification",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Rows cover positive, negative, zero, and NULL durations across three exam groups so minute arithmetic and data-quality classification remain observable.",
+  "determinism_notes": "All session IDs and timestamps are fixed literals, and output is ordered by the grouped exam name with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE exam_sessions (session_id INT PRIMARY KEY, exam_name VARCHAR(32) NOT NULL, start_at DATETIME NULL, end_at DATETIME NULL)",
+    "INSERT INTO exam_sessions VALUES (6101, 'orientation', '2024-03-01 09:00:00', '2024-03-01 09:45:00'), (6102, 'orientation', '2024-03-01 09:30:00', '2024-03-01 09:20:00'), (6103, 'orientation', '2024-03-01 10:00:00', '2024-03-01 11:30:00'), (6104, 'billing', '2024-03-01 12:00:00', '2024-03-01 14:15:00'), (6105, 'billing', '2024-03-01 13:00:00', '2024-03-01 13:00:00'), (6106, 'billing', '2024-03-02 08:00:00', NULL), (6107, 'follow-up', NULL, '2024-03-02 10:00:00'), (6108, 'follow-up', '2024-03-02 09:15:00', '2024-03-02 09:17:00')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT exam_name, COUNT(*) AS session_count, COUNT(TIMESTAMPDIFF(MINUTE, start_at, end_at)) AS measured_count, AVG(TIMESTAMPDIFF(MINUTE, start_at, end_at)) AS average_minutes, MIN(TIMESTAMPDIFF(MINUTE, start_at, end_at)) AS shortest_minutes, MAX(TIMESTAMPDIFF(MINUTE, start_at, end_at)) AS longest_minutes, SUM(CASE WHEN TIMESTAMPDIFF(MINUTE, start_at, end_at) < 0 THEN 1 ELSE 0 END) AS negative_count, CASE WHEN MIN(TIMESTAMPDIFF(MINUTE, start_at, end_at)) IS NULL THEN 'unmeasured' WHEN MIN(TIMESTAMPDIFF(MINUTE, start_at, end_at)) < 0 THEN 'has-anomaly' ELSE 'valid' END AS duration_class FROM exam_sessions GROUP BY exam_name ORDER BY exam_name",
+      "ordered": true
+    }
+  ]
+}
