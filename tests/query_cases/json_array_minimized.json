@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "json_array_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "Arche-One-Application-Team/Tamil-Nadu-POC",
+      "commit": "38e830312a023e3df0d3d656a87472ea25f7d611",
+      "path": "sql/seed_case_types.sql",
+      "url": "https://github.com/Arche-One-Application-Team/Tamil-Nadu-POC/blob/38e830312a023e3df0d3d656a87472ea25f7d611/sql/seed_case_types.sql",
+      "sha256": "18fd7680d73eba0cc5d7232be2db079026f4402ce341f840b5e995a38c1829d3",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/seed_case_types.sql:35 and repeated JSON_ARRAY expressions in the derived UNION ALL sources",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A JSON_ARRAY scalar expression supplies an array-valued column in a MySQL derived INSERT source.",
+      "mysql_mariadb_translation": "Reduced to one independently authored scalar JSON_ARRAY projection with two fixed channel labels. The tables, upsert, derived relation, and application fields are removed while MariaDB's JSON wire rendering remains observable."
+    },
+    "independently_authored": true,
+    "minimized_from": "json_array_upsert_profiles"
+  },
+  "features": [
+    "json-array",
+    "json",
+    "minimized-regression"
+  ],
+  "fixture_notes": "The two fixed strings isolate JSON_ARRAY's serialized result and BLOB metadata without setup or mutation.",
+  "determinism_notes": "Both string literals are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT JSON_ARRAY('email', 'sms') AS channels",
+      "ordered": true
+    }
+  ]
+}

@@ -1166,8 +1166,7 @@ fn write_row<W: io::Read + io::Write>(
                     rw.write_col(value)?;
                 }
             }
-            Value::Array(_) | Value::Object(_) if json_columns[index] =>
-            {
+            Value::Array(_) | Value::Object(_) => {
                 let text = if definition.table.is_empty() {
                     crate::sql::engine::json_wire_text(&value)
                 } else {
@@ -1177,7 +1176,6 @@ fn write_row<W: io::Read + io::Write>(
                 rw.write_col(text)?;
             }
             Value::String(value) => write_string_column(rw, value, definition)?,
-            other => rw.write_col(other.to_string())?,
         }
     }
     Ok(())
