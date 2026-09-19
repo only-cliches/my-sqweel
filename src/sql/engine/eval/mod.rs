@@ -3994,6 +3994,7 @@ pub(super) fn eval_function_text(
         "LN" | "LOG" => eval_log(args.first(), args.get(1), data, last_insert_id),
         "LOG10" => eval_unary_number(args.first(), data, last_insert_id, |value| value.log10()),
         "LOG2" => eval_unary_number(args.first(), data, last_insert_id, |value| value.log2()),
+        "FORMAT" => eval_format_number(args.first(), args.get(1), data, last_insert_id),
         "ROUND" => {
             let value = args
                 .first()

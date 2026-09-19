@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "formatted_invoice_amounts_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "shockerli/Notes",
+      "commit": "ab692c415b98da64528d57ba6856add8d78dc3cd",
+      "path": "MySQL_Note.sql",
+      "url": "https://github.com/shockerli/Notes/blob/ab692c415b98da64528d57ba6856add8d78dc3cd/MySQL_Note.sql",
+      "sha256": "ea4fec2cd49faedee8b86a80642b3d053f23adc112367a32ae4e4e0833d10c0a",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL_Note.sql:824",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "FORMAT renders a numeric value with thousands separators and fixed decimal places.",
+      "mysql_mariadb_translation": "Minimized to one deterministic scalar FORMAT projection so the compatibility mismatch is isolated from table setup, DECIMAL column metadata, NULL handling, and CASE classification."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "format-number",
+    "decimal-rounding",
+    "thousands-separator"
+  ],
+  "fixture_notes": "The single fixed amount isolates FORMAT evaluation and VARCHAR result metadata.",
+  "determinism_notes": "The numeric literal and precision are fixed; the query has no clocks, randomness, sleeps, or concurrent connections.",
+  "steps": [
+    {
+      "sql": "SELECT FORMAT(1234567.456, 2) AS display_amount",
+      "ordered": true
+    }
+  ]
+}

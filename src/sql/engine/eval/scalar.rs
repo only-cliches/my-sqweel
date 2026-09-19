@@ -77,6 +77,44 @@ pub(super) fn eval_truncate(
     ))
 }
 
+pub(super) fn eval_format_number(
+    value_arg: Option<&String>,
+    decimals_arg: Option<&String>,
+    data: &Map<String, Value>,
+    last_insert_id: u64,
+) -> Result<Value> {
+    let value = eval_arg(value_arg, data, last_insert_id)?;
+    let decimals = eval_arg(decimals_arg, data, last_insert_id)?;
+    if value == Value::Null || decimals == Value::Null {
+        return Ok(Value::Null);
+    }
+    let number = json_to_f64_lossy(&value)?;
+    if !number.is_finite() {
+        return Ok(Value::Null);
+    }
+    let decimals = value_to_i64(&decimals).unwrap_or(0).clamp(0, 30) as usize;
+    let rendered = format!("{number:.decimals$}");
+    let (sign, unsigned) = rendered
+        .strip_prefix('-')
+        .map_or(("", rendered.as_str()), |_| ("-", &rendered[1..]));
+    let (integer, fraction) = unsigned
+        .split_once('.')
+        .map_or((unsigned, ""), |(integer, fraction)| (integer, fraction));
+    let mut grouped = String::with_capacity(unsigned.len() + integer.len() / 3);
+    for (index, character) in integer.chars().enumerate() {
+        if index > 0 && (integer.len() - index) % 3 == 0 {
+            grouped.push(',');
+        }
+        grouped.push(character);
+    }
+    let suffix = if fraction.is_empty() {
+        String::new()
+    } else {
+        format!(".{fraction}")
+    };
+    Ok(Value::String(format!("{sign}{grouped}{suffix}")))
+}
+
 pub(super) fn eval_mod(
     left_arg: Option<&String>,
     right_arg: Option<&String>,
