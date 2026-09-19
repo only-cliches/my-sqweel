@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "regional_cume_distribution",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16166862d295b2a4bb290cec1",
+      "path": "scenarios/window-analytics/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16166862d295b2a4bb290cec1/scenarios/window-analytics/mysql.sql",
+      "sha256": "cfe5bd07baa23d84ab54915477310fee678124ea795371c0f5dc4de108ffdd18",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "scenarios/window-analytics/mysql.sql:202-210",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL window report combines partitioned ranking functions with CUME_DIST over an ordered peer set.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored regional scorecard. Scores are partitioned by region, duplicate scores verify peer-group cumulative behavior, a NULL score exercises MariaDB ordering, and explicit region/score/player ordering makes the result deterministic without copying the source schema or rows."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "cume-dist-window",
+    "partitioned-window",
+    "peer-ties",
+    "null-ordering",
+    "deterministic-order"
+  ],
+  "fixture_notes": "East scores 10, 10, 20, and 30 produce CUME_DIST values 0.50, 0.50, 0.75, and 1.00. West scores NULL, 5, and 15 produce 0.3333333333, 0.6666666667, and 1.00; the NULL score sorts first under MariaDB ordering.",
+  "determinism_notes": "Region names, player IDs, and scores are fixed; the result is ordered by region, score, and unique player ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE regional_player_scores (player_id INT PRIMARY KEY, region VARCHAR(16) NOT NULL, score DECIMAL(10,2) NULL)",
+    "INSERT INTO regional_player_scores VALUES (101, 'east', 10.00), (102, 'east', 10.00), (103, 'east', 20.00), (104, 'east', 30.00), (201, 'west', NULL), (202, 'west', 5.00), (203, 'west', 15.00)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT region, player_id, score, CUME_DIST() OVER (PARTITION BY region ORDER BY score) AS cumulative_distribution FROM regional_player_scores ORDER BY region, score, player_id",
+      "ordered": true
+    }
+  ]
+}

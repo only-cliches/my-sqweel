@@ -168,7 +168,7 @@ fn nonrecursive_ctes_set_operations_and_windows_work() {
         .unwrap();
     assert_eq!(
         peer_windows[0].column_metadata[1].column_type,
-        MysqlColumnType::Decimal
+        MysqlColumnType::Double
     );
     assert_eq!(peer_windows[0].column_metadata[1].decimals, 10);
     assert_eq!(

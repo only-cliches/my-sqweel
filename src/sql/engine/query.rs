@@ -1453,8 +1453,10 @@ impl RawEngine {
                     "GROUP_CONCAT" => MysqlColumnType::Blob,
                     "REGEXP_REPLACE" => MysqlColumnType::LongBlob,
                     "PERCENT_RANK" | "CUME_DIST" => {
+                        // MariaDB renders both ranking fractions as DOUBLE
+                        // with exactly ten fractional digits.
                         metadata.decimals = 10;
-                        MysqlColumnType::Decimal
+                        MysqlColumnType::Double
                     }
                     "UNIX_TIMESTAMP" => {
                         metadata.decimals = 0;

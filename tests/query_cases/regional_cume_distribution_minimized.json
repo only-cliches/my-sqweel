@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "regional_cume_distribution_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16166862d295b2a4bb290cec1",
+      "path": "scenarios/window-analytics/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16166862d295b2a4bb290cec1/scenarios/window-analytics/mysql.sql",
+      "sha256": "cfe5bd07baa23d84ab54915477310fee678124ea795371c0f5dc4de108ffdd18",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "scenarios/window-analytics/mysql.sql:202-210",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped MySQL window query computes CUME_DIST over an ordered peer set.",
+      "mysql_mariadb_translation": "Reduced to one independently authored region with two tied scores and one NULL score. It isolates CUME_DIST peer handling, NULL ordering, and DOUBLE metadata without multiple partitions or other window functions."
+    },
+    "independently_authored": true,
+    "minimized_from": "regional_cume_distribution"
+  },
+  "features": [
+    "cume-dist-window",
+    "peer-ties",
+    "null-ordering",
+    "minimized-regression"
+  ],
+  "fixture_notes": "The single region has scores NULL, 10.00, and 10.00. CUME_DIST is 0.3333333333 for NULL and 1.0000000000 for both tied scores.",
+  "determinism_notes": "Player IDs and scores are fixed; the result is ordered by score and unique player ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE mini_regional_scores (player_id INT PRIMARY KEY, region VARCHAR(16) NOT NULL, score DECIMAL(10,2) NULL)",
+    "INSERT INTO mini_regional_scores VALUES (1, 'central', NULL), (2, 'central', 10.00), (3, 'central', 10.00)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT region, player_id, score, CUME_DIST() OVER (PARTITION BY region ORDER BY score) AS cumulative_distribution FROM mini_regional_scores ORDER BY region, score, player_id",
+      "ordered": true
+    }
+  ]
+}
