@@ -25,9 +25,9 @@ pub(super) fn eval_json_extract(
         0 => Ok(Value::Null),
         1 => {
             let value = matches.pop().unwrap_or(Value::Null);
-            json_text_value(value)
+            json_extract_text_value(value)
         }
-        _ => json_text_value(Value::Array(matches)),
+        _ => json_extract_text_value(Value::Array(matches)),
     }
 }
 
@@ -146,6 +146,7 @@ pub(super) fn eval_json_unquote(
         .map(|arg| eval_scalar_text(arg, data, last_insert_id))
         .transpose()?
         .unwrap_or(Value::Null);
+    let value = json_extract_value(&value).unwrap_or(value);
     if value == Value::Null {
         return Ok(Value::Null);
     }
@@ -162,6 +163,16 @@ pub(super) fn eval_json_unquote(
         }
         other => Ok(Value::String(json_scalar_to_string(&other))),
     }
+}
+
+pub(super) fn json_extract_text_value(value: Value) -> Result<Value> {
+    if matches!(&value, Value::String(value) if is_json_null(value)) {
+        return Ok(json_null_value());
+    }
+    Ok(Value::String(format!(
+        "{JSON_EXTRACT_TEXT_SENTINEL}{}",
+        serde_json::to_string(&public_json_value(&value))?
+    )))
 }
 
 pub(super) fn eval_json_object(
@@ -1175,6 +1186,14 @@ pub(crate) fn parse_json_document_value(value: Value) -> Value {
                         .map(mark_json_nulls)
                         .unwrap_or(Value::String(text))
                 })
+        }
+        Value::String(value) if value.starts_with(JSON_EXTRACT_TEXT_SENTINEL) => {
+            let text = value
+                .strip_prefix(JSON_EXTRACT_TEXT_SENTINEL)
+                .unwrap_or_default();
+            serde_json::from_str::<Value>(text)
+                .map(mark_json_nulls)
+                .unwrap_or(Value::String(text.to_string()))
         }
         Value::String(value) if value.starts_with(JSON_AGGREGATE_TEXT_SENTINEL) => {
             let text = value.trim_start_matches(JSON_AGGREGATE_TEXT_SENTINEL);

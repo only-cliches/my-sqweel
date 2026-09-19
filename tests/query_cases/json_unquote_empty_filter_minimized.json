@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "json_unquote_empty_filter_minimized",
+  "provenance": {
+    "kind": "github",
+    "source_url": "https://github.com/TencentBlueKing/bk-hcm/blob/c054bcedacc51275adacba7459481942795781b9/scripts/sql/0044_20251219_image.sql",
+    "source_commit": "c054bcedacc51275adac7459481942795781b9",
+    "source_location": "scripts/sql/0044_20251219_image.sql:35-38",
+    "source_sha256": "b4f8a20be03c10c34861a9ea4dc0d625765d9b64c43fa1d982471c1fdbd06d06",
+    "source_dialect": "mysql-mariadb",
+    "observed_pattern": "A JSON-derived relational update excludes rows whose extracted string value is empty.",
+    "mysql_mariadb_translation": "Minimized independently authored regression with one empty nested JSON string and one pre-existing relational value; only JSON_EXTRACT empty-string comparison and JSON_UNQUOTE assignment remain observable."
+  },
+  "features": [
+    "json-unquote",
+    "json-extract",
+    "empty-json-string",
+    "filtered-update",
+    "minimized-regression"
+  ],
+  "fixture_notes": "The empty nested region must not overwrite the existing relational sentinel, isolating JSON_EXTRACT comparison against the SQL empty string.",
+  "determinism_notes": "One fixed primary-key row and one ordered final-state read are used; no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE json_region_probe (probe_id INT PRIMARY KEY, details JSON NOT NULL, region VARCHAR(16) NOT NULL)",
+    "INSERT INTO json_region_probe VALUES (1, '{\"placement\":{\"region\":\"\"}}', 'legacy')"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE json_region_probe SET region = JSON_UNQUOTE(JSON_EXTRACT(details, '$.placement.region')) WHERE JSON_EXTRACT(details, '$.placement.region') IS NOT NULL AND JSON_EXTRACT(details, '$.placement.region') != ''"
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT probe_id, region FROM json_region_probe ORDER BY probe_id",
+      "ordered": true
+    }
+  ]
+}

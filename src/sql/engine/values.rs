@@ -699,6 +699,10 @@ pub(super) fn coerce_bool(value: Value) -> Option<Value> {
 pub(super) fn json_scalar_to_string(value: &Value) -> String {
     match value {
         Value::String(value) if is_json_null(value) => "null".to_string(),
+        Value::String(value) if value.starts_with(JSON_EXTRACT_TEXT_SENTINEL) => value
+            .strip_prefix(JSON_EXTRACT_TEXT_SENTINEL)
+            .unwrap_or_default()
+            .to_string(),
         Value::String(value) => value.clone(),
         Value::Bool(value) => value.to_string(),
         Value::Number(value) => value.to_string(),

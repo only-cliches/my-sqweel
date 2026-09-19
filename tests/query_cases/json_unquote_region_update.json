@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "json_unquote_region_update",
+  "provenance": {
+    "kind": "github",
+    "source_url": "https://github.com/TencentBlueKing/bk-hcm/blob/c054bcedacc51275adacba7459481942795781b9/scripts/sql/0044_20251219_image.sql",
+    "source_commit": "c054bcedacc51275adacba7459481942795781b9",
+    "source_location": "scripts/sql/0044_20251219_image.sql:27-47",
+    "source_sha256": "b4f8a20be03c10c34861a9ea4dc0d625765d9b64c43fa1d982471c1fdbd06d06",
+    "source_dialect": "mysql-mariadb",
+    "observed_pattern": "A migration copies a nested JSON string property into a relational column while filtering out missing and empty JSON values.",
+    "mysql_mariadb_translation": "Use an independently authored direct UPDATE whose SET expression applies JSON_UNQUOTE(JSON_EXTRACT(...)) and whose WHERE clause separately rejects missing and empty extracted values; verify changed and preserved rows after the mutation."
+  },
+  "features": [
+    "json-unquote",
+    "json-extract",
+    "nested-json-path",
+    "filtered-update",
+    "empty-and-missing-json-values",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Active catalog entries copy a nested placement region into the relational region column; an empty region and a missing placement remain unchanged, distinguishing JSON scalar extraction from absent-value filtering.",
+  "determinism_notes": "Asset IDs are unique and every final-state read orders by the primary key; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE asset_catalog (asset_id INT PRIMARY KEY, asset_name VARCHAR(32) NOT NULL, details JSON NOT NULL, region VARCHAR(16) NULL)",
+    "INSERT INTO asset_catalog VALUES (101, 'north-gateway', '{\"placement\":{\"region\":\"north\"}}', NULL), (102, 'empty-rack', '{\"placement\":{\"region\":\"\"}}', 'legacy'), (103, 'south-router', '{\"placement\":{\"region\":\"south\"}}', 'legacy'), (104, 'unassigned-sensor', '{\"placement\":{\"zone\":\"east\"}}', 'legacy'), (105, 'west-cache', '{\"placement\":{\"region\":\"west\"},\"tier\":\"edge\"}', 'legacy')"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE asset_catalog SET region = JSON_UNQUOTE(JSON_EXTRACT(details, '$.placement.region')) WHERE JSON_EXTRACT(details, '$.placement.region') IS NOT NULL AND JSON_EXTRACT(details, '$.placement.region') != ''"
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT asset_id, asset_name, region FROM asset_catalog ORDER BY asset_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT asset_id, details FROM asset_catalog ORDER BY asset_id",
+      "ordered": true
+    }
+  ]
+}

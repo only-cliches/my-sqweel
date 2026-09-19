@@ -55,6 +55,7 @@ use scalar::*;
 
 pub(crate) const MYSQL_BINARY_SENTINEL: &str = "\0my_sqweel_binary:";
 
+
 pub(crate) use common::unquote_sql_string;
 pub(crate) use json::{
     json_compact_text, json_extract_matches, json_extract_path, json_wire_text,
@@ -89,6 +90,14 @@ pub(super) fn mark_json_nulls(value: Value) -> Value {
 pub(super) fn public_json_value(value: &Value) -> Value {
     match value {
         Value::String(value) if is_json_null(value) => Value::Null,
+        Value::String(value) if value.starts_with(JSON_EXTRACT_TEXT_SENTINEL) => {
+            Value::String(
+                value
+                    .strip_prefix(JSON_EXTRACT_TEXT_SENTINEL)
+                    .unwrap_or_default()
+                    .to_string(),
+            )
+        }
         Value::Array(values) => Value::Array(values.iter().map(public_json_value).collect()),
         Value::Object(values) => Value::Object(
             values
@@ -100,9 +109,21 @@ pub(super) fn public_json_value(value: &Value) -> Value {
     }
 }
 
+pub(super) fn json_extract_value(value: &Value) -> Option<Value> {
+    let Value::String(value) = value else {
+        return None;
+    };
+    let text = value.strip_prefix(JSON_EXTRACT_TEXT_SENTINEL)?;
+    serde_json::from_str::<Value>(text)
+        .ok()
+        .map(mark_json_nulls)
+}
+
 pub(super) fn contains_json_null_sentinel(value: &Value) -> bool {
     match value {
-        Value::String(value) => is_json_null(value),
+        Value::String(value) => {
+            is_json_null(value) || value.starts_with(JSON_EXTRACT_TEXT_SENTINEL)
+        }
         Value::Array(values) => values.iter().any(contains_json_null_sentinel),
         Value::Object(values) => values.values().any(contains_json_null_sentinel),
         _ => false,
@@ -2255,6 +2276,15 @@ fn binary_display_value(value: &str) -> Option<String> {
 }
 
 fn mysql_cmp_non_null(left: &Value, right: &Value) -> Ordering {
+    if let Some(left_value) = json_extract_value(left) {
+        if let Some(right_value) = json_extract_value(right) {
+            return mysql_cmp_non_null(&left_value, &right_value);
+        }
+        return mysql_cmp_non_null(&left_value, right);
+    }
+    if let Some(right_value) = json_extract_value(right) {
+        return mysql_cmp_non_null(left, &right_value);
+    }
     match (left, right) {
         (Value::String(left), Value::String(right)) => {
             // DECIMAL/NUMERIC column values, including the results of window

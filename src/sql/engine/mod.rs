@@ -59,6 +59,7 @@ pub(crate) const JSON_NULL_SENTINEL: &str = "\0my_sqweel_json_null";
 /// Pre-rendered JSON_AGGREGATE text in MariaDB's aggregate style. The wire
 /// sends the suffix verbatim instead of re-serializing it.
 pub(crate) const JSON_AGGREGATE_TEXT_SENTINEL: &str = "\0my_sqweel_json_agg_text";
+pub(crate) const JSON_EXTRACT_TEXT_SENTINEL: &str = "\0my_sqweel_json_extract:";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

@@ -1129,6 +1129,24 @@ fn write_row<W: io::Read + io::Write>(
             }
             Value::String(value)
                 if let Some(text) = value
+                    .strip_prefix(crate::sql::engine::JSON_EXTRACT_TEXT_SENTINEL)
+            =>
+            {
+                if json_columns[index] {
+                    match serde_json::from_str::<serde_json::Value>(text) {
+                        Ok(value) => {
+                            rw.write_col(crate::sql::engine::json_wire_text(&value).map_err(
+                                |error| io::Error::new(io::ErrorKind::InvalidData, error),
+                            )?)?
+                        }
+                        Err(_) => rw.write_col(text)?,
+                    }
+                } else {
+                    rw.write_col(text)?;
+                }
+            }
+            Value::String(value)
+                if let Some(text) = value
                     .strip_prefix(crate::sql::engine::JSON_AGGREGATE_TEXT_SENTINEL)
             =>
             {
