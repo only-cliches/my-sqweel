@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "hub_package_variance",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "functions/aggregate/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/functions/aggregate/mysql.sql",
+      "sha256": "0160718d9ccf135c9938eaf3879a37c672cd171e68065046c953d55e95a33425",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "functions/aggregate/mysql.sql:154-155",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL aggregate report uses VAR_SAMP to calculate sample variance for a numeric measure.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored package-weight audit. Weights are grouped by hub, a NULL-only hub verifies that VAR_SAMP returns NULL without usable samples, and fixed decimal readings expose sample-versus-population variance without copying the source schema or rows."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "var-samp-aggregate",
+    "grouping",
+    "decimal-input",
+    "null-aggregate-input",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Hub 10 has weights 2.00 and 8.00 plus NULL, so sample variance is 18.00. Hub 20 has weights 1.00, 4.00, and 10.00, so sample variance is 21.00. Hub 30 has only NULL and must return NULL.",
+  "determinism_notes": "Hub IDs and package IDs are fixed; the grouped report is ordered by the unique hub ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE hub_package_weights (package_id INT PRIMARY KEY, hub_id INT NOT NULL, weight_kg DECIMAL(10,2) NULL)",
+    "INSERT INTO hub_package_weights VALUES (101, 10, 2.00), (102, 10, 8.00), (103, 10, NULL), (201, 20, 1.00), (202, 20, 4.00), (203, 20, 10.00), (301, 30, NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT hub_id, VAR_SAMP(weight_kg) AS sample_variance FROM hub_package_weights GROUP BY hub_id ORDER BY hub_id",
+      "ordered": true
+    }
+  ]
+}

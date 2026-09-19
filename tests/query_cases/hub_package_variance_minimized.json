@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "hub_package_variance_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "functions/aggregate/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/functions/aggregate/mysql.sql",
+      "sha256": "0160718d9ccf135c9938eaf3879a37c672cd171e68065046c953d55e95a33425",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "functions/aggregate/mysql.sql:154-155",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped MySQL query computes sample variance with VAR_SAMP.",
+      "mysql_mariadb_translation": "Reduced to one independently authored hub with two DECIMAL weights and one NULL weight. It isolates VAR_SAMP recognition, sample-versus-population math, and NULL omission without joins or multiple groups."
+    },
+    "independently_authored": true,
+    "minimized_from": "hub_package_variance"
+  },
+  "features": [
+    "var-samp-aggregate",
+    "grouping",
+    "decimal-input",
+    "null-aggregate-input",
+    "minimized-regression"
+  ],
+  "fixture_notes": "The single hub has weights 2.00 and 8.00 plus NULL, so sample variance is 18.00; the NULL must be ignored.",
+  "determinism_notes": "Package IDs and the single hub ID are fixed; the result is ordered by the unique hub ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE mini_hub_weights (package_id INT PRIMARY KEY, hub_id INT NOT NULL, weight_kg DECIMAL(10,2) NULL)",
+    "INSERT INTO mini_hub_weights VALUES (1, 10, 2.00), (2, 10, 8.00), (3, 10, NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT hub_id, VAR_SAMP(weight_kg) AS sample_variance FROM mini_hub_weights GROUP BY hub_id ORDER BY hub_id",
+      "ordered": true
+    }
+  ]
+}

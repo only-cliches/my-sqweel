@@ -1180,6 +1180,7 @@ enum AggregateKind {
     Avg,
     Std,
     StdSample,
+    VarSample,
     Variance,
     BitOr,
     BitAnd,
@@ -1231,6 +1232,7 @@ fn aggregate_call(expr: &Expr) -> Option<AggregateCall> {
         "AVG" => AggregateKind::Avg,
         "STD" | "STDDEV" | "STDDEV_POP" => AggregateKind::Std,
         "STDDEV_SAMP" => AggregateKind::StdSample,
+        "VAR_SAMP" => AggregateKind::VarSample,
         "VARIANCE" | "VAR_POP" => AggregateKind::Variance,
         "BIT_OR" => AggregateKind::BitOr,
         "BIT_AND" => AggregateKind::BitAnd,
@@ -1489,9 +1491,15 @@ fn eval_aggregate_call_rows<'a>(
                 .try_fold(0.0, |acc, value| value.map(|value| acc + value))?;
             Ok(number_from_f64(round_aggregate(sum / values.len() as f64, &values)))
         }
-        AggregateKind::Std | AggregateKind::StdSample | AggregateKind::Variance => {
+        AggregateKind::Std
+        | AggregateKind::StdSample
+        | AggregateKind::VarSample
+        | AggregateKind::Variance => {
             if values.is_empty()
-                || (call.kind == AggregateKind::StdSample && values.len() < 2)
+                || (matches!(
+                    call.kind,
+                    AggregateKind::StdSample | AggregateKind::VarSample
+                ) && values.len() < 2)
             {
                 return Ok(Value::Null);
             }
@@ -1504,13 +1512,18 @@ fn eval_aggregate_call_rows<'a>(
                 .iter()
                 .map(|value| (value - mean).powi(2))
                 .sum::<f64>()
-                / if call.kind == AggregateKind::StdSample {
+                / if matches!(
+                    call.kind,
+                    AggregateKind::StdSample | AggregateKind::VarSample
+                ) {
                     (numbers.len() - 1) as f64
                 } else {
                     numbers.len() as f64
                 };
             if matches!(call.kind, AggregateKind::Std | AggregateKind::StdSample) {
                 Ok(number_from_f64(round_aggregate(variance.sqrt(), &values)))
+            } else if call.kind == AggregateKind::VarSample {
+                Ok(number_from_f64(round_aggregate(variance, &values)))
             } else {
                 Ok(number_from_f64(variance))
             }

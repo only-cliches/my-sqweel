@@ -1461,12 +1461,12 @@ impl RawEngine {
                         MysqlColumnType::Decimal
                     }
                     "AVG" | "SUM" | "STD" | "STDDEV" | "STDDEV_POP" | "STDDEV_SAMP"
-                    | "VAR_POP" | "VARIANCE" => {
+                    | "VAR_POP" | "VAR_SAMP" | "VARIANCE" => {
                         // MariaDB 10.11.7 aggregate output types: SUM over an
                         // exact input (INT, DECIMAL) returns DECIMAL carrying
                         // the argument's scale (INT has scale 0); AVG widens
                         // that scale by four; STD/STDDEV, STDDEV_SAMP, VAR_POP,
-                        // and any floating input yield DOUBLE.
+                        // VAR_SAMP, and any floating input yield DOUBLE.
                         let argument = function_arguments(function)
                             .ok()
                             .and_then(|arguments| arguments.into_iter().next().flatten())
@@ -1498,7 +1498,7 @@ impl RawEngine {
                                             input.decimals.saturating_add(4);
                                         MysqlColumnType::Double
                                     }
-                                    "VAR_POP" | "VARIANCE" => {
+                                    "VAR_POP" | "VAR_SAMP" | "VARIANCE" => {
                                         metadata.decimals =
                                             input.decimals.saturating_add(4);
                                         MysqlColumnType::Double
@@ -1527,7 +1527,7 @@ impl RawEngine {
                             }
                             _ if matches!(
                                 name.as_str(),
-                                "STDDEV_POP" | "STDDEV_SAMP"
+                                "STDDEV_POP" | "STDDEV_SAMP" | "VAR_SAMP"
                             ) => {
                                 metadata.decimals = 6;
                                 MysqlColumnType::Double
