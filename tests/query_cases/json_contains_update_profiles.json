@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "id": "json_contains_update_profiles",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "open-metadata/OpenMetadata",
+      "commit": "564e0ce0499eef97d9147ca2dcf068951a9aca20",
+      "path": "bootstrap/sql/migrations/native/1.11.0/mysql/schemaChanges.sql",
+      "url": "https://github.com/open-metadata/OpenMetadata/blob/564e0ce0499eef97d9147ca2dcf068951a9aca20/bootstrap/sql/migrations/native/1.11.0/mysql/schemaChanges.sql",
+      "sha256": "42f5d45d014bfaf5a3397ab242e1f9fb7075687603f4f4b469bfb8ec6d5d5507",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "bootstrap/sql/migrations/native/1.11.0/mysql/schemaChanges.sql:80-84",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL UPDATE filters JSON documents with JSON_CONTAINS at an array path and rewrites a nested JSON value with JSON_SET and JSON_EXTRACT.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored service-profile migration. Profiles containing the legacy label receive a lifecycle marker and a copied owner value through JSON_SET/JSON_EXTRACT; profiles without that label remain unchanged. The source migration's table, JSON paths, replacement text, CAST form, and application purpose are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "json-contains",
+    "json-set",
+    "json-extract",
+    "json-array-path",
+    "filtered-update",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Profiles 10 and 30 contain the legacy label and receive lifecycle='migrated' plus a legacy_owner copy. Profile 20 lacks the label and remains active. Final checks use deterministic COUNT predicates over the migrated, unchanged, copied-owner, and retained-label states.",
+  "determinism_notes": "Profile IDs and JSON documents are fixed literals; final checks use deterministic COUNT predicates with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE service_profiles (profile_id INT PRIMARY KEY, payload JSON NOT NULL)",
+    "INSERT INTO service_profiles VALUES (10, '{\"labels\":[\"legacy\",\"api\"],\"lifecycle\":\"active\",\"owner\":\"ops\"}'), (20, '{\"labels\":[\"stable\"],\"lifecycle\":\"active\",\"owner\":\"sales\"}'), (30, '{\"labels\":[\"legacy\"],\"lifecycle\":\"paused\",\"owner\":\"data\"}')"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE service_profiles SET payload = JSON_SET(payload, '$.lifecycle', 'migrated', '$.legacy_owner', JSON_EXTRACT(payload, '$.owner')) WHERE JSON_CONTAINS(payload, '\"legacy\"', '$.labels')"
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT COUNT(*) AS migrated_profiles FROM service_profiles WHERE JSON_CONTAINS(payload, '\"migrated\"', '$.lifecycle')",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT COUNT(*) AS active_profiles FROM service_profiles WHERE JSON_CONTAINS(payload, '\"active\"', '$.lifecycle')",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT COUNT(*) AS ops_copies FROM service_profiles WHERE JSON_CONTAINS(payload, '\"ops\"', '$.legacy_owner')",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT COUNT(*) AS data_copies FROM service_profiles WHERE JSON_CONTAINS(payload, '\"data\"', '$.legacy_owner')",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT COUNT(*) AS legacy_profiles FROM service_profiles WHERE JSON_CONTAINS(payload, '\"legacy\"', '$.labels')",
+      "ordered": true
+    }
+  ]
+}

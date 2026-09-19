@@ -1013,7 +1013,7 @@ pub(super) fn eval_json_mutation(
                     break;
                 };
                 let path = eval_scalar_text(path_arg, data, last_insert_id)?;
-                let value = eval_scalar_text(value_arg, data, last_insert_id)?;
+                let value = eval_json_mutation_value(value_arg, data, last_insert_id)?;
                 let value = if value == Value::Null {
                     json_null_value()
                 } else {
@@ -1045,7 +1045,7 @@ pub(super) fn eval_json_mutation(
                 };
                 let path =
                     json_scalar_to_string(&eval_scalar_text(path_arg, data, last_insert_id)?);
-                let value = eval_scalar_text(value_arg, data, last_insert_id)?;
+                let value = eval_json_mutation_value(value_arg, data, last_insert_id)?;
                 let value = if value == Value::Null {
                     json_null_value()
                 } else {
@@ -1132,6 +1132,25 @@ fn json_path_to_string(tokens: &[JsonPathToken]) -> String {
 fn eval_json_document(arg: &str, data: &Map<String, Value>, last_insert_id: u64) -> Result<Value> {
     let value = eval_scalar_text(arg, data, last_insert_id)?;
     Ok(parse_json_document_value(value))
+}
+
+fn eval_json_mutation_value(
+    arg: &str,
+    data: &Map<String, Value>,
+    last_insert_id: u64,
+) -> Result<Value> {
+    let value = eval_scalar_text(arg, data, last_insert_id)?;
+    if value == Value::Null {
+        return Ok(Value::Null);
+    }
+    if arg
+        .trim_start()
+        .to_ascii_uppercase()
+        .starts_with("JSON_EXTRACT(")
+    {
+        return Ok(parse_json_document_value(value));
+    }
+    Ok(value)
 }
 
 pub(crate) fn parse_json_document_value(value: Value) -> Value {

@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "id": "json_contains_update_profiles_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "open-metadata/OpenMetadata",
+      "commit": "564e0ce0499eef97d9147ca2dcf068951a9aca20",
+      "path": "bootstrap/sql/migrations/native/1.11.0/mysql/schemaChanges.sql",
+      "url": "https://github.com/open-metadata/OpenMetadata/blob/564e0ce0499eef97d9147ca2dcf068951a9aca20/bootstrap/sql/migrations/native/1.11.0/mysql/schemaChanges.sql",
+      "sha256": "42f5d45d014bfaf5a3397ab242e1f9fb7075687603f4f4b469bfb8ec6d5d5507",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "bootstrap/sql/migrations/native/1.11.0/mysql/schemaChanges.sql:80-84",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A JSON mutation consumes JSON_EXTRACT output as a structured value while the surrounding update is guarded by JSON_CONTAINS.",
+      "mysql_mariadb_translation": "Minimized independently authored expression regression with one JSON document and a JSON_SET value sourced from JSON_EXTRACT. It removes the original filter and update state transition so nested JSON value typing is the only observable behavior."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "json-set",
+    "json-extract",
+    "json-value-context",
+    "minimized-regression"
+  ],
+  "fixture_notes": "The copied owner must remain the JSON numeric scalar 7, not a quoted JSON string produced by a top-level JSON_EXTRACT result.",
+  "determinism_notes": "One fixed row and one fixed owner value are used; the scalar projection has no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE json_set_probe (probe_id INT PRIMARY KEY, payload JSON NOT NULL)",
+    "INSERT INTO json_set_probe VALUES (1, '{\"owner\":7}')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT COUNT(*) AS copied_numeric_count FROM json_set_probe WHERE JSON_CONTAINS(JSON_SET(payload, '$.copied_owner', JSON_EXTRACT(payload, '$.owner')), '7', '$.copied_owner')",
+      "ordered": true
+    }
+  ]
+}

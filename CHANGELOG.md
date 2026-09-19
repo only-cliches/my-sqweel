@@ -57,6 +57,7 @@ All notable changes to MySqweel will be documented in this file.
 - Added GitHub-attributed `LAST_INSERT_ID()` coverage for same-connection generated-key retrieval after an `AUTO_INCREMENT` insert, with final ledger-state checks and a minimized alias-metadata regression; fixed the wire shortcut to preserve explicit scalar-result aliases.
 - Parked GitHub-attributed `ANY_VALUE()` grouping coverage because MariaDB 10.11.7 returns error 1305 / SQLSTATE `42000` (`FUNCTION ANY_VALUE does not exist`); no invalid fixture was retained.
 - Added GitHub-attributed `JSON_VALUE` coverage for an `UPDATE JOIN` service-node state transition with JSON payload filtering and final-state checks; narrowed the source's `RETURNING` form after MariaDB 10.11.7 returned syntax error 1064 for it, and fixed declared JSON result columns to use MariaDB's `BLOB` wire metadata with a minimized regression.
+- Added GitHub-attributed `JSON_CONTAINS`/`JSON_SET` coverage for a filtered JSON document update that copies a scalar through `JSON_EXTRACT`, including a minimized JSON-value-context regression; fixed JSON mutations to preserve `JSON_EXTRACT` results as JSON values instead of quoted text.
 - Parked GitHub-attributed `GROUPING()` plus `GROUP BY ... WITH ROLLUP` coverage from the MariaDB seed query because MariaDB 10.11.7 returns error 1305 / SQLSTATE `42000` for `GROUPING()`; no invalid fixture was retained.
 - Parked an `UPDATE ... RETURNING` coverage candidate because MariaDB 10.11.7 returns syntax error 1064 for that form; no invalid fixture was retained.
 
