@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "route_package_arrays",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "UthmanAdeyanju/studybook-sql-for-finance-and-data-science",
+      "commit": "8d89c0951a8610bf7ddf6cedf742e13e2ecb4cca",
+      "path": "2_mysql_tutorialclass/2_mysql_function_module/module_1_mysql_aggregate_functions.sql",
+      "url": "https://github.com/UthmanAdeyanju/studybook-sql-for-finance-and-data-science/blob/8d89c0951a8610bf7ddf6cedf742e13e2ecb4cca/2_mysql_tutorialclass/2_mysql_function_module/module_1_mysql_aggregate_functions.sql",
+      "sha256": "8fac97e8eb56e617bcec6259f802238a5fa4183275eaacbbe8fa4ac23697cbe1",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "2_mysql_tutorialclass/2_mysql_function_module/module_1_mysql_aggregate_functions.sql:9-16",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL report joins a detail relation to its parent and groups JSON_ARRAYAGG values by the parent identifier.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored route manifest report. Routes join package stops, CONCAT_WS builds each package label, JSON_ARRAYAGG preserves duplicate labels within each route, and unique route ordering makes the grouped result deterministic without copying the source schema, rows, or business purpose."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "json-arrayagg",
+    "inner-join",
+    "grouping",
+    "concat-ws",
+    "duplicate-preservation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Route 10 has two identical package labels and must retain both array elements; route 20 has one distinct package label. The outer route ordering is unique, and duplicate array members make internal duplicate ordering unobservable.",
+  "determinism_notes": "Route IDs and stop IDs are fixed; duplicate members in route 10 are byte-identical, so array order is not observable within that group. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE manifest_routes (route_id INT PRIMARY KEY, route_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE manifest_stops (stop_id INT PRIMARY KEY, route_id INT NOT NULL, package_code VARCHAR(16) NOT NULL, carrier VARCHAR(16) NOT NULL)",
+    "INSERT INTO manifest_routes VALUES (10, 'north loop'), (20, 'south loop')",
+    "INSERT INTO manifest_stops VALUES (1001, 10, 'PKG-A', 'NorthPost'), (1002, 10, 'PKG-A', 'NorthPost'), (2001, 20, 'PKG-B', 'SouthPost')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT r.route_id, r.route_name, JSON_ARRAYAGG(CONCAT_WS(':', s.package_code, s.carrier)) AS packages FROM manifest_routes r INNER JOIN manifest_stops s ON s.route_id = r.route_id GROUP BY r.route_id, r.route_name ORDER BY r.route_id",
+      "ordered": true
+    }
+  ]
+}
