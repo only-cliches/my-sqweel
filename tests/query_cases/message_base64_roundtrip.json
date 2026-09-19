@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "message_base64_roundtrip",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "csiro-rds/data-migration",
+      "commit": "6df27609550c8a1124262b80b14fe99388054d46",
+      "path": "steps/sql/mysql/create_demo_users_for_roles.sql",
+      "url": "https://github.com/csiro-rds/data-migration/blob/6df27609550c8a1124262b80b14fe99388054d46/steps/sql/mysql/create_demo_users_for_roles.sql",
+      "sha256": "87b3d47f2bb32b71d042c1a363d74a764296e96cc19a3fce32cf7410e1e072fe",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "steps/sql/mysql/create_demo_users_for_roles.sql:9-10",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL insert projection stores serialized text fields as base64 using TO_BASE64.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored message-payload audit that encodes and decodes text, including UTF-8, empty, and SQL NULL bodies, then classifies each row; the source table, literals, schema, and application purpose are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "base64-encoding",
+    "base64-decoding",
+    "utf8-text",
+    "round-trip",
+    "empty-string",
+    "null-propagation",
+    "case-classification",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Message 1101 exercises ordinary ASCII, 1102 exercises a UTF-8 accent, 1103 preserves an empty body, and 1104 preserves SQL NULL through both base64 functions.",
+  "determinism_notes": "All message IDs, channels, and bodies are fixed literals, and output is ordered by the unique message ID with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE message_payloads (message_id INT PRIMARY KEY, channel VARCHAR(16) NOT NULL, body TEXT NULL)",
+    "INSERT INTO message_payloads VALUES (1101, 'notice', 'hello'), (1102, 'receipt', 'café'), (1103, 'empty', ''), (1104, 'missing', NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT message_id, channel, TO_BASE64(body) AS encoded_body, FROM_BASE64(TO_BASE64(body)) AS decoded_body, CASE WHEN body IS NULL THEN 'missing' WHEN body = '' THEN 'empty' ELSE 'present' END AS body_class FROM message_payloads ORDER BY message_id",
+      "ordered": true
+    }
+  ]
+}

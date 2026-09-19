@@ -823,6 +823,7 @@ fn write_result<W: io::Read + io::Write>(
                     MysqlColumnType::Binary
                         | MysqlColumnType::VarBinary
                         | MysqlColumnType::Blob
+                        | MysqlColumnType::MediumBlob
                         | MysqlColumnType::LongBlob
                         | MysqlColumnType::Json
                         | MysqlColumnType::Bit
@@ -880,6 +881,7 @@ fn wire_column_type(column_type: MysqlColumnType) -> ColumnType {
         MysqlColumnType::Char | MysqlColumnType::Binary => ColumnType::MYSQL_TYPE_STRING,
         MysqlColumnType::VarChar | MysqlColumnType::VarBinary => ColumnType::MYSQL_TYPE_VAR_STRING,
         MysqlColumnType::Text | MysqlColumnType::Blob => ColumnType::MYSQL_TYPE_BLOB,
+        MysqlColumnType::MediumBlob => ColumnType::MYSQL_TYPE_MEDIUM_BLOB,
         MysqlColumnType::LongBlob => ColumnType::MYSQL_TYPE_LONG_BLOB,
         MysqlColumnType::Json => ColumnType::MYSQL_TYPE_BLOB,
         MysqlColumnType::Bit => ColumnType::MYSQL_TYPE_BIT,

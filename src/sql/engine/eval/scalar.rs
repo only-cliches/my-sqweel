@@ -1,8 +1,51 @@
 use super::*;
+use base64::Engine;
 use md5::{Digest, Md5};
 use sha1_smol::Sha1;
 use sha2::Sha256;
 use regex::{NoExpand, Regex};
+
+pub(super) fn eval_to_base64_value(value: Value) -> Result<Value> {
+    if value == Value::Null {
+        return Ok(Value::Null);
+    }
+    let bytes = binary_value_bytes(&value)
+        .unwrap_or_else(|| json_scalar_to_string(&value).into_bytes());
+    Ok(Value::String(
+        base64::engine::general_purpose::STANDARD.encode(bytes),
+    ))
+}
+
+pub(super) fn eval_from_base64_value(value: Value) -> Result<Value> {
+    if value == Value::Null {
+        return Ok(Value::Null);
+    }
+    let encoded = json_scalar_to_string(&value);
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded.as_bytes())
+        .map_err(|error| anyhow!("invalid base64 data: {error}"))?;
+    let hex = bytes
+        .iter()
+        .map(|byte| format!("{byte:02X}"))
+        .collect::<String>();
+    Ok(Value::String(format!("{MYSQL_BINARY_SENTINEL}{hex}")))
+}
+
+fn binary_value_bytes(value: &Value) -> Option<Vec<u8>> {
+    let hex = value
+        .as_str()?
+        .strip_prefix(MYSQL_BINARY_SENTINEL)?;
+    if hex.len() % 2 != 0 {
+        return None;
+    }
+    hex.as_bytes()
+        .chunks_exact(2)
+        .map(|pair| {
+            let text = std::str::from_utf8(pair).ok()?;
+            u8::from_str_radix(text, 16).ok()
+        })
+        .collect()
+}
 
 pub(super) fn eval_arg(
     arg: Option<&String>,

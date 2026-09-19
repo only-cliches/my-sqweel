@@ -422,6 +422,7 @@ pub enum MysqlColumnType {
     Binary,
     VarBinary,
     Blob,
+    MediumBlob,
     LongBlob,
     Json,
     Bit,
@@ -542,6 +543,8 @@ fn mysql_column_type_from_declared(upper: &str) -> MysqlColumnType {
         MysqlColumnType::Binary
     } else if upper.starts_with("BIT") {
         MysqlColumnType::Bit
+    } else if upper.starts_with("MEDIUMBLOB") {
+        MysqlColumnType::MediumBlob
     } else if upper.contains("BLOB") {
         MysqlColumnType::Blob
     } else if upper.starts_with("JSON") {

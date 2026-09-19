@@ -1517,7 +1517,32 @@ impl RawEngine {
                         metadata.unsigned = true;
                         MysqlColumnType::BigInt
                     }
-                    "EXPORT_SET" => MysqlColumnType::VarChar,
+                    "TO_BASE64" => {
+                        let argument = function_arguments(function)
+                            .ok()
+                            .and_then(|arguments| arguments.into_iter().next().flatten())
+                            .map(|argument| {
+                                self.expression_metadata(select, &argument, String::new(), first_row)
+                                    .column_type
+                            });
+                        if argument.is_some_and(|column_type| {
+                            matches!(
+                                column_type,
+                                MysqlColumnType::Binary
+                                    | MysqlColumnType::VarBinary
+                                    | MysqlColumnType::Text
+                                    | MysqlColumnType::Blob
+                                    | MysqlColumnType::MediumBlob
+                                    | MysqlColumnType::LongBlob
+                                    | MysqlColumnType::Json
+                            )
+                        }) {
+                            MysqlColumnType::MediumBlob
+                        } else {
+                            MysqlColumnType::VarChar
+                        }
+                    }
+                    "FROM_BASE64" => MysqlColumnType::MediumBlob,
                     "PERCENT_RANK" | "CUME_DIST" => {
                         // MariaDB renders both ranking fractions as DOUBLE
                         // with exactly ten fractional digits.
@@ -6015,6 +6040,7 @@ fn column_hint_from_metadata(metadata: &ColumnMetadata) -> ColumnHint {
         MysqlColumnType::Binary => "BINARY",
         MysqlColumnType::VarBinary => "VARBINARY",
         MysqlColumnType::Blob => "BLOB",
+        MysqlColumnType::MediumBlob => "MEDIUM_BLOB",
         MysqlColumnType::LongBlob => "LONG_BLOB",
         MysqlColumnType::Json => "JSON",
         MysqlColumnType::Bit => "BIT",

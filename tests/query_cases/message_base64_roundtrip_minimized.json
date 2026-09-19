@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "message_base64_roundtrip_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "csiro-rds/data-migration",
+      "commit": "6df27609550c8a1124262b80b14fe99388054d46",
+      "path": "steps/sql/mysql/create_demo_users_for_roles.sql",
+      "url": "https://github.com/csiro-rds/data-migration/blob/6df27609550c8a1124262b80b14fe99388054d46/steps/sql/mysql/create_demo_users_for_roles.sql",
+      "sha256": "87b3d47f2bb32b71d042c1a363d74a764296e96cc19a3fce32cf7410e1e072fe",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "steps/sql/mysql/create_demo_users_for_roles.sql:9-10",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "The accepted base64 scenario exposed that MySqweel rejected a single scalar TO_BASE64 conversion while MariaDB returned the encoded bytes.",
+      "mysql_mariadb_translation": "Reduced to one deterministic TO_BASE64 expression so the missing scalar function path and MEDIUM_BLOB metadata remain directly regression-testable."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "base64-encoding",
+    "minimized-regression"
+  ],
+  "fixture_notes": "One scalar conversion isolates the original unsupported-function mismatch without tables or nondeterministic inputs.",
+  "determinism_notes": "The query contains only a fixed literal and no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT TO_BASE64('hello') AS encoded",
+      "ordered": true
+    }
+  ]
+}

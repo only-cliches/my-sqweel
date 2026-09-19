@@ -3284,6 +3284,22 @@ where
     let args = FunctionExprArgs(&arguments.args);
 
     match name.as_str() {
+        "TO_BASE64" => Some((|| {
+            let value = args
+                .first()
+                .map(eval_arg)
+                .transpose()?
+                .unwrap_or(Value::Null);
+            eval_to_base64_value(value)
+        })()),
+        "FROM_BASE64" => Some((|| {
+            let value = args
+                .first()
+                .map(eval_arg)
+                .transpose()?
+                .unwrap_or(Value::Null);
+            eval_from_base64_value(value)
+        })()),
         "CONV" => Some((|| {
             let values = args.iter().map(eval_arg).collect::<Result<Vec<_>>>()?;
             eval_conv_values(&values)
@@ -3510,6 +3526,22 @@ pub(super) fn eval_function_text(
                 .map(|arg| eval_scalar_text(arg, data, last_insert_id))
                 .collect::<Result<Vec<_>>>()?;
             eval_conv_values(&values)
+        }
+        "TO_BASE64" => {
+            let value = args
+                .first()
+                .map(|arg| eval_scalar_text(arg, data, last_insert_id))
+                .transpose()?
+                .unwrap_or(Value::Null);
+            eval_to_base64_value(value)
+        }
+        "FROM_BASE64" => {
+            let value = args
+                .first()
+                .map(|arg| eval_scalar_text(arg, data, last_insert_id))
+                .transpose()?
+                .unwrap_or(Value::Null);
+            eval_from_base64_value(value)
         }
         "USER_VAR_ASSIGN" => {
             let target = args
