@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "locale_due_date_formats",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "codinglin/StudyNotes",
+      "commit": "6fa91231e27302e8864ded5b258049e88245939a",
+      "path": "MySQL基础篇/MySQL基础篇课后练习/第07章_单行函数.sql",
+      "url": "https://github.com/codinglin/StudyNotes/blob/6fa91231e27302e8864ded5b258049e88245939a/MySQL%E5%9F%BA%E7%A1%80/MySQL%E5%9F%BA%E7%A1%80%E7%AF%87%E8%AF%BE%E5%90%8E%E7%BB%83%E4%B9%A0/%E7%AC%AC07%E7%AB%A0_%E5%8D%95%E8%A1%8C%E5%87%BD%E6%95%B0.sql",
+      "sha256": "90bcebbb15f243cb27d3bfb152e744b11562950f6fec92b74c2e6e0832a5bdb5",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL基础篇/MySQL基础篇课后练习/第07章_单行函数.sql:180",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "DATE_FORMAT receives a locale-specific format string from GET_FORMAT for a DATE value.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored invoice due-date report. Each row selects a fixed locale, GET_FORMAT supplies the DATE pattern, DATE_FORMAT renders the date, and CASE classifies missing dates. The source literals, schema, rows, aliases, and reporting purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "get-format",
+    "date-format",
+    "locale-projection",
+    "case-classification",
+    "null-propagation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Invoice 901 uses the USA format, invoice 902 uses the European format, invoice 903 uses ISO format, and invoice 904 has a NULL due date so the formatted value is NULL.",
+  "determinism_notes": "Invoice IDs, DATE values, and locale strings are fixed; output is ordered by the unique invoice ID with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE invoice_due_dates (invoice_id INT PRIMARY KEY, due_date DATE NULL, locale_code VARCHAR(8) NOT NULL)",
+    "INSERT INTO invoice_due_dates VALUES (901, '2026-06-05', 'USA'), (902, '2026-06-15', 'EUR'), (903, '2026-06-25', 'ISO'), (904, NULL, 'USA')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT invoice_id, locale_code, due_date, DATE_FORMAT(due_date, GET_FORMAT(DATE, locale_code)) AS localized_due, CASE WHEN due_date IS NULL THEN 'missing' ELSE 'scheduled' END AS due_status FROM invoice_due_dates ORDER BY invoice_id",
+      "ordered": true
+    }
+  ]
+}
