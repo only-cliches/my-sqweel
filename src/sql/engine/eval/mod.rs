@@ -53,6 +53,15 @@ pub(super) use datetime::*;
 use json::*;
 use scalar::*;
 
+pub(super) fn eval_regexp_match_values(
+    target: Value,
+    pattern: Value,
+    negated: bool,
+) -> Result<Value> {
+    scalar::eval_regexp_values(target, pattern, negated)
+}
+
+
 pub(crate) const MYSQL_BINARY_SENTINEL: &str = "\0my_sqweel_binary:";
 
 
@@ -643,7 +652,9 @@ fn expr_has_aggregate(expr: &Expr) -> bool {
             expr_has_aggregate(expr) || list.iter().any(expr_has_aggregate)
         }
         Expr::InSubquery { expr, .. } => expr_has_aggregate(expr),
-        Expr::Like { expr, pattern, .. } => expr_has_aggregate(expr) || expr_has_aggregate(pattern),
+        Expr::Like { expr, pattern, .. } | Expr::RLike { expr, pattern, .. } => {
+            expr_has_aggregate(expr) || expr_has_aggregate(pattern)
+        }
         Expr::Between {
             expr, low, high, ..
         } => expr_has_aggregate(expr) || expr_has_aggregate(low) || expr_has_aggregate(high),
@@ -1040,7 +1051,7 @@ pub(super) fn materialize_aggregate_exprs(
         Expr::InSubquery { expr, .. } => {
             materialize_aggregate_exprs(expr, group, base, last_insert_id, order_hints, eval, out)?;
         }
-        Expr::Like { expr, pattern, .. } => {
+        Expr::Like { expr, pattern, .. } | Expr::RLike { expr, pattern, .. } => {
             materialize_aggregate_exprs(expr, group, base, last_insert_id, order_hints, eval, out)?;
             materialize_aggregate_exprs(
                 pattern,
@@ -2925,6 +2936,16 @@ pub(super) fn eval_expr(
             let target = eval_expr(expr, data, last_insert_id)?;
             let pattern = eval_expr(pattern, data, last_insert_id)?;
             Ok(eval_like_values(target, pattern, *negated))
+        }
+        Expr::RLike {
+            expr,
+            pattern,
+            negated,
+            ..
+        } => {
+            let target = eval_expr(expr, data, last_insert_id)?;
+            let pattern = eval_expr(pattern, data, last_insert_id)?;
+            eval_regexp_match_values(target, pattern, *negated)
         }
         Expr::Between {
             expr,

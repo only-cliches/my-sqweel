@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "id": "ticket_code_routing",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "divassya/leetcode_problems",
+      "commit": "622b9402d2f0d6a6902fa7eeb37098b944915b6d",
+      "path": "mySQL_problems/regexp_example.sql",
+      "url": "https://github.com/divassya/leetcode_problems/blob/622b9402d2f0d6a6902fa7eeb37098b944915b6d/mySQL_problems/regexp_example.sql",
+      "sha256": "cbe81fad911d0590e6a16d1bb2253dde9a04a4f2329bd307b246d337f299d44e",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "mySQL_problems/regexp_example.sql:45-46",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL REGEXP predicate uses a word boundary to find a token prefix inside a space-separated text field, avoiding false matches embedded in another token.",
+      "mysql_mariadb_translation": "Rewritten as an original support-ticket routing update. REGEXP word-boundary checks classify the first matching queue code with deterministic CASE precedence; a final SELECT reports matching security tickets and a full ordered state check verifies NULL and embedded-token behavior."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "regexp-operator",
+    "regexp-word-boundary",
+    "case-classification",
+    "precedence",
+    "filtered-update",
+    "null-propagation",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Tickets 101 and 103 contain security codes and route to security; ticket 103 also contains billing and proves CASE precedence. Ticket 102 routes to billing, ticket 104 to general, ticket 105 has SQL NULL labels and retains its unassigned route, and ticket 106 embeds SEC100 inside another token so the word boundary must reject it.",
+  "determinism_notes": "Ticket IDs are fixed and every result is ordered by ticket ID. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE support_tickets (ticket_id INT PRIMARY KEY, ticket_title VARCHAR(64) NOT NULL, labels VARCHAR(128), routed_queue VARCHAR(16) NOT NULL)",
+    "INSERT INTO support_tickets VALUES (101, 'Account lockout', 'INFO1 SEC100', 'unassigned'), (102, 'Invoice mismatch', 'URGENT BILL100', 'unassigned'), (103, 'Compromised invoice', 'SEC100 BILL100', 'unassigned'), (104, 'General question', 'OPS200', 'unassigned'), (105, 'Unlabeled request', NULL, 'unassigned'), (106, 'Embedded code', 'XSEC100', 'unassigned')"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE support_tickets SET routed_queue = CASE WHEN labels REGEXP '\\\\bSEC1' THEN 'security' WHEN labels REGEXP '\\\\bBILL1' THEN 'billing' WHEN labels REGEXP '\\\\bOPS1' THEN 'operations' ELSE 'general' END WHERE labels IS NOT NULL",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT ticket_id, ticket_title, labels FROM support_tickets WHERE labels REGEXP '\\\\bSEC1' ORDER BY ticket_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT ticket_id, ticket_title, labels, routed_queue FROM support_tickets ORDER BY ticket_id",
+      "ordered": true
+    }
+  ]
+}

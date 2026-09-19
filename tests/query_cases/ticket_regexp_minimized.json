@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "id": "ticket_regexp_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "divassya/leetcode_problems",
+      "commit": "622b9402d2f0d6a6902fa7eeb37098b944915b6d",
+      "path": "mySQL_problems/regexp_example.sql",
+      "url": "https://github.com/divassya/leetcode_problems/blob/622b9402d2f0d6a6902fa7eeb37098b944915b6d/mySQL_problems/regexp_example.sql",
+      "sha256": "cbe81fad911d0590e6a16d1bb2253dde9a04a4f2329bd307b246d337f299d44e",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "mySQL_problems/regexp_example.sql:45-46",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL REGEXP predicate uses a word boundary to find a token prefix inside a space-separated text field.",
+      "mysql_mariadb_translation": "Reduced to one independently authored scalar security-label predicate so REGEXP matching, NULL behavior, and the MySQL/MariaDB boolean result are isolated without the routing update."
+    },
+    "independently_authored": true,
+    "minimized_from": "ticket_code_routing"
+  },
+  "features": ["regexp-operator", "regexp-word-boundary", "minimized-regression"],
+  "fixture_notes": "The label starts with SEC100 and must match the SEC1 word-boundary prefix.",
+  "determinism_notes": "The scalar literal and projected alias are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT 'SEC100' REGEXP '\\\\bSEC1' AS security_match",
+      "ordered": true
+    }
+  ]
+}

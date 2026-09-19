@@ -1498,6 +1498,9 @@ impl RawEngine {
                 metadata.column_type = MysqlColumnType::Decimal;
                 metadata.decimals = argument.decimals;
             }
+            Expr::RLike { .. } => {
+                metadata.column_type = MysqlColumnType::Integer;
+            }
             Expr::Function(function) => {
                 let name = function
                     .name
@@ -3102,6 +3105,16 @@ impl RawEngine {
                 let target = self.eval_expr_ctx(expr, data, last_insert_id)?;
                 let pattern = self.eval_expr_ctx(pattern, data, last_insert_id)?;
                 Ok(eval_like_values(target, pattern, *negated))
+            }
+            Expr::RLike {
+                expr,
+                pattern,
+                negated,
+                ..
+            } => {
+                let target = self.eval_expr_ctx(expr, data, last_insert_id)?;
+                let pattern = self.eval_expr_ctx(pattern, data, last_insert_id)?;
+                eval_regexp_match_values(target, pattern, *negated)
             }
             Expr::Between {
                 expr,
@@ -7156,7 +7169,7 @@ fn validate_expr_columns(expr: &Expr, scope: &ColumnScope) -> Result<()> {
             validate_expr_columns(low, scope)?;
             validate_expr_columns(high, scope)
         }
-        Expr::Like { expr, pattern, .. } => {
+        Expr::Like { expr, pattern, .. } | Expr::RLike { expr, pattern, .. } => {
             validate_expr_columns(expr, scope)?;
             validate_expr_columns(pattern, scope)
         }
@@ -7487,7 +7500,7 @@ fn expr_outer_reference(
             }
             Ok(None)
         }
-        Expr::Like { expr, pattern, .. } => {
+        Expr::Like { expr, pattern, .. } | Expr::RLike { expr, pattern, .. } => {
             if let Some(identifier) = expr_outer_reference(expr, local_qualifiers)? {
                 return Ok(Some(identifier));
             }

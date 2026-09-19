@@ -715,6 +715,18 @@ pub(super) fn eval_regexp_substr_values(values: &[Value]) -> Result<Value> {
         .unwrap_or(Value::Null))
 }
 
+pub(super) fn eval_regexp_values(target: Value, pattern: Value, negated: bool) -> Result<Value> {
+    if target == Value::Null || pattern == Value::Null {
+        return Ok(Value::Null);
+    }
+    let target = json_scalar_to_string(&target);
+    let pattern = json_scalar_to_string(&pattern);
+    let regex = Regex::new(&pattern).map_err(|error| anyhow!("invalid regular expression: {error}"))?;
+    let matched = regex.is_match(&target);
+    Ok(Value::Bool(if negated { !matched } else { matched }))
+}
+
+
 pub(super) fn eval_repeat(
     string_arg: Option<&String>,
     count_arg: Option<&String>,

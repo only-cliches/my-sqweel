@@ -117,6 +117,16 @@ pub(super) fn eval_insert_update_value(
             let pattern = eval_insert_update_value(pattern, existing, incoming)?;
             Ok(eval_like_values(target, pattern, *negated))
         }
+        Expr::RLike {
+            expr,
+            pattern,
+            negated,
+            ..
+        } => {
+            let target = eval_insert_update_value(expr, existing, incoming)?;
+            let pattern = eval_insert_update_value(pattern, existing, incoming)?;
+            eval_regexp_match_values(target, pattern, *negated)
+        }
         Expr::Case {
             operand,
             conditions,

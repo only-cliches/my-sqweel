@@ -157,6 +157,7 @@ impl Visitor for SupportValidator {
             | Expr::Between { .. }
             | Expr::BinaryOp { .. }
             | Expr::Like { .. }
+            | Expr::RLike { .. }
             | Expr::UnaryOp { .. }
             | Expr::Convert { .. }
             | Expr::Cast { .. }

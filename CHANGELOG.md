@@ -125,6 +125,10 @@ All notable changes to MySqweel will be documented in this file.
 - Parked the GitHub-attributed `GROUP_CONCAT ... SEPARATOR` candidate from `Miazzy/oa-front-service` because existing `group_concat_project_tags.json` already covers the same ordered grouped concatenation semantics; no duplicate fixture was retained.
 - Parked the GitHub-attributed `BoardGameArchive` candidate because its second query mixes SQL Server-only `TOP`, `GETDATE()`, `DATEDIFF`, and `DATEADD` forms with the MySQL-labelled source; translating it would change semantics, so no fixture was retained.
 - Added GitHub-attributed CTE qualification coverage for an independently authored member-activity report combining distinct category counts across multiple `LEFT JOIN`s, `HAVING`, a date-filtered CTE, and an `IN` semi-join; MariaDB 10.11.7 and MySqweel matched across repeated fresh differential runs without a source fix.
+- Parked the GitHub-attributed `INSERT ... SELECT ... WHERE NOT EXISTS` candidates from Cloudberry/InferX because the matching files depend on PostgreSQL/Cloudberry types, extensions, and partial-index syntax rather than executable MySQL/MariaDB coverage; no fixture was retained.
+- Parked the GitHub-attributed `REGEXP_LIKE` candidate from `fishercoder1534/Leetcode` because MariaDB 10.11.7 does not provide `REGEXP_LIKE`; the compatible `REGEXP` operator candidate was retained instead.
+- Added GitHub-attributed `REGEXP` coverage for an independently authored support-ticket routing update with word-boundary token matching, CASE precedence, NULL preservation, and deterministic final-state checks; fixed REGEXP predicate evaluation and MariaDB integer result metadata to match 10.11.7.
+- Added the minimized GitHub-attributed scalar `REGEXP` word-boundary regression; MariaDB 10.11.7 and MySqweel now both return integer `1` across repeated fresh differential runs.
 
 ## 0.4.4 Sep 9, 2026
 
