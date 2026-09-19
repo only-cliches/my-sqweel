@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "id": "recursive_weekday_roster",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Aryansamil/SQL_Shark_Tank_Project",
+      "commit": "1ab2fd744539b7c98ad3e663f6f48311fa81317d",
+      "path": "code_mysql.sql",
+      "url": "https://github.com/Aryansamil/SQL_Shark_Tank_Project/blob/1ab2fd744539b7c98ad3e663f6f48311fa81317d/code_mysql.sql",
+      "sha256": "2c84e60f465fbd1d0cd005ac66bc8b57477403145286c05af400316ab6bb721b",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "code_mysql.sql:4-6",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A recursive date sequence advances one day at a time and applies DAYNAME to each generated date.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored roster-day report. A recursive CTE expands a fixed six-day planning range, DAYNAME labels each generated date, DAYOFWEEK plus CASE classifies weekend versus weekday, and deterministic date ordering exposes the full sequence. The source schema, dates, labels, and reporting purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "recursive-cte",
+    "date-add",
+    "dayname",
+    "dayofweek",
+    "case-classification",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The fixed roster range runs from Monday 2026-05-11 through Saturday 2026-05-16, so five weekday rows and one weekend row exercise both DAYNAME and the CASE classification.",
+  "determinism_notes": "The recursive anchor, end date, interval, and output ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "WITH RECURSIVE roster_days (day_date) AS (SELECT CAST('2026-05-11' AS DATE) UNION ALL SELECT DATE_ADD(day_date, INTERVAL 1 DAY) FROM roster_days WHERE day_date < '2026-05-16') SELECT day_date, DAYNAME(day_date) AS weekday_name, CASE WHEN DAYOFWEEK(day_date) IN (1, 7) THEN 'weekend' ELSE 'weekday' END AS day_kind FROM roster_days ORDER BY day_date",
+      "ordered": true
+    }
+  ]
+}

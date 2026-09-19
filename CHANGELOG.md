@@ -64,6 +64,7 @@ All notable changes to MySqweel will be documented in this file.
 - Added GitHub-attributed NULL-safe equality (`<=>`) coverage for a nullable composite route-assignment LEFT JOIN, including both-NULL matching, one-sided-NULL non-matches, and deterministic assignment classification; MariaDB 10.11.7 and MySqweel matched without a source fix.
 - Added GitHub-attributed `BIT_COUNT` coverage for a permission-mask audit with scalar bit counts, bitwise intersections, NULL propagation, and deterministic CASE classification, including a minimized metadata regression; fixed `BIT_COUNT` result metadata to match MariaDB's integer type.
 - Added GitHub-attributed `DATEDIFF`/`LEAD` coverage for deterministic member check-in gap classification with partitioned windows, same-day duplicates, long/short gaps, and terminal NULLs, including a minimized metadata regression; fixed `DATEDIFF` result metadata to match MariaDB's integer type.
+- Added GitHub-attributed recursive CTE coverage for a fixed weekday roster using `DATE_ADD`, `DAYNAME`, `DAYOFWEEK`, and CASE weekend classification; MariaDB 10.11.7 and MySqweel matched without a source fix.
 - Parked GitHub-attributed `GROUPING()` plus `GROUP BY ... WITH ROLLUP` coverage from the MariaDB seed query because MariaDB 10.11.7 returns error 1305 / SQLSTATE `42000` for `GROUPING()`; no invalid fixture was retained.
 - Parked an `UPDATE ... RETURNING` coverage candidate because MariaDB 10.11.7 returns syntax error 1064 for that form; no invalid fixture was retained.
 
