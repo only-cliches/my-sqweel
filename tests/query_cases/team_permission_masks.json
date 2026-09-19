@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "team_permission_masks",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "doocs/leetcode",
+      "commit": "651d04d423d71d8e4e161d818d6c83ceae995804",
+      "path": "solution/3200-3299/3204.Bitwise User Permissions Analysis/Solution.sql",
+      "url": "https://github.com/doocs/leetcode/blob/651d04d423d71d8e4e161d818d6c83ceae995804/solution/3200-3299/3204.Bitwise%20User%20Permissions%20Analysis/Solution.sql",
+      "sha256": "d229456ec6db9f2954c981c440a4ec092ca5d7bd96eaeab06af1c7e6ecefdded",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "solution/3200-3299/3204.Bitwise User Permissions Analysis/Solution.sql:2-4",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A permissions query combines BIT_AND and BIT_OR aggregates to report the bits common to every row and the bits present in any row.",
+      "mysql_mariadb_translation": "Rewritten as an original team capability audit. Permission masks are grouped by team, a NULL grant verifies that bitwise aggregates ignore NULL inputs, and deterministic team ordering exposes both common and union masks without copying the source schema or rows."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "bit-and-aggregate",
+    "bit-or-aggregate",
+    "grouping",
+    "null-aggregate-input",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Team 10 combines masks 7 and 5 plus a NULL grant, so common capabilities are 5 and any capability is 7. Team 20 combines masks 12 and 10, producing common capabilities 8 and any capability 14.",
+  "determinism_notes": "Team IDs and grant IDs are fixed; the report is ordered by the unique team ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE team_permission_grants (grant_id INT PRIMARY KEY, team_id INT NOT NULL, permission_mask INT NULL)",
+    "INSERT INTO team_permission_grants VALUES (101, 10, 7), (102, 10, 5), (103, 10, NULL), (201, 20, 12), (202, 20, 10)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT team_id, BIT_AND(permission_mask) AS common_permissions, BIT_OR(permission_mask) AS any_permissions FROM team_permission_grants GROUP BY team_id ORDER BY team_id",
+      "ordered": true
+    }
+  ]
+}
