@@ -14,7 +14,9 @@ use crate::vendor::msql_srv::{
 };
 use serde_json::{Map, Value};
 
-use crate::sql::engine::{row_keys_for_columns, Engine, EngineSession, MysqlColumnType, QueryResult, QueryWarning};
+use crate::sql::engine::{
+    Engine, EngineSession, MysqlColumnType, QueryResult, QueryWarning, row_keys_for_columns,
+};
 
 #[derive(Clone)]
 pub struct WireServer {
@@ -785,11 +787,29 @@ fn write_result<W: io::Read + io::Write>(
             float_columns.insert(metadata.name.clone(), metadata.decimals as usize);
         }
     }
+    let json_columns: Vec<bool> = columns
+        .iter()
+        .enumerate()
+        .map(|(index, _)| {
+            out.column_metadata
+                .get(index)
+                .is_some_and(|metadata| metadata.column_type == MysqlColumnType::Json)
+        })
+        .collect();
     let defs: Vec<Column> = columns
         .iter()
         .enumerate()
         .map(|(index, name)| {
             let metadata = out.column_metadata.get(index);
+            let wire_type = metadata
+                .map(|metadata| wire_column_type(metadata.column_type))
+                .unwrap_or_else(|| {
+                    if decimal_columns.contains_key(name) {
+                        ColumnType::MYSQL_TYPE_NEWDECIMAL
+                    } else {
+                        column_type_for(&out.rows, name)
+                    }
+                });
             let mut colflags = ColumnFlags::empty();
             if metadata.is_some_and(|metadata| !metadata.nullable) {
                 colflags.insert(ColumnFlags::NOT_NULL_FLAG);
@@ -804,6 +824,7 @@ fn write_result<W: io::Read + io::Write>(
                         | MysqlColumnType::VarBinary
                         | MysqlColumnType::Blob
                         | MysqlColumnType::LongBlob
+                        | MysqlColumnType::Json
                         | MysqlColumnType::Bit
                 )
             }) {
@@ -814,15 +835,7 @@ fn write_result<W: io::Read + io::Write>(
                     .map(|metadata| metadata.table.clone())
                     .unwrap_or_default(),
                 column: name.clone(),
-                coltype: metadata
-                    .map(|metadata| wire_column_type(metadata.column_type))
-                    .unwrap_or_else(|| {
-                        if decimal_columns.contains_key(name) {
-                            ColumnType::MYSQL_TYPE_NEWDECIMAL
-                        } else {
-                            column_type_for(&out.rows, name)
-                        }
-                    }),
+                coltype: wire_type,
                 colflags,
             }
         })
@@ -840,6 +853,7 @@ fn write_result<W: io::Read + io::Write>(
             &row,
             &columns,
             &defs,
+            &json_columns,
             &decimal_columns,
             &float_columns,
         )?;
@@ -867,7 +881,7 @@ fn wire_column_type(column_type: MysqlColumnType) -> ColumnType {
         MysqlColumnType::VarChar | MysqlColumnType::VarBinary => ColumnType::MYSQL_TYPE_VAR_STRING,
         MysqlColumnType::Text | MysqlColumnType::Blob => ColumnType::MYSQL_TYPE_BLOB,
         MysqlColumnType::LongBlob => ColumnType::MYSQL_TYPE_LONG_BLOB,
-        MysqlColumnType::Json => ColumnType::MYSQL_TYPE_JSON,
+        MysqlColumnType::Json => ColumnType::MYSQL_TYPE_BLOB,
         MysqlColumnType::Bit => ColumnType::MYSQL_TYPE_BIT,
     }
 }
@@ -1030,6 +1044,7 @@ fn write_row<W: io::Read + io::Write>(
     row: &Map<String, Value>,
     columns: &[String],
     definitions: &[Column],
+    json_columns: &[bool],
     decimal_columns: &HashMap<String, usize>,
     float_columns: &HashMap<String, usize>,
 ) -> io::Result<()> {
@@ -1102,8 +1117,7 @@ fn write_row<W: io::Read + io::Write>(
                 }
             }
             Value::String(value)
-                if definition.coltype == ColumnType::MYSQL_TYPE_JSON
-                    && value == crate::sql::engine::JSON_NULL_SENTINEL =>
+                if json_columns[index] && value == crate::sql::engine::JSON_NULL_SENTINEL =>
             {
                 rw.write_col("null")?;
             }
@@ -1114,7 +1128,7 @@ fn write_row<W: io::Read + io::Write>(
             {
                 rw.write_col(text)?;
             }
-            Value::String(value) if definition.coltype == ColumnType::MYSQL_TYPE_JSON => {
+            Value::String(value) if json_columns[index] => {
                 if definition.table.is_empty() {
                     match serde_json::from_str::<serde_json::Value>(value) {
                         Ok(value) => {
@@ -1128,8 +1142,7 @@ fn write_row<W: io::Read + io::Write>(
                     rw.write_col(value)?;
                 }
             }
-            Value::Array(_) | Value::Object(_)
-                if definition.coltype == ColumnType::MYSQL_TYPE_JSON =>
+            Value::Array(_) | Value::Object(_) if json_columns[index] =>
             {
                 let text = if definition.table.is_empty() {
                     crate::sql::engine::json_wire_text(&value)

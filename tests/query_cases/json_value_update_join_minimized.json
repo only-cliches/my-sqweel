@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "id": "json_value_update_join_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "open-metadata/OpenMetadata",
+      "commit": "275b04b9a4f27c271d7fc61afa960a25ebd3c401",
+      "path": "bootstrap/sql/migrations/native/2.0.0/mysql/postDataMigrationSQLScript.sql",
+      "url": "https://github.com/open-metadata/OpenMetadata/blob/275b04b9a4f27c271d7fc61afa960a25ebd3c401/bootstrap/sql/migrations/native/2.0.0/mysql/postDataMigrationSQLScript.sql",
+      "sha256": "37b704fd06918132be606efe944cd345b9c3bbf3fd10d672701faf7923dc54db",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "bootstrap/sql/migrations/native/2.0.0/mysql/postDataMigrationSQLScript.sql:323-335",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL UPDATE joins a derived JSON-aware relation and filters on a scalar extracted from a JSON document.",
+      "mysql_mariadb_translation": "Minimized independently authored wire regression with one declared JSON column and alphabetically ordered object members. It isolates MariaDB's BLOB metadata and verbatim JSON text behavior from UPDATE JOIN and JSON_VALUE evaluation."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "declared-json-wire",
+    "json-metadata",
+    "deterministic-order",
+    "minimized-regression"
+  ],
+  "fixture_notes": "The JSON object members are alphabetic, so the minimized mismatch isolates MariaDB's declared-JSON BLOB metadata from object-member ordering differences.",
+  "determinism_notes": "One fixed row is selected by its primary key; the JSON text contains no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE json_wire_probe (probe_id INT PRIMARY KEY, payload JSON NOT NULL)",
+    "INSERT INTO json_wire_probe VALUES (1, '{\"enabled\":1,\"region\":\"north\"}')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT probe_id, payload FROM json_wire_probe ORDER BY probe_id",
+      "ordered": true
+    }
+  ]
+}

@@ -53,6 +53,7 @@ All notable changes to MySqweel will be documented in this file.
 - Added GitHub-attributed `JSON_ARRAYAGG` coverage for grouped route package labels through an inner join and `CONCAT_WS`, preserving duplicate array members with deterministic route ordering; MariaDB 10.11.7 and MySqweel matched without a source fix.
 - Added GitHub-attributed value-window coverage for partitioned DECIMAL readings using `FIRST_VALUE`, `NTH_VALUE`, and `LAST_VALUE` over explicit full `ROWS` frames with NULL ordering; MariaDB 10.11.7 and MySqweel matched without a source fix.
 - Added GitHub-attributed `PERCENT_RANK` coverage for a CTE-filtered regional latency report with peer ties, DECIMAL scores, partitioned windows, and a deterministic percentile threshold; MariaDB 10.11.7 and MySqweel matched without a source fix.
+- Added GitHub-attributed `JSON_VALUE` coverage for an `UPDATE JOIN` service-node state transition with JSON payload filtering and final-state checks; narrowed the source's `RETURNING` form after MariaDB 10.11.7 returned syntax error 1064 for it, and fixed declared JSON result columns to use MariaDB's `BLOB` wire metadata with a minimized regression.
 - Parked GitHub-attributed `GROUPING()` plus `GROUP BY ... WITH ROLLUP` coverage from the MariaDB seed query because MariaDB 10.11.7 returns error 1305 / SQLSTATE `42000` for `GROUPING()`; no invalid fixture was retained.
 - Parked an `UPDATE ... RETURNING` coverage candidate because MariaDB 10.11.7 returns syntax error 1064 for that form; no invalid fixture was retained.
 

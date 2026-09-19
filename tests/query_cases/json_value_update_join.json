@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "id": "json_value_update_join",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "open-metadata/OpenMetadata",
+      "commit": "275b04b9a4f27c271d7fc61afa960a25ebd3c401",
+      "path": "bootstrap/sql/migrations/native/2.0.0/mysql/postDataMigrationSQLScript.sql",
+      "url": "https://github.com/open-metadata/OpenMetadata/blob/275b04b9a4f27c271d7fc61afa960a25ebd3c401/bootstrap/sql/migrations/native/2.0.0/mysql/postDataMigrationSQLScript.sql",
+      "sha256": "37b704fd06918132be606efe944cd345b9c3bbf3fd10d672701faf7923dc54db",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "bootstrap/sql/migrations/native/2.0.0/mysql/postDataMigrationSQLScript.sql:323-335",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL UPDATE joins a derived JSON-aware relation and uses JSON_VALUE with RETURNING CHAR in the filter before changing rows selected by the join.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored service-node state update. The source's typed RETURNING clauses were narrowed after MariaDB 10.11.7 returned syntax error 1064 for that form; the compatible two-argument JSON_VALUE calls still extract region, enabled, and next-state text in a direct UPDATE JOIN, and the final state verifies every node. The schema, payloads, identifiers, and operational purpose are new; JSON_TABLE and migration-specific logic are intentionally not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "json-value",
+    "json-value-text",
+    "update-join",
+    "json-filter",
+    "json-scalar-extraction",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Nodes 10 and 40 have north-region enabled payloads and receive their JSON next_state values. Node 20 is north but disabled, and node 30 is enabled but west, so both remain unchanged. MariaDB-compatible two-argument JSON_VALUE returns scalar text, so the enabled flag is compared with the string '1'. JSON object members are inserted in alphabetic order so the final JSON wire text remains deterministic while this case targets JSON_VALUE and UPDATE JOIN semantics.",
+  "determinism_notes": "Node IDs and update IDs are fixed; the final state read is ordered by the unique node ID. Payloads contain no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE service_nodes (node_id INT PRIMARY KEY, node_name VARCHAR(32) NOT NULL, state VARCHAR(16) NOT NULL)",
+    "CREATE TABLE node_updates (update_id INT PRIMARY KEY, node_id INT NOT NULL, payload JSON NOT NULL)",
+    "INSERT INTO service_nodes VALUES (10, 'edge-a', 'queued'), (20, 'edge-b', 'queued'), (30, 'edge-c', 'queued'), (40, 'edge-d', 'queued')",
+    "INSERT INTO node_updates VALUES (1001, 10, '{\"enabled\":1,\"next_state\":\"ready\",\"region\":\"north\"}'), (1002, 20, '{\"enabled\":0,\"next_state\":\"ready\",\"region\":\"north\"}'), (1003, 30, '{\"enabled\":1,\"next_state\":\"draining\",\"region\":\"west\"}'), (1004, 40, '{\"enabled\":1,\"next_state\":\"paused\",\"region\":\"north\"}')"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE service_nodes n INNER JOIN node_updates u ON u.node_id = n.node_id SET n.state = JSON_VALUE(u.payload, '$.next_state') WHERE JSON_VALUE(u.payload, '$.region') = 'north' AND JSON_VALUE(u.payload, '$.enabled') = '1'"
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT node_id, node_name, state FROM service_nodes ORDER BY node_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT update_id, node_id, payload FROM node_updates ORDER BY update_id",
+      "ordered": true
+    }
+  ]
+}
