@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "json_type_boolean_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/3639.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/3639.sql",
+      "sha256": "1f8ca89d313541bc913e05c166621b842f55192a33f3beaf265f8ae93de6a8fb",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/docker/fuzz_root/mysql_initlib/3639.sql:1",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A scalar JSON_TYPE call reports the top-level type of a boolean JSON document.",
+      "mysql_mariadb_translation": "Reduced to one independently authored JSON_TYPE('true') projection, removing the payload table, mutation, and unrelated document kinds while retaining the boolean type naming that exposed the mismatch."
+    },
+    "independently_authored": true,
+    "minimized_from": "json_type_payload_audit"
+  },
+  "features": [
+    "json-type",
+    "boolean-json-value",
+    "minimized-regression"
+  ],
+  "fixture_notes": "One fixed JSON boolean isolates MariaDB's BOOLEAN type label.",
+  "determinism_notes": "The JSON literal is fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT JSON_TYPE('true') AS boolean_type",
+      "ordered": true
+    }
+  ]
+}

@@ -883,9 +883,11 @@ impl RawEngine {
             }
 
             next_rows.insert(new_key.clone(), updated_row.clone());
+            if current_row.data != updated_row.data {
+                updated += 1;
+            }
             returned_rows.push(updated_row.data.clone());
             changed_rows.insert(new_key, updated_row);
-            updated += 1;
         }
 
         self.validate_unique_constraints(&table_name, &next_rows)?;

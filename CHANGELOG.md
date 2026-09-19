@@ -120,6 +120,8 @@ All notable changes to MySqweel will be documented in this file.
 - Parked an `UPDATE ... RETURNING` coverage candidate because MariaDB 10.11.7 returns syntax error 1064 for that form; no invalid fixture was retained.
 - Parked the GitHub-attributed `SHA2` candidate from `DataLinkDC/dinky` because the matching rows were Flink function-documentation seed inserts rather than executable MySQL/MariaDB query coverage; no duplicate fixture was retained.
 - Added GitHub-attributed `SHA2` coverage for an independently authored credential-event import with variable 224/256/384/512-bit digest lengths, `INSERT ... SELECT`, and NULL propagation; fixed SHA2 hash-length dispatch to match MariaDB 10.11.7, including a minimized scalar regression.
+- Added GitHub-attributed `JSON_TYPE` coverage for an independently authored payload audit spanning object, array, string, integer, decimal, boolean, JSON `null`, and SQL `NULL` values with deterministic `UPDATE` final state; fixed boolean type classification and no-op `UPDATE` affected-row accounting to match MariaDB 10.11.7.
+- Added the minimized GitHub-attributed `JSON_TYPE('true')` scalar regression; MariaDB 10.11.7 and MySqweel now both return `BOOLEAN` across repeated fresh differential runs.
 
 ## 0.4.4 Sep 9, 2026
 

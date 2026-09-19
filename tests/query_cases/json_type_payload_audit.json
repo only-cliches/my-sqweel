@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "id": "json_type_payload_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/3639.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/3639.sql",
+      "sha256": "1f8ca89d313541bc913e05c166621b842f55192a33f3beaf265f8ae93de6a8fb",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/docker/fuzz_root/mysql_initlib/3639.sql:1-24",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL fuzz corpus classifies JSON documents with JSON_TYPE across array and object literals, exposing the document's top-level JSON kind as a scalar result.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored payload audit. A JSON column stores object, array, string, integer, decimal, boolean, JSON-null, and SQL-NULL documents; an UPDATE materializes JSON_TYPE labels, final rows verify stored classification, and scalar projections isolate boolean/null/numeric type names. The source schema, values, labels, and application purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "json-type",
+    "typed-json-values",
+    "json-null",
+    "sql-null",
+    "update",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Payloads cover object, array, quoted string, integer, decimal, true, JSON null, and SQL NULL. UPDATE stores the reported top-level type for every row, while scalar calls make boolean, JSON-null, and numeric naming independently observable.",
+  "determinism_notes": "Payload IDs, JSON documents, labels, and ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE payload_audit (payload_id INT PRIMARY KEY, payload_label VARCHAR(32) NOT NULL, payload JSON, detected_type VARCHAR(32))",
+    "INSERT INTO payload_audit VALUES (10, 'object', '{\"ready\": true, \"count\": 3}', NULL), (20, 'array', '[1, 2, 3]', NULL), (30, 'string', '\"hello\"', NULL), (40, 'integer', '42', NULL), (50, 'decimal', '3.5', NULL), (60, 'boolean', 'true', NULL), (70, 'json-null', 'null', NULL), (80, 'sql-null', NULL, NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE payload_audit SET detected_type = JSON_TYPE(payload)"
+    },
+    {
+      "sql": "SELECT payload_id, payload_label, JSON_TYPE(payload) AS observed_type, detected_type FROM payload_audit ORDER BY payload_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT JSON_TYPE('true') AS boolean_type, JSON_TYPE('false') AS false_type, JSON_TYPE('null') AS json_null_type, JSON_TYPE('42') AS integer_type, JSON_TYPE('3.5') AS decimal_type",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT payload_id, payload_label, JSON_TYPE(payload) AS observed_type, detected_type FROM payload_audit ORDER BY payload_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT JSON_TYPE('true') AS boolean_type, JSON_TYPE('false') AS false_type, JSON_TYPE('null') AS json_null_type, JSON_TYPE('42') AS integer_type, JSON_TYPE('3.5') AS decimal_type",
+      "ordered": true
+    }
+  ]
+}

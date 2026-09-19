@@ -421,8 +421,7 @@ pub(super) fn eval_json_type(
 fn json_type_name(value: &Value) -> &'static str {
     match value {
         Value::Null => "NULL",
-        Value::Bool(true) => "TRUE",
-        Value::Bool(false) => "FALSE",
+        Value::Bool(_) => "BOOLEAN",
         Value::Number(number) if number.is_i64() => "INTEGER",
         Value::Number(number) if number.is_u64() => "UNSIGNED INTEGER",
         Value::Number(_) => "DOUBLE",
