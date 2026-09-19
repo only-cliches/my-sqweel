@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "ipv4_numeric_audit_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "shockerli/Notes",
+      "commit": "ab692c415b98da64528d57ba6856add8d78dc3cd",
+      "path": "MySQL_Note.sql",
+      "url": "https://github.com/shockerli/Notes/blob/ab692c415b98da64528d57ba6856add8d78dc3cd/MySQL_Note.sql",
+      "sha256": "ea4fec2cd49faedee8b86a80642b3d053f23adc112367a32ae4e4e0833d10c0a",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL_Note.sql:275",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "INET_ATON converts a dotted IPv4 address to its integer representation.",
+      "mysql_mariadb_translation": "Reduced to one independently authored scalar INET_ATON projection over a fixed documentation-network address, removing table setup, NULL handling, malformed input, and CASE classification while retaining the numeric conversion contract."
+    },
+    "independently_authored": true,
+    "minimized_from": "ipv4_numeric_audit"
+  },
+  "features": [
+    "inet-aton",
+    "unsigned-integer",
+    "minimized-regression"
+  ],
+  "fixture_notes": "The fixed address 192.0.2.17 isolates INET_ATON evaluation and LONGLONG result metadata.",
+  "determinism_notes": "The IPv4 literal is fixed; the scalar query has no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT INET_ATON('192.0.2.17') AS numeric_address",
+      "ordered": true
+    }
+  ]
+}

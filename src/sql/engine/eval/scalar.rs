@@ -114,6 +114,38 @@ pub(super) fn eval_format_number(
     };
     Ok(Value::String(format!("{sign}{grouped}{suffix}")))
 }
+pub(super) fn eval_inet_aton(
+    value_arg: Option<&String>,
+    data: &Map<String, Value>,
+    last_insert_id: u64,
+) -> Result<Value> {
+    eval_inet_aton_value(eval_arg(value_arg, data, last_insert_id)?)
+}
+
+pub(super) fn eval_inet_aton_value(value: Value) -> Result<Value> {
+    if value == Value::Null {
+        return Ok(Value::Null);
+    }
+    let text = json_scalar_to_string(&value);
+    let mut address = 0_u64;
+    let mut parts = text.split('.');
+    for _ in 0..4 {
+        let Some(part) = parts.next() else {
+            return Ok(Value::Null);
+        };
+        let Ok(octet) = part.parse::<u64>() else {
+            return Ok(Value::Null);
+        };
+        if octet > 255 {
+            return Ok(Value::Null);
+        }
+        address = (address << 8) | octet;
+    }
+    if parts.next().is_some() {
+        return Ok(Value::Null);
+    }
+    Ok(Value::Number(Number::from(address)))
+}
 
 pub(super) fn eval_mod(
     left_arg: Option<&String>,

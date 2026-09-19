@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "ipv4_numeric_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "shockerli/Notes",
+      "commit": "ab692c415b98da64528d57ba6856add8d78dc3cd",
+      "path": "MySQL_Note.sql",
+      "url": "https://github.com/shockerli/Notes/blob/ab692c415b98da64528d57ba6856add8d78dc3cd/MySQL_Note.sql",
+      "sha256": "ea4fec2cd49faedee8b86a80642b3d053f23adc112367a32ae4e4e0833d10c0a",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL_Note.sql:275",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "INET_ATON converts a dotted IPv4 address such as 127.0.0.1 to its integer representation.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored network-allocation audit. INET_ATON converts fixed IPv4 address text into sortable numeric values, while CASE separates valid addresses from NULL or malformed input. The source literals, schema, rows, aliases, and reporting purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "inet-aton",
+    "ipv4-validation",
+    "unsigned-integer",
+    "null-propagation",
+    "case-classification",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Allocation 601 and 602 use valid documentation-network addresses, 603 is malformed, and 604 is NULL. Numeric conversion must preserve the unsigned IPv4 ordering value.",
+  "determinism_notes": "Allocation IDs, address strings, and conversion expressions are fixed; output is ordered by the unique allocation ID with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE network_allocations (allocation_id INT PRIMARY KEY, address VARCHAR(32) NULL)",
+    "INSERT INTO network_allocations VALUES (601, '192.0.2.17'), (602, '198.51.100.42'), (603, '198.51.100.999'), (604, NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT allocation_id, address, INET_ATON(address) AS numeric_address, CASE WHEN address IS NULL THEN 'missing' WHEN INET_ATON(address) IS NULL THEN 'invalid' ELSE 'valid' END AS address_class FROM network_allocations ORDER BY allocation_id",
+      "ordered": true
+    }
+  ]
+}

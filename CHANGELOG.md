@@ -76,6 +76,9 @@ All notable changes to MySqweel will be documented in this file.
 - Added the minimized GitHub-attributed `LAST_DAY` scalar regression fixture; MariaDB 10.11.7 and MySqweel now both return `2024-02-29` with DATE metadata across repeated fresh differential runs.
 - Added GitHub-attributed `FORMAT` coverage for an independently authored invoice amount export with DECIMAL rounding, thousands separators, negative credits, NULL propagation, CASE classification, and deterministic ordering; fixed `FORMAT` evaluation and VARCHAR wire metadata to match MariaDB 10.11.7.
 - Added the minimized GitHub-attributed `FORMAT` scalar regression fixture; MariaDB 10.11.7 and MySqweel now both return `1,234,567.46` with VARCHAR metadata across repeated fresh differential runs.
+- Added GitHub-attributed `INET_ATON` coverage for an independently authored IPv4 allocation audit with numeric conversion, malformed and NULL input, unsigned integer output, CASE classification, and deterministic ordering; fixed `INET_ATON` evaluation and LONGLONG metadata to match MariaDB 10.11.7.
+- Added the minimized GitHub-attributed `INET_ATON` scalar regression fixture; MariaDB 10.11.7 and MySqweel now both return `3221226001` with LONGLONG metadata across repeated fresh differential runs.
+- Parked the GitHub-attributed `REGEXP_LIKE` email-validation candidate because MariaDB 10.11.7 returns error 1305 / SQLSTATE `42000` for `REGEXP_LIKE`; no invalid fixture was retained.
 - Parked GitHub-attributed `GROUPING()` plus `GROUP BY ... WITH ROLLUP` coverage from the MariaDB seed query because MariaDB 10.11.7 returns error 1305 / SQLSTATE `42000` for `GROUPING()`; no invalid fixture was retained.
 - Parked an `UPDATE ... RETURNING` coverage candidate because MariaDB 10.11.7 returns syntax error 1064 for that form; no invalid fixture was retained.
 
