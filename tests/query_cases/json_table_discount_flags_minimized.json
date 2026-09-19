@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "id": "json_table_discount_flags_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "markddrake/YADAMU---Yet-Another-DAta-Migration-Utility",
+      "commit": "8aff53691beaf272feb9f522e5f1b7af884ef3e",
+      "path": "src/sql/mysql/SET_VENDOR_TYPE_MAPPINGS.sql",
+      "url": "https://github.com/markddrake/YADAMU---Yet-Another-DAta-Migration-Utility/blob/8aff53691beaf272feb9f522e5f1b7af884ef3e/src/sql/mysql/SET_VENDOR_TYPE_MAPPINGS.sql",
+      "sha256": "2981217119cb3252533ab20b07fc4714a33f64c3476466c856b1a319801f7dec",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "src/sql/mysql/SET_VENDOR_TYPE_MAPPINGS.sql:16-25",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A JSON_TABLE projection exposes typed JSON values as relational columns.",
+      "mysql_mariadb_translation": "Reduced to one JSON object and one discount calculation. The independently authored query isolates DECIMAL JSON_TABLE metadata and CASE arithmetic without the original report's order column, labels, or missing-field branch."
+    },
+    "independently_authored": true,
+    "minimized_from": "json_table_discount_flags"
+  },
+  "features": [
+    "json-table",
+    "typed-json-columns",
+    "decimal-arithmetic",
+    "case-expression",
+    "minimized-regression"
+  ],
+  "fixture_notes": "One JSON object supplies amount 12.50 and discount 2.50. MariaDB preserves DECIMAL scale in both the projected amount and the net CASE result, producing 10.00.",
+  "determinism_notes": "The single JSON object is fixed and the query has no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT jt.amount, CASE WHEN jt.has_discount = 1 THEN jt.amount - jt.discount ELSE jt.amount END AS net_amount FROM JSON_TABLE('[{\"amount\":12.50,\"discount\":2.50}]', '$[*]' COLUMNS (amount DECIMAL(10,2) PATH '$.amount', discount DECIMAL(10,2) PATH '$.discount', has_discount INT EXISTS PATH '$.discount')) AS jt",
+      "ordered": true
+    }
+  ]
+}

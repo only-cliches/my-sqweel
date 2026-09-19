@@ -48,6 +48,7 @@ All notable changes to MySqweel will be documented in this file.
 - Added GitHub-attributed `STDDEV_SAMP` coverage for grouped station voltage samples with DECIMAL input and NULL readings, including the minimized one-group regression; fixed sample-standard-deviation evaluation, NULL/single-sample handling, and MariaDB `DOUBLE` metadata.
 - Added GitHub-attributed `VAR_SAMP` coverage for grouped hub package weights with DECIMAL input and NULL readings, including the minimized one-group regression; fixed sample-variance evaluation, NULL/single-sample handling, and MariaDB `DOUBLE` metadata.
 - Added GitHub-attributed `CUME_DIST` coverage for partitioned regional score distributions with tied DECIMAL scores and NULL ordering, including the minimized one-partition regression; fixed ranking-window metadata to expose MariaDB's `DOUBLE` with ten fractional digits.
+- Added GitHub-attributed `JSON_TABLE` coverage for typed DECIMAL discount rows with `FOR ORDINALITY`, `EXISTS PATH` missing-field detection, and CASE arithmetic, including the minimized regression; fixed JSON_TABLE column metadata and numeric CASE metadata to preserve MariaDB's declared types and decimal scale.
 - Parked GitHub-attributed `GROUPING()` plus `GROUP BY ... WITH ROLLUP` coverage from the MariaDB seed query because MariaDB 10.11.7 returns error 1305 / SQLSTATE `42000` for `GROUPING()`; no invalid fixture was retained.
 - Parked an `UPDATE ... RETURNING` coverage candidate because MariaDB 10.11.7 returns syntax error 1064 for that form; no invalid fixture was retained.
 

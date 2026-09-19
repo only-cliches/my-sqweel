@@ -1354,6 +1354,23 @@ impl RawEngine {
             }
             return;
         }
+        if let TableFactor::JsonTable {
+            columns, alias, ..
+        } = factor
+        {
+            let table = alias
+                .as_ref()
+                .map(|alias| alias.name.value.clone())
+                .unwrap_or_else(|| "json_table".to_string());
+            if qualifier.is_some_and(|qualifier| !qualifier.eq_ignore_ascii_case(&table)) {
+                return;
+            }
+            for (column, hint) in json_table_column_hints(columns) {
+                metadata.push(ColumnMetadata::from_declared(&column, &table, &hint));
+            }
+            return;
+        }
+
         let TableFactor::Table { name, alias, .. } = factor else {
             return;
         };
@@ -1422,6 +1439,49 @@ impl RawEngine {
             metadata.unsigned = false;
         }
         match expr {
+            Expr::Case {
+                results, else_result, ..
+            } => {
+                let mut branch_metadata = results
+                    .iter()
+                    .map(|result| {
+                        self.expression_metadata(select, result, String::new(), first_row)
+                    })
+                    .collect::<Vec<_>>();
+                if let Some(else_result) = else_result {
+                    branch_metadata.push(self.expression_metadata(
+                        select,
+                        else_result,
+                        String::new(),
+                        first_row,
+                    ));
+                }
+                if !branch_metadata.is_empty()
+                    && branch_metadata
+                        .iter()
+                        .all(|branch| numeric_type_rank(branch.column_type) > 0)
+                {
+                    let rank = branch_metadata
+                        .iter()
+                        .map(|branch| numeric_type_rank(branch.column_type))
+                        .max()
+                        .unwrap_or_default();
+                    metadata.column_type = match rank {
+                        1 => MysqlColumnType::BigInt,
+                        2 => MysqlColumnType::Decimal,
+                        3 => MysqlColumnType::Double,
+                        _ => metadata.column_type,
+                    };
+                    if metadata.column_type == MysqlColumnType::Decimal {
+                        metadata.decimals = branch_metadata
+                            .iter()
+                            .map(|branch| branch.decimals)
+                            .max()
+                            .unwrap_or_default();
+                    }
+                }
+            }
+
             Expr::Cast { data_type, .. } => {
                 let hint = ColumnHint {
                     sql_type: Some(cast_data_type_name(data_type)),
@@ -1735,6 +1795,25 @@ impl RawEngine {
             for factor in std::iter::once(&table.relation)
                 .chain(table.joins.iter().map(|join| &join.relation))
             {
+                if let TableFactor::JsonTable {
+                    columns, alias, ..
+                } = factor
+                {
+                    let table = alias
+                        .as_ref()
+                        .map(|alias| alias.name.value.clone())
+                        .unwrap_or_else(|| "json_table".to_string());
+                    if qualifier
+                        .is_some_and(|qualifier| !qualifier.eq_ignore_ascii_case(&table))
+                    {
+                        continue;
+                    }
+                    if let Some(hint) = find_json_table_column_hint(columns, column) {
+                        return Some((table, hint));
+                    }
+                    continue;
+                }
+
                 let TableFactor::Table { name, alias, .. } = factor else {
                     continue;
                 };
@@ -5091,6 +5170,63 @@ impl RawEngine {
             ..QueryResult::default()
         }
     }
+}
+
+fn json_table_column_hints(
+    columns: &[sqlparser::ast::JsonTableColumn],
+) -> Vec<(String, ColumnHint)> {
+    columns
+        .iter()
+        .flat_map(|column| match column {
+            sqlparser::ast::JsonTableColumn::ForOrdinality(name) => vec![(
+                name.value.clone(),
+                ColumnHint {
+                    sql_type: Some("INT".to_string()),
+                    nullable: Some(false),
+                    ..ColumnHint::default()
+                },
+            )],
+            sqlparser::ast::JsonTableColumn::Named(column) => vec![(
+                column.name.value.clone(),
+                ColumnHint {
+                    sql_type: Some(column.r#type.to_string()),
+                    ..ColumnHint::default()
+                },
+            )],
+            sqlparser::ast::JsonTableColumn::Nested(column) => {
+                json_table_column_hints(&column.columns)
+            }
+        })
+        .collect()
+}
+
+fn find_json_table_column_hint(
+    columns: &[sqlparser::ast::JsonTableColumn],
+    name: &str,
+) -> Option<ColumnHint> {
+    columns.iter().find_map(|column| match column {
+        sqlparser::ast::JsonTableColumn::ForOrdinality(column) => {
+            column
+                .value
+                .eq_ignore_ascii_case(name)
+                .then(|| ColumnHint {
+                    sql_type: Some("INT".to_string()),
+                    nullable: Some(false),
+                    ..ColumnHint::default()
+                })
+        }
+        sqlparser::ast::JsonTableColumn::Named(column) => column
+            .name
+            .value
+            .eq_ignore_ascii_case(name)
+            .then(|| ColumnHint {
+                sql_type: Some(column.r#type.to_string()),
+                ..ColumnHint::default()
+            }),
+        sqlparser::ast::JsonTableColumn::Nested(column) => {
+            find_json_table_column_hint(&column.columns, name)
+        }
+    })
 }
 
 fn json_table_column_names(column: &sqlparser::ast::JsonTableColumn) -> Vec<String> {

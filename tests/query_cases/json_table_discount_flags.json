@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "id": "json_table_discount_flags",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "markddrake/YADAMU---Yet-Another-DAta-Migration-Utility",
+      "commit": "8aff53691beaf2722feb9f522e5f1b7af884ef3e",
+      "path": "src/sql/mysql/SET_VENDOR_TYPE_MAPPINGS.sql",
+      "url": "https://github.com/markddrake/YADAMU---Yet-Another-DAta-Migration-Utility/blob/8aff53691beaf2722feb9f522e5f1b7af884ef3e/src/sql/mysql/SET_VENDOR_TYPE_MAPPINGS.sql",
+      "sha256": "2981217119cb3252533ab20b07fc4714a33f64c3476466c856b1a319801f7dec",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "src/sql/mysql/SET_VENDOR_TYPE_MAPPINGS.sql:16-25",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL migration projects typed values from a JSON array through JSON_TABLE into relational columns.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored discount feed over a JSON array of objects. FOR ORDINALITY preserves input order, typed DECIMAL columns parse amounts, EXISTS PATH distinguishes missing discounts, and a CASE expression computes each net amount without copying the source procedure, schema, or rows."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "json-table",
+    "for-ordinality",
+    "exists-path",
+    "typed-json-columns",
+    "missing-json-field",
+    "case-expression",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The three JSON objects arrive in fixed order. Alpha and gamma contain discounts and produce net amounts 10.00 and 4.25; beta omits discount and keeps amount 8.00. EXISTS PATH must report 1, 0, and 1 respectively.",
+  "determinism_notes": "FOR ORDINALITY and the outer ORDER BY jt.ord make the JSON input order explicit. The query has no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT jt.ord, jt.code, jt.amount, jt.has_discount, CASE WHEN jt.has_discount = 1 THEN jt.amount - jt.discount ELSE jt.amount END AS net_amount FROM JSON_TABLE('[{\"code\":\"alpha\",\"amount\":12.50,\"discount\":2.50},{\"code\":\"beta\",\"amount\":8.00},{\"code\":\"gamma\",\"amount\":5.00,\"discount\":0.75}]', '$[*]' COLUMNS (ord FOR ORDINALITY, code VARCHAR(16) PATH '$.code', amount DECIMAL(10,2) PATH '$.amount', discount DECIMAL(10,2) PATH '$.discount', has_discount INT EXISTS PATH '$.discount')) AS jt ORDER BY jt.ord",
+      "ordered": true
+    }
+  ]
+}
