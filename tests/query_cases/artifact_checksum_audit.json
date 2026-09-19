@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "artifact_checksum_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "anilsolanki2645/MySQL-Tutorial",
+      "commit": "205393ee3b9db1041777e8667161f62e656c6558",
+      "path": "MySQL - Math-Numeric Function.sql",
+      "url": "https://github.com/anilsolanki2645/MySQL-Tutorial/blob/205393ee3b9db1041777e8667161f62e656c6558/MySQL%20-%20Math-Numeric%20Function.sql",
+      "sha256": "a8727a9685efe3aeac0694281989246358129319916bb6c2bffa4981c198ad1a",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL - Math-Numeric Function.sql:182",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A scalar CRC32 call computes the unsigned checksum of a text value.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored grouped artifact-checksum audit. CRC32 is applied to nullable payloads, MAX aggregates per-bundle checksums, and CASE labels bundles with no payload or a high unsigned checksum. The source scalar, schema, rows, aliases, and reporting purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "crc32",
+    "grouped-checksum",
+    "max-aggregate",
+    "null-aggregate-input",
+    "case-classification",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Bundle 901 has two payloads and exposes the maximum checksum; bundle 902 mixes a NULL payload with one payload; bundle 903 contains only a NULL payload and exercises CRC32 NULL propagation through MAX and CASE.",
+  "determinism_notes": "Bundle IDs, payload strings, and row IDs are fixed; grouped output is ordered by the unique bundle ID with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE artifact_parts (part_id INT PRIMARY KEY, bundle_id INT NOT NULL, payload VARCHAR(32) NULL)",
+    "INSERT INTO artifact_parts VALUES (1, 901, 'manifest-alpha-v1'), (2, 901, 'manifest-alpha-v2'), (3, 902, NULL), (4, 902, 'manifest-beta-v1'), (5, 903, NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT bundle_id, COUNT(*) AS part_count, MAX(CRC32(payload)) AS max_payload_checksum, CASE WHEN MAX(CRC32(payload)) IS NULL THEN 'empty' WHEN MAX(CRC32(payload)) >= 2147483648 THEN 'unsigned-high' ELSE 'standard' END AS checksum_class FROM artifact_parts GROUP BY bundle_id ORDER BY bundle_id",
+      "ordered": true
+    }
+  ]
+}
