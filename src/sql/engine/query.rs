@@ -1613,7 +1613,7 @@ impl RawEngine {
                     "FLOOR" => MysqlColumnType::Decimal,
                     "ROUND" | "TRUNCATE" => MysqlColumnType::Decimal,
                     "CURRENT_DATE" | "CURDATE" | "DATE" => MysqlColumnType::Date,
-                    "CURRENT_TIME" | "CURTIME" | "TIME" => MysqlColumnType::Time,
+                    "CURRENT_TIME" | "CURTIME" | "TIME" | "SEC_TO_TIME" => MysqlColumnType::Time,
                     "NOW" | "CURRENT_TIMESTAMP" => MysqlColumnType::DateTime,
                     "DATE_ADD" | "DATE_SUB" | "ADDDATE" | "SUBDATE" => {
                         MysqlColumnType::DateTime

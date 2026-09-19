@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "appointment_time_slots_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "freemed/freemed",
+      "commit": "79efd68d2a919244beeb584f77e8298a42a01a01",
+      "path": "data/schema/mysql/scheduler.sql",
+      "url": "https://github.com/freemed/freemed/blob/79efd68d2a919244beeb584f77e8298a42a01a01/data/schema/mysql/scheduler.sql",
+      "sha256": "c728c8e68d23d69c4eeae2961762231e68244b4f60f0c837a05beeeff2c7d217",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "data/schema/mysql/scheduler.sql:274",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "SEC_TO_TIME converts seconds produced by TIME_TO_SEC arithmetic back into a TIME cursor.",
+      "mysql_mariadb_translation": "Reduced to one independently authored scalar SEC_TO_TIME projection over a fixed TIME literal and minute increment. The scheduler loop, table, and classification are removed so MariaDB's TIME result metadata is isolated."
+    },
+    "independently_authored": true,
+    "minimized_from": "appointment_time_slots"
+  },
+  "features": [
+    "sec-to-time",
+    "time-to-sec",
+    "minimized-regression"
+  ],
+  "fixture_notes": "A fixed 08:15:00 appointment plus 45 minutes produces 09:00:00 and isolates SEC_TO_TIME's TIME metadata.",
+  "determinism_notes": "The time literal and minute increment are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT SEC_TO_TIME(TIME_TO_SEC('08:15:00') + 45 * 60) AS ending_time",
+      "ordered": true
+    }
+  ]
+}

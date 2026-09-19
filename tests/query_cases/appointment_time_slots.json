@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "appointment_time_slots",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "freemed/freemed",
+      "commit": "79efd68d2a919244beeb584f77e8298a42a01a01",
+      "path": "data/schema/mysql/scheduler.sql",
+      "url": "https://github.com/freemed/freemed/blob/79efd68d2a919244beeb584f77e8298a42a01a01/data/schema/mysql/scheduler.sql",
+      "sha256": "c728c8e68d23d69c4eeae2961762231e68244b4f60f0c837a05beeeff2c7d217",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "data/schema/mysql/scheduler.sql:249,274",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A scheduler compares TIME values through TIME_TO_SEC and advances a time cursor by minutes with SEC_TO_TIME(TIME_TO_SEC(...) + seconds).",
+      "mysql_mariadb_translation": "Rewritten as an independently authored appointment-slot report. Fixed appointment TIME values and duration minutes use TIME_TO_SEC for a noon shift boundary and SEC_TO_TIME for calculated end times; a literal noon threshold replaces the source routine's MAKETIME construction, and the routine loop becomes ordinary row-wise projection. The schema, rows, labels, and reporting purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "time-to-sec",
+    "sec-to-time",
+    "time-arithmetic",
+    "case-classification",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Appointments begin before noon, exactly at noon, and after noon; durations produce end times before and after the hour boundary. The noon comparison and calculated end time both remain observable as scalar TIME expressions.",
+  "determinism_notes": "Appointment IDs, TIME values, durations, and the noon threshold are fixed; output is ordered by the unique appointment ID with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE clinic_appointments (appointment_id INT PRIMARY KEY, appointment_time TIME NOT NULL, duration_minutes INT NOT NULL)",
+    "INSERT INTO clinic_appointments VALUES (101, '08:15:00', 45), (102, '11:30:00', 60), (103, '12:00:00', 30), (104, '17:10:00', 50)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT appointment_id, appointment_time, SEC_TO_TIME(TIME_TO_SEC(appointment_time) + duration_minutes * 60) AS ending_time, CASE WHEN TIME_TO_SEC(appointment_time) < TIME_TO_SEC('12:00:00') THEN 'morning' ELSE 'afternoon' END AS shift_name FROM clinic_appointments ORDER BY appointment_id",
+      "ordered": true
+    }
+  ]
+}
