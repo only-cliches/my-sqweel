@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "message_byte_lengths",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "functions/string-functions/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/functions/string-functions/mysql.sql",
+      "sha256": "579d216a9bec0a4d380ee6f63483e595bb412f873ed757454e3719095f9c9421",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "functions/string-functions/mysql.sql:110",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "OCTET_LENGTH measures the byte length of a string, distinct from character length for multibyte text.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored message-length audit. OCTET_LENGTH and CHAR_LENGTH compare UTF-8 byte and character counts across ASCII, accented, CJK, empty, and NULL message bodies, while CASE classifies missing and present content. The source literals, schema, rows, aliases, and reporting purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "octet-length",
+    "char-length",
+    "multibyte-text",
+    "empty-string",
+    "null-propagation",
+    "case-classification",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Message 801 is ASCII, 802 contains an accented character, 803 contains two CJK characters, 804 is empty, and 805 is NULL. Byte and character counts must diverge only for multibyte text.",
+  "determinism_notes": "Message IDs and text literals are fixed; output is ordered by the unique message ID with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE message_catalog (message_id INT PRIMARY KEY, body VARCHAR(64) NULL)",
+    "INSERT INTO message_catalog VALUES (801, 'cafe'), (802, 'café'), (803, '東京'), (804, ''), (805, NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT message_id, body, OCTET_LENGTH(body) AS byte_length, CHAR_LENGTH(body) AS character_length, CASE WHEN body IS NULL THEN 'missing' WHEN body = '' THEN 'empty' ELSE 'present' END AS body_class FROM message_catalog ORDER BY message_id",
+      "ordered": true
+    }
+  ]
+}
