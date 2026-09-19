@@ -203,6 +203,33 @@ pub(super) fn eval_date_part(
     Ok(Value::String(datetime.date().to_string()))
 }
 
+pub(super) fn eval_last_day(
+    arg: Option<&String>,
+    data: &Map<String, Value>,
+    last_insert_id: u64,
+) -> Result<Value> {
+    let value = arg
+        .map(|arg| eval_scalar_text(arg, data, last_insert_id))
+        .transpose()?
+        .unwrap_or(Value::Null);
+    if value == Value::Null {
+        return Ok(Value::Null);
+    }
+    let Some(datetime) = parse_mysql_datetime_value(&value) else {
+        return Ok(Value::Null);
+    };
+    let date = datetime.date();
+    let first_next_month = if date.month() == 12 {
+        NaiveDate::from_ymd_opt(date.year() + 1, 1, 1)
+    } else {
+        NaiveDate::from_ymd_opt(date.year(), date.month() + 1, 1)
+    };
+    Ok(first_next_month
+        .and_then(|date| date.pred_opt())
+        .map(|date| Value::String(date.to_string()))
+        .unwrap_or(Value::Null))
+}
+
 pub(super) fn eval_time_part(
     arg: Option<&String>,
     data: &Map<String, Value>,

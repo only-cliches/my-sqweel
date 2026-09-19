@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "month_end_invoice_windows",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "maranemil/howto",
+      "commit": "8c78618fce26710862fdfda1f6d427b9e0b3b879",
+      "path": "fullstack/databases/mysql/howto_mysql_date_format.sql",
+      "url": "https://github.com/maranemil/howto/blob/8c78618fce26710862fdfda1f6d427b9e0b3b879/fullstack/databases/mysql/howto_mysql_date_format.sql",
+      "sha256": "6350cdc38b4b49e2ae13ec18cae297149a23099647b99ad964cd4e682e7a65ec",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "fullstack/databases/mysql/howto_mysql_date_format.sql:100",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "DATE_FORMAT renders the month end returned by LAST_DAY around a relative date expression.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored invoice billing-window report. Each row supplies a fixed anchor date, LAST_DAY computes its calendar month boundary, DATE_FORMAT renders that boundary, and CASE classifies whether the invoice is due on the month end. The source literals, schema, rows, aliases, and reporting purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "last-day",
+    "date-format",
+    "calendar-boundary",
+    "leap-year",
+    "case-classification",
+    "null-propagation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Invoice 701 exercises a leap-year February boundary, invoice 702 a thirty-day month, invoice 703 an already month-ending date, and invoice 704 a NULL anchor.",
+  "determinism_notes": "Anchor dates, invoice IDs, and due dates are fixed; output is ordered by the unique invoice ID with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE invoice_billing_windows (invoice_id INT PRIMARY KEY, anchor_date DATE NULL, due_date DATE NULL)",
+    "INSERT INTO invoice_billing_windows VALUES (701, '2024-02-10', '2024-02-29'), (702, '2026-04-01', '2026-04-29'), (703, '2026-02-28', '2026-02-28'), (704, NULL, NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT invoice_id, anchor_date, due_date, LAST_DAY(anchor_date) AS month_end, DATE_FORMAT(LAST_DAY(anchor_date), '%Y-%m-%d') AS month_end_label, CASE WHEN anchor_date IS NULL THEN 'missing' WHEN due_date = LAST_DAY(anchor_date) THEN 'month-end' ELSE 'mid-month' END AS billing_class FROM invoice_billing_windows ORDER BY invoice_id",
+      "ordered": true
+    }
+  ]
+}
