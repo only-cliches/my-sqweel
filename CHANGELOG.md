@@ -44,6 +44,7 @@ All notable changes to MySqweel will be documented in this file.
 - Added GitHub-attributed `SUM(DISTINCT ...)` coverage for grouped campaign spend through a NULL-preserving left join, including duplicate and NULL amount semantics; MariaDB 10.11.7 and MySqweel matched without a source fix.
 - Added GitHub-attributed `AVG(DISTINCT ...)` coverage for grouped regional decimal prices through a NULL-preserving left join, including duplicate, NULL, and empty-group semantics; fixed aggregate metadata argument extraction for ordinary `DISTINCT` calls so MariaDB's input-scale-plus-four decimal rendering matches, with a minimized regression.
 - Added GitHub-attributed `BIT_AND`/`BIT_OR` coverage for grouped team permission masks, including NULL aggregate inputs; MariaDB 10.11.7 and MySqweel matched without a source fix.
+- Added GitHub-attributed `VAR_POP` coverage for grouped warehouse load variance with DECIMAL input and NULL readings, including the minimized one-group regression; fixed `VAR_POP`/`VARIANCE` metadata to emit MariaDB's `DOUBLE` and input-scale-plus-four fixed-point rendering.
 - Parked GitHub-attributed `GROUPING()` plus `GROUP BY ... WITH ROLLUP` coverage from the MariaDB seed query because MariaDB 10.11.7 returns error 1305 / SQLSTATE `42000` for `GROUPING()`; no invalid fixture was retained.
 - Parked an `UPDATE ... RETURNING` coverage candidate because MariaDB 10.11.7 returns syntax error 1064 for that form; no invalid fixture was retained.
 

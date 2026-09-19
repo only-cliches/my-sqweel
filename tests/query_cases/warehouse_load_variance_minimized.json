@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "warehouse_load_variance_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "princeKris/mysqlProgram",
+      "commit": "c84b0678843999ce9545ded6dd6a18ed76730163",
+      "path": "mysql_complete_beginner_teaching.sql",
+      "url": "https://github.com/princeKris/mysqlProgram/blob/c84b0678843999ce9545ded6dd6a18ed76730163/mysql_complete_beginner_teaching.sql",
+      "sha256": "3649f50263b042b0c709a1ed3c80d0dd5d22e6a0d214256545bc978d86fbabd9",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "mysql_complete_beginner_teaching.sql:956-958",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL report uses VAR_POP to calculate population variance for a numeric measure.",
+      "mysql_mariadb_translation": "Minimized independently authored regression with one warehouse and two decimal loads plus one NULL reading. It isolates VAR_POP's DOUBLE result type and fixed-point wire formatting without the original table or report."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "var-pop-aggregate",
+    "grouping",
+    "decimal-input",
+    "null-aggregate-input",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The only warehouse has loads 10.00 and 14.00 plus a NULL reading, so VAR_POP over non-NULL values is 4.00 and the NULL must be ignored.",
+  "determinism_notes": "Measurement IDs and the single warehouse ID are fixed; the result is ordered by the unique warehouse ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE mini_warehouse_loads (measurement_id INT PRIMARY KEY, warehouse_id INT NOT NULL, load_kg DECIMAL(10,2) NULL)",
+    "INSERT INTO mini_warehouse_loads VALUES (1, 10, 10.00), (2, 10, 14.00), (3, 10, NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT warehouse_id, VAR_POP(load_kg) AS population_variance FROM mini_warehouse_loads GROUP BY warehouse_id ORDER BY warehouse_id",
+      "ordered": true
+    }
+  ]
+}

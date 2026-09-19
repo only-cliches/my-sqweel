@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "warehouse_load_variance",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "princeKris/mysqlProgram",
+      "commit": "c84b0678843999ce9545ded6dd6a18ed76730163",
+      "path": "mysql_complete_beginner_teaching.sql",
+      "url": "https://github.com/princeKris/mysqlProgram/blob/c84b0678843999ce9545ded6dd6a18ed76730163/mysql_complete_beginner_teaching.sql",
+      "sha256": "3649f50263b042b0c709a1ed3c80d0dd5d22e6a0d214256545bc978d86fbabd9",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "mysql_complete_beginner_teaching.sql:956-958",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL report uses VAR_POP to calculate population variance for a numeric measure.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored warehouse load report. Measurements are grouped by warehouse, a NULL reading verifies that VAR_POP ignores NULL inputs, and fixed decimal weights make the variance results deterministic without copying the source schema or rows."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "var-pop-aggregate",
+    "grouping",
+    "decimal-input",
+    "null-aggregate-input",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Warehouse 10 has loads 10.00 and 14.00 plus a NULL reading, so the population variance over non-NULL values is 4.00. Warehouse 20 has loads 3.00 and 9.00, so its population variance is 9.00.",
+  "determinism_notes": "Warehouse IDs and measurement IDs are fixed; the grouped report is ordered by the unique warehouse ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE warehouse_loads (measurement_id INT PRIMARY KEY, warehouse_id INT NOT NULL, load_kg DECIMAL(10,2) NULL)",
+    "INSERT INTO warehouse_loads VALUES (101, 10, 10.00), (102, 10, 14.00), (103, 10, NULL), (201, 20, 3.00), (202, 20, 9.00)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT warehouse_id, VAR_POP(load_kg) AS population_variance FROM warehouse_loads GROUP BY warehouse_id ORDER BY warehouse_id",
+      "ordered": true
+    }
+  ]
+}
