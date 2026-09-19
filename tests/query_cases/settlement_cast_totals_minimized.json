@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "id": "settlement_cast_totals_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "sqlstandardsproject/sqlacidtest",
+      "commit": "14a231ba9b3719d731ea01989c19ac9edfc06561",
+      "path": "acid.sql",
+      "url": "https://github.com/sqlstandardsproject/sqlacidtest/blob/14a231ba9b3719d731ea01989c19ac9edfc06561/acid.sql",
+      "sha256": "7907fca14bd3df0f0596b41628ea361ad80baa4af64a87438fc305fca21b377e",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "acid.sql: standard-cast checks around test016 and test019",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A scalar CAST converts a numeric literal to a fixed-scale DECIMAL result with MariaDB rounding semantics.",
+      "mysql_mariadb_translation": "Reduced to one independently authored negative half-step decimal literal and DECIMAL(10,2) cast, removing the settlement tables, aggregates, text conversion, and classification so exact negative rounding is isolated."
+    },
+    "independently_authored": true,
+    "minimized_from": "settlement_cast_totals"
+  },
+  "features": [
+    "cast",
+    "decimal-cast",
+    "negative-rounding",
+    "minimized-regression"
+  ],
+  "fixture_notes": "MariaDB rounds the fixed-scale negative half-step -4.995 away from zero to -5.00.",
+  "determinism_notes": "The numeric literal and target scale are fixed with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT CAST('-4.995' AS DECIMAL(10,2)) AS rounded_amount",
+      "ordered": true
+    }
+  ]
+}

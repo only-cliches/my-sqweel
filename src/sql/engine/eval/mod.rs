@@ -4694,6 +4694,15 @@ pub(super) fn cast_json_value(value: Value, data_type: &str) -> Result<Value> {
         || data_type.contains("float")
         || data_type.contains("real")
     {
+        if data_type.contains("decimal")
+            && let Some(scale) = decimal_cast_scale(&data_type)
+            && let Some(rendered) = round_decimal_cast(&value, scale)
+        {
+            return rendered
+                .parse::<Number>()
+                .map(Value::Number)
+                .map_err(|error| anyhow!("invalid decimal cast: {error}"));
+        }
         return Ok(number_from_f64(json_to_f64_lossy(&value)?));
     }
     if data_type.contains("char") || data_type.contains("text") || data_type.contains("binary") {
@@ -4715,6 +4724,58 @@ pub(super) fn cast_json_value(value: Value, data_type: &str) -> Result<Value> {
         return Ok(Value::Bool(value_truthy(&value)));
     }
     Ok(value)
+}
+fn round_decimal_cast(value: &Value, scale: usize) -> Option<String> {
+    let DecimalParts {
+        sign,
+        mut integer,
+        mut fraction,
+    } = decimal_parts(value)?;
+    if fraction.len() > scale {
+        let round_up = fraction
+            .as_bytes()
+            .get(scale)
+            .is_some_and(|digit| *digit >= b'5');
+        fraction.truncate(scale);
+        if round_up {
+            let mut digits = format!("{integer}{fraction}");
+            increment_decimal_digits(&mut digits);
+            let split = digits.len().saturating_sub(scale);
+            integer = digits[..split].to_string();
+            fraction = digits[split..].to_string();
+        }
+    }
+    while fraction.len() < scale {
+        fraction.push('0');
+    }
+    let sign = if sign < 0 { "-" } else { "" };
+    Some(if scale == 0 {
+        format!("{sign}{integer}")
+    } else {
+        format!("{sign}{integer}.{fraction}")
+    })
+}
+
+fn increment_decimal_digits(digits: &mut String) {
+    let mut bytes = digits.as_bytes().to_vec();
+    for digit in bytes.iter_mut().rev() {
+        if *digit == b'9' {
+            *digit = b'0';
+        } else {
+            *digit += 1;
+            *digits = String::from_utf8(bytes).expect("decimal digits are ASCII");
+            return;
+        }
+    }
+    bytes.insert(0, b'1');
+    *digits = String::from_utf8(bytes).expect("decimal digits are ASCII");
+}
+fn decimal_cast_scale(data_type: &str) -> Option<usize> {
+    let (_, tail) = data_type.split_once('(')?;
+    let body = tail.split_once(')').map_or(tail, |(body, _)| body);
+    body.split(',')
+        .nth(1)
+        .and_then(|scale| scale.trim().parse().ok())
 }
 
 fn cast_mysql_date(value: Value) -> Value {

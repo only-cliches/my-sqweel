@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "settlement_cast_totals",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "sqlstandardsproject/sqlacidtest",
+      "commit": "14a231ba9b3719d731ea01989c19ac9edfc06561",
+      "path": "acid.sql",
+      "url": "https://github.com/sqlstandardsproject/sqlacidtest/blob/14a231ba9b3719d731ea01989c19ac9edfc06561/acid.sql",
+      "sha256": "7907fca14bd3df0f0596b41628ea361ad80baa4af64a87438fc305fca21b377e",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "acid.sql: standard-cast checks around test016 and test019",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "Public SQL conformance checks use CAST to convert NULL and textual numeric values into explicitly typed numeric results, including DECIMAL precision.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored settlement ledger. Grouped decimal amounts are cast to two-place DECIMAL totals, textual tax units are cast before aggregation, and NULL-only settlements are classified separately. The schema, rows, expressions, aliases, and reporting purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "cast",
+    "decimal-cast",
+    "numeric-text-conversion",
+    "grouped-aggregate",
+    "null-propagation",
+    "case-classification",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Account 501 sums two positive amounts and textual tax units; account 502 has a negative amount that rounds to -5.00 and a positive tax unit; account 503 has only NULL inputs and must retain NULL aggregate casts with an empty classification.",
+  "determinism_notes": "Entry IDs, account IDs, decimal literals, and text amounts are fixed; the grouped output is ordered by the unique account ID with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE settlement_entries (entry_id INT PRIMARY KEY, account_id INT NOT NULL, amount DECIMAL(10,3) NULL, tax_units_text VARCHAR(16) NULL)",
+    "INSERT INTO settlement_entries VALUES (1, 501, 12.345, '1.250'), (2, 501, 0.655, '0.750'), (3, 502, -4.995, '2.500'), (4, 503, NULL, NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT account_id, CAST(SUM(amount) AS DECIMAL(10,2)) AS total_amount, CAST(SUM(CAST(tax_units_text AS DECIMAL(10,3))) AS DECIMAL(10,2)) AS total_tax_units, CASE WHEN CAST(SUM(amount) AS DECIMAL(10,2)) IS NULL THEN 'empty' WHEN CAST(SUM(amount) AS DECIMAL(10,2)) < 0 THEN 'credit' ELSE 'debit' END AS settlement_class FROM settlement_entries GROUP BY account_id ORDER BY account_id",
+      "ordered": true
+    }
+  ]
+}
