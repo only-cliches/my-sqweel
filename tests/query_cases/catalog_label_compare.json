@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "catalog_label_compare",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "zufuliu/notepad4",
+      "commit": "6237dacffb299c7cbdb505ca05b3f45d42e7dbc2",
+      "path": "tools/lang/MySQL.sql",
+      "url": "https://github.com/zufuliu/notepad4/blob/6237dacffb299c7cbdb505ca05b3f45d42e7dbc2/tools/lang/MySQL.sql",
+      "sha256": "f60d37c6d9596173ba20b9d552abf22d6b396f8d000dc2e61b6ff13d8e5f612c",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "tools/lang/MySQL.sql:910",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "STRCMP compares two strings and returns a negative, zero, or positive comparison result.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored catalog-label audit. STRCMP compares fixed candidate labels against expected labels, while CASE classifies exact matches, lower candidates, higher candidates, and NULL inputs. The source literals, schema, rows, aliases, and reporting purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "strcmp",
+    "three-way-comparison",
+    "null-propagation",
+    "case-classification",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Label 901 is equal to its expected value, 902 sorts before the expected label, 903 sorts after it, and 904 has a NULL candidate.",
+  "determinism_notes": "Label IDs and strings are fixed; output is ordered by the unique label ID with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE catalog_labels (label_id INT PRIMARY KEY, candidate VARCHAR(64) NULL, expected VARCHAR(64) NOT NULL)",
+    "INSERT INTO catalog_labels VALUES (901, 'alpha', 'alpha'), (902, 'alpha', 'beta'), (903, 'gamma', 'beta'), (904, NULL, 'delta')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT label_id, candidate, expected, STRCMP(candidate, expected) AS comparison, CASE WHEN candidate IS NULL THEN 'missing' WHEN STRCMP(candidate, expected) = 0 THEN 'match' WHEN STRCMP(candidate, expected) < 0 THEN 'lower' ELSE 'higher' END AS comparison_class FROM catalog_labels ORDER BY label_id",
+      "ordered": true
+    }
+  ]
+}

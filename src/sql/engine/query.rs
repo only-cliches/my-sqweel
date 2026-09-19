@@ -1645,6 +1645,7 @@ impl RawEngine {
                     "LENGTH" | "OCTET_LENGTH" | "CHAR_LENGTH" | "CHARACTER_LENGTH" => {
                         MysqlColumnType::Integer
                     }
+                    "STRCMP" => MysqlColumnType::Integer,
                     "TIMESTAMPDIFF" => MysqlColumnType::BigInt,
                     "DATEDIFF" => MysqlColumnType::Integer,
                     "COALESCE" | "IFNULL" => self.widest_function_argument_type(

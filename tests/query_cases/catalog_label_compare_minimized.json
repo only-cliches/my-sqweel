@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "catalog_label_compare_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "zufuliu/notepad4",
+      "commit": "6237dacffb299c7cbdb505ca05b3f45d42e7dbc2",
+      "path": "tools/lang/MySQL.sql",
+      "url": "https://github.com/zufuliu/notepad4/blob/6237dacffb299c7cbdb505ca05b3f45d42e7dbc2/tools/lang/MySQL.sql",
+      "sha256": "f60d37c6d9596173ba20b9d552abf22d6b396f8d000dc2e61b6ff13d8e5f612c",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "tools/lang/MySQL.sql:910",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "STRCMP compares two strings and returns a three-way integer result.",
+      "mysql_mariadb_translation": "Reduced to one independently authored scalar STRCMP projection over two fixed labels, removing table setup, NULL handling, and CASE classification while retaining comparison values and integer metadata."
+    },
+    "independently_authored": true,
+    "minimized_from": "catalog_label_compare"
+  },
+  "features": [
+    "strcmp",
+    "three-way-comparison",
+    "minimized-regression"
+  ],
+  "fixture_notes": "The fixed labels produce a negative comparison result and isolate STRCMP's integer result metadata.",
+  "determinism_notes": "Both text literals are fixed; the scalar query has no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT STRCMP('alpha', 'beta') AS comparison",
+      "ordered": true
+    }
+  ]
+}
