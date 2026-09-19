@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "text_date_monthly_sales",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "nehanegi2912/nehaproject06",
+      "commit": "ec50933d334b1880baf06a55dc7e563f14136149",
+      "path": "task6_monthly_sales_trend_mysql.sql",
+      "url": "https://github.com/nehanegi2912/nehaproject06/blob/ec50933d334b1880baf06a55dc7e563f14136149/task6_monthly_sales_trend_mysql.sql",
+      "sha256": "b55371ffbbec3866ce61615d4513623b63b48f1037714e0f8a9ba481581e22d1",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "task6_monthly_sales_trend_mysql.sql:3-8",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A monthly sales report parses text dates with STR_TO_DATE, derives a DATE_FORMAT month bucket, sums revenue, counts distinct orders, and orders the month buckets chronologically.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored campaign-sales report. The input date format, table, rows, status filter, revenue values, and output names are new; a NULL text date is excluded explicitly while duplicate order references exercise COUNT(DISTINCT) within the parsed month grouping."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "str-to-date",
+    "date-format",
+    "text-date-grouping",
+    "count-distinct",
+    "round",
+    "sum",
+    "null-filter",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Settled sale 1 is the only January order; sales 2 and 3 share one February order while sale 4 contributes a second order but NULL revenue; sale 5 is March; the cancelled February sale and NULL-date settled sale are excluded.",
+  "determinism_notes": "All date strings, amounts, statuses, and order references are fixed; month buckets are ordered lexicographically in YYYY-MM form with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE campaign_sales (sale_id INT PRIMARY KEY, sold_on VARCHAR(10), gross DECIMAL(10,2), order_ref VARCHAR(16) NOT NULL, status VARCHAR(12) NOT NULL)",
+    "INSERT INTO campaign_sales VALUES (1, '31/01/2026', 125.50, 'CAM-100', 'settled'), (2, '01/02/2026', 40.00, 'CAM-101', 'settled'), (3, '14/02/2026', 12.50, 'CAM-101', 'settled'), (4, '28/02/2026', NULL, 'CAM-102', 'settled'), (5, '01/03/2026', 90.00, 'CAM-103', 'settled'), (6, '15/02/2026', 50.00, 'CAM-104', 'cancelled'), (7, NULL, 80.00, 'CAM-105', 'settled')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT DATE_FORMAT(STR_TO_DATE(sold_on, '%d/%m/%Y'), '%Y-%m') AS sales_month, ROUND(SUM(gross), 2) AS gross_revenue, COUNT(DISTINCT order_ref) AS distinct_orders FROM campaign_sales WHERE status = 'settled' AND STR_TO_DATE(sold_on, '%d/%m/%Y') IS NOT NULL GROUP BY sales_month ORDER BY sales_month",
+      "ordered": true
+    }
+  ]
+}
