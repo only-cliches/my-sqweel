@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "regional_percentile_latency",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "milonsarker/dsa",
+      "commit": "243a456d73c56dfb78a3663dcab6b2a7918f1334",
+      "path": "leetcode/databases/MySQL/3055.sql",
+      "url": "https://github.com/milonsarker/dsa/blob/243a456d73c56dfb78a3663dcab6b2a7918f1334/leetcode/databases/MySQL/3055.sql",
+      "sha256": "ce7d68b41c782217bc90463f30fe127d0b3656e54c761323cb49f30416976216",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "leetcode/databases/MySQL/3055.sql:4-12",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL CTE computes PERCENT_RANK within each state ordered by a descending score, then filters the ranked rows by a percentile threshold and applies deterministic output ordering.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored regional latency report. Fixed service readings are ranked within each region, tied latency values remain peers, the outer CTE filter keeps the best half of each region, and region/latency/reading ID ordering makes output deterministic. The schema, rows, labels, and operational purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "percent-rank",
+    "cte",
+    "partitioned-window",
+    "peer-ties",
+    "threshold-filter",
+    "decimal",
+    "deterministic-order"
+  ],
+  "fixture_notes": "North has four readings with an equal-latency peer pair, producing ranks 0, 0.3333333333, 0.3333333333, and 1; south has three distinct readings producing 0, 0.5, and 1. The <= 0.5 filter retains three north readings and two south readings while excluding each region's slowest reading.",
+  "determinism_notes": "The window partitions by region and orders by latency DESC; the final result orders by region, latency DESC, and unique reading_id. All readings and thresholds are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE service_readings (reading_id INT PRIMARY KEY, region VARCHAR(16) NOT NULL, latency_ms DECIMAL(8,2) NOT NULL)",
+    "INSERT INTO service_readings VALUES (101, 'north', 100.00), (102, 'north', 80.00), (103, 'north', 80.00), (104, 'north', 40.00), (201, 'south', 90.00), (202, 'south', 70.00), (203, 'south', 50.00)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH ranked_readings AS (SELECT reading_id, region, latency_ms, PERCENT_RANK() OVER (PARTITION BY region ORDER BY latency_ms DESC) AS percentile_rank FROM service_readings) SELECT reading_id, region, latency_ms, percentile_rank FROM ranked_readings WHERE percentile_rank <= 0.5 ORDER BY region, latency_ms DESC, reading_id",
+      "ordered": true
+    }
+  ]
+}
