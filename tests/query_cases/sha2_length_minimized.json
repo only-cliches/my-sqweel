@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "sha2_length_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "LarryUllman/phpmysqlvqp-5ed",
+      "commit": "d2271117ef54be63e28b7125d574655c444bf596",
+      "path": "sql.sql",
+      "url": "https://github.com/LarryUllman/phpmysqlvqp-5ed/blob/d2271117ef54be63e28b7125d574655c444bf596/sql.sql",
+      "sha256": "b7e36356ac4bf8ea1ecef5d57a6b2f22feb36033175c1c6609f8766efc45749c",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql.sql:31",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A scalar SHA2 call selects the 512-bit digest variant for a fixed string.",
+      "mysql_mariadb_translation": "Reduced to one independently authored scalar SHA2 projection, removing tables, mutation, and unrelated hash lengths while retaining the variable hash-length argument that exposed the mismatch."
+    },
+    "independently_authored": true,
+    "minimized_from": "sha2_credential_digests"
+  },
+  "features": [
+    "sha2",
+    "variable-hash-length",
+    "minimized-regression"
+  ],
+  "fixture_notes": "One fixed phrase and the 512-bit selector isolate SHA2's hash-length dispatch.",
+  "determinism_notes": "The phrase and bit length are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT SHA2('violet-key', 512) AS digest_512",
+      "ordered": true
+    }
+  ]
+}

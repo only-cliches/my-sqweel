@@ -4024,7 +4024,7 @@ pub(super) fn eval_function_text(
         }),
         "MD5" => eval_digest(args.first(), data, last_insert_id, "MD5"),
         "SHA" | "SHA1" => eval_digest(args.first(), data, last_insert_id, "SHA1"),
-        "SHA2" => eval_digest(args.first(), data, last_insert_id, "SHA256"),
+        "SHA2" => eval_sha2(&args, data, last_insert_id),
         "CRC32" => eval_crc32(args.first(), data, last_insert_id),
         "HEX" => {
             let value = args

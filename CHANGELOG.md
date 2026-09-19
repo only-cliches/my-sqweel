@@ -118,6 +118,8 @@ All notable changes to MySqweel will be documented in this file.
 - Parked the GitHub-attributed `REGEXP_LIKE` email-validation candidate because MariaDB 10.11.7 returns error 1305 / SQLSTATE `42000` for `REGEXP_LIKE`; no invalid fixture was retained.
 - Parked GitHub-attributed `GROUPING()` plus `GROUP BY ... WITH ROLLUP` coverage from the MariaDB seed query because MariaDB 10.11.7 returns error 1305 / SQLSTATE `42000` for `GROUPING()`; no invalid fixture was retained.
 - Parked an `UPDATE ... RETURNING` coverage candidate because MariaDB 10.11.7 returns syntax error 1064 for that form; no invalid fixture was retained.
+- Parked the GitHub-attributed `SHA2` candidate from `DataLinkDC/dinky` because the matching rows were Flink function-documentation seed inserts rather than executable MySQL/MariaDB query coverage; no duplicate fixture was retained.
+- Added GitHub-attributed `SHA2` coverage for an independently authored credential-event import with variable 224/256/384/512-bit digest lengths, `INSERT ... SELECT`, and NULL propagation; fixed SHA2 hash-length dispatch to match MariaDB 10.11.7, including a minimized scalar regression.
 
 ## 0.4.4 Sep 9, 2026
 

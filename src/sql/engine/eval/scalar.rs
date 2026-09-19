@@ -2,7 +2,7 @@ use super::*;
 use base64::Engine;
 use md5::{Digest, Md5};
 use sha1_smol::Sha1;
-use sha2::Sha256;
+use sha2::{Sha224, Sha256, Sha384, Sha512};
 use regex::{NoExpand, Regex};
 
 pub(super) fn eval_to_base64_value(value: Value) -> Result<Value> {
@@ -813,6 +813,34 @@ pub(super) fn eval_digest(
         "SHA" | "SHA1" => Sha1::from(bytes).digest().to_string(),
         "SHA256" => format_digest(&Sha256::digest(bytes.as_bytes())),
         _ => return Err(anyhow!("unsupported digest: {algorithm}")),
+    };
+    Ok(Value::String(hex))
+}
+
+pub(super) fn eval_sha2(
+    args: &[String],
+    data: &Map<String, Value>,
+    last_insert_id: u64,
+) -> Result<Value> {
+    let value = eval_arg(args.first(), data, last_insert_id)?;
+    let hash_length = args
+        .get(1)
+        .map(|arg| eval_arg(Some(arg), data, last_insert_id))
+        .transpose()?
+        .unwrap_or(Value::Null);
+    if value == Value::Null || hash_length == Value::Null {
+        return Ok(Value::Null);
+    }
+    let Some(hash_length) = value_to_i64(&hash_length) else {
+        return Ok(Value::Null);
+    };
+    let bytes = json_scalar_to_string(&value);
+    let hex = match hash_length {
+        224 => format_digest(&Sha224::digest(bytes.as_bytes())),
+        256 => format_digest(&Sha256::digest(bytes.as_bytes())),
+        384 => format_digest(&Sha384::digest(bytes.as_bytes())),
+        512 => format_digest(&Sha512::digest(bytes.as_bytes())),
+        _ => return Ok(Value::Null),
     };
     Ok(Value::String(hex))
 }
