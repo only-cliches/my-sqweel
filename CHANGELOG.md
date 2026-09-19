@@ -146,6 +146,8 @@ All notable changes to MySqweel will be documented in this file.
 - Parked the GitHub-attributed `JSON_STORAGE_SIZE` candidate from [opengauss-mirror/Plugin](https://github.com/opengauss-mirror/Plugin/blob/15611cfb458bdddf4b36043ff4f6e62ef9d1213a/contrib/dolphin/sql/json_storage_size.sql) because MariaDB 10.11.7 returned error 1305 (`42000`, function unavailable) in both repeated baselines; no fixture was retained.
 - Added GitHub-attributed `JSON_OVERLAPS` coverage from [ZhiQingWu00/special](https://github.com/ZhiQingWu00/special/blob/283b45983920f3e09a5bd44177c6b6290555fa7d/mysql_design.sql) for an independently authored array/object overlap audit; fixed `JSON_OVERLAPS` result metadata to report MariaDB's integer column type.
 - Added the minimized GitHub-attributed JSON overlap metadata regression; MariaDB 10.11.7 and MySqweel now both report `MYSQL_TYPE_LONG` across repeated fresh differential runs.
+- Added GitHub-attributed CTE/window coverage from [wenshao/sql-dialects](https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/query/cte/mysql.sql) for an independently authored monthly billing-growth audit combining three CTE layers, `DATE_FORMAT`, `SUM` over `DECIMAL`, `LAG`, and rounded percentage arithmetic; fixed `ROUND` metadata to preserve its requested decimal scale.
+- Added the minimized GitHub-attributed monthly-growth decimal-scale regression; MariaDB 10.11.7 and MySqweel now both report `MYSQL_TYPE_NEWDECIMAL` values with two fractional digits across repeated fresh differential runs.
 
 ## 0.4.4 Sep 9, 2026
 

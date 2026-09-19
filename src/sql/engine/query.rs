@@ -1645,7 +1645,24 @@ impl RawEngine {
                         }
                     }
                     "FLOOR" => MysqlColumnType::Decimal,
-                    "ROUND" | "TRUNCATE" => MysqlColumnType::Decimal,
+                    "ROUND" | "TRUNCATE" => {
+                        if let Ok(arguments) = function_arguments(function) {
+                            if let Some(Some(Expr::Value(SqlValue::Number(number, _)))) =
+                                arguments.get(1)
+                            {
+                                metadata.decimals = number
+                                    .parse::<i64>()
+                                    .ok()
+                                    .map(|places| places.clamp(0, u8::MAX as i64) as u8)
+                                    .unwrap_or_default();
+                            } else if let Some(Some(argument)) = arguments.first() {
+                                metadata.decimals = self
+                                    .expression_metadata(select, argument, String::new(), first_row)
+                                    .decimals;
+                            }
+                        }
+                        MysqlColumnType::Decimal
+                    }
                     "CURRENT_DATE" | "CURDATE" | "DATE" | "FROM_DAYS" | "LAST_DAY" => MysqlColumnType::Date,
                     "CURRENT_TIME" | "CURTIME" | "TIME" | "SEC_TO_TIME" | "TIMEDIFF" => MysqlColumnType::Time,
                     "NOW" | "CURRENT_TIMESTAMP" | "FROM_UNIXTIME" => MysqlColumnType::DateTime,

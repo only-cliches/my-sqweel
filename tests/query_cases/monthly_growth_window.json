@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "monthly_growth_window",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "query/cte/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/query/cte/mysql.sql",
+      "sha256": "3d119466a5e2ff93dba4df11c83944f748a451aefc037fe3cfab17feea4fb5f5",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "query/cte/mysql.sql:218-230",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL CTE aggregates dated records into monthly revenue and uses LAG plus ROUND to calculate month-over-month growth.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored billing-event audit. Three CTE layers bucket posted decimal amounts by month, carry the prior monthly total with LAG, and round the percentage change; the schema, values, statuses, and report labels are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["common-table-expressions", "date-format-bucketing", "aggregate-sum", "lag-window", "decimal-arithmetic", "rounded-growth", "deterministic-order"],
+  "fixture_notes": "Posted amounts aggregate to 100.00 for January, 125.00 for February, 150.00 for March, and 60.00 for April; a voided January event is excluded. The expected growth percentages are NULL, 25.00, 20.00, and -60.00 in month order.",
+  "determinism_notes": "Event IDs, dates, amounts, and statuses are fixed, and the final report is ordered by its unique month bucket. There are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE billing_events (event_id INT PRIMARY KEY, posted_at DATE NOT NULL, amount DECIMAL(10,2) NOT NULL, event_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO billing_events VALUES (101, '2026-01-04', 40.25, 'posted'), (102, '2026-01-16', 59.75, 'posted'), (103, '2026-01-28', 999.00, 'voided'), (104, '2026-02-02', 80.00, 'posted'), (105, '2026-02-21', 45.00, 'posted'), (106, '2026-03-09', 75.00, 'posted'), (107, '2026-03-26', 75.00, 'posted'), (108, '2026-04-11', 60.00, 'posted')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH monthly_revenue AS (SELECT DATE_FORMAT(posted_at, '%Y-%m') AS month_bucket, SUM(amount) AS revenue FROM billing_events WHERE event_state = 'posted' GROUP BY month_bucket), with_previous AS (SELECT month_bucket, revenue, LAG(revenue) OVER (ORDER BY month_bucket) AS previous_revenue FROM monthly_revenue), monthly_growth AS (SELECT month_bucket, revenue, previous_revenue, ROUND((revenue - previous_revenue) / previous_revenue * 100, 2) AS growth_percent FROM with_previous) SELECT month_bucket, revenue, previous_revenue, growth_percent FROM monthly_growth ORDER BY month_bucket",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT event_id, event_state FROM billing_events ORDER BY event_id",
+      "ordered": true
+    }
+  ]
+}

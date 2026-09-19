@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "monthly_growth_window_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "query/cte/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/query/cte/mysql.sql",
+      "sha256": "3d119466a5e2ff93dba4df11c83944f748a451aefc037fe3cfab17feea4fb5f5",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "query/cte/mysql.sql:218-230",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "ROUND preserves a requested decimal scale for a calculated percentage in a CTE-based report.",
+      "mysql_mariadb_translation": "Minimized to one independently authored DECIMAL ratio and a fixed ROUND scale so result formatting is isolated from date bucketing, aggregation, and window ordering."
+    },
+    "independently_authored": true,
+    "minimized_from": "monthly_growth_window"
+  },
+  "features": ["round", "decimal-scale", "division", "metadata-regression", "deterministic-order"],
+  "fixture_notes": "The fixed ratio 125.00 / 100.00 * 100 must render as decimal 125.00 after ROUND(..., 2).",
+  "determinism_notes": "One fixed primary-key row is selected in ID order. There are no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE growth_values (sample_id INT PRIMARY KEY, current_value DECIMAL(10,2) NOT NULL, previous_value DECIMAL(10,2) NOT NULL)",
+    "INSERT INTO growth_values VALUES (1, 125.00, 100.00)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT sample_id, ROUND((current_value / previous_value) * 100, 2) AS growth_percent FROM growth_values ORDER BY sample_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT sample_id FROM growth_values ORDER BY sample_id",
+      "ordered": true
+    }
+  ]
+}
