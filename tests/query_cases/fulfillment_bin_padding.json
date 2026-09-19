@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "fulfillment_bin_padding",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "jk983294/CommonScript",
+      "commit": "4589db3c9d31174aebaaa1f8613e0db1c2a62dd2",
+      "path": "db/mysql/select_builtin_functions.sql",
+      "url": "https://github.com/jk983294/CommonScript/blob/4589db3c9d31174aebaaa1f8613e0db1c2a62dd2/db/mysql/select_builtin_functions.sql",
+      "sha256": "f9eb06f066ee52235beba4108dd6e2a95b7d7c2857daa9b78906324bc7b639af",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "db/mysql/select_builtin_functions.sql:25-26",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL scalar-function reference demonstrates LPAD and RPAD for fixed-width text formatting alongside ordinary string cleanup functions.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored fulfillment-bin report. Zone and slot identifiers are padded into stable display keys, labels are right-padded for a fixed-width export column, and surrounding note whitespace is trimmed. The source literals, table, data, and documentation purpose are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "lpad",
+    "rpad",
+    "implicit-numeric-to-text",
+    "coalesce",
+    "trim",
+    "null",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Bin 1 exercises a one-character zone and short label, bin 2 exercises multi-character zone and near-limit label, and bin 3 preserves NULL zone while COALESCE supplies an empty label before RPAD. Slot numbers must become four-character zero-padded strings.",
+  "determinism_notes": "All bin IDs, codes, labels, and notes are fixed literals; output is ordered by the unique bin ID with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE fulfillment_bins (bin_id INT PRIMARY KEY, zone_code VARCHAR(4), slot_no INT NOT NULL, label VARCHAR(16), note VARCHAR(32))",
+    "INSERT INTO fulfillment_bins VALUES (1, 'A', 7, 'cold', '  aisle-a  '), (2, 'AB', 42, 'ambient', ' shelf '), (3, NULL, 3, NULL, ' loose ' )"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT bin_id, LPAD(zone_code, 3, '0') AS zone_key, LPAD(slot_no, 4, '0') AS slot_key, RPAD(COALESCE(label, ''), 8, '.') AS padded_label, TRIM(note) AS clean_note FROM fulfillment_bins ORDER BY bin_id",
+      "ordered": true
+    }
+  ]
+}
