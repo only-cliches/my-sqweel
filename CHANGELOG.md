@@ -73,6 +73,7 @@ All notable changes to MySqweel will be documented in this file.
 - Added GitHub-attributed `CRC32` coverage for an independently authored grouped artifact-checksum audit with MAX aggregation, NULL payload propagation, unsigned checksum classification, and deterministic bundle ordering; MariaDB 10.11.7 and MySqweel matched without a source fix.
 - Added GitHub-attributed `GET_FORMAT`/`DATE_FORMAT` coverage for an independently authored locale-aware invoice due-date report with USA/EUR/ISO projections, NULL date propagation, CASE classification, and deterministic ordering; MariaDB 10.11.7 and MySqweel matched without a source fix.
 - Added GitHub-attributed `LAST_DAY`/`DATE_FORMAT` coverage for an independently authored invoice billing-window report with leap-year and thirty-day month boundaries, NULL propagation, CASE classification, and deterministic ordering; fixed `LAST_DAY` evaluation and DATE wire metadata to match MariaDB 10.11.7.
+- Added the minimized GitHub-attributed `LAST_DAY` scalar regression fixture; MariaDB 10.11.7 and MySqweel now both return `2024-02-29` with DATE metadata across repeated fresh differential runs.
 - Parked GitHub-attributed `GROUPING()` plus `GROUP BY ... WITH ROLLUP` coverage from the MariaDB seed query because MariaDB 10.11.7 returns error 1305 / SQLSTATE `42000` for `GROUPING()`; no invalid fixture was retained.
 - Parked an `UPDATE ... RETURNING` coverage candidate because MariaDB 10.11.7 returns syntax error 1064 for that form; no invalid fixture was retained.
 

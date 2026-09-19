@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "month_end_last_day_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "maranemil/howto",
+      "commit": "8c78618fce26710862fdfda1f6d427b9e0b3b879",
+      "path": "fullstack/databases/mysql/howto_mysql_date_format.sql",
+      "url": "https://github.com/maranemil/howto/blob/8c78618fce26710862fdfda1f6d427b9e0b3b879/fullstack/databases/mysql/howto_mysql_date_format.sql",
+      "sha256": "6350cdc38b4b49e2ae13ec18cae297149a23099647b99ad964cd4e682e7a65ec",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "fullstack/databases/mysql/howto_mysql_date_format.sql:100",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "LAST_DAY returns the calendar month boundary used by a date expression.",
+      "mysql_mariadb_translation": "Minimized to one deterministic scalar LAST_DAY projection so the compatibility mismatch is isolated from DATE_FORMAT, table setup, CASE classification, and row ordering."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "last-day",
+    "calendar-boundary",
+    "leap-year"
+  ],
+  "fixture_notes": "The single fixed leap-year date isolates LAST_DAY evaluation and DATE result metadata.",
+  "determinism_notes": "The scalar date literal is fixed and the query has no clocks, randomness, sleeps, or concurrent connections.",
+  "steps": [
+    {
+      "sql": "SELECT LAST_DAY('2024-02-10') AS month_end",
+      "ordered": true
+    }
+  ]
+}
