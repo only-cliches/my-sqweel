@@ -3300,6 +3300,15 @@ where
                 .unwrap_or(Value::Null);
             eval_from_base64_value(value)
         })()),
+        "QUOTE" => Some((|| {
+            let value = args
+                .first()
+                .map(eval_arg)
+                .transpose()?
+                .unwrap_or(Value::Null);
+            Ok(eval_quote_value(value))
+        })()),
+
         "CONV" => Some((|| {
             let values = args.iter().map(eval_arg).collect::<Result<Vec<_>>>()?;
             eval_conv_values(&values)
@@ -3543,6 +3552,15 @@ pub(super) fn eval_function_text(
                 .unwrap_or(Value::Null);
             eval_from_base64_value(value)
         }
+        "QUOTE" => {
+            let value = args
+                .first()
+                .map(|arg| eval_scalar_text(arg, data, last_insert_id))
+                .transpose()?
+                .unwrap_or(Value::Null);
+            Ok(eval_quote_value(value))
+        }
+
         "USER_VAR_ASSIGN" => {
             let target = args
                 .first()

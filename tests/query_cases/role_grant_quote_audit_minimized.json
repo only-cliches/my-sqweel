@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "role_grant_quote_audit_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "gravitational/teleport",
+      "commit": "1283425b60ec5f60d509ba4c791183d452923ff7",
+      "path": "lib/srv/db/mysql/sql/mysql_activate_user.sql",
+      "url": "https://github.com/gravitational/teleport/blob/1283425b60ec5f60d509ba4c791183d452923ff7/lib/srv/db/mysql/sql/mysql_activate_user.sql",
+      "sha256": "d211f6b0d27b2190fdbf94a6268571d75b2fd168ed0f434b6f2eb0a18c2c3a41",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "lib/srv/db/mysql/sql/mysql_activate_user.sql:42-52",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL administrative procedure uses QUOTE inside CONCAT_WS to assemble safely quoted ALTER USER, CREATE USER, and GRANT statements from usernames and role names.",
+      "mysql_mariadb_translation": "Minimized independently authored scalar reproduction of the apostrophe-escaping QUOTE behavior observed in the role-grant preview report."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "quote-sql-literal",
+    "apostrophe-escaping"
+  ],
+  "fixture_notes": "The minimized case isolates QUOTE's apostrophe escaping from table setup, CONCAT_WS, NULL handling, and CASE classification.",
+  "determinism_notes": "The query uses one fixed literal with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT QUOTE('o''connor') AS quoted_username",
+      "ordered": true
+    }
+  ]
+}

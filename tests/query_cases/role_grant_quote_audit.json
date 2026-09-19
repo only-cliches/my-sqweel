@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "role_grant_quote_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "gravitational/teleport",
+      "commit": "1283425b60ec5f60d509ba4c791183d452923ff7",
+      "path": "lib/srv/db/mysql/sql/mysql_activate_user.sql",
+      "url": "https://github.com/gravitational/teleport/blob/1283425b60ec5f60d509ba4c791183d452923ff7/lib/srv/db/mysql/sql/mysql_activate_user.sql",
+      "sha256": "d211f6b0d27b2190fdbf94a6268571d75b2fd168ed0f434b6f2eb0a18c2c3a41",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "lib/srv/db/mysql/sql/mysql_activate_user.sql:42-52",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL administrative procedure uses QUOTE inside CONCAT_WS to assemble safely quoted ALTER USER, CREATE USER, and GRANT statements from usernames and role names.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored role-grant preview report. QUOTE protects ordinary, apostrophe-containing, backslash-containing, empty, and NULL identifiers while CONCAT_WS assembles a deterministic GRANT statement; the source procedure, administrative tables, identifiers, and data are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "quote-sql-literal",
+    "concat-ws",
+    "apostrophe-escaping",
+    "backslash-escaping",
+    "empty-string",
+    "null-propagation",
+    "case-classification",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Rows cover ordinary identifiers, an apostrophe-containing username, a backslash-containing role, empty identifiers, and NULL identifiers so QUOTE escaping and CONCAT_WS NULL skipping remain observable.",
+  "determinism_notes": "All grant IDs and identifier values are fixed literals, and output is ordered by the unique grant ID with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE role_grant_requests (grant_id INT PRIMARY KEY, username VARCHAR(64) NULL, role_name VARCHAR(64) NULL)",
+    "INSERT INTO role_grant_requests VALUES (1201, 'alice', 'report_reader'), (1202, 'o''connor', 'nightly\\\\sync'), (1203, '', ''), (1204, NULL, 'auditor'), (1205, 'bob', NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT grant_id, QUOTE(username) AS quoted_username, QUOTE(role_name) AS quoted_role, CONCAT_WS(' ', 'GRANT', QUOTE(role_name), 'TO', QUOTE(username)) AS grant_sql, CASE WHEN username IS NULL OR role_name IS NULL THEN 'incomplete' WHEN username = '' OR role_name = '' THEN 'empty' ELSE 'ready' END AS request_class FROM role_grant_requests ORDER BY grant_id",
+      "ordered": true
+    }
+  ]
+}

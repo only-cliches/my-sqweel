@@ -47,6 +47,29 @@ fn binary_value_bytes(value: &Value) -> Option<Vec<u8>> {
         .collect()
 }
 
+pub(super) fn eval_quote_value(value: Value) -> Value {
+    if value == Value::Null {
+        return Value::String("NULL".to_string());
+    }
+    let input = json_scalar_to_string(&value);
+    let mut quoted = String::with_capacity(input.len() + 2);
+    quoted.push('\'');
+    for character in input.chars() {
+        match character {
+            '\0' => quoted.push_str("\\0"),
+            '\n' => quoted.push_str("\\n"),
+            '\r' => quoted.push_str("\\r"),
+            '\\' => quoted.push_str("\\\\"),
+            '\'' => quoted.push_str("\\'"),
+            '"' => quoted.push_str("\\\""),
+            '\u{001A}' => quoted.push_str("\\Z"),
+            character => quoted.push(character),
+        }
+    }
+    quoted.push('\'');
+    Value::String(quoted)
+}
+
 pub(super) fn eval_arg(
     arg: Option<&String>,
     data: &Map<String, Value>,
