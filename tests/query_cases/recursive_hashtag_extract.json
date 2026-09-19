@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "recursive_hashtag_extract",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "kamyu104/LeetCode-Solutions",
+      "commit": "61dbeee7007dd94e539655ce843cf33a8c72294b",
+      "path": "MySQL/find-trending-hashtags-ii.sql",
+      "url": "https://github.com/kamyu104/LeetCode-Solutions/blob/61dbeee7007dd94e539655ce843cf33a8c72294b/MySQL/find-trending-hashtags-ii.sql",
+      "sha256": "c62b0c0a56ff6d8eed30126bbe18d6a7b504a9fa3c95c119a98463f1e5f9f8f9",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/find-trending-hashtags-ii.sql:5-18",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A recursive CTE repeatedly extracts the rightmost hashtag with nested SUBSTRING_INDEX calls, removes the extracted suffix with LOCATE, LENGTH, and REVERSE, then aggregates the expanded tags by date range.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored message-tag report. A fixed recursive CTE scans dated messages from right to left, uses LOCATE and REVERSE to shorten the remaining text, counts repeated tags, and returns the three most frequent tags with deterministic tie ordering. The source table, rows, dates, labels, and reporting purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "recursive-cte",
+    "union-all",
+    "substring-index",
+    "locate",
+    "reverse",
+    "length",
+    "grouping",
+    "limit",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Messages 1, 2, 4, and 6 are inside the May reporting window. The repeated api and urgent tags tie at three occurrences, so descending tag order places urgent before api; ops and docs tie at two, and ops is the third returned tag. The June message and the untagged message are excluded.",
+  "determinism_notes": "Message IDs, dates, bodies, recursive extraction, aggregate ordering, and LIMIT are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE tag_messages (message_id INT PRIMARY KEY, sent_on DATE NOT NULL, body VARCHAR(255) NOT NULL)",
+    "INSERT INTO tag_messages VALUES (1, '2026-05-01', 'deploy #api #urgent'), (2, '2026-05-02', 'incident #urgent #api #ops'), (3, '2026-06-01', 'outside #urgent'), (4, '2026-05-03', 'docs #api #docs'), (5, '2026-05-04', 'no tags here'), (6, '2026-05-05', 'queue #ops #urgent')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH RECURSIVE hashtag_scan AS (SELECT message_id, sent_on, CONCAT('#', SUBSTRING_INDEX(SUBSTRING_INDEX(body, '#', -1), ' ', 1)) AS hashtag, SUBSTRING(body, 1, LENGTH(body) - LOCATE('#', REVERSE(body))) AS remaining FROM tag_messages WHERE sent_on BETWEEN '2026-05-01' AND '2026-05-31' AND LOCATE('#', body) > 0 UNION ALL SELECT message_id, sent_on, CONCAT('#', SUBSTRING_INDEX(SUBSTRING_INDEX(remaining, '#', -1), ' ', 1)) AS hashtag, SUBSTRING(remaining, 1, LENGTH(remaining) - LOCATE('#', REVERSE(remaining))) AS remaining FROM hashtag_scan WHERE LOCATE('#', remaining) > 0) SELECT hashtag, COUNT(*) AS occurrence_count FROM hashtag_scan GROUP BY hashtag ORDER BY occurrence_count DESC, hashtag DESC LIMIT 3",
+      "ordered": true
+    }
+  ]
+}
