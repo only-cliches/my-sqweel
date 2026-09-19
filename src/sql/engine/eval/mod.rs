@@ -3498,7 +3498,7 @@ where
             Ok(if value == Value::Null {
                 Value::Null
             } else {
-                Value::Number(Number::from(json_scalar_to_string(&value).len() as u64))
+                Value::Number(Number::from(eval_octet_length_value(&value) as u64))
             })
         })()),
         "CHAR_LENGTH" | "CHARACTER_LENGTH" => Some((|| {
@@ -3910,7 +3910,7 @@ pub(super) fn eval_function_text(
                 Ok(Value::Null)
             } else {
                 Ok(Value::Number(Number::from(
-                    json_scalar_to_string(&value).len() as u64,
+                    eval_octet_length_value(&value) as u64,
                 )))
             }
         }
@@ -4027,12 +4027,13 @@ pub(super) fn eval_function_text(
             } else {
                 let text = json_scalar_to_string(&value);
                 let text = text.trim();
-                if text.len() % 2 != 0
-                    || !text.chars().all(|character| character.is_ascii_hexdigit())
-                {
+                if !text.chars().all(|character| character.is_ascii_hexdigit()) {
                     Ok(Value::Null)
                 } else {
-                    Ok(Value::String(format!("{MYSQL_BINARY_SENTINEL}{text}")))
+                    let leading_zero = (text.len() % 2 != 0).then_some("0").unwrap_or("");
+                    Ok(Value::String(format!(
+                        "{MYSQL_BINARY_SENTINEL}{leading_zero}{text}"
+                    )))
                 }
             }
         }

@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "payload_hex_roundtrip_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "achristmascarl/rainfrog",
+      "commit": "1264e0052f4f664c3dfd000531224bea81052384",
+      "path": "dev/mysql_init.sql",
+      "url": "https://github.com/achristmascarl/rainfrog/blob/1264e0052f4f664c3dfd000531224bea81052384/dev/mysql_init.sql",
+      "sha256": "6976cacb092c65313c039dadcfc4585eff9988fa6a3f45d38d3cdbbf75456e50",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "dev/mysql_init.sql: INSERT INTO sensor_data data_blob values",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL initialization script stores deterministic binary sensor payloads by applying UNHEX to hexadecimal literals in a BLOB column.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored payload-normalization audit. HEX(UNHEX(...)) exposes canonical uppercase encoding, OCTET_LENGTH measures decoded bytes, and CASE classifies valid, empty, malformed, and NULL packet text without copying the source schema, rows, or application data."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "hex-unhex-roundtrip",
+    "binary-payload",
+    "nested-scalar-functions",
+    "octet-length",
+    "invalid-hex-input",
+    "empty-string",
+    "null-propagation",
+    "case-classification",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Rows cover uppercase and lowercase valid hex, odd-length and non-hex text, an empty payload, and NULL input so binary conversion, canonical HEX output, byte length, and NULL behavior remain observable.",
+  "determinism_notes": "All payload IDs and packet strings are fixed literals, and output is ordered by the unique payload ID with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE payload_hex_records (payload_id INT PRIMARY KEY, packet_hex VARCHAR(32) NULL, payload_kind VARCHAR(32) NOT NULL)",
+    "INSERT INTO payload_hex_records VALUES (4101, 'DEADBEEF', 'firmware'), (4102, 'cafebabe', 'cache'), (4103, 'A1B2C3', 'telemetry'), (4104, '', 'empty'), (4105, 'ABC', 'malformed'), (4106, NULL, 'missing'), (4107, 'G0', 'malformed')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT payload_id, payload_kind, packet_hex, HEX(UNHEX(packet_hex)) AS normalized_hex, OCTET_LENGTH(UNHEX(packet_hex)) AS payload_bytes, CASE WHEN packet_hex IS NULL THEN 'missing' WHEN packet_hex = '' THEN 'empty' WHEN UNHEX(packet_hex) IS NULL THEN 'invalid' WHEN OCTET_LENGTH(UNHEX(packet_hex)) >= 4 THEN 'large' ELSE 'short' END AS packet_class FROM payload_hex_records ORDER BY payload_id",
+      "ordered": true
+    }
+  ]
+}

@@ -46,6 +46,17 @@ fn binary_value_bytes(value: &Value) -> Option<Vec<u8>> {
         })
         .collect()
 }
+fn binary_value_length(value: &Value) -> Option<usize> {
+    let hex = value
+        .as_str()?
+        .strip_prefix(MYSQL_BINARY_SENTINEL)?;
+    (hex.len() % 2 == 0).then_some(hex.len() / 2)
+}
+
+pub(super) fn eval_octet_length_value(value: &Value) -> usize {
+    binary_value_length(value).unwrap_or_else(|| json_scalar_to_string(value).len())
+}
+
 
 pub(super) fn eval_quote_value(value: Value) -> Value {
     if value == Value::Null {

@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "id": "payload_hex_roundtrip_audit_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "achristmascarl/rainfrog",
+      "commit": "1264e0052f4f664c3dfd000531224bea81052384",
+      "path": "dev/mysql_init.sql",
+      "url": "https://github.com/achristmascarl/rainfrog/blob/1264e0052f4f664c3dfd000531224bea81052384/dev/mysql_init.sql",
+      "sha256": "6976cacb092c65313c039dadcfc4585eff9988fa6a3f45d38d3cdbbf75456e50",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "dev/mysql_init.sql: INSERT INTO sensor_data data_blob values",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL initialization script stores deterministic binary sensor payloads by applying UNHEX to hexadecimal literals in a BLOB column.",
+      "mysql_mariadb_translation": "Minimized independently authored scalar reproduction of MariaDB's odd-length UNHEX padding, observed through HEX normalization and decoded byte length."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "odd-length-unhex-padding",
+    "hex-unhex-roundtrip",
+    "octet-length"
+  ],
+  "fixture_notes": "The minimized query isolates MariaDB's leading-zero padding for an odd-length hexadecimal string from table setup, invalid-input handling, and CASE classification.",
+  "determinism_notes": "The query uses one fixed literal with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT HEX(UNHEX('ABC')) AS normalized_hex, OCTET_LENGTH(UNHEX('ABC')) AS payload_bytes",
+      "ordered": true
+    }
+  ]
+}
