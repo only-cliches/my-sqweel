@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "id": "permission_bit_count_audit_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "RicordeChris/SQL-Query",
+      "commit": "12cfe8bfd582603865e42c34e4898d2020cd1aa0",
+      "path": "MySQL Functions.sql",
+      "url": "https://github.com/RicordeChris/SQL-Query/blob/12cfe8bfd582603865e42c34e4898d2020cd1aa0/MySQL%20Functions.sql",
+      "sha256": "a3fd23a8dbe95519939934284b13bac42389a6d2e2e6556be5cac1cef2c031d9",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL Functions.sql:443-447",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "The source isolates BIT_COUNT as a scalar integer function over a fixed mask.",
+      "mysql_mariadb_translation": "Reduced to one independently authored permission mask and one BIT_COUNT projection; joins, CASE classification, bitwise intersection, and NULL propagation are removed so the integer result metadata is isolated."
+    },
+    "independently_authored": true,
+    "minimized_from": "permission_bit_count_audit"
+  },
+  "features": [
+    "bit-count",
+    "minimized-regression"
+  ],
+  "fixture_notes": "One fixed mask with three set bits is sufficient to expose BIT_COUNT's MariaDB integer metadata while retaining the scalar function itself.",
+  "determinism_notes": "The single fixed mask and row ID have no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE bit_count_inputs (input_id INT PRIMARY KEY, mask_value INT NOT NULL)",
+    "INSERT INTO bit_count_inputs VALUES (1, 7)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT input_id, BIT_COUNT(mask_value) AS set_bits FROM bit_count_inputs ORDER BY input_id",
+      "ordered": true
+    }
+  ]
+}

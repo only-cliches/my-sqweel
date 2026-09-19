@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "permission_bit_count_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "RicordeChris/SQL-Query",
+      "commit": "12cfe8bfd582603865e42c34e4898d2020cd1aa0",
+      "path": "MySQL Functions.sql",
+      "url": "https://github.com/RicordeChris/SQL-Query/blob/12cfe8bfd582603865e42c34e4898d2020cd1aa0/MySQL%20Functions.sql",
+      "sha256": "a3fd23a8dbe95519939934284b13bac42389a6d2e2e6556be5cac1cef2c031d9",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL Functions.sql:443-447",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "The MySQL function reference uses BIT_COUNT to count set bits in integer values, including ordinary positive masks and zero.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored permission-audit report. Requested and granted masks are paired per review, scalar BIT_COUNT measures each mask and their bitwise intersection, and a NULL request exercises NULL propagation. The source examples, literals, and instructional context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "bit-count",
+    "bitwise-and",
+    "null-propagation",
+    "case-classification",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Reviews 1 and 2 have three/two and two/two requested/granted bits respectively; review 3 has zero bits; review 4 has a NULL request and therefore NULL BIT_COUNT results and a missing-request classification.",
+  "determinism_notes": "All review IDs, subjects, and masks are fixed integers; output is ordered by the unique review ID with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE permission_reviews (review_id INT PRIMARY KEY, subject VARCHAR(16) NOT NULL, requested_mask INT, granted_mask INT)",
+    "INSERT INTO permission_reviews VALUES (1, 'analyst', 7, 5), (2, 'operator', 10, 10), (3, 'guest', 0, 0), (4, 'contractor', NULL, 3)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT review_id, BIT_COUNT(requested_mask) AS requested_bits, BIT_COUNT(granted_mask) AS granted_bits, BIT_COUNT(requested_mask & granted_mask) AS shared_bits, CASE WHEN requested_mask IS NULL THEN 'missing-request' WHEN requested_mask = granted_mask THEN 'fully-granted' ELSE 'partially-granted' END AS grant_state FROM permission_reviews ORDER BY review_id",
+      "ordered": true
+    }
+  ]
+}

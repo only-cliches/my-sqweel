@@ -62,6 +62,7 @@ All notable changes to MySqweel will be documented in this file.
 - Added GitHub-attributed `LPAD`/`RPAD` coverage for a deterministic fulfillment-bin formatting report with NULL-aware label padding, implicit numeric-to-text conversion, and trimmed notes; MariaDB 10.11.7 and MySqweel matched without a source fix.
 - Added GitHub-attributed `STR_TO_DATE`/`DATE_FORMAT` coverage for a text-date monthly sales report with duplicate-order deduplication, NULL revenue/date filtering, and deterministic month ordering; MariaDB 10.11.7 and MySqweel matched without a source fix.
 - Added GitHub-attributed NULL-safe equality (`<=>`) coverage for a nullable composite route-assignment LEFT JOIN, including both-NULL matching, one-sided-NULL non-matches, and deterministic assignment classification; MariaDB 10.11.7 and MySqweel matched without a source fix.
+- Added GitHub-attributed `BIT_COUNT` coverage for a permission-mask audit with scalar bit counts, bitwise intersections, NULL propagation, and deterministic CASE classification, including a minimized metadata regression; fixed `BIT_COUNT` result metadata to match MariaDB's integer type.
 - Parked GitHub-attributed `GROUPING()` plus `GROUP BY ... WITH ROLLUP` coverage from the MariaDB seed query because MariaDB 10.11.7 returns error 1305 / SQLSTATE `42000` for `GROUPING()`; no invalid fixture was retained.
 - Parked an `UPDATE ... RETURNING` coverage candidate because MariaDB 10.11.7 returns syntax error 1064 for that form; no invalid fixture was retained.
 
