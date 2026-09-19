@@ -3575,21 +3575,23 @@ pub(super) fn eval_function_text(
             Ok(Value::String(format.to_string()))
         }
         "FROM_DAYS" => {
-            let days = args
+            let value = args
                 .first()
                 .map(|arg| eval_scalar_text(arg, data, last_insert_id))
                 .transpose()?
-                .and_then(|value| value.as_i64())
-                .unwrap_or(0);
+                .unwrap_or(Value::Null);
+            let Some(days) = value.as_i64() else {
+                return Ok(Value::Null);
+            };
             let Some(date) = NaiveDate::from_ymd_opt(1, 1, 1)
                 .and_then(|date| date.checked_add_signed(Duration::days(days - 366)))
             else {
-                return Ok(Value::String("0000-00-00 00:00:00".to_string()));
+                return Ok(Value::String("0000-00-00".to_string()));
             };
             if date.year() > 9999 {
-                Ok(Value::String("0000-00-00 00:00:00".to_string()))
+                Ok(Value::String("0000-00-00".to_string()))
             } else {
-                Ok(Value::String(format!("{date} 00:00:00")))
+                Ok(Value::String(date.to_string()))
             }
         }
         "UNIX_TIMESTAMP" => {

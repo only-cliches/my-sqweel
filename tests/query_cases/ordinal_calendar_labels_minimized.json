@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "ordinal_calendar_labels_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "striver619/db",
+      "commit": "918ce0e4618268d87d2d051466b448869c1c7098",
+      "path": "mysql/mysql-learn.sql",
+      "url": "https://github.com/striver619/db/blob/918ce0e4618268d87d2d051466b448869c1c7098/mysql/mysql-learn.sql",
+      "sha256": "ef20ef838fe720fb24e7939bf24d2bf9065adec9ec41a24d7e9c4e1bedc26c69",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "mysql/mysql-learn.sql:1291",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A scalar FROM_DAYS call converts an ordinal day number into a calendar date.",
+      "mysql_mariadb_translation": "Reduced to one independently authored scalar FROM_DAYS projection so the DATE value, wire metadata, and date-only formatting are isolated from the calendar report's DATE_FORMAT, DAYOFWEEK, CASE, and NULL row."
+    },
+    "independently_authored": true,
+    "minimized_from": "ordinal_calendar_labels"
+  },
+  "features": [
+    "from-days",
+    "date-result",
+    "minimized-regression"
+  ],
+  "fixture_notes": "One fixed ordinal day isolates FROM_DAYS's DATE result and metadata.",
+  "determinism_notes": "The ordinal day argument is fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT FROM_DAYS(738885) AS calendar_date",
+      "ordered": true
+    }
+  ]
+}

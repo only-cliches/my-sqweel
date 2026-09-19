@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "ordinal_calendar_labels",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "striver619/db",
+      "commit": "918ce0e4618268d87d2d051466b448869c1c7098",
+      "path": "mysql/mysql-learn.sql",
+      "url": "https://github.com/striver619/db/blob/918ce0e4618268d87d2d051466b448869c1c7098/mysql/mysql-learn.sql",
+      "sha256": "ef20ef838fe720fb24e7939bf24d2bf9065adec9ec41a24d7e9c4e1bedc26c69",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "mysql/mysql-learn.sql:1291",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A scalar FROM_DAYS call converts an ordinal day number counted from the MySQL day-zero epoch into a calendar date.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored calendar-label report. Stored ordinal days are converted to DATE values, formatted into month labels, and classified as weekend or weekday with explicit NULL handling. The schema, rows, aliases, and reporting purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "from-days",
+    "date-format",
+    "dayofweek",
+    "case-classification",
+    "null-propagation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Three ordinal days produce calendar labels and weekday/weekend classifications; the fourth row has no ordinal day and exercises NULL propagation and the missing classification branch.",
+  "determinism_notes": "Ordinal day numbers and row IDs are fixed; output is ordered by the unique label ID with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE calendar_labels (label_id INT PRIMARY KEY, ordinal_day INT NULL, label_kind VARCHAR(16) NOT NULL)",
+    "INSERT INTO calendar_labels VALUES (801, 738885, 'opening'), (802, 738886, 'peak'), (803, 738891, 'closing'), (804, NULL, 'pending')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT label_id, label_kind, FROM_DAYS(ordinal_day) AS calendar_date, DATE_FORMAT(FROM_DAYS(ordinal_day), '%Y-%m') AS month_label, CASE WHEN ordinal_day IS NULL THEN 'missing' WHEN DAYOFWEEK(FROM_DAYS(ordinal_day)) IN (1, 7) THEN 'weekend' ELSE 'weekday' END AS day_class FROM calendar_labels ORDER BY label_id",
+      "ordered": true
+    }
+  ]
+}
