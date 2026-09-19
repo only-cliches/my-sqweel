@@ -1624,7 +1624,7 @@ impl RawEngine {
                         MysqlColumnType::DateTime
                     }
                     "FIELD" | "FIND_IN_SET" | "BIT_COUNT" => MysqlColumnType::Integer,
-                    "MAKE_SET" | "FORMAT" => MysqlColumnType::VarChar,
+                    "CONV" | "MAKE_SET" | "FORMAT" => MysqlColumnType::VarChar,
                     "INTERVAL_FUNC" => MysqlColumnType::Integer,
                     "JSON_ARRAYAGG" | "JSON_OBJECTAGG" => MysqlColumnType::Blob,
                     "JSON_ARRAY"

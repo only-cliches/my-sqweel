@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "radix_conversion_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "functions/math-functions/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/functions/math-functions/mysql.sql",
+      "sha256": "1ae89c2cf88cff05a89ab492839fdca54fe4bda6144020df3d6e6e389aa455c7",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "functions/math-functions/mysql.sql:95-96",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL math-function reference converts a hexadecimal string to decimal and a decimal integer to hexadecimal with CONV.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored radix audit for encoded shipment labels. Rows cover binary, decimal, octal, and hexadecimal source bases, a signed target base, zero, and NULL propagation; the source examples, literals, schema, and data are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "conv-base-conversion",
+    "binary-source",
+    "octal-source",
+    "hexadecimal-source",
+    "signed-target-base",
+    "zero-value",
+    "null-propagation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Each shipment label stores a token and its source base. The signed hexadecimal target row exercises negative target-base semantics without relying on nondeterministic input; the zero and NULL rows make boundary and propagation behavior observable.",
+  "determinism_notes": "All tokens and bases are fixed literals, and output is ordered by the unique label ID with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE shipment_radix_labels (label_id INT PRIMARY KEY, token VARCHAR(16) NULL, source_base INT NOT NULL, target_base INT NOT NULL)",
+    "INSERT INTO shipment_radix_labels VALUES (901, '101101', 2, 10), (902, '255', 10, 16), (903, '17', 8, 2), (904, '-1A', 16, -10), (905, '0', 10, 2), (906, NULL, 10, 16)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT label_id, token, source_base, target_base, CONV(token, source_base, target_base) AS converted_token, CASE WHEN token IS NULL THEN 'missing' WHEN token = '0' THEN 'zero' ELSE 'encoded' END AS token_class FROM shipment_radix_labels ORDER BY label_id",
+      "ordered": true
+    }
+  ]
+}

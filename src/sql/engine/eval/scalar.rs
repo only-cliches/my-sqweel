@@ -58,6 +58,100 @@ pub(super) fn eval_log(
     }
 }
 
+pub(super) fn eval_conv_values(values: &[Value]) -> Result<Value> {
+    if values.len() < 3 {
+        return Err(anyhow!("CONV requires three arguments"));
+    }
+    if values[..3].iter().any(|value| *value == Value::Null) {
+        return Ok(Value::Null);
+    }
+
+    let input = json_scalar_to_string(&values[0]);
+    let Some(from_base) = value_to_i64(&values[1]) else {
+        return Ok(Value::Null);
+    };
+    let Some(to_base) = value_to_i64(&values[2]) else {
+        return Ok(Value::Null);
+    };
+    let output_base = to_base.unsigned_abs();
+    if !(2..=36).contains(&(from_base as u64))
+        || from_base < 2
+        || !(2..=36).contains(&output_base)
+    {
+        return Ok(Value::Null);
+    }
+
+    let mut digits = input.trim();
+    let negative = digits.strip_prefix('-').is_some();
+    if negative {
+        digits = &digits[1..];
+    } else if let Some(unsigned) = digits.strip_prefix('+') {
+        digits = unsigned;
+    }
+    let mut magnitude = 0_u64;
+    let mut parsed = false;
+    for character in digits.chars() {
+        let digit = match character {
+            '0'..='9' => character as u32 - '0' as u32,
+            'a'..='z' => character as u32 - 'a' as u32 + 10,
+            'A'..='Z' => character as u32 - 'A' as u32 + 10,
+            _ => break,
+        };
+        if digit >= from_base as u32 {
+            break;
+        }
+        parsed = true;
+        magnitude = magnitude
+            .saturating_mul(from_base as u64)
+            .saturating_add(digit as u64);
+    }
+    if !parsed {
+        magnitude = 0;
+    }
+
+    if to_base < 0 {
+        let signed = if negative {
+            -(magnitude as i128)
+        } else if magnitude <= i64::MAX as u64 {
+            magnitude as i128
+        } else {
+            magnitude as i128 - (1_i128 << 64)
+        };
+        Ok(format_signed_radix(signed, output_base))
+    } else {
+        let unsigned = if negative {
+            0_u64.wrapping_sub(magnitude)
+        } else {
+            magnitude
+        };
+        Ok(Value::String(format_unsigned_radix(unsigned, output_base)))
+    }
+}
+
+fn format_signed_radix(value: i128, base: u64) -> Value {
+    if value < 0 {
+        Value::String(format!(
+            "-{}",
+            format_unsigned_radix(value.unsigned_abs() as u64, base)
+        ))
+    } else {
+        Value::String(format_unsigned_radix(value as u64, base))
+    }
+}
+
+fn format_unsigned_radix(mut value: u64, base: u64) -> String {
+    const DIGITS: &[u8] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    if value == 0 {
+        return "0".to_string();
+    }
+    let mut output = Vec::new();
+    while value > 0 {
+        output.push(DIGITS[(value % base) as usize] as char);
+        value /= base;
+    }
+    output.into_iter().rev().collect()
+}
+
 pub(super) fn eval_truncate(
     value_arg: Option<&String>,
     places_arg: Option<&String>,

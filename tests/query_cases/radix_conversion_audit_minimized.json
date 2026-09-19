@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "id": "radix_conversion_audit_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "functions/math-functions/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/functions/math-functions/mysql.sql",
+      "sha256": "1ae89c2cf88cff05a89ab492839fdca54fe4bda6144020df3d6e6e389aa455c7",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "functions/math-functions/mysql.sql:95-96",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "The accepted CONV scenario exposed that MySqweel rejected a single scalar hexadecimal-to-decimal conversion while MariaDB returned the converted text.",
+      "mysql_mariadb_translation": "Reduced to one deterministic CONV expression so the missing function path and its signed target-base handling remain directly regression-testable."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "conv-base-conversion",
+    "signed-target-base",
+    "minimized-regression"
+  ],
+  "fixture_notes": "One scalar conversion isolates the original unsupported-function mismatch without tables or nondeterministic inputs.",
+  "determinism_notes": "The query contains only fixed literals and no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT CONV('1A', 16, -10) AS converted",
+      "ordered": true
+    }
+  ]
+}

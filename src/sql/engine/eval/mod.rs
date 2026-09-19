@@ -3284,6 +3284,10 @@ where
     let args = FunctionExprArgs(&arguments.args);
 
     match name.as_str() {
+        "CONV" => Some((|| {
+            let values = args.iter().map(eval_arg).collect::<Result<Vec<_>>>()?;
+            eval_conv_values(&values)
+        })()),
         "CONCAT" => Some((|| {
             let mut out = String::new();
             for arg in args.iter() {
@@ -3500,6 +3504,13 @@ pub(super) fn eval_function_text(
     };
 
     match name.as_str() {
+        "CONV" => {
+            let values = args
+                .iter()
+                .map(|arg| eval_scalar_text(arg, data, last_insert_id))
+                .collect::<Result<Vec<_>>>()?;
+            eval_conv_values(&values)
+        }
         "USER_VAR_ASSIGN" => {
             let target = args
                 .first()
