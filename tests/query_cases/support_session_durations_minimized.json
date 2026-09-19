@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "id": "support_session_durations_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "timerring/backend-tutorial",
+      "commit": "75524f6ac554afe80f015163796026ed06e79aba",
+      "path": "code/java-tutorial/chapter24/mysql/date.sql",
+      "url": "https://github.com/timerring/backend-tutorial/blob/75524f6ac554afe80f015163796026ed06e79aba/code/java-tutorial/chapter24/mysql/date.sql",
+      "sha256": "31a55d178121f9a98b3ee04d8e8f4ac20ef7bf4e8c5ed978321bd21adf1ba1c5",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "code/java-tutorial/chapter24/mysql/date.sql:51",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A scalar TIMEDIFF returns the elapsed TIME between two fixed time values.",
+      "mysql_mariadb_translation": "Reduced to one independently authored scalar TIMEDIFF projection with no table, classification, or NULL row so MariaDB's TIME result metadata is isolated."
+    },
+    "independently_authored": true,
+    "minimized_from": "support_session_durations"
+  },
+  "features": [
+    "timediff",
+    "minimized-regression"
+  ],
+  "fixture_notes": "The fixed times produce a four-hour, one-minute, one-second elapsed TIME value that isolates TIMEDIFF metadata.",
+  "determinism_notes": "Both TIME literals are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT TIMEDIFF('10:11:11', '06:10:10') AS elapsed_time",
+      "ordered": true
+    }
+  ]
+}

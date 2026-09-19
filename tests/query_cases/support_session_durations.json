@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "support_session_durations",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "timerring/backend-tutorial",
+      "commit": "75524f6ac554afe80f015163796026ed06e79aba",
+      "path": "code/java-tutorial/chapter24/mysql/date.sql",
+      "url": "https://github.com/timerring/backend-tutorial/blob/75524f6ac554afe80f015163796026ed06e79aba/code/java-tutorial/chapter24/mysql/date.sql",
+      "sha256": "31a55d178121f9a98b3ee04d8e8f4ac20ef7bf4e8c5ed978321bd21adf1ba1c5",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "code/java-tutorial/chapter24/mysql/date.sql:51",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A scalar TIMEDIFF subtracts one TIME value from another to produce an elapsed duration.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored support-session duration report. Start and end TIME columns produce TIMEDIFF durations, TIME_TO_SEC makes duration thresholds explicit, and CASE classifies extended, brief, instant, and still-open sessions. The source literals, schema, rows, and reporting purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "timediff",
+    "time-to-sec",
+    "case-classification",
+    "null-propagation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Session 201 lasts more than an hour, session 202 is brief, session 203 has zero duration, and session 204 has no end time so both TIMEDIFF and the classification expose the open-session path.",
+  "determinism_notes": "Session IDs and all TIME values are fixed; output is ordered by the unique session ID with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE support_sessions (session_id INT PRIMARY KEY, started_at TIME NOT NULL, ended_at TIME NULL)",
+    "INSERT INTO support_sessions VALUES (201, '06:10:10', '10:11:11'), (202, '23:45:00', '23:59:30'), (203, '09:00:00', '09:00:00'), (204, '12:00:00', NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT session_id, started_at, ended_at, TIMEDIFF(ended_at, started_at) AS elapsed_time, CASE WHEN ended_at IS NULL THEN 'open' WHEN TIME_TO_SEC(TIMEDIFF(ended_at, started_at)) >= 3600 THEN 'extended' WHEN TIME_TO_SEC(TIMEDIFF(ended_at, started_at)) = 0 THEN 'instant' ELSE 'brief' END AS duration_class FROM support_sessions ORDER BY session_id",
+      "ordered": true
+    }
+  ]
+}
