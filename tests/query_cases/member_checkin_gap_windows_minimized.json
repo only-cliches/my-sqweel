@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "id": "member_checkin_gap_windows_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "fishercoder1534/Leetcode",
+      "commit": "d8c1ae46852fb1c19f07feec6fd28f718417e704",
+      "path": "database/_1709.sql",
+      "url": "https://github.com/fishercoder1534/Leetcode/blob/d8c1ae46852fb1c19f07feec6fd28f718417e704/database/_1709.sql",
+      "sha256": "fc97bbeed837d5d32c0fe383964ec97d4f419e861834822aa84b89ae8b494c61",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "database/_1709.sql:3",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A scalar DATEDIFF consumes the next row produced by a LEAD window over ordered dates.",
+      "mysql_mariadb_translation": "Reduced to two independently authored check-ins and one DATEDIFF-over-LEAD projection. The report classification, partitions, and extra columns are removed so MariaDB's integer result metadata is isolated while the window/date composition remains."
+    },
+    "independently_authored": true,
+    "minimized_from": "member_checkin_gap_windows"
+  },
+  "features": [
+    "datediff",
+    "lead-window",
+    "minimized-regression"
+  ],
+  "fixture_notes": "Two ordered check-ins produce one two-day gap and one terminal NULL, which is sufficient to expose DATEDIFF's MariaDB integer metadata through a LEAD expression.",
+  "determinism_notes": "The two fixed IDs and dates are ordered by check-in date and ID; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE gap_inputs (input_id INT PRIMARY KEY, group_id INT NOT NULL, event_date DATE NOT NULL)",
+    "INSERT INTO gap_inputs VALUES (1, 42, '2026-04-01'), (2, 42, '2026-04-03')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT group_id, input_id, event_date, LEAD(event_date) OVER (PARTITION BY group_id ORDER BY event_date, input_id) AS next_date, DATEDIFF(LEAD(event_date) OVER (PARTITION BY group_id ORDER BY event_date, input_id), event_date) AS days_to_next FROM gap_inputs ORDER BY group_id, event_date, input_id",
+      "ordered": true
+    }
+  ]
+}

@@ -1637,9 +1637,8 @@ impl RawEngine {
                     | "JSON_SEARCH"
                     | "JSON_SCHEMA_VALIDATION_REPORT"
                     | "JSON_SET" => MysqlColumnType::Json,
-                    "LENGTH" | "CHAR_LENGTH" | "DATEDIFF" | "TIMESTAMPDIFF" => {
-                        MysqlColumnType::BigInt
-                    }
+                    "LENGTH" | "CHAR_LENGTH" | "TIMESTAMPDIFF" => MysqlColumnType::BigInt,
+                    "DATEDIFF" => MysqlColumnType::Integer,
                     "COALESCE" | "IFNULL" => self.widest_function_argument_type(
                         function,
                         select,

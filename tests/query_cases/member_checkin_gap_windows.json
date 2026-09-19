@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "member_checkin_gap_windows",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "fishercoder1534/Leetcode",
+      "commit": "d8c1ae46852fb1c19f07feec6fd28f718417e704",
+      "path": "database/_1709.sql",
+      "url": "https://github.com/fishercoder1534/Leetcode/blob/d8c1ae46852fb1c19f07feec6fd28f718417e704/database/_1709.sql",
+      "sha256": "fc97bbeed837d5d32c0fe383964ec97d4f419e861834822aa84b89ae8b494c61",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "database/_1709.sql:3",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A per-user visit report applies LEAD over each user's date-ordered events and feeds the next date into DATEDIFF to measure the gap until the next visit.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored member check-in report. Each member's next check-in is found with a two-argument LEAD window, DATEDIFF exposes the day gap, and CASE classifies terminal, same-day, short, and long gaps. The source default-date argument is omitted so terminal rows retain MariaDB's NULL result; the schema, rows, labels, and reporting purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "datediff",
+    "lead-window",
+    "partition-by",
+    "case-classification",
+    "null-terminal",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Member 7 has two-day and seven-day gaps; member 8 has a same-day duplicate followed by a three-day gap; member 9 has one terminal check-in and therefore a NULL next-gap. The explicit check-in ID tie-breaker makes same-day window ordering deterministic.",
+  "determinism_notes": "All member IDs, check-in IDs, and dates are fixed; output and each window use member_id, checkin_date, and checkin_id ordering. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE member_checkins (checkin_id INT PRIMARY KEY, member_id INT NOT NULL, checkin_date DATE NOT NULL)",
+    "INSERT INTO member_checkins VALUES (101, 7, '2026-04-01'), (102, 7, '2026-04-03'), (103, 7, '2026-04-10'), (201, 8, '2026-04-02'), (202, 8, '2026-04-02'), (203, 8, '2026-04-05'), (301, 9, '2026-04-06')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT member_id, checkin_date, DATEDIFF(LEAD(checkin_date) OVER (PARTITION BY member_id ORDER BY checkin_date, checkin_id), checkin_date) AS days_to_next, CASE WHEN LEAD(checkin_date) OVER (PARTITION BY member_id ORDER BY checkin_date, checkin_id) IS NULL THEN 'terminal' WHEN DATEDIFF(LEAD(checkin_date) OVER (PARTITION BY member_id ORDER BY checkin_date, checkin_id), checkin_date) >= 7 THEN 'long-gap' WHEN DATEDIFF(LEAD(checkin_date) OVER (PARTITION BY member_id ORDER BY checkin_date, checkin_id), checkin_date) = 0 THEN 'same-day' ELSE 'short-gap' END AS spacing_class FROM member_checkins ORDER BY member_id, checkin_date, checkin_id",
+      "ordered": true
+    }
+  ]
+}
