@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "null_safe_route_matching",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "striver619/db",
+      "commit": "918ce0e4618268d87d2d051466b448869c1c7098",
+      "path": "mysql/mysql-learn.sql",
+      "url": "https://github.com/striver619/db/blob/918ce0e4618268d87d2d051466b448869c1c7098/mysql/mysql-learn.sql",
+      "sha256": "ef20ef838fe720fb24e7939bf24d2bf9065adec9ec41a24d7e9c4e1bedc26c69",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "mysql/mysql-learn.sql:1589-1600",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "The MySQL reference demonstrates NULL-safe equality with <=>: two NULL operands compare equal, while a NULL and a non-NULL operand compare unequal instead of producing SQL NULL.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored route-assignment report. A LEFT JOIN uses two nullable route dimensions with <=> so assignments whose missing dimension is intentionally NULL match the corresponding event, while one-sided NULLs remain unmatched. The source literals, tables, and instructional examples are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "null-safe-equality",
+    "nullable-composite-join",
+    "left-join",
+    "coalesce",
+    "case",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Events 1-4 match assignments, including events 2-4 whose nullable route dimensions require <=>; event 5 has no assignment, and event 6 has only one NULL dimension so it remains unmatched. Every event has at most one assignment.",
+  "determinism_notes": "Event and assignment IDs, nullable route dimensions, and teams are fixed; output is ordered by the unique event ID with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE route_events (event_id INT PRIMARY KEY, route_code VARCHAR(8), depot_code VARCHAR(8), event_state VARCHAR(12) NOT NULL)",
+    "CREATE TABLE route_assignments (assignment_id INT PRIMARY KEY, route_code VARCHAR(8), depot_code VARCHAR(8), team VARCHAR(16) NOT NULL)",
+    "INSERT INTO route_events VALUES (1, 'R1', 'D1', 'ready'), (2, NULL, 'D2', 'ready'), (3, 'R2', NULL, 'ready'), (4, NULL, NULL, 'ready'), (5, 'R9', 'D9', 'ready'), (6, 'R1', NULL, 'hold')",
+    "INSERT INTO route_assignments VALUES (11, 'R1', 'D1', 'north'), (12, NULL, 'D2', 'east'), (13, 'R2', NULL, 'south'), (14, NULL, NULL, 'central')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT e.event_id, COALESCE(a.team, 'unassigned') AS assigned_team, CASE WHEN a.assignment_id IS NULL THEN 'unmatched' ELSE 'matched' END AS match_state FROM route_events e LEFT JOIN route_assignments a ON e.route_code <=> a.route_code AND e.depot_code <=> a.depot_code ORDER BY e.event_id",
+      "ordered": true
+    }
+  ]
+}
