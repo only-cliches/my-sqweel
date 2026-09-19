@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "distinct_json_route_summary",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "EvVPEvVP/hexlet-git",
+      "commit": "0cedfda98ba6ab02c438940e239ec0574d25a64d",
+      "path": "sql_7.sql",
+      "url": "https://github.com/EvVPEvVP/hexlet-git/blob/0cedfda98ba6ab02c438940e239ec0574d25a64d/sql_7.sql",
+      "sha256": "098ccad59f561741f97db95ba083460729eec791e67d0e9afcfd3b8cc21c46f7",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql_7.sql:1-17",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped MySQL report uses JSON_ARRAYAGG(DISTINCT ...) alongside COUNT(DISTINCT ...) over a parent/detail LEFT JOIN, retaining one JSON identifier per parent while aggregating detail rows.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored route-scan summary. Regions left join route scans, distinct route IDs are emitted as JSON arrays, scan counts remain distinct, and a conditional delivered count exposes the NULL-extended route case. The source schema, rows, labels, and application purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "json-arrayagg-distinct",
+    "count-distinct",
+    "left-join",
+    "grouping",
+    "conditional-aggregate",
+    "null-extended-row",
+    "deterministic-order"
+  ],
+  "fixture_notes": "North has two routes and three scans, including two delivered scans; south has two routes but only route 20 has scans, so the LEFT JOIN preserves route 21 while delivered counting remains zero for its NULL-extended row. DISTINCT JSON aggregation must list each route once despite multiple scans.",
+  "determinism_notes": "Region, route, scan, and state values are fixed; grouped output is ordered by the unique region name. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE service_regions (region_id INT PRIMARY KEY, region_name VARCHAR(16) NOT NULL UNIQUE)",
+    "CREATE TABLE service_routes (route_id INT PRIMARY KEY, region_id INT NOT NULL, route_label VARCHAR(32) NOT NULL)",
+    "CREATE TABLE route_scans (scan_id INT PRIMARY KEY, route_id INT NOT NULL, scan_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO service_regions VALUES (1, 'north'), (2, 'south')",
+    "INSERT INTO service_routes VALUES (10, 1, 'north-a'), (11, 1, 'north-b'), (20, 2, 'south-a'), (21, 2, 'south-b')",
+    "INSERT INTO route_scans VALUES (1001, 10, 'delivered'), (1002, 10, 'delivered'), (1101, 11, 'pending'), (2001, 20, 'delivered'), (2002, 20, 'failed')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT r.region_name, COUNT(DISTINCT v.route_id) AS route_count, JSON_ARRAYAGG(DISTINCT v.route_id) AS route_ids, COUNT(DISTINCT s.scan_id) AS scan_count, SUM(CASE WHEN s.scan_state = 'delivered' THEN 1 ELSE 0 END) AS delivered_scans FROM service_regions r INNER JOIN service_routes v ON v.region_id = r.region_id LEFT JOIN route_scans s ON s.route_id = v.route_id GROUP BY r.region_name ORDER BY r.region_name",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT r.region_name, COUNT(DISTINCT v.route_id) AS route_count, JSON_ARRAYAGG(DISTINCT v.route_id) AS route_ids, COUNT(DISTINCT s.scan_id) AS scan_count, SUM(CASE WHEN s.scan_state = 'delivered' THEN 1 ELSE 0 END) AS delivered_scans FROM service_regions r INNER JOIN service_routes v ON v.region_id = r.region_id LEFT JOIN route_scans s ON s.route_id = v.route_id GROUP BY r.region_name ORDER BY r.region_name",
+      "ordered": true
+    }
+  ]
+}
