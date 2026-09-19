@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "id": "archive_expired_jobs",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "query/cte/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/query/cte/mysql.sql",
+      "sha256": "3d119466a5e2ff93dba4df11c83944f748a451aefc037fe3cfab17feea4fb5f5",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "query/cte/mysql.sql:44-48",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL 8.0 common table expression can feed a DELETE through an IN subquery, separating the rows selected for removal from the target-table mutation.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored archive cleanup. A stale-jobs CTE selects completed jobs before a fixed cutoff inside the DELETE's IN subquery, and the DELETE removes only those job IDs. Recent completions, non-completed jobs, and NULL completion dates exercise the CTE predicate and preserve non-matching rows."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "cte",
+    "delete",
+    "in-subquery",
+    "date-comparison",
+    "null-preservation",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Job 201 is completed before the cutoff and is deleted; job 202 completed after the cutoff, job 203 is still running, job 204 failed before the cutoff, and job 205 has a NULL completion date. Only job 201 should be removed.",
+  "determinism_notes": "Job IDs, states, and completion dates are fixed; the final table is ordered by the unique job ID with no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE batch_jobs (job_id INT PRIMARY KEY, job_state VARCHAR(16) NOT NULL, finished_on DATE NULL)",
+    "INSERT INTO batch_jobs VALUES (201, 'complete', '2026-04-01'), (202, 'complete', '2026-05-20'), (203, 'running', '2026-03-15'), (204, 'failed', '2026-04-10'), (205, 'complete', NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "DELETE FROM batch_jobs WHERE job_id IN (WITH stale_jobs AS (SELECT job_id FROM batch_jobs WHERE job_state = 'complete' AND finished_on < '2026-05-01') SELECT job_id FROM stale_jobs)",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT job_id, job_state, finished_on FROM batch_jobs ORDER BY job_id",
+      "ordered": true
+    }
+  ]
+}

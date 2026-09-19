@@ -129,6 +129,7 @@ All notable changes to MySqweel will be documented in this file.
 - Parked the GitHub-attributed `REGEXP_LIKE` candidate from `fishercoder1534/Leetcode` because MariaDB 10.11.7 does not provide `REGEXP_LIKE`; the compatible `REGEXP` operator candidate was retained instead.
 - Added GitHub-attributed `REGEXP` coverage for an independently authored support-ticket routing update with word-boundary token matching, CASE precedence, NULL preservation, and deterministic final-state checks; fixed REGEXP predicate evaluation and MariaDB integer result metadata to match 10.11.7.
 - Added the minimized GitHub-attributed scalar `REGEXP` word-boundary regression; MariaDB 10.11.7 and MySqweel now both return integer `1` across repeated fresh differential runs.
+- Added GitHub-attributed CTE-backed `DELETE` coverage for an independently authored stale-job archive cleanup using a date-filtered CTE inside an `IN` subquery; the MariaDB-compatible translation preserves completed-before-cutoff, non-completed, and NULL-date rows, and MariaDB 10.11.7 matched MySqweel across repeated fresh differential runs without a source fix.
 
 ## 0.4.4 Sep 9, 2026
 
