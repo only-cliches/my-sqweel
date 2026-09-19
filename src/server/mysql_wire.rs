@@ -370,8 +370,8 @@ impl Backend {
         if let Some(result) = self.execute_session_query(query) {
             return Ok(vec![result]);
         }
-        if is_last_insert_id_query(query) {
-            return Ok(vec![last_insert_id_result(self.last_insert_id)]);
+        if let Some(column) = last_insert_id_column(query) {
+            return Ok(vec![last_insert_id_result(self.last_insert_id, column)]);
         }
         let results = self.session.execute_sql_for_wire(query)?;
         let trimmed = query.trim().trim_end_matches(';').trim();
@@ -886,34 +886,38 @@ fn wire_column_type(column_type: MysqlColumnType) -> ColumnType {
     }
 }
 
-fn is_last_insert_id_query(query: &str) -> bool {
+fn last_insert_id_column(query: &str) -> Option<String> {
     let Ok(statements) = crate::sql::parse(query) else {
-        return false;
+        return None;
     };
     let Some(sqlparser::ast::Statement::Query(query)) = statements.into_iter().next() else {
-        return false;
+        return None;
     };
     let sqlparser::ast::SetExpr::Select(select) = *query.body else {
-        return false;
+        return None;
     };
     if !select.from.is_empty() || select.projection.len() != 1 {
-        return false;
+        return None;
     }
 
-    let expr = match &select.projection[0] {
-        sqlparser::ast::SelectItem::UnnamedExpr(expr) => expr,
-        sqlparser::ast::SelectItem::ExprWithAlias { expr, .. } => expr,
-        _ => return false,
+    let (expr, alias) = match &select.projection[0] {
+        sqlparser::ast::SelectItem::UnnamedExpr(expr) => (expr, None),
+        sqlparser::ast::SelectItem::ExprWithAlias { expr, alias } => {
+            (expr, Some(alias.value.clone()))
+        }
+        _ => return None,
     };
-    expr.to_string()
+    let normalized = expr
+        .to_string()
         .chars()
         .filter(|ch| !ch.is_whitespace() && *ch != '`')
-        .collect::<String>()
+        .collect::<String>();
+    normalized
         .eq_ignore_ascii_case("LAST_INSERT_ID()")
+        .then(|| alias.unwrap_or_else(|| "LAST_INSERT_ID()".to_string()))
 }
 
-fn last_insert_id_result(value: u64) -> QueryResult {
-    let column = "LAST_INSERT_ID()".to_string();
+fn last_insert_id_result(value: u64, column: String) -> QueryResult {
     let mut row = Map::new();
     row.insert(column.clone(), serde_json::Number::from(value).into());
     QueryResult {

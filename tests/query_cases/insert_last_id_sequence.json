@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "id": "insert_last_id_sequence",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "dml/insert/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/dml/insert/mysql.sql",
+      "sha256": "762dca80c32e2567749ae75c7718361ba14546f694e4e3d8036242e1735937b9",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "dml/insert/mysql.sql:27-31",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL insert into an AUTO_INCREMENT table is followed by SELECT LAST_INSERT_ID() to retrieve the generated identifier on the same connection.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored run-ledger scenario. A pre-existing row establishes a nonzero sequence, one new run is inserted without its generated key, and the same connection reads LAST_INSERT_ID() before the final ledger state is checked. The table, columns, identifiers, values, and operational purpose are new; the source's users example is not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "auto-increment",
+    "insert",
+    "last-insert-id",
+    "connection-state",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The seeded run consumes identifier 1, so the inserted reconciliation run must report generated identifier 2 through LAST_INSERT_ID() and appear with that key in the final ledger.",
+  "determinism_notes": "The sequence starts from an empty table and fixed literals; all final rows are ordered by the unique generated run ID with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE run_ledger (run_id INT AUTO_INCREMENT PRIMARY KEY, run_code VARCHAR(32) NOT NULL, state VARCHAR(16) NOT NULL)",
+    "INSERT INTO run_ledger (run_code, state) VALUES ('bootstrap', 'complete')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO run_ledger (run_code, state) VALUES ('reconcile', 'queued')"
+    },
+    {
+      "sql": "SELECT LAST_INSERT_ID() AS created_run_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT run_id, run_code, state FROM run_ledger ORDER BY run_id",
+      "ordered": true
+    }
+  ]
+}
