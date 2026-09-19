@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "usage_period_fallbacks_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "FreeRADIUS/freeradius-server",
+      "commit": "5af41f327be5ee3e655a01a2d8c208e98a4e2c72",
+      "path": "raddb/mods-config/sql/main/mysql/process-radacct.sql",
+      "url": "https://github.com/FreeRADIUS/freeradius-server/blob/5af41f327be5ee3e655a01a2d8c208e98a4e2c72/raddb/mods-config/sql/main/mysql/process-radacct.sql",
+      "sha256": "0465bc986104f0f8a6a70cb39cf54f030fee7291bdd3306a92a1c6837454f2f2",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "raddb/mods-config/sql/main/mysql/process-radacct.sql:93",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A missing latest period end is defaulted to the Unix epoch while the non-NULL branch advances a timestamp by one second.",
+      "mysql_mariadb_translation": "Reduced to one independently authored aggregate IFNULL expression combining MAX, DATE_ADD, and FROM_UNIXTIME so temporal type merging remains isolated from the original multi-account report."
+    },
+    "independently_authored": true,
+    "minimized_from": "usage_period_fallbacks"
+  },
+  "features": [
+    "from-unix-time",
+    "date-add",
+    "ifnull",
+    "max-aggregate",
+    "temporal-type-merge",
+    "minimized-regression"
+  ],
+  "fixture_notes": "One NULL period row forces the epoch fallback while retaining the aggregate and DATE_ADD expression that exposed the temporal metadata mismatch.",
+  "determinism_notes": "The single fixed NULL row and epoch argument are deterministic; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE usage_period_min (period_id INT PRIMARY KEY, period_end DATETIME NULL)",
+    "INSERT INTO usage_period_min VALUES (1, NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT IFNULL(DATE_ADD(MAX(period_end), INTERVAL 1 SECOND), FROM_UNIXTIME(0)) AS next_period_start FROM usage_period_min",
+      "ordered": true
+    }
+  ]
+}

@@ -1614,7 +1614,7 @@ impl RawEngine {
                     "ROUND" | "TRUNCATE" => MysqlColumnType::Decimal,
                     "CURRENT_DATE" | "CURDATE" | "DATE" => MysqlColumnType::Date,
                     "CURRENT_TIME" | "CURTIME" | "TIME" | "SEC_TO_TIME" | "TIMEDIFF" => MysqlColumnType::Time,
-                    "NOW" | "CURRENT_TIMESTAMP" => MysqlColumnType::DateTime,
+                    "NOW" | "CURRENT_TIMESTAMP" | "FROM_UNIXTIME" => MysqlColumnType::DateTime,
                     "DATE_ADD" | "DATE_SUB" | "ADDDATE" | "SUBDATE" => {
                         MysqlColumnType::DateTime
                     }
@@ -1971,15 +1971,32 @@ impl RawEngine {
         };
         let mut best = fallback;
         let mut best_rank = 0u8;
+        let mut argument_types = Vec::new();
         for argument in arguments.into_iter().flatten() {
             let argument_type = self
                 .expression_metadata(select, &argument, String::new(), first_row)
                 .column_type;
+            argument_types.push(argument_type);
             let rank = numeric_type_rank(argument_type);
             if rank > best_rank {
                 best_rank = rank;
                 best = argument_type;
             }
+        }
+        if best_rank == 0
+            && let Some(first_type) = argument_types.first().copied()
+            && matches!(
+                first_type,
+                MysqlColumnType::Date
+                    | MysqlColumnType::Time
+                    | MysqlColumnType::DateTime
+                    | MysqlColumnType::Timestamp
+            )
+            && argument_types
+                .iter()
+                .all(|argument_type| *argument_type == first_type)
+        {
+            return first_type;
         }
         best
     }

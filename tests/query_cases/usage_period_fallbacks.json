@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "usage_period_fallbacks",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "FreeRADIUS/freeradius-server",
+      "commit": "5af41f327be5ee3e655a01a2d8c208e98a4e2c72",
+      "path": "raddb/mods-config/sql/main/mysql/process-radacct.sql",
+      "url": "https://github.com/FreeRADIUS/freeradius-server/blob/5af41f327be5ee3e655a01a2d8c208e98a4e2c72/raddb/mods-config/sql/main/mysql/process-radacct.sql",
+      "sha256": "0465bc986104f0f8a6a70cb39cf54f030fee7291bdd3306a92a1c6837454f2f2",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "raddb/mods-config/sql/main/mysql/process-radacct.sql:93",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A usage-period workflow defaults a missing latest period end to the Unix epoch while otherwise adding one second to the latest period timestamp.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored grouped usage-period report. MAX finds each account's latest non-NULL period, DATE_ADD advances it by one second, and IFNULL uses FROM_UNIXTIME(0) for accounts without a completed period. The source routine, schema, rows, and output purpose are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "from-unix-time",
+    "date-add",
+    "ifnull",
+    "max-aggregate",
+    "grouping",
+    "null-fallback",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Account 701 has two completed periods and advances the latest one; account 702 has only a NULL period and receives the epoch fallback; account 703 mixes a NULL period with one completed period so MAX ignores the NULL row.",
+  "determinism_notes": "Account IDs and DATETIME values are fixed; grouped output is ordered by the unique account ID with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE usage_periods (period_id INT PRIMARY KEY, account_id INT NOT NULL, period_end DATETIME NULL)",
+    "INSERT INTO usage_periods VALUES (1, 701, '2026-04-01 10:00:00'), (2, 701, '2026-04-03 11:30:00'), (3, 702, NULL), (4, 703, NULL), (5, 703, '2026-05-10 23:59:59')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT account_id, IFNULL(DATE_ADD(MAX(period_end), INTERVAL 1 SECOND), FROM_UNIXTIME(0)) AS next_period_start FROM usage_periods GROUP BY account_id ORDER BY account_id",
+      "ordered": true
+    }
+  ]
+}
