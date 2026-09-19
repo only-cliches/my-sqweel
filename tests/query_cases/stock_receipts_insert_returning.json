@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "stock_receipts_insert_returning",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Dicklesworthstone/sqlmodel_rust",
+      "commit": "5017764ba8b26da23afd6c9c5b06384b4e7f2236",
+      "path": "crates/sqlmodel-e2e/golden/mysql/insert_returning.sql",
+      "url": "https://github.com/Dicklesworthstone/sqlmodel_rust/blob/5017764ba8b26da23afd6c9c5b06384b4e7f2236/crates/sqlmodel-e2e/golden/mysql/insert_returning.sql",
+      "sha256": "d6b50c35ae01b70305bcdb881069786ca2932effec9d25ac894d9e25dc881a36",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "crates/sqlmodel-e2e/golden/mysql/insert_returning.sql:1-3",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL insert statement can return selected columns from the rows it creates.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored stock-receipt intake. One multi-row VALUES insert returns explicit identity, SKU, quantity, and nullable note columns; the table, rows, aliases, and inventory purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["insert-returning", "multi-row-values", "nullable-column", "explicit-projection", "final-state-check", "deterministic-order"],
+  "fixture_notes": "The RETURNING result must expose both inserted rows in VALUES order, preserving the NULL note for the second receipt. The final read verifies both rows were committed.",
+  "determinism_notes": "Receipt IDs, values, and insert order are fixed; the final state is ordered by the primary key. There are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE stock_receipts (receipt_id INT PRIMARY KEY, sku VARCHAR(16) NOT NULL, quantity INT NOT NULL, note VARCHAR(32) NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO stock_receipts (receipt_id, sku, quantity, note) VALUES (701, 'AX-14', 4, 'rush'), (702, 'BZ-09', 7, NULL) RETURNING receipt_id, sku, quantity, note",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT receipt_id, sku, quantity, note FROM stock_receipts ORDER BY receipt_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT receipt_id, sku, quantity, note FROM stock_receipts ORDER BY receipt_id",
+      "ordered": true
+    }
+  ]
+}
