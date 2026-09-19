@@ -1,0 +1,68 @@
+{
+  "version": 1,
+  "id": "temporary_dispatch_rollup",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Alanaktion/phproject",
+      "commit": "0307062a4b8d31375b6dbe09cb09a7a631dfdafd",
+      "path": "db/16.11.25.sql",
+      "url": "https://github.com/Alanaktion/phproject/blob/0307062a4b8d31375b6dbe09cb09a7a631dfdafd/db/16.11.25.sql",
+      "sha256": "52598ee905ce71d6a7a7eb4b764dbef39e3d685fadac1d6b0a1d99d8f4fadd5b",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "db/16.11.25.sql:4-16",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL migration materializes a grouped aggregate in a temporary table, clears a destination table, copies the staged rows with INSERT ... SELECT, and drops the temporary table.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored dispatch rollup. Pending parcel counts are staged in a temporary table, a stale depot summary is truncated, the aggregate is copied into the permanent summary, and the temporary table is dropped before final-state checks. The source schema, rows, columns, and reporting purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "temporary-table-ctas",
+    "aggregate-staging",
+    "truncate",
+    "insert-select",
+    "drop-temporary-table",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Pending dispatches for depots 10 and 20 are staged and replace stale summary rows; depot 30 has only delivered dispatches and must disappear from the refreshed summary. The source dispatch ledger remains unchanged.",
+  "determinism_notes": "Depot IDs, event states, and parcel counts are fixed; grouped staging and final summaries are ordered by unique depot ID with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE dispatch_events (event_id INT PRIMARY KEY, depot_id INT NOT NULL, dispatch_state VARCHAR(16) NOT NULL, parcel_count INT NOT NULL)",
+    "CREATE TABLE depot_totals (depot_id INT PRIMARY KEY, parcel_count INT NOT NULL)",
+    "INSERT INTO dispatch_events VALUES (101, 10, 'pending', 4), (102, 10, 'pending', 6), (103, 10, 'delivered', 99), (201, 20, 'pending', 3), (202, 20, 'delivered', 50), (301, 30, 'delivered', 7)",
+    "INSERT INTO depot_totals VALUES (10, 999), (30, 777)"
+  ],
+  "steps": [
+    {
+      "sql": "CREATE TEMPORARY TABLE pending_depot_totals SELECT depot_id, SUM(parcel_count) AS pending_parcels FROM dispatch_events WHERE dispatch_state = 'pending' GROUP BY depot_id",
+      "ordered": true
+    },
+    {
+      "sql": "TRUNCATE TABLE depot_totals",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO depot_totals (depot_id, parcel_count) SELECT depot_id, pending_parcels FROM pending_depot_totals",
+      "ordered": true
+    },
+    {
+      "sql": "DROP TEMPORARY TABLE pending_depot_totals",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT depot_id, parcel_count FROM depot_totals ORDER BY depot_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT event_id, depot_id, dispatch_state, parcel_count FROM dispatch_events ORDER BY event_id",
+      "ordered": true
+    }
+  ]
+}

@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "warehouse_range_windows",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "kamyu104/LeetCode-Solutions",
+      "commit": "61dbeee7007dd94e539655ce843cf33a8c72294b",
+      "path": "MySQL/restaurant-growth.sql",
+      "url": "https://github.com/kamyu104/LeetCode-Solutions/blob/61dbeee7007dd94e539655ce843cf33a8c72294b/MySQL/restaurant-growth.sql",
+      "sha256": "eca31fcc72100860f4e46d70a4a47e0ea4b0ef1effb815e88bc28dc51e04ed22",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/restaurant-growth.sql: total_cte rolling amount window",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A date-ordered aggregate window uses RANGE with an INTERVAL day boundary so each row sees all same-partition records within a logical time span rather than a fixed row count.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored warehouse movement audit. Because MariaDB 10.11.7 rejects temporal INTERVAL bounds in a RANGE frame, a fixed day ordinal column carries the date distance and a numeric two-day RANGE preserves the logical time span; duplicate movement dates exercise peer-frame sharing, and a NULL movement tests aggregate input handling. The schema, rows, expressions, aliases, and reporting purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "range-window",
+    "numeric-range-frame",
+    "partitioned-window",
+    "peer-dates",
+    "sum-over",
+    "count-over",
+    "null-aggregate-input",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Each frame includes rows in the same warehouse whose movement date is no more than two days before the current date. Duplicate dates share the same RANGE frame; warehouse 20's NULL movement contributes to COUNT(*) but not SUM.",
+  "determinism_notes": "Movement IDs, warehouse IDs, dates, and units are fixed; the result is ordered by warehouse, movement date, and unique movement ID with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE warehouse_movements (movement_id INT PRIMARY KEY, warehouse_id INT NOT NULL, moved_on DATE NOT NULL, day_index INT NOT NULL, units INT NULL)",
+    "INSERT INTO warehouse_movements VALUES (1, 10, '2024-04-01', 0, 5), (2, 10, '2024-04-02', 1, 3), (3, 10, '2024-04-04', 3, 7), (4, 10, '2024-04-04', 3, 2), (5, 10, '2024-04-07', 6, 4), (6, 20, '2024-04-01', 0, 9), (7, 20, '2024-04-03', 2, 1), (8, 20, '2024-04-06', 5, NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT movement_id, warehouse_id, moved_on, units, SUM(units) OVER (PARTITION BY warehouse_id ORDER BY day_index RANGE BETWEEN 2 PRECEDING AND CURRENT ROW) AS rolling_units, COUNT(*) OVER (PARTITION BY warehouse_id ORDER BY day_index RANGE BETWEEN 2 PRECEDING AND CURRENT ROW) AS events_in_range FROM warehouse_movements ORDER BY warehouse_id, moved_on, movement_id",
+      "ordered": true
+    }
+  ]
+}

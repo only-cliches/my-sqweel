@@ -129,9 +129,13 @@ All notable changes to MySqweel will be documented in this file.
 - Parked the GitHub-attributed `REGEXP_LIKE` candidate from `fishercoder1534/Leetcode` because MariaDB 10.11.7 does not provide `REGEXP_LIKE`; the compatible `REGEXP` operator candidate was retained instead.
 - Added GitHub-attributed `REGEXP` coverage for an independently authored support-ticket routing update with word-boundary token matching, CASE precedence, NULL preservation, and deterministic final-state checks; fixed REGEXP predicate evaluation and MariaDB integer result metadata to match 10.11.7.
 - Added the minimized GitHub-attributed scalar `REGEXP` word-boundary regression; MariaDB 10.11.7 and MySqweel now both return integer `1` across repeated fresh differential runs.
+- Parked the GitHub-attributed executable `CHECK (... REGEXP ...)` candidate from `devcamps/camps` because existing `ticket_code_routing.json` already covers MariaDB-compatible `REGEXP` predicate evaluation; no duplicate fixture was retained.
 - Added GitHub-attributed CTE-backed `DELETE` coverage for an independently authored stale-job archive cleanup using a date-filtered CTE inside an `IN` subquery; the MariaDB-compatible translation preserves completed-before-cutoff, non-completed, and NULL-date rows, and MariaDB 10.11.7 matched MySqweel across repeated fresh differential runs without a source fix.
 - Added GitHub-attributed MariaDB QA coverage for independently authored `INSERT ... SET` upserts combining `ON DUPLICATE KEY UPDATE`, column `DEFAULT` assignments, and `RETURNING` on both conflict and insert paths; fixed parser normalization to preserve the duplicate clause and materialize column defaults in duplicate updates.
 - Added the minimized GitHub-attributed `INSERT ... SET ... ON DUPLICATE KEY UPDATE ... RETURNING` regression; MariaDB 10.11.7 and MySqweel now return and persist the defaulted value across repeated fresh differential runs.
+- Added GitHub-attributed temporary-table staging coverage for an independently authored dispatch rollup combining `CREATE TEMPORARY TABLE ... SELECT`, grouped aggregation, `TRUNCATE`, `INSERT ... SELECT`, and `DROP TEMPORARY TABLE`; fixed CTAS affected-row reporting to match MariaDB 10.11.7.
+- Added the minimized GitHub-attributed temporary CTAS regression; MariaDB 10.11.7 and MySqweel now both report one materialized row across repeated fresh differential runs.
+- Added GitHub-attributed numeric `RANGE` window coverage for an independently authored warehouse movement audit with peer-date frames, partitioned `SUM`/`COUNT`, NULL input handling, and deterministic ordering; MariaDB 10.11.7 and MySqweel matched without a source fix.
 
 ## 0.4.4 Sep 9, 2026
 

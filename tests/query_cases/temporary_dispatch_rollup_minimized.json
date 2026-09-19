@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "temporary_dispatch_rollup_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "temporary_dispatch_rollup",
+    "source": {
+      "kind": "github",
+      "repository": "Alanaktion/phproject",
+      "commit": "0307062a4b8d31375b6dbe09cb09a7a631dfdafd",
+      "path": "db/16.11.25.sql",
+      "url": "https://github.com/Alanaktion/phproject/blob/0307062a4b8d31375b6dbe09cb09a7a631dfdafd/db/16.11.25.sql",
+      "sha256": "52598ee905ce71d6a7a7eb4b764dbef39e3d685fadac1d6b0a1d99d8f4fadd5b",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "db/16.11.25.sql:4-7",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "CREATE TEMPORARY TABLE ... SELECT reports the number of materialized rows while retaining the staged relation for later reads.",
+      "mysql_mariadb_translation": "Minimized independently authored regression with one pending depot row. It isolates affected-row reporting for temporary CTAS from the original aggregate, truncate, permanent-table refresh, and multi-depot workflow."
+    },
+    "independently_authored": true,
+    "minimized_from": "temporary_dispatch_rollup"
+  },
+  "features": [
+    "temporary-table-ctas",
+    "dml-final-state",
+    "minimized-regression"
+  ],
+  "fixture_notes": "One temporary row must be materialized and reported as one affected row; the final count verifies that the staged row exists.",
+  "determinism_notes": "The fixed event rows and depot ID produce one stable staged row with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE mini_dispatch_events (event_id INT PRIMARY KEY, depot_id INT NOT NULL, dispatch_state VARCHAR(16) NOT NULL, parcel_count INT NOT NULL)",
+    "INSERT INTO mini_dispatch_events VALUES (1, 41, 'pending', 8), (2, 41, 'delivered', 99)"
+  ],
+  "steps": [
+    {
+      "sql": "CREATE TEMPORARY TABLE mini_pending_totals SELECT depot_id, parcel_count AS pending_parcels FROM mini_dispatch_events WHERE dispatch_state = 'pending'",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT COUNT(*) AS staged_rows FROM mini_pending_totals",
+      "ordered": true
+    }
+  ]
+}

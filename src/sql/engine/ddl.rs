@@ -53,6 +53,7 @@ impl RawEngine {
         query: sqlparser::ast::Query,
     ) -> Result<QueryResult> {
         let result = self.select_query(query)?;
+        let rows_affected = result.rows.len() as u64;
         let table = object_name(&name)?;
         if self.mysql_strict() && self.schemas.contains_key(&table) {
             if if_not_exists {
@@ -88,7 +89,10 @@ impl RawEngine {
         self.rows.insert(table.clone(), table_rows.into());
         self.rebuild_indexes(&table);
         self.persist_schema(&table)?;
-        Ok(QueryResult::default())
+        Ok(QueryResult {
+            rows_affected,
+            ..QueryResult::default()
+        })
     }
 
     pub(super) fn create_table(
