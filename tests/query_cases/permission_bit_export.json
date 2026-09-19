@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "permission_bit_export",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "anilsolanki2645/MySQL-Tutorial",
+      "commit": "205393ee3b9db1041777e8667161f62e656c6558",
+      "path": "MySQL-String-Function.sql",
+      "url": "https://github.com/anilsolanki2645/MySQL-Tutorial/blob/205393ee3b9db1041777e8667161f62e656c6558/MySQL-String-Function.sql",
+      "sha256": "4889fbabcd6e16b646c2568cd6d959bce8de65d338fe8dad0042a81d4d428d25",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL-String-Function.sql:133",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "EXPORT_SET serializes the low-order bits of an integer as on/off text with a separator and explicit bit width.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored service-account permission audit. EXPORT_SET renders four fixed permission positions using grant/deny labels, while CASE classifies NULL and zero masks. The source literals, schema, rows, aliases, labels, and reporting purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "export-set",
+    "bitmask-to-text",
+    "explicit-bit-width",
+    "null-propagation",
+    "case-classification",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Account 701 has bits 0 and 2 enabled, account 702 has bits 1 and 3 enabled, account 703 has no permissions, and account 704 has a NULL mask.",
+  "determinism_notes": "Account IDs, masks, labels, separator, and four-bit width are fixed; output is ordered by the unique account ID with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE service_accounts (account_id INT PRIMARY KEY, account_name VARCHAR(32) NOT NULL, permission_mask INT NULL)",
+    "INSERT INTO service_accounts VALUES (701, 'atlas-api', 5), (702, 'beacon-worker', 10), (703, 'cinder-readonly', 0), (704, 'delta-pending', NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT account_id, account_name, permission_mask, EXPORT_SET(permission_mask, 'grant', 'deny', '|', 4) AS permission_bits, CASE WHEN permission_mask IS NULL THEN 'missing' WHEN permission_mask = 0 THEN 'none' ELSE 'configured' END AS permission_class FROM service_accounts ORDER BY account_id",
+      "ordered": true
+    }
+  ]
+}

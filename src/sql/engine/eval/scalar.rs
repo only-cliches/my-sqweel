@@ -389,6 +389,46 @@ where
     }
     Ok(Value::String(out))
 }
+pub(super) fn eval_export_set_values(values: &[Value]) -> Result<Value> {
+    let Some(bits) = values.first() else {
+        return Err(anyhow!("EXPORT_SET requires at least three arguments"));
+    };
+    let Some(on) = values.get(1) else {
+        return Err(anyhow!("EXPORT_SET requires at least three arguments"));
+    };
+    let Some(off) = values.get(2) else {
+        return Err(anyhow!("EXPORT_SET requires at least three arguments"));
+    };
+    if bits == &Value::Null || on == &Value::Null || off == &Value::Null {
+        return Ok(Value::Null);
+    }
+    let bits = value_to_i64(bits).unwrap_or(0) as u64;
+    let on = json_scalar_to_string(on);
+    let off = json_scalar_to_string(off);
+    let separator = values
+        .get(3)
+        .and_then(|value| (value != &Value::Null).then(|| json_scalar_to_string(value)))
+        .unwrap_or_else(|| ",".to_string());
+    let width = values
+        .get(4)
+        .filter(|value| *value != &Value::Null)
+        .and_then(|value| value_to_i64(value))
+        .unwrap_or(64)
+        .clamp(0, 64) as usize;
+    Ok(Value::String(
+        (0..width)
+            .map(|index| {
+                if bits & (1_u64 << index) != 0 {
+                    on.as_str()
+                } else {
+                    off.as_str()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(&separator),
+    ))
+}
+
 
 pub(super) fn eval_substring_values(
     value: Value,

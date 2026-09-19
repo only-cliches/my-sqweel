@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "id": "permission_bit_export_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "anilsolanki2645/MySQL-Tutorial",
+      "commit": "205393ee3b9db1041777e8667161f62e656c6558",
+      "path": "MySQL-String-Function.sql",
+      "url": "https://github.com/anilsolanki2645/MySQL-Tutorial/blob/205393ee3b9db1041777e8667161f62e656c6558/MySQL-String-Function.sql",
+      "sha256": "4889fbabcd6e16b646c2568cd6d959bce8de65d338fe8dad0042a81d4d428d25",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL-String-Function.sql:133",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "EXPORT_SET serializes the low-order bits of an integer using on/off text, a separator, and an explicit bit width.",
+      "mysql_mariadb_translation": "Reduced to one independently authored scalar EXPORT_SET projection over a fixed five-bit mask, removing table setup, NULL handling, and CASE classification while retaining bit ordering, separator, and VARCHAR metadata."
+    },
+    "independently_authored": true,
+    "minimized_from": "permission_bit_export"
+  },
+  "features": [
+    "export-set",
+    "bitmask-to-text",
+    "explicit-bit-width",
+    "minimized-regression"
+  ],
+  "fixture_notes": "The fixed mask 5 isolates low-order bit serialization as grant|deny|grant|deny.",
+  "determinism_notes": "The mask, labels, separator, and four-bit width are fixed; the scalar query has no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT EXPORT_SET(5, 'grant', 'deny', '|', 4) AS permission_bits",
+      "ordered": true
+    }
+  ]
+}

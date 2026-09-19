@@ -1517,6 +1517,7 @@ impl RawEngine {
                         metadata.unsigned = true;
                         MysqlColumnType::BigInt
                     }
+                    "EXPORT_SET" => MysqlColumnType::VarChar,
                     "PERCENT_RANK" | "CUME_DIST" => {
                         // MariaDB renders both ranking fractions as DOUBLE
                         // with exactly ten fractional digits.

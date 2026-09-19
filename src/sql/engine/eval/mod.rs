@@ -3383,6 +3383,10 @@ where
                 .unwrap_or(Value::Null);
             eval_make_set_values(bits, args.iter().skip(1).map(eval_arg))
         })()),
+        "EXPORT_SET" => Some((|| {
+            let values = args.iter().map(eval_arg).collect::<Result<Vec<_>>>()?;
+            eval_export_set_values(&values)
+        })()),
         "REGEXP_REPLACE" => Some((|| {
             let values = args.iter().map(eval_arg).collect::<Result<Vec<_>>>()?;
             eval_regexp_replace_values(&values)
@@ -4168,6 +4172,13 @@ pub(super) fn eval_function_text(
                     .skip(1)
                     .map(|arg| eval_scalar_text(arg, data, last_insert_id)),
             )
+        }
+        "EXPORT_SET" => {
+            let values = args
+                .iter()
+                .map(|arg| eval_scalar_text(arg, data, last_insert_id))
+                .collect::<Result<Vec<_>>>()?;
+            eval_export_set_values(&values)
         }
         "POSITION" => {
             reject_invalid_binary_charset_conversion(&args)?;
