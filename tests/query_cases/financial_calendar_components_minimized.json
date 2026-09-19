@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "financial_calendar_components_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "maranemil/howto",
+      "commit": "8c78618fce26710862fdfda1f6d427b9e0b3b879",
+      "path": "fullstack/databases/mysql/howto_mysql_date_format.sql",
+      "url": "https://github.com/maranemil/howto/blob/8c78618fce26710862fdfda1f6d427b9e0b3b879/fullstack/databases/mysql/howto_mysql_date_format.sql",
+      "sha256": "6350cdc38b4b49e2ae13ec18cae297149a23099647b99ad964cd4e682e7a65ec",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "fullstack/databases/mysql/howto_mysql_date_format.sql:70-90",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL date-query reference combines WEEKDAY with calendar extraction functions such as YEAR, WEEKOFYEAR, YEARWEEK, and WEEK to inspect date components.",
+      "mysql_mariadb_translation": "Minimized independently authored scalar reproduction of the integer metadata mismatch for QUARTER over a fixed date literal."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "quarter",
+    "integer-date-metadata"
+  ],
+  "fixture_notes": "The minimized query isolates QUARTER's MariaDB LONG metadata from table setup, NULL handling, and the other calendar projections.",
+  "determinism_notes": "The query uses one fixed date literal with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT QUARTER('2024-04-01') AS quarter_number",
+      "ordered": true
+    }
+  ]
+}

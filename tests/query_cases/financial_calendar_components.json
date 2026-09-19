@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "financial_calendar_components",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "maranemil/howto",
+      "commit": "8c78618fce26710862fdfda1f6d427b9e0b3b879",
+      "path": "fullstack/databases/mysql/howto_mysql_date_format.sql",
+      "url": "https://github.com/maranemil/howto/blob/8c78618fce26710862fdfda1f6d427b9e0b3b879/fullstack/databases/mysql/howto_mysql_date_format.sql",
+      "sha256": "6350cdc38b4b49e2ae13ec18cae297149a23099647b99ad964cd4e682e7a65ec",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "fullstack/databases/mysql/howto_mysql_date_format.sql:70-90",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL date-query reference combines WEEKDAY with calendar extraction functions such as YEAR, WEEKOFYEAR, YEARWEEK, and WEEK to classify date ranges and inspect component values.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored financial milestone calendar report. Fixed timestamps exercise DATE_FORMAT, MONTHNAME, QUARTER, DAYOFYEAR, and WEEKDAY across a leap day, quarter boundaries, year end, weekend classification, and NULL input; source queries, schema, dates, and reporting purpose are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "date-format",
+    "monthname",
+    "quarter",
+    "dayofyear",
+    "weekday",
+    "leap-day",
+    "quarter-classification",
+    "null-propagation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Rows cover New Year's Day, leap day, quarter starts, a summer milestone, year end, and a NULL timestamp so calendar extraction and missing-value classification remain observable.",
+  "determinism_notes": "All milestone IDs and timestamps are fixed literals, and output is ordered by the unique milestone ID with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE financial_milestones (milestone_id INT PRIMARY KEY, milestone_at DATETIME NULL, milestone_kind VARCHAR(32) NOT NULL)",
+    "INSERT INTO financial_milestones VALUES (5201, '2024-01-01 09:00:00', 'opening'), (5202, '2024-02-29 23:59:59', 'leap-close'), (5203, '2024-04-01 08:30:00', 'spring-reset'), (5204, '2024-07-04 12:00:00', 'summer-check'), (5205, '2024-12-31 17:45:00', 'year-close'), (5206, NULL, 'unscheduled')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT milestone_id, milestone_kind, DATE_FORMAT(milestone_at, '%Y-%m-%d') AS milestone_day, MONTHNAME(milestone_at) AS month_label, QUARTER(milestone_at) AS quarter_number, DAYOFYEAR(milestone_at) AS day_number, WEEKDAY(milestone_at) AS weekday_number, CASE WHEN milestone_at IS NULL THEN 'missing' WHEN WEEKDAY(milestone_at) IN (5, 6) THEN 'weekend' WHEN QUARTER(milestone_at) = 4 THEN 'year-end-weekday' ELSE 'weekday' END AS calendar_class FROM financial_milestones ORDER BY milestone_id",
+      "ordered": true
+    }
+  ]
+}
