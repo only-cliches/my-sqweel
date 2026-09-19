@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "document_bit_lengths",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "functions/string-functions/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/functions/string-functions/mysql.sql",
+      "sha256": "579d216a9bec0a4d380ee6f63483e595bb412f873ed757454e3719095f9c9421",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "functions/string-functions/mysql.sql:109",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "BIT_LENGTH reports the number of bits occupied by a string's encoded bytes.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored document-fragment audit. BIT_LENGTH measures fixed UTF-8 text at bit granularity, CHAR_LENGTH provides the character comparison, and CASE classifies empty and NULL fragments. The source literals, schema, rows, aliases, and reporting purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "bit-length",
+    "multibyte-text",
+    "character-comparison",
+    "empty-string",
+    "null-propagation",
+    "case-classification",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Fragment 801 is ASCII, 802 is accented text, 803 is an emoji, 804 is empty, and 805 is NULL. Bit counts must reflect encoded UTF-8 bytes rather than character count.",
+  "determinism_notes": "Fragment IDs and text literals are fixed; output is ordered by the unique fragment ID with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE document_fragments (fragment_id INT PRIMARY KEY, body VARCHAR(64) NULL)",
+    "INSERT INTO document_fragments VALUES (801, 'OK'), (802, 'é'), (803, '🚀'), (804, ''), (805, NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT fragment_id, body, BIT_LENGTH(body) AS bit_length, CHAR_LENGTH(body) AS character_length, CASE WHEN body IS NULL THEN 'missing' WHEN body = '' THEN 'empty' ELSE 'present' END AS body_class FROM document_fragments ORDER BY fragment_id",
+      "ordered": true
+    }
+  ]
+}
