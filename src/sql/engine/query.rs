@@ -1667,12 +1667,13 @@ impl RawEngine {
                     | "MINUTE"
                     | "SECOND"
                     | "MICROSECOND" => MysqlColumnType::Integer,
-                    "CONV" | "MAKE_SET" | "FORMAT" | "QUOTE" => MysqlColumnType::VarChar,
                     "INTERVAL_FUNC" => MysqlColumnType::Integer,
-                    "JSON_ARRAYAGG" | "JSON_OBJECTAGG" => MysqlColumnType::Blob,
-                    "JSON_ARRAY" => MysqlColumnType::VarChar,
+                    "CONV" | "MAKE_SET" | "FORMAT" | "QUOTE" => MysqlColumnType::VarChar,
                     "JSON_LENGTH" => MysqlColumnType::Integer,
                     "JSON_UNQUOTE" => MysqlColumnType::LongBlob,
+                    "JSON_CONTAINS_PATH" => MysqlColumnType::Integer,
+                    "JSON_ARRAYAGG" | "JSON_OBJECTAGG" => MysqlColumnType::Blob,
+                    "JSON_ARRAY" => MysqlColumnType::VarChar,
                     "JSON_ARRAY_APPEND"
                     | "JSON_ARRAY_INSERT"
                     | "JSON_EXTRACT"

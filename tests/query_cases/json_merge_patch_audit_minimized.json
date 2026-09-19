@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "json_merge_patch_audit_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "zhao1jin4/Record",
+      "commit": "560eef9486626c34c7c6b37d0f944c5f3a2b8aab",
+      "path": "Record/Program-Record/MySQL_Devlop.sql",
+      "url": "https://github.com/zhao1jin4/Record/blob/560eef9486626c34c7c6b37d0f944c5f3a2b8aab/Record/Program-Record/MySQL_Devlop.sql",
+      "sha256": "85d78867be4ac4fe8ffed11340db286245a91a1dda0be00438a6abfd856c5f53",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Record/Program-Record/MySQL_Devlop.sql: JSON_MERGE_PATCH example",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "JSON_MERGE_PATCH removes an existing object key when the patch assigns that key JSON null.",
+      "mysql_mariadb_translation": "Minimized to one independently authored preference document and one null-valued patch. JSON_CONTAINS_PATH exposes the merged key's absence while retaining the function's MariaDB integer metadata contract."
+    },
+    "independently_authored": true,
+    "minimized_from": "json_merge_patch_audit"
+  },
+  "features": ["json-merge-patch", "json-null-key-removal", "json-contains-path", "metadata-regression"],
+  "fixture_notes": "The source document contains obsolete=true and the patch contains obsolete=null; the merged document must not contain that key.",
+  "determinism_notes": "One fixed primary-key row is selected in ID order. There are no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE json_merge_patch_min (record_id INT PRIMARY KEY, payload JSON NOT NULL, patch JSON NOT NULL)",
+    "INSERT INTO json_merge_patch_min VALUES (1, '{\"obsolete\":true}', '{\"obsolete\":null}')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT record_id, JSON_CONTAINS_PATH(JSON_MERGE_PATCH(payload, patch), 'one', '$.obsolete') AS has_obsolete FROM json_merge_patch_min ORDER BY record_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT record_id FROM json_merge_patch_min ORDER BY record_id",
+      "ordered": true
+    }
+  ]
+}

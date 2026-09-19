@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "json_merge_patch_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "zhao1jin4/Record",
+      "commit": "560eef9486626c34c7c6b37d0f944c5f3a2b8aab",
+      "path": "Record/Program-Record/MySQL_Devlop.sql",
+      "url": "https://github.com/zhao1jin4/Record/blob/560eef9486626c34c7c6b37d0f944c5f3a2b8aab/Record/Program-Record/MySQL_Devlop.sql",
+      "sha256": "85d78867be4ac4fe8ffed11340db286245a91a1dda0be00438a6abfd856c5f53",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Record/Program-Record/MySQL_Devlop.sql: JSON_MERGE_PATCH example",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL JSON expression applies JSON_MERGE_PATCH to overlay one document on another, including nested object updates, array replacement, and null-valued key removal.",
+      "mysql_mariadb_translation": "Reauthored as a preference-patch audit over two new JSON documents. The report extracts merged nested fields, counts the replaced label array, and checks removal/addition of object keys so merge-patch semantics are observed without copying source schema, values, or query text."
+    },
+    "independently_authored": true
+  },
+  "features": ["json-merge-patch", "nested-json-object", "json-array-replacement", "json-null-key-removal", "json-path-extraction", "deterministic-order"],
+  "fixture_notes": "Record 1 changes the nested plan, replaces two labels with one, and removes obsolete; record 2 preserves plan, adds region and new_flag, and retains an empty labels array. The report exposes only scalar fields and path predicates to avoid JSON object formatting differences.",
+  "determinism_notes": "Rows use fixed IDs and the report orders by the unique record ID. There are no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE preference_patches (record_id INT PRIMARY KEY, payload JSON NOT NULL, patch JSON NOT NULL)",
+    "INSERT INTO preference_patches VALUES (1, '{\"profile\":{\"plan\":\"basic\",\"region\":\"na\"},\"labels\":[\"email\",\"sms\"],\"obsolete\":true}', '{\"profile\":{\"plan\":\"pro\"},\"labels\":[\"push\"],\"obsolete\":null}'), (2, '{\"profile\":{\"plan\":\"basic\"},\"labels\":[]}', '{\"profile\":{\"region\":\"eu\"},\"new_flag\":true}')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT record_id, JSON_UNQUOTE(JSON_EXTRACT(JSON_MERGE_PATCH(payload, patch), '$.profile.plan')) AS plan, JSON_UNQUOTE(JSON_EXTRACT(JSON_MERGE_PATCH(payload, patch), '$.profile.region')) AS region, JSON_LENGTH(JSON_MERGE_PATCH(payload, patch), '$.labels') AS label_count, JSON_CONTAINS_PATH(JSON_MERGE_PATCH(payload, patch), 'one', '$.obsolete') AS has_obsolete, JSON_CONTAINS_PATH(JSON_MERGE_PATCH(payload, patch), 'one', '$.new_flag') AS has_new_flag FROM preference_patches ORDER BY record_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT record_id FROM preference_patches ORDER BY record_id",
+      "ordered": true
+    }
+  ]
+}
