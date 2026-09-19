@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "cluster_reading_value_windows",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Malekpour99/handouts",
+      "commit": "3cab2b1611732cab26b403ddfd301c9402d7732e",
+      "path": "Database/MySQL-Commands.sql",
+      "url": "https://github.com/Malekpour99/handouts/blob/3cab2b1611732cab26b403ddfd301c9402d7732e/Database/MySQL-Commands.sql",
+      "sha256": "cdfbc53059cfd54a7a9a4f9e09ed43d3dbcd3c24ad4f73143b4e7cb2981598b9",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Database/MySQL-Commands.sql:388-391",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL report uses FIRST_VALUE over a partition ordered by a descending measure to repeat the partition's highest value on each row.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored cluster-reading report. The query partitions decimal readings by cluster, orders NULL readings after measured values, and combines FIRST_VALUE, NTH_VALUE, and LAST_VALUE over an explicit full ROWS frame. The schema, rows, names, and monitoring purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "first-value",
+    "nth-value",
+    "last-value",
+    "partitioned-window",
+    "full-rows-frame",
+    "null-ordering",
+    "decimal",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Cluster 10 has two measured readings and one NULL reading; descending order places NULL last, so FIRST_VALUE is the peak, NTH_VALUE(..., 2) is the lower measured reading, and LAST_VALUE is NULL across the explicit full frame. Cluster 20 has two measured readings and confirms the same value-window semantics without a NULL tail.",
+  "determinism_notes": "Each window orders by reading DESC plus unique reading_id, and the final result orders by cluster_id plus reading_id. All timestamps, values, and IDs are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE cluster_readings (reading_id INT PRIMARY KEY, cluster_id INT NOT NULL, reading DECIMAL(8,2) NULL)",
+    "INSERT INTO cluster_readings VALUES (101, 10, 12.50), (102, 10, NULL), (103, 10, 18.75), (201, 20, 7.25), (202, 20, 9.50)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT cluster_id, reading_id, reading, FIRST_VALUE(reading) OVER (PARTITION BY cluster_id ORDER BY reading DESC, reading_id ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS peak_reading, NTH_VALUE(reading, 2) OVER (PARTITION BY cluster_id ORDER BY reading DESC, reading_id ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS second_reading, LAST_VALUE(reading) OVER (PARTITION BY cluster_id ORDER BY reading DESC, reading_id ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS tail_reading FROM cluster_readings ORDER BY cluster_id, reading_id",
+      "ordered": true
+    }
+  ]
+}
