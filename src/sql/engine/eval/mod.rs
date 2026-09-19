@@ -3387,6 +3387,10 @@ where
             let values = args.iter().map(eval_arg).collect::<Result<Vec<_>>>()?;
             eval_regexp_replace_values(&values)
         })()),
+        "REGEXP_SUBSTR" => Some((|| {
+            let values = args.iter().map(eval_arg).collect::<Result<Vec<_>>>()?;
+            eval_regexp_substr_values(&values)
+        })()),
         "IF" => Some((|| {
             let condition = args
                 .first()
@@ -3802,6 +3806,13 @@ pub(super) fn eval_function_text(
                 .map(|arg| eval_scalar_text(arg, data, last_insert_id))
                 .collect::<Result<Vec<_>>>()?;
             eval_regexp_replace_values(&values)
+        }
+        "REGEXP_SUBSTR" => {
+            let values = args
+                .iter()
+                .map(|arg| eval_scalar_text(arg, data, last_insert_id))
+                .collect::<Result<Vec<_>>>()?;
+            eval_regexp_substr_values(&values)
         }
         "LOWER" | "LCASE" => eval_unary_string(args.first(), data, last_insert_id, |value| {
             value.to_ascii_lowercase()

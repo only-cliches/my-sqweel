@@ -1512,6 +1512,7 @@ impl RawEngine {
                     }
                     "GROUP_CONCAT" => MysqlColumnType::Blob,
                     "REGEXP_REPLACE" => MysqlColumnType::LongBlob,
+                    "REGEXP_SUBSTR" => MysqlColumnType::VarChar,
                     "PERCENT_RANK" | "CUME_DIST" => {
                         // MariaDB renders both ranking fractions as DOUBLE
                         // with exactly ten fractional digits.

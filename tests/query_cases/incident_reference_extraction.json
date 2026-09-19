@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "id": "incident_reference_extraction",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "IHTSDO/snomed-database-loader",
+      "commit": "19c08f80025b6ca204f80f44fceef9ec65e2b29b",
+      "path": "mysql-loader-with-optimized-views/mysql_load/sct_mysql_temp.sql",
+      "url": "https://github.com/IHTSDO/snomed-database-loader/blob/19c08f80025b6ca204f80f44fceef9ec65e2b29b/mysql-loader-with-optimized-views/mysql_load/sct_mysql_temp.sql",
+      "sha256": "03a6f0df4a0b6bb0650133e0a177559855299ed386ea38d99a6de27d7e32ab25",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "mysql-loader-with-optimized-views/mysql_load/sct_mysql_temp.sql:1749-1812",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL loader uses REGEXP_SUBSTR to extract the first matching token and, in other calls, supplies explicit start-position and occurrence controls.",
+      "mysql_mariadb_translation": "MariaDB 10.11.7 rejects the MySQL four-argument occurrence form with error 1582, so the independently authored case retains the compatible two-argument first-match extraction. It preserves NULL for missing input or a missing match without copying the source procedure, schema, or values."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "regexp-substr",
+    "null-no-match",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Note 101's first token is INC-482; note 102's first token is INC-305; note 103 is NULL; note 104's first token is INC-111. REGEXP_SUBSTR must preserve NULL for the absent input.",
+  "determinism_notes": "All note IDs and text values are fixed; output is ordered by the unique note ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE incident_reference_lines (line_id INT PRIMARY KEY, line_text VARCHAR(128) NULL)",
+    "INSERT INTO incident_reference_lines VALUES (101, 'Escalated from INC-482 to INC-719'), (102, 'Only INC-305 appears'), (103, NULL), (104, 'INC-111 and INC-222')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT line_id, REGEXP_SUBSTR(line_text, 'INC-[0-9]+') AS first_incident FROM incident_reference_lines ORDER BY line_id",
+      "ordered": true
+    }
+  ]
+}

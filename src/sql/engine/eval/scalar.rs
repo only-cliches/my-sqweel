@@ -391,6 +391,22 @@ pub(super) fn eval_regexp_replace_values(values: &[Value]) -> Result<Value> {
     ))
 }
 
+pub(super) fn eval_regexp_substr_values(values: &[Value]) -> Result<Value> {
+    let [subject, pattern] = values else {
+        return Err(anyhow!("REGEXP_SUBSTR requires two arguments"));
+    };
+    if subject == &Value::Null || pattern == &Value::Null {
+        return Ok(Value::Null);
+    }
+    let subject = json_scalar_to_string(subject);
+    let pattern = json_scalar_to_string(pattern);
+    let regex = Regex::new(&pattern).map_err(|error| anyhow!("invalid regular expression: {error}"))?;
+    Ok(regex
+        .find(&subject)
+        .map(|matched| Value::String(matched.as_str().to_string()))
+        .unwrap_or(Value::Null))
+}
+
 pub(super) fn eval_repeat(
     string_arg: Option<&String>,
     count_arg: Option<&String>,

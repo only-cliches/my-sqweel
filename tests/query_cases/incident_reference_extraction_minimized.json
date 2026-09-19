@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "id": "incident_reference_extraction_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "IHTSDO/snomed-database-loader",
+      "commit": "19c08f80025b6ca204f80f44fceef9ec65e2b29b",
+      "path": "mysql-loader-with-optimized-views/mysql_load/sct_mysql_temp.sql",
+      "url": "https://github.com/IHTSDO/snomed-database-loader/blob/19c08f80025b6ca204f80f44fceef9ec65e2b29b/mysql-loader-with-optimized-views/mysql_load/sct_mysql_temp.sql",
+      "sha256": "03a6f0df4a0b6bb0650133e0a177559855299ed386ea38d99a6de27d7e32ab25",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "mysql-loader-with-optimized-views/mysql_load/sct_mysql_temp.sql:1749-1812",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL loader uses REGEXP_SUBSTR to extract a matching token from text.",
+      "mysql_mariadb_translation": "Reduced to one independently authored scalar REGEXP_SUBSTR call, removing the source procedure, table, and unrelated rows while retaining the first-match extraction contract."
+    },
+    "independently_authored": true,
+    "minimized_from": "incident_reference_extraction"
+  },
+  "features": [
+    "regexp-substr",
+    "minimized-regression"
+  ],
+  "fixture_notes": "A fixed incident sentence contains INC-482 as its first matching token; the minimized query isolates scalar REGEXP_SUBSTR support.",
+  "determinism_notes": "The scalar text and pattern are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT REGEXP_SUBSTR('Escalated from INC-482 to INC-719', 'INC-[0-9]+') AS first_incident",
+      "ordered": true
+    }
+  ]
+}
