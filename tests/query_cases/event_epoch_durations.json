@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "event_epoch_durations",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "maranemil/howto",
+      "commit": "8c78618fce26710862fdfda1f6d427b9e0b3b879",
+      "path": "fullstack/databases/mysql/howto_mysql_date_format.sql",
+      "url": "https://github.com/maranemil/howto/blob/8c78618fce26710862fdfda1f6d427b9e0b3b879/fullstack/databases/mysql/howto_mysql_date_format.sql",
+      "sha256": "6350cdc38b4b49e2ae13ec18cae297149a23099647b99ad964cd4e682e7a65ec",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "fullstack/databases/mysql/howto_mysql_date_format.sql:25",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL example converts a formatted date string with STR_TO_DATE and passes the resulting DATETIME to UNIX_TIMESTAMP.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored event-duration report. Text timestamps are parsed with STR_TO_DATE, converted to UNIX_TIMESTAMP epoch seconds, subtracted for elapsed duration, and classified with CASE. The schema, date format, rows, aliases, and reporting purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "unix-timestamp",
+    "str-to-date",
+    "epoch-arithmetic",
+    "case-classification",
+    "null-propagation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Event 501 lasts 90 minutes, event 502 crosses midnight for a 30-minute duration, and event 503 has no completion timestamp so its epoch and classification expose the open-event path.",
+  "determinism_notes": "All timestamp strings and event IDs are fixed; output is ordered by the unique event ID with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE event_runs (event_id INT PRIMARY KEY, started_text VARCHAR(19) NOT NULL, completed_text VARCHAR(19) NULL)",
+    "INSERT INTO event_runs VALUES (501, '2026-04-15 08:00:00', '2026-04-15 09:30:00'), (502, '2026-04-15 23:45:00', '2026-04-16 00:15:00'), (503, '2026-04-16 12:00:00', NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT event_id, UNIX_TIMESTAMP(STR_TO_DATE(started_text, '%Y-%m-%d %H:%i:%s')) AS started_epoch, UNIX_TIMESTAMP(STR_TO_DATE(completed_text, '%Y-%m-%d %H:%i:%s')) AS completed_epoch, UNIX_TIMESTAMP(STR_TO_DATE(completed_text, '%Y-%m-%d %H:%i:%s')) - UNIX_TIMESTAMP(STR_TO_DATE(started_text, '%Y-%m-%d %H:%i:%s')) AS elapsed_seconds, CASE WHEN completed_text IS NULL THEN 'open' WHEN UNIX_TIMESTAMP(STR_TO_DATE(completed_text, '%Y-%m-%d %H:%i:%s')) - UNIX_TIMESTAMP(STR_TO_DATE(started_text, '%Y-%m-%d %H:%i:%s')) >= 3600 THEN 'long' ELSE 'short' END AS duration_class FROM event_runs ORDER BY event_id",
+      "ordered": true
+    }
+  ]
+}

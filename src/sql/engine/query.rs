@@ -1521,7 +1521,7 @@ impl RawEngine {
                     }
                     "UNIX_TIMESTAMP" => {
                         metadata.decimals = 0;
-                        MysqlColumnType::Decimal
+                        MysqlColumnType::BigInt
                     }
                     "AVG" | "SUM" | "STD" | "STDDEV" | "STDDEV_POP" | "STDDEV_SAMP"
                     | "VAR_POP" | "VAR_SAMP" | "VARIANCE" => {

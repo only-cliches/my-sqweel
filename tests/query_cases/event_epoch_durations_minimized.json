@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "event_epoch_durations_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "maranemil/howto",
+      "commit": "8c78618fce26710862fdfda1f6d427b9e0b3b879",
+      "path": "fullstack/databases/mysql/howto_mysql_date_format.sql",
+      "url": "https://github.com/maranemil/howto/blob/8c78618fce26710862fdfda1f6d427b9e0b3b879/fullstack/databases/mysql/howto_mysql_date_format.sql",
+      "sha256": "6350cdc38b4b49e2ae13ec18cae297149a23099647b99ad964cd4e682e7a65ec",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "fullstack/databases/mysql/howto_mysql_date_format.sql:25",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A parsed DATETIME is converted to Unix epoch seconds with UNIX_TIMESTAMP.",
+      "mysql_mariadb_translation": "Reduced to one independently authored scalar UNIX_TIMESTAMP projection over one fixed STR_TO_DATE value so the result metadata is isolated from the duration report's arithmetic, NULL row, and CASE expression."
+    },
+    "independently_authored": true,
+    "minimized_from": "event_epoch_durations"
+  },
+  "features": [
+    "unix-timestamp",
+    "str-to-date",
+    "minimized-regression"
+  ],
+  "fixture_notes": "One fixed parsed timestamp isolates UNIX_TIMESTAMP's integer wire metadata.",
+  "determinism_notes": "The timestamp literal and format are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT UNIX_TIMESTAMP(STR_TO_DATE('2026-04-15 08:00:00', '%Y-%m-%d %H:%i:%s')) AS epoch_seconds",
+      "ordered": true
+    }
+  ]
+}
