@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "id": "studio_distinct_release_counts",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Rohithgilla12/data-peek",
+      "commit": "2ce83b15a9a0ddd2a36afa304efece03af217982",
+      "path": "seeds/acme_saas_mysql_seed.sql",
+      "url": "https://github.com/Rohithgilla12/data-peek/blob/2ce83b15a9a0ddd2a36afa304efece03af217982/seeds/acme_saas_mysql_seed.sql",
+      "sha256": "481d8a8c161d04aa320d226769400ad5031085d9a25ef04a8bb6a4dcb7e2a91f",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "seeds/acme_saas_mysql_seed.sql:413-427 (organization_summary view)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped organization report uses COUNT(DISTINCT ...) for membership cardinality and COUNT(DISTINCT CASE WHEN ...) for conditional child-resource counts across multiple LEFT JOINs.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored studio release report. Studios are preserved with LEFT JOINs, contributor and release IDs are counted distinctly after join multiplication, and CASE predicates split published and draft release counts. The schema, rows, names, statuses, and reporting purpose are new; the source view, UUIDs, and application data are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "count-distinct-case",
+    "left-join",
+    "null-preserving",
+    "grouping",
+    "duplicate-join-expansion",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Studio 10 has three contributors, two published releases, and one draft release; studio 20 has one contributor, one draft release, and one archived release; studio 30 has neither and must remain in the report with zero counts. The independent contributor and release joins multiply rows, so each conditional distinct count must deduplicate release IDs after CASE filtering.",
+  "determinism_notes": "All IDs, names, and statuses are fixed literals; the grouped report is ordered by the unique studio ID with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE studios (studio_id INT PRIMARY KEY, studio_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE contributors (contributor_id INT PRIMARY KEY, studio_id INT NOT NULL, contributor_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE releases (release_id INT PRIMARY KEY, studio_id INT NOT NULL, release_name VARCHAR(32) NOT NULL, release_status VARCHAR(16) NOT NULL)",
+    "INSERT INTO studios VALUES (10, 'northlight'), (20, 'southbank'), (30, 'quiet-harbor')",
+    "INSERT INTO contributors VALUES (101, 10, 'Ari'), (102, 10, 'Bea'), (103, 10, 'Cato'), (201, 20, 'Dara')",
+    "INSERT INTO releases VALUES (1001, 10, 'Dawn', 'published'), (1002, 10, 'Drift', 'published'), (1003, 10, 'Ember', 'draft'), (2001, 20, 'Fable', 'draft'), (2002, 20, 'Gale', 'archived')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT s.studio_id, COUNT(DISTINCT c.contributor_id) AS contributor_count, COUNT(DISTINCT CASE WHEN r.release_status = 'published' THEN r.release_id END) AS published_release_count, COUNT(DISTINCT CASE WHEN r.release_status = 'draft' THEN r.release_id END) AS draft_release_count FROM studios s LEFT JOIN contributors c ON c.studio_id = s.studio_id LEFT JOIN releases r ON r.studio_id = s.studio_id GROUP BY s.studio_id ORDER BY s.studio_id",
+      "ordered": true
+    }
+  ]
+}
