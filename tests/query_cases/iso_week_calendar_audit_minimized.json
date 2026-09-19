@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "id": "iso_week_calendar_audit_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "maranemil/howto",
+      "commit": "8c78618fce26710862fdfda1f6d427b9e0b3b879",
+      "path": "fullstack/databases/mysql/howto_mysql_date_format.sql",
+      "url": "https://github.com/maranemil/howto/blob/8c78618fce26710862fdfda1f6d427b9e0b3b879/fullstack/databases/mysql/howto_mysql_date_format.sql",
+      "sha256": "6350cdc38b4b49e2ae13ec18cae297149a23099647b99ad964cd4e682e7a65ec",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "fullstack/databases/mysql/howto_mysql_date_format.sql: SELECT YEARWEEK('1987-01-01'); SELECT WEEKOFYEAR('2008-02-20');",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A scalar date expression derives an ISO year-week number and ISO week number from one fixed date.",
+      "mysql_mariadb_translation": "Reduced to one independently authored date literal at the ISO 2020/2021 boundary, retaining YEARWEEK mode 3 and WEEKOFYEAR while removing table setup, row classification, and multiple dates."
+    },
+    "independently_authored": true,
+    "minimized_from": "iso_week_calendar_audit"
+  },
+  "features": [
+    "yearweek",
+    "weekofyear",
+    "minimized-regression",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The fixed 2020-12-28 date belongs to ISO week 53 of ISO year 2020; both functions must expose that boundary consistently.",
+  "determinism_notes": "The date literal is fixed with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT YEARWEEK('2020-12-28', 3) AS iso_year_week, WEEKOFYEAR('2020-12-28') AS iso_week",
+      "ordered": true
+    }
+  ]
+}

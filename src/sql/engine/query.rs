@@ -1656,6 +1656,8 @@ impl RawEngine {
                     | "DAYOFWEEK"
                     | "WEEKDAY"
                     | "DAYOFYEAR"
+                    | "YEARWEEK"
+                    | "WEEKOFYEAR"
                     | "QUARTER"
                     | "HOUR"
                     | "MINUTE"

@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "iso_week_calendar_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "maranemil/howto",
+      "commit": "8c78618fce26710862fdfda1f6d427b9e0b3b879",
+      "path": "fullstack/databases/mysql/howto_mysql_date_format.sql",
+      "url": "https://github.com/maranemil/howto/blob/8c78618fce26710862fdfda1f6d427b9e0b3b879/fullstack/databases/mysql/howto_mysql_date_format.sql",
+      "sha256": "6350cdc38b4b49e2ae13ec18cae297149a23099647b99ad964cd4e682e7a65ec",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "fullstack/databases/mysql/howto_mysql_date_format.sql: SELECT YEARWEEK('1987-01-01'); SELECT WEEKOFYEAR('2008-02-20');",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL date reference uses YEARWEEK and WEEKOFYEAR to derive ISO-style calendar week labels from dates.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored calendar-event audit. Fixed timestamps straddle ISO week-year boundaries, YEARWEEK(..., 3) and WEEKOFYEAR expose the numeric week labels, and CASE classifies missing versus boundary events. The source literals, schema, rows, and reporting purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "yearweek",
+    "weekofyear",
+    "iso-week-boundary",
+    "datetime",
+    "case-classification",
+    "null-propagation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Events cover ISO week 53 at the end of 2020, the first ISO week of 2021, ISO week 52 at the end of 2021, the first ISO week of 2022, and one NULL timestamp.",
+  "determinism_notes": "Event IDs, labels, and timestamps are fixed; output is ordered by the unique event ID with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE calendar_events (event_id INT PRIMARY KEY, event_label VARCHAR(32) NOT NULL, occurred_at DATETIME NULL)",
+    "INSERT INTO calendar_events VALUES (701, 'iso-2020-final', '2020-12-28 09:00:00'), (702, 'iso-2021-opening', '2021-01-01 09:00:00'), (703, 'iso-2021-week-one', '2021-01-04 09:00:00'), (704, 'iso-2021-final', '2021-12-31 09:00:00'), (705, 'iso-2022-opening', '2022-01-03 09:00:00'), (706, 'missing', NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT event_id, event_label, occurred_at, YEARWEEK(occurred_at, 3) AS iso_year_week, WEEKOFYEAR(occurred_at) AS iso_week, CASE WHEN occurred_at IS NULL THEN 'missing' WHEN YEARWEEK(occurred_at, 3) IN (202053, 202152) THEN 'year-boundary' ELSE 'ordinary' END AS week_class FROM calendar_events ORDER BY event_id",
+      "ordered": true
+    }
+  ]
+}

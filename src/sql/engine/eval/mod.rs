@@ -4102,6 +4102,8 @@ pub(super) fn eval_function_text(
         "DAYOFWEEK" => eval_datetime_component(args.first(), data, last_insert_id, "DAYOFWEEK"),
         "WEEKDAY" => eval_datetime_component(args.first(), data, last_insert_id, "WEEKDAY"),
         "DAYOFYEAR" => eval_datetime_component(args.first(), data, last_insert_id, "DAYOFYEAR"),
+        "YEARWEEK" => eval_year_week(args.first(), args.get(1), data, last_insert_id),
+        "WEEKOFYEAR" => eval_week_of_year(args.first(), data, last_insert_id),
         "QUARTER" => eval_datetime_component(args.first(), data, last_insert_id, "QUARTER"),
         "HOUR" => eval_datetime_component(args.first(), data, last_insert_id, "HOUR"),
         "MINUTE" => eval_datetime_component(args.first(), data, last_insert_id, "MINUTE"),

@@ -264,6 +264,56 @@ pub(super) fn eval_datetime_component(
     eval_extract_datetime_component(field, &value)
 }
 
+pub(super) fn eval_year_week(
+    date_arg: Option<&String>,
+    mode_arg: Option<&String>,
+    data: &Map<String, Value>,
+    last_insert_id: u64,
+) -> Result<Value> {
+    let value = date_arg
+        .map(|arg| eval_scalar_text(arg, data, last_insert_id))
+        .transpose()?
+        .unwrap_or(Value::Null);
+    if value == Value::Null {
+        return Ok(Value::Null);
+    }
+    let mode = mode_arg
+        .map(|arg| eval_scalar_text(arg, data, last_insert_id))
+        .transpose()?
+        .and_then(|value| value_to_i64(&value))
+        .unwrap_or(0);
+    if mode != 3 {
+        return Err(anyhow!("YEARWEEK supports ISO mode 3 only"));
+    }
+    let Some(datetime) = parse_mysql_datetime_value(&value) else {
+        return Ok(Value::Null);
+    };
+    let iso_week = datetime.date().iso_week();
+    Ok(Value::Number(Number::from(
+        i64::from(iso_week.year()) * 100 + i64::from(iso_week.week()),
+    )))
+}
+
+pub(super) fn eval_week_of_year(
+    date_arg: Option<&String>,
+    data: &Map<String, Value>,
+    last_insert_id: u64,
+) -> Result<Value> {
+    let value = date_arg
+        .map(|arg| eval_scalar_text(arg, data, last_insert_id))
+        .transpose()?
+        .unwrap_or(Value::Null);
+    if value == Value::Null {
+        return Ok(Value::Null);
+    }
+    let Some(datetime) = parse_mysql_datetime_value(&value) else {
+        return Ok(Value::Null);
+    };
+    Ok(Value::Number(Number::from(
+        i64::from(datetime.date().iso_week().week()),
+    )))
+}
+
 pub(super) fn eval_extract_datetime_field(field: &DateTimeField, value: Value) -> Result<Value> {
     match field {
         DateTimeField::Year => eval_extract_datetime_component("YEAR", &value),
