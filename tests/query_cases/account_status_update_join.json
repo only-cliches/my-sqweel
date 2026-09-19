@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "account_status_update_join",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "dml/update/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/dml/update/mysql.sql",
+      "sha256": "e6a13493e1863b0278c167f5e5869d46a383a2e47a2cb9fc0a840a813dbc43e0",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "dml/update/mysql.sql:25-47",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "MySQL UPDATE syntax combines CASE-based conditional assignments with a joined table filter for multi-table updates.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored account-status refresh. A joined event row drives two CASE assignments, including a NULL amount branch and a reviewed flag, while the event-kind predicate limits which accounts change; all tables, values, labels, and reporting purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["update-join", "case-assignment", "null-branch", "decimal-comparison", "final-state-check", "deterministic-order"],
+  "fixture_notes": "Account 1 has a high-value reviewed purchase and becomes priority/1; account 2 has a low-value unreviewed purchase and becomes standard/0; account 3 has no purchase and remains untouched; account 4 has a NULL-valued purchase and becomes unreviewed/1.",
+  "determinism_notes": "Each account has at most one matching purchase event, so the joined update has one deterministic source row per target. IDs and final reads are fixed and ordered; there are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE account_status (account_id INT PRIMARY KEY, account_name VARCHAR(32) NOT NULL, account_state VARCHAR(16) NOT NULL, priority_flag TINYINT NOT NULL)",
+    "CREATE TABLE account_events (event_id INT PRIMARY KEY, account_id INT NOT NULL, event_kind VARCHAR(16) NOT NULL, amount DECIMAL(10,2) NULL, reviewed TINYINT NOT NULL)",
+    "INSERT INTO account_status VALUES (1, 'Aster', 'new', 0), (2, 'Beryl', 'new', 0), (3, 'Cinder', 'new', 0), (4, 'Dune', 'new', 0)",
+    "INSERT INTO account_events VALUES (201, 1, 'purchase', 1500.00, 1), (202, 2, 'purchase', 300.00, 0), (203, 3, 'refund', 900.00, 1), (204, 4, 'purchase', NULL, 1)"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE account_status AS a JOIN account_events AS e ON e.account_id = a.account_id SET a.account_state = CASE WHEN e.amount >= 1000 THEN 'priority' WHEN e.amount IS NULL THEN 'unreviewed' ELSE 'standard' END, a.priority_flag = CASE WHEN e.reviewed = 1 THEN 1 ELSE 0 END WHERE e.event_kind = 'purchase'",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT account_id, account_state, priority_flag FROM account_status ORDER BY account_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT account_id, account_state, priority_flag FROM account_status ORDER BY account_id",
+      "ordered": true
+    }
+  ]
+}

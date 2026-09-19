@@ -148,6 +148,7 @@ All notable changes to MySqweel will be documented in this file.
 - Added the minimized GitHub-attributed JSON overlap metadata regression; MariaDB 10.11.7 and MySqweel now both report `MYSQL_TYPE_LONG` across repeated fresh differential runs.
 - Added GitHub-attributed CTE/window coverage from [wenshao/sql-dialects](https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/query/cte/mysql.sql) for an independently authored monthly billing-growth audit combining three CTE layers, `DATE_FORMAT`, `SUM` over `DECIMAL`, `LAG`, and rounded percentage arithmetic; fixed `ROUND` metadata to preserve its requested decimal scale.
 - Added the minimized GitHub-attributed monthly-growth decimal-scale regression; MariaDB 10.11.7 and MySqweel now both report `MYSQL_TYPE_NEWDECIMAL` values with two fractional digits across repeated fresh differential runs.
+- Added GitHub-attributed `UPDATE ... JOIN` coverage from [wenshao/sql-dialects](https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/dml/update/mysql.sql) for an independently authored account-status refresh combining joined filtering, CASE assignments, decimal comparisons, and a NULL branch; MariaDB 10.11.7 and MySqweel matched across repeated fresh differential runs without a source fix.
 
 ## 0.4.4 Sep 9, 2026
 
