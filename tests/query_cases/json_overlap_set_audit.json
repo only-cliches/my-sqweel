@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "json_overlap_set_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "ZhiQingWu00/special",
+      "commit": "283b45983920f3e09a5bd44177c6b6290555fa7d",
+      "path": "mysql_design.sql",
+      "url": "https://github.com/ZhiQingWu00/special/blob/283b45983920f3e09a5bd44177c6b6290555fa7d/mysql_design.sql",
+      "sha256": "05c35b781a8d6ff0121febee11b48d3b50a12acadb1fcdd345d7ed2a7b861c54",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "mysql_design.sql: JSON_OVERLAPS examples",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL JSON predicate tests whether two arrays or objects share at least one overlapping value or key-value pair.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored compatibility audit over fixed array and object documents. One pair overlaps by an array element, one by an object key-value pair, and one is disjoint; primary-key ordering makes the boolean results deterministic."
+    },
+    "independently_authored": true
+  },
+  "features": ["json-overlaps", "json-arrays", "json-objects", "json-boolean-result", "deterministic-order"],
+  "fixture_notes": "Pair 1 shares array value 3, pair 2 shares object key enabled with value true despite a differing tier, and pair 3 has disjoint arrays. The predicate result is expected to be 1, 1, and 0.",
+  "determinism_notes": "Each row has fixed JSON literals and the result is ordered by the unique pair ID. There are no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE json_overlap_sets (pair_id INT PRIMARY KEY, left_document JSON NOT NULL, right_document JSON NOT NULL)",
+    "INSERT INTO json_overlap_sets VALUES (1, '[1, 2, 3]', '[3, 4, 5]'), (2, '{\"tier\":\"pro\",\"enabled\":true}', '{\"tier\":\"basic\",\"enabled\":true}'), (3, '[\"red\",\"green\"]', '[\"blue\",\"yellow\"]')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT pair_id, JSON_OVERLAPS(left_document, right_document) AS overlaps FROM json_overlap_sets ORDER BY pair_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT pair_id FROM json_overlap_sets ORDER BY pair_id",
+      "ordered": true
+    }
+  ]
+}

@@ -144,6 +144,8 @@ All notable changes to MySqweel will be documented in this file.
 - Added GitHub-attributed `JSON_MERGE_PATCH` coverage from [zhao1jin4/Record](https://github.com/zhao1jin4/Record/blob/560eef9486626c34c7c6b37d0f944c5f3a2b8aab/Record/Program-Record/MySQL_Devlop.sql) for an independently authored nested preference-patch audit covering object updates, array replacement, JSON-null key removal, and path extraction; fixed `JSON_CONTAINS_PATH` result metadata to report MariaDB's integer column type.
 - Added the minimized GitHub-attributed JSON merge-patch metadata regression; MariaDB 10.11.7 and MySqweel now both report `MYSQL_TYPE_LONG` for the merged-key path predicate across repeated fresh differential runs.
 - Parked the GitHub-attributed `JSON_STORAGE_SIZE` candidate from [opengauss-mirror/Plugin](https://github.com/opengauss-mirror/Plugin/blob/15611cfb458bdddf4b36043ff4f6e62ef9d1213a/contrib/dolphin/sql/json_storage_size.sql) because MariaDB 10.11.7 returned error 1305 (`42000`, function unavailable) in both repeated baselines; no fixture was retained.
+- Added GitHub-attributed `JSON_OVERLAPS` coverage from [ZhiQingWu00/special](https://github.com/ZhiQingWu00/special/blob/283b45983920f3e09a5bd44177c6b6290555fa7d/mysql_design.sql) for an independently authored array/object overlap audit; fixed `JSON_OVERLAPS` result metadata to report MariaDB's integer column type.
+- Added the minimized GitHub-attributed JSON overlap metadata regression; MariaDB 10.11.7 and MySqweel now both report `MYSQL_TYPE_LONG` across repeated fresh differential runs.
 
 ## 0.4.4 Sep 9, 2026
 

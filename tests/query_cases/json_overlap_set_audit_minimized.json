@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "json_overlap_set_audit_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "ZhiQingWu00/special",
+      "commit": "283b45983920f3e09a5bd44177c6b6290555fa7d",
+      "path": "mysql_design.sql",
+      "url": "https://github.com/ZhiQingWu00/special/blob/283b45983920f3e09a5bd44177c6b6290555fa7d/mysql_design.sql",
+      "sha256": "05c35b781a8d6ff0121febee11b48d3b50a12acadb1fcdd345d7ed2a7b861c54",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "mysql_design.sql: JSON_OVERLAPS examples",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "JSON_OVERLAPS returns a true integer result when two JSON arrays share one scalar element.",
+      "mysql_mariadb_translation": "Minimized to one independently authored array pair so the MariaDB integer metadata contract is the only observable regression signal."
+    },
+    "independently_authored": true,
+    "minimized_from": "json_overlap_set_audit"
+  },
+  "features": ["json-overlaps", "json-array", "metadata-regression"],
+  "fixture_notes": "Both arrays contain the fixed scalar 7, so JSON_OVERLAPS must return integer 1.",
+  "determinism_notes": "One fixed primary-key row is selected in ID order. There are no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE json_overlap_min (pair_id INT PRIMARY KEY, left_document JSON NOT NULL, right_document JSON NOT NULL)",
+    "INSERT INTO json_overlap_min VALUES (1, '[7, 8]', '[6, 7]')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT pair_id, JSON_OVERLAPS(left_document, right_document) AS overlaps FROM json_overlap_min ORDER BY pair_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT pair_id FROM json_overlap_min ORDER BY pair_id",
+      "ordered": true
+    }
+  ]
+}
