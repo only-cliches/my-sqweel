@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "id": "ipv6_binary_update",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "fln/addrwatch",
+      "commit": "d1ca07b78c5b13a83d82f510a2474a46cd6917c2",
+      "path": "migrate_0.8_to_1.0.sql",
+      "url": "https://github.com/fln/addrwatch/blob/d1ca07b78c5b13a83d82f510a2474a46cd6917c2/migrate_0.8_to_1.0.sql",
+      "sha256": "2eff644a3317e839080a263eab5403e7b2cb11be1e4bc81a597b0665ea694689",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "migrate_0.8_to_1.0.sql:27-32",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A migration uses a LEFT JOIN during an UPDATE to normalize textual MAC addresses with UNHEX(REPLACE(...)) and textual IPv4 or IPv6 addresses with INET6_ATON while copying a nullable category key.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored network-interface inventory update. Existing text columns are converted into binary MAC and IP projections, a LEFT JOIN maps known interface classes, and NULL/unknown class rows verify null preservation. The schema, rows, names, and reporting purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "inet6-aton",
+    "binary-mac-normalization",
+    "update-left-join",
+    "ipv4-and-ipv6",
+    "null-and-missing-join",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Interface 101 uses an IPv4 address and known wired class; 102 uses an IPv6 address and known wireless class; 103 has an unknown class that must retain a NULL class code; 104 has a NULL address that must produce a NULL binary IP while still receiving its known class code.",
+  "determinism_notes": "Interface IDs, addresses, MAC strings, and class mappings are fixed; the final projection is ordered by the unique interface ID with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE interface_classes (class_code INT PRIMARY KEY, class_name VARCHAR(16) NOT NULL UNIQUE)",
+    "CREATE TABLE interface_inventory (interface_id INT PRIMARY KEY, address_text VARCHAR(42) NULL, mac_text VARCHAR(17) NOT NULL, class_name VARCHAR(16) NULL, mac_bytes VARBINARY(6) NULL, ip_bytes VARBINARY(16) NULL, class_code INT NULL)",
+    "INSERT INTO interface_classes VALUES (7, 'wired'), (8, 'wireless')",
+    "INSERT INTO interface_inventory VALUES (101, '192.0.2.17', '02:00:5E:10:00:01', 'wired', NULL, NULL, NULL), (102, '2001:db8::42', '02:00:5E:10:00:02', 'wireless', NULL, NULL, NULL), (103, '2001:db8::99', '02:00:5E:10:00:03', 'satellite', NULL, NULL, NULL), (104, NULL, '02:00:5E:10:00:04', 'wired', NULL, NULL, NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE interface_inventory i LEFT JOIN interface_classes c ON c.class_name = i.class_name SET i.mac_bytes = UNHEX(REPLACE(i.mac_text, ':', '')), i.ip_bytes = INET6_ATON(i.address_text), i.class_code = c.class_code",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT interface_id, HEX(mac_bytes) AS mac_hex, HEX(ip_bytes) AS ip_hex, class_code FROM interface_inventory ORDER BY interface_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT interface_id, HEX(mac_bytes) AS mac_hex, HEX(ip_bytes) AS ip_hex, class_code FROM interface_inventory ORDER BY interface_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT class_code, class_name FROM interface_classes ORDER BY class_code",
+      "ordered": true
+    }
+  ]
+}

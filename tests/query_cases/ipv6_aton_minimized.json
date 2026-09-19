@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "ipv6_aton_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "fln/addrwatch",
+      "commit": "d1ca07b78c5b13a83d82f510a2474a46cd6917c2",
+      "path": "migrate_0.8_to_1.0.sql",
+      "url": "https://github.com/fln/addrwatch/blob/d1ca07b78c5b13a83d82f510a2474a46cd6917c2/migrate_0.8_to_1.0.sql",
+      "sha256": "2eff644a3317e839080a263eab5403e7b2cb11be1e4bc81a597b0665ea694689",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "migrate_0.8_to_1.0.sql:31",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A migration converts textual IP addresses to binary values with INET6_ATON.",
+      "mysql_mariadb_translation": "Minimized independently authored scalar regression with one fixed IPv6 text value and HEX(INET6_ATON(...)) output. It removes the source migration's joins, DML, schema changes, and application data while preserving the function's binary result."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "inet6-aton",
+    "ipv6-binary-conversion",
+    "hex-projection",
+    "minimized-regression",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The single documentation-network IPv6 value isolates INET6_ATON's binary conversion and HEX rendering.",
+  "determinism_notes": "The probe ID and IPv6 literal are fixed; output is ordered by the unique probe ID with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE ipv6_probe (probe_id INT PRIMARY KEY, address_text VARCHAR(42) NOT NULL)",
+    "INSERT INTO ipv6_probe VALUES (17, '2001:db8::42')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT probe_id, HEX(INET6_ATON(address_text)) AS ip_hex FROM ipv6_probe ORDER BY probe_id",
+      "ordered": true
+    }
+  ]
+}

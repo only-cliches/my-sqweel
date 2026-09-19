@@ -3462,6 +3462,14 @@ where
                 .unwrap_or(Value::Null);
             eval_inet_aton_value(value)
         })()),
+        "INET6_ATON" => Some((|| {
+            let value = args
+                .first()
+                .map(eval_arg)
+                .transpose()?
+                .unwrap_or(Value::Null);
+            eval_inet6_aton_value(value)
+        })()),
         "IF" => Some((|| {
             let condition = args
                 .first()
@@ -3921,6 +3929,7 @@ pub(super) fn eval_function_text(
             eval_regexp_substr_values(&values)
         }
         "INET_ATON" => eval_inet_aton(args.first(), data, last_insert_id),
+        "INET6_ATON" => eval_inet6_aton(args.first(), data, last_insert_id),
         "LOWER" | "LCASE" => eval_unary_string(args.first(), data, last_insert_id, |value| {
             value.to_ascii_lowercase()
         }),

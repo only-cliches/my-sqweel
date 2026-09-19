@@ -1517,6 +1517,7 @@ impl RawEngine {
                         metadata.unsigned = true;
                         MysqlColumnType::BigInt
                     }
+                    "INET6_ATON" => MysqlColumnType::VarBinary,
                     "TO_BASE64" => {
                         let argument = function_arguments(function)
                             .ok()

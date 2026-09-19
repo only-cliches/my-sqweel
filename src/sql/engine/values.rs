@@ -406,7 +406,9 @@ pub(super) fn validate_mysql_column_value(
         && let Value::String(value) = value
     {
         let length = if declared.contains("BINARY") {
-            value.len()
+            value
+                .strip_prefix(MYSQL_BINARY_SENTINEL)
+                .map_or(value.len(), |hex| hex.len() / 2)
         } else {
             value.chars().count()
         };

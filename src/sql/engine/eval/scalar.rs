@@ -318,6 +318,33 @@ pub(super) fn eval_inet_aton_value(value: Value) -> Result<Value> {
     Ok(Value::Number(Number::from(address)))
 }
 
+pub(super) fn eval_inet6_aton(
+    value_arg: Option<&String>,
+    data: &Map<String, Value>,
+    last_insert_id: u64,
+) -> Result<Value> {
+    eval_inet6_aton_value(eval_arg(value_arg, data, last_insert_id)?)
+}
+
+pub(super) fn eval_inet6_aton_value(value: Value) -> Result<Value> {
+    if value == Value::Null {
+        return Ok(Value::Null);
+    }
+    let text = json_scalar_to_string(&value);
+    let Ok(address) = text.parse::<std::net::IpAddr>() else {
+        return Ok(Value::Null);
+    };
+    let bytes = match address {
+        std::net::IpAddr::V4(address) => address.octets().to_vec(),
+        std::net::IpAddr::V6(address) => address.octets().to_vec(),
+    };
+    let hex = bytes
+        .iter()
+        .map(|byte| format!("{byte:02X}"))
+        .collect::<String>();
+    Ok(Value::String(format!("{MYSQL_BINARY_SENTINEL}{hex}")))
+}
+
 pub(super) fn eval_mod(
     left_arg: Option<&String>,
     right_arg: Option<&String>,
