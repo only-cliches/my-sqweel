@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "member_segment_union",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Prashant-4527/mercaridb-mysql-30days",
+      "commit": "f72849f9ba3414412387bd9930b703258bed2b80",
+      "path": "day12_union_intersect_except.sql",
+      "url": "https://github.com/Prashant-4527/mercaridb-mysql-30days/blob/f72849f9ba3414412387bd9930b703258bed2b80/day12_union_intersect_except.sql",
+      "sha256": "d066da0587ed66a5546ec720a9704693e5aad8a17d31c84fba121790dc966c5e",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "day12_union_intersect_except.sql: full user segmentation report",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A user segmentation report combines mutually exclusive UNION branches, each using correlated EXISTS and NOT EXISTS checks against activity tables, then orders the complete result by the segment and stable user identifier.",
+      "mysql_mariadb_translation": "Reauthored as a member engagement report over new members, reading events, and published guides. Four correlated branches classify members as dual, reader-only, publisher-only, or inactive; fixed IDs and a final segment/id order make the result deterministic without copying source schema, names, or rows."
+    },
+    "independently_authored": true
+  },
+  "features": ["union", "correlated-exists", "correlated-not-exists", "mutually-exclusive-segments", "deterministic-order"],
+  "fixture_notes": "Member 1 has both activity types, member 2 only reads, members 3 and 4 only publish, and member 5 has neither. Duplicate reading events for member 2 verify that EXISTS does not multiply result rows.",
+  "determinism_notes": "The final UNION result is ordered by the literal segment label and unique member ID. All values are fixed and there are no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE members (member_id INT PRIMARY KEY, handle VARCHAR(32) NOT NULL, region VARCHAR(16) NOT NULL)",
+    "CREATE TABLE reading_events (event_id INT PRIMARY KEY, member_id INT NOT NULL, article_code VARCHAR(16) NOT NULL)",
+    "CREATE TABLE published_guides (guide_id INT PRIMARY KEY, member_id INT NOT NULL, topic VARCHAR(32) NOT NULL)",
+    "INSERT INTO members VALUES (1, 'ada_north', 'north'), (2, 'bjarne_east', 'east'), (3, 'cora_south', 'south'), (4, 'dijkstra_west', 'west'), (5, 'elena_central', 'central')",
+    "INSERT INTO reading_events VALUES (101, 1, 'sql-101'), (201, 2, 'sql-201'), (202, 2, 'sql-202')",
+    "INSERT INTO published_guides VALUES (501, 1, 'joins'), (502, 3, 'windows'), (503, 4, 'transactions')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT m.member_id, m.handle, 'dual' AS segment FROM members m WHERE EXISTS (SELECT 1 FROM reading_events r WHERE r.member_id = m.member_id) AND EXISTS (SELECT 1 FROM published_guides g WHERE g.member_id = m.member_id) UNION SELECT m.member_id, m.handle, 'reader-only' FROM members m WHERE EXISTS (SELECT 1 FROM reading_events r WHERE r.member_id = m.member_id) AND NOT EXISTS (SELECT 1 FROM published_guides g WHERE g.member_id = m.member_id) UNION SELECT m.member_id, m.handle, 'publisher-only' FROM members m WHERE EXISTS (SELECT 1 FROM published_guides g WHERE g.member_id = m.member_id) AND NOT EXISTS (SELECT 1 FROM reading_events r WHERE r.member_id = m.member_id) UNION SELECT m.member_id, m.handle, 'inactive' FROM members m WHERE NOT EXISTS (SELECT 1 FROM reading_events r WHERE r.member_id = m.member_id) AND NOT EXISTS (SELECT 1 FROM published_guides g WHERE g.member_id = m.member_id) ORDER BY segment, member_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT member_id, handle, region FROM members ORDER BY member_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT event_id, member_id, article_code FROM reading_events ORDER BY event_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT guide_id, member_id, topic FROM published_guides ORDER BY guide_id",
+      "ordered": true
+    }
+  ]
+}
