@@ -143,6 +143,7 @@ All notable changes to MySqweel will be documented in this file.
 - Parked the GitHub-attributed `FIELD(...)` custom-order search candidate from [TheDataDisciple/mysql-topics](https://github.com/TheDataDisciple/mysql-topics/blob/a8ccd328e7ce0272e5b36b90c2a63e16829db176/MySQL%20Tutorial.com/order%20by.sql) because existing `field_priority_dispatch.json` already covers custom ordering, rank metadata, and unknown/NULL behavior; no duplicate fixture was retained.
 - Added GitHub-attributed `JSON_MERGE_PATCH` coverage from [zhao1jin4/Record](https://github.com/zhao1jin4/Record/blob/560eef9486626c34c7c6b37d0f944c5f3a2b8aab/Record/Program-Record/MySQL_Devlop.sql) for an independently authored nested preference-patch audit covering object updates, array replacement, JSON-null key removal, and path extraction; fixed `JSON_CONTAINS_PATH` result metadata to report MariaDB's integer column type.
 - Added the minimized GitHub-attributed JSON merge-patch metadata regression; MariaDB 10.11.7 and MySqweel now both report `MYSQL_TYPE_LONG` for the merged-key path predicate across repeated fresh differential runs.
+- Parked the GitHub-attributed `JSON_STORAGE_SIZE` candidate from [opengauss-mirror/Plugin](https://github.com/opengauss-mirror/Plugin/blob/15611cfb458bdddf4b36043ff4f6e62ef9d1213a/contrib/dolphin/sql/json_storage_size.sql) because MariaDB 10.11.7 returned error 1305 (`42000`, function unavailable) in both repeated baselines; no fixture was retained.
 
 ## 0.4.4 Sep 9, 2026
 
