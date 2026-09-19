@@ -136,6 +136,8 @@ All notable changes to MySqweel will be documented in this file.
 - Added GitHub-attributed temporary-table staging coverage for an independently authored dispatch rollup combining `CREATE TEMPORARY TABLE ... SELECT`, grouped aggregation, `TRUNCATE`, `INSERT ... SELECT`, and `DROP TEMPORARY TABLE`; fixed CTAS affected-row reporting to match MariaDB 10.11.7.
 - Added the minimized GitHub-attributed temporary CTAS regression; MariaDB 10.11.7 and MySqweel now both report one materialized row across repeated fresh differential runs.
 - Added GitHub-attributed numeric `RANGE` window coverage for an independently authored warehouse movement audit with peer-date frames, partitioned `SUM`/`COUNT`, NULL input handling, and deterministic ordering; MariaDB 10.11.7 and MySqweel matched without a source fix.
+- Parked the GitHub-attributed `CREATE TABLE ... LIKE` search candidate because the fetched executable patterns were ordinary CTAS or documentation, while existing temporary CTAS coverage already exercises materialized-table semantics; no duplicate fixture was retained.
+- Parked the GitHub-attributed `MATCH ... AGAINST` candidate from [bheckel/code](https://github.com/bheckel/code/blob/0df855b47761ae4f2fc6253ad6a3718b80b0e630/database/mysql.sql) at commit `0df855b47761ae4f2fc6253ad6a3718b80b0e630`: MariaDB 10.11.7 returned indexed natural-language relevance rows, while MySqweel returned error 1235 / SQLSTATE `42000`; full-text indexing/search requires storage architecture, so no fixture was retained.
 
 ## 0.4.4 Sep 9, 2026
 
