@@ -2215,7 +2215,32 @@ impl RawEngine {
         for table in &select.from {
             self.add_table_to_column_scope(&table.relation, &mut scope)?;
             for join in &table.joins {
+                let natural_columns = if join_is_natural(&join.join_operator) {
+                    table_factor_name_and_alias(&join.relation)
+                        .ok()
+                        .and_then(|(table, _)| self.schemas.get(&table))
+                        .map(|schema| {
+                            schema
+                                .columns
+                                .keys()
+                                .map(|column| column.to_ascii_lowercase())
+                                .collect::<BTreeSet<_>>()
+                        })
+                        .unwrap_or_default()
+                } else {
+                    BTreeSet::new()
+                };
+                let had_natural_columns = !natural_columns.is_empty();
                 self.add_table_to_column_scope(&join.relation, &mut scope)?;
+                if had_natural_columns {
+                    for column in natural_columns {
+                        // NATURAL JOIN merges every shared column into one
+                        // unqualified result column, just like USING.
+                        if scope.unqualified.contains_key(&column) {
+                            scope.unqualified.insert(column, 1);
+                        }
+                    }
+                }
                 if let Some(columns) = join_using_columns(&join.join_operator) {
                     for column in columns {
                         // A USING column is merged into one unqualified
@@ -5753,6 +5778,15 @@ fn required_equi_join_columns(expr: &Expr) -> Option<(String, String)> {
         }
         _ => equi_join_columns(expr),
     }
+}
+
+fn join_is_natural(join: &JoinOperator) -> bool {
+    matches!(
+        join,
+        JoinOperator::Inner(JoinConstraint::Natural)
+            | JoinOperator::LeftOuter(JoinConstraint::Natural)
+            | JoinOperator::RightOuter(JoinConstraint::Natural)
+    )
 }
 
 fn join_using_columns(join: &JoinOperator) -> Option<&[Ident]> {

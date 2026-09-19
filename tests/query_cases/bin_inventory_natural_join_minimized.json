@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "bin_inventory_natural_join_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "query/joins/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/query/joins/mysql.sql",
+      "sha256": "b32271a9cfe2e427280f89ea400b2409d4dcc3c6ab85f6dbf385a398daf3d62a",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "query/joins/mysql.sql:49-53",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A NATURAL JOIN makes shared columns available as one unqualified result column while matching on every shared name.",
+      "mysql_mariadb_translation": "Minimized to two independently authored tables sharing id and zone_code. One matching pair must return both shared columns unqualified, while a same-id row with a different zone_code must not join."
+    },
+    "independently_authored": true,
+    "minimized_from": "bin_inventory_natural_join"
+  },
+  "features": ["natural-join", "implicit-multi-column-match", "unqualified-shared-columns", "deterministic-order"],
+  "fixture_notes": "Only id 1 matches because both id and zone_code agree; id 2 is rejected because its zone_code differs.",
+  "determinism_notes": "Two fixed rows are selected in id order. There are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE natural_left (id INT NOT NULL, zone_code VARCHAR(8) NOT NULL, left_value VARCHAR(16) NOT NULL)",
+    "CREATE TABLE natural_right (id INT NOT NULL, zone_code VARCHAR(8) NOT NULL, right_value VARCHAR(16) NOT NULL)",
+    "INSERT INTO natural_left VALUES (1, 'NORTH', 'catalog-a'), (2, 'NORTH', 'catalog-b')",
+    "INSERT INTO natural_right VALUES (1, 'NORTH', 'stock-a'), (2, 'SOUTH', 'stock-b')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT id, zone_code, left_value, right_value FROM natural_left NATURAL JOIN natural_right ORDER BY id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT id, zone_code, left_value FROM natural_left ORDER BY id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT id, zone_code, right_value FROM natural_right ORDER BY id",
+      "ordered": true
+    }
+  ]
+}

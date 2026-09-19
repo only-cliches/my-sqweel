@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "bin_inventory_natural_join",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "query/joins/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/query/joins/mysql.sql",
+      "sha256": "b32271a9cfe2e427280f89ea400b2409d4dcc3c6ab85f6dbf385a398daf3d62a",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "query/joins/mysql.sql:49-53",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL NATURAL JOIN infers equality predicates from columns shared by both input tables.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored warehouse-bin inventory report. Catalog and stock tables intentionally share bin_id and zone_code, so NATURAL JOIN must match both columns; a same-ID row with a mismatched zone and an unlisted stock row verify that implicit multi-column matching is not a single-key join."
+    },
+    "independently_authored": true
+  },
+  "features": ["natural-join", "implicit-multi-column-match", "duplicate-column-collapse", "deterministic-order"],
+  "fixture_notes": "Catalog bin 1 matches stock row 1 on both shared columns. Catalog bin 2 does not match stock row 2 because the shared zone_code differs; stock row 4 has no catalog row. Only bin 1 should be returned.",
+  "determinism_notes": "Bin IDs, zone codes, labels, and stock values are fixed; the joined report is ordered by the catalog primary key. There are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE bin_catalog (bin_id INT PRIMARY KEY, zone_code VARCHAR(8) NOT NULL, bin_label VARCHAR(16) NOT NULL, capacity INT NOT NULL)",
+    "CREATE TABLE bin_inventory (inventory_id INT PRIMARY KEY, bin_id INT NOT NULL, zone_code VARCHAR(8) NOT NULL, sku VARCHAR(16) NOT NULL, quantity INT NOT NULL)",
+    "INSERT INTO bin_catalog VALUES (1, 'NORTH', 'N-01', 40), (2, 'NORTH', 'N-02', 25), (3, 'SOUTH', 'S-01', 30)",
+    "INSERT INTO bin_inventory VALUES (501, 1, 'NORTH', 'AX-14', 6), (502, 2, 'SOUTH', 'BZ-09', 8), (504, 4, 'NORTH', 'CX-22', 3)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT bin_id, zone_code, bin_label, sku, quantity FROM bin_catalog NATURAL JOIN bin_inventory ORDER BY bin_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT bin_id, zone_code, bin_label, capacity FROM bin_catalog ORDER BY bin_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT inventory_id, bin_id, zone_code, sku, quantity FROM bin_inventory ORDER BY inventory_id",
+      "ordered": true
+    }
+  ]
+}

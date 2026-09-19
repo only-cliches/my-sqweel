@@ -150,6 +150,8 @@ All notable changes to MySqweel will be documented in this file.
 - Added the minimized GitHub-attributed monthly-growth decimal-scale regression; MariaDB 10.11.7 and MySqweel now both report `MYSQL_TYPE_NEWDECIMAL` values with two fractional digits across repeated fresh differential runs.
 - Added GitHub-attributed `UPDATE ... JOIN` coverage from [wenshao/sql-dialects](https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/dml/update/mysql.sql) for an independently authored account-status refresh combining joined filtering, CASE assignments, decimal comparisons, and a NULL branch; MariaDB 10.11.7 and MySqweel matched across repeated fresh differential runs without a source fix.
 - Added GitHub-attributed `INSERT ... RETURNING` coverage from [Dicklesworthstone/sqlmodel_rust](https://github.com/Dicklesworthstone/sqlmodel_rust/blob/5017764ba8b26da23afd6c9c5b06384b4e7f2236/crates/sqlmodel-e2e/golden/mysql/insert_returning.sql) for an independently authored multi-row stock-receipt intake with explicit returned columns and nullable data; MariaDB 10.11.7 and MySqweel matched across repeated fresh differential runs without a source fix.
+- Added GitHub-attributed `NATURAL JOIN` coverage from [wenshao/sql-dialects](https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/query/joins/mysql.sql) for an independently authored warehouse-bin report that matches on multiple shared columns; fixed column-scope validation to merge NATURAL JOIN columns like `USING`.
+- Added the minimized GitHub-attributed NATURAL JOIN regression; MariaDB 10.11.7 and MySqweel now both return the shared columns and reject mismatched multi-column pairs across repeated fresh differential runs.
 
 ## 0.4.4 Sep 9, 2026
 
