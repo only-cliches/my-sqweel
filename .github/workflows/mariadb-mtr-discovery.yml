@@ -252,6 +252,10 @@ jobs:
             --minimum-percent 100
       - name: Generate final MariaDB MTR coverage report
         if: always()
+        # Discovery records the full upstream surface, including cases that
+        # still need baseline or harness investigation. The strict MTR jobs
+        # in ci.yml remain the required compatibility gate.
+        continue-on-error: true
         run: |
           set -euo pipefail
           python3 tools/mariadb_mtr_plan.py \
@@ -263,6 +267,9 @@ jobs:
             --derived-report artifacts/mariadb-mtr-discovery/derived/mtr-report.json
       - name: Require compatibility audit reports and infrastructure health
         if: always()
+        # Keep infrastructure findings visible in the uploaded report and job
+        # summary without making this exploratory inventory workflow a gate.
+        continue-on-error: true
         run: |
           set -euo pipefail
           python3 - <<'PY'
