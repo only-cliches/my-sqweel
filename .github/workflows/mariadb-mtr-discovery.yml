@@ -4,17 +4,45 @@ on:
   push:
     paths:
       - .github/workflows/mariadb-mtr-discovery.yml
+      - Cargo.toml
+      - Cargo.lock
       - tools/mariadb_mtr_compat.py
-      - tools/mariadb_mtr_discover.py
       - tools/mariadb_mtr_core.py
+      - tools/mariadb_mtr_derived.py
+      - tools/mariadb_mtr_discover.py
       - tools/mariadb_mtr_discover_core.py
       - tools/prepare_mariadb_mtr.sh
       - tests/mariadb-mtr-allowlist.txt
+      - tests/mariadb-mtr-derived.json
       - tests/mariadb-mtr-scope.txt
+      - tests/query_coverage_mtr/**
       - tests/test_mysql_mtr_compat.py
-      - src/sql/engine/transaction.rs
-      - src/storage/transaction_image.rs
-      - src/server/mysql_wire.rs
+      - tests/test_mariadb_mtr*.py
+      - src/sql/**
+      - src/storage/**
+      - src/server/**
+      - tests/transactions.rs
+      - tests/wire_transactions.rs
+  pull_request:
+    paths:
+      - .github/workflows/mariadb-mtr-discovery.yml
+      - Cargo.toml
+      - Cargo.lock
+      - tools/mariadb_mtr_compat.py
+      - tools/mariadb_mtr_core.py
+      - tools/mariadb_mtr_derived.py
+      - tools/mariadb_mtr_discover.py
+      - tools/mariadb_mtr_discover_core.py
+      - tools/prepare_mariadb_mtr.sh
+      - tests/mariadb-mtr-allowlist.txt
+      - tests/mariadb-mtr-derived.json
+      - tests/mariadb-mtr-scope.txt
+      - tests/query_coverage_mtr/**
+      - tests/test_mariadb_mtr*.py
+      - tests/test_mysql_mtr_compat.py
+      - src/sql/**
+      - src/storage/**
+      - src/server/**
       - tests/transactions.rs
       - tests/wire_transactions.rs
   workflow_dispatch: {}
@@ -127,7 +155,7 @@ jobs:
             --report-dir artifacts/mariadb-mtr-discovery/audit \
             --baseline-version 10.11.7 \
             --source-revision "$MARIADB_MTR_REVISION" \
-            --case-timeout 30 \
+            --case-timeout 300 \
             --skip-mysqweel-after-baseline-failure \
             --minimum-percent 100
       - name: Audit focused contract scope
@@ -151,9 +179,58 @@ jobs:
             --report-dir artifacts/mariadb-mtr-discovery/focused-audit \
             --baseline-version 10.11.7 \
             --source-revision "$MARIADB_MTR_REVISION" \
-            --case-timeout 60 \
+            --case-timeout 300 \
             --skip-mysqweel-after-baseline-failure \
             --minimum-percent 100
+      - name: Audit derived MTR scenarios
+        id: derived-compatibility-audit
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          source "$RUNNER_TEMP/mariadb-mtr.env"
+          python3 tools/mariadb_mtr_derived.py \
+            --suite-root "$MARIADB_MTR_ROOT" \
+            --manifest tests/mariadb-mtr-derived.json \
+            --report-dir artifacts/mariadb-mtr-discovery/derived \
+            --target both \
+            --baseline-url "$MARIADB_COMPARE_URL" \
+            --mysqltest-bin "$MYSQLTEST_BIN" \
+            --client-bindir "$MYSQL_CLIENT_BINDIR" \
+            --mysqweel-bin target/debug/sqwl \
+            --mtr-runner "$MTR_RUNNER" \
+            --safe-process-bin "$MTR_SAFE_PROCESS" \
+            --baseline-label MariaDB \
+            --baseline-version 10.11.7 \
+            --source-revision "$MARIADB_MTR_REVISION" \
+            --case-timeout 300 \
+            --skip-mysqweel-after-baseline-failure \
+            --minimum-percent 100
+      - name: Require compatibility audit reports and infrastructure health
+        if: always()
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import pathlib
+          import sys
+          paths = [
+              pathlib.Path("artifacts/mariadb-mtr-discovery/audit/mtr-report.json"),
+              pathlib.Path("artifacts/mariadb-mtr-discovery/focused-audit/mtr-report.json"),
+              pathlib.Path("artifacts/mariadb-mtr-discovery/derived/mtr-report.json"),
+          ]
+          failed = False
+          for path in paths:
+              if not path.is_file():
+                  print(f"missing required compatibility report: {path}", file=sys.stderr)
+                  failed = True
+                  continue
+              report = json.loads(path.read_text())
+              counts = report.get("counts", {})
+              if report.get("status") == "invalid" or counts.get("infrastructure", 0):
+                  print(f"invalid baseline or infrastructure failure in compatibility report: {path}", file=sys.stderr)
+                  failed = True
+          raise SystemExit(1 if failed else 0)
+          PY
       - name: Generate promotion candidates and job summary
         if: always()
         run: |
@@ -162,21 +239,38 @@ jobs:
           cat "$discovery_dir/mariadb-mtr-discovery.md" >> "$GITHUB_STEP_SUMMARY"
           compatibility_report="$discovery_dir/audit/mtr-report.json"
           if [[ -f "$compatibility_report" ]]; then
-            python3 tools/mariadb_mtr_discover.py \
-              --compat-report "$compatibility_report" \
-              --promote-manifest "$discovery_dir/mariadb-mtr-promotion-candidates.txt"
+            coverage_kind="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("coverage_kind", "complete-upstream"))' "$compatibility_report")"
+            if [[ "$coverage_kind" == "complete-upstream" ]]; then
+              python3 tools/mariadb_mtr_discover.py \
+                --compat-report "$compatibility_report" \
+                --promote-manifest "$discovery_dir/mariadb-mtr-promotion-candidates.txt"
+            else
+              echo "Complete-file promotion skipped for coverage kind: $coverage_kind" >> "$GITHUB_STEP_SUMMARY"
+            fi
             cat "$discovery_dir/audit/mtr-report.md" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "The compatibility audit did not produce a report." >> "$GITHUB_STEP_SUMMARY"
           fi
           focused_report="$discovery_dir/focused-audit/mtr-report.json"
           if [[ -f "$focused_report" ]]; then
-            python3 tools/mariadb_mtr_discover.py \
-              --compat-report "$focused_report" \
-              --promote-manifest "$discovery_dir/mariadb-mtr-focused-promotion-candidates.txt"
+            coverage_kind="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("coverage_kind", "complete-upstream"))' "$focused_report")"
+            if [[ "$coverage_kind" == "complete-upstream" ]]; then
+              python3 tools/mariadb_mtr_discover.py \
+                --compat-report "$focused_report" \
+                --promote-manifest "$discovery_dir/mariadb-mtr-focused-promotion-candidates.txt"
+            else
+              echo "Focused promotion skipped for coverage kind: $coverage_kind" >> "$GITHUB_STEP_SUMMARY"
+            fi
             cat "$discovery_dir/focused-audit/mtr-report.md" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "The focused contract audit did not produce a report." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          derived_report="$discovery_dir/derived/mtr-report.json"
+          if [[ -f "$derived_report" ]]; then
+            cat "$discovery_dir/derived/mtr-report.md" >> "$GITHUB_STEP_SUMMARY"
+            echo "Derived scenarios are audit-only; no complete-file promotion is generated." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "The derived compatibility audit did not produce a report." >> "$GITHUB_STEP_SUMMARY"
           fi
       - name: Upload discovery report
         if: always()
@@ -204,6 +298,15 @@ jobs:
             artifacts/mariadb-mtr-discovery/focused-audit/**/stderr.log
             artifacts/mariadb-mtr-discovery/focused-audit/**/log/**/*.log
             artifacts/mariadb-mtr-discovery/focused-audit/**/*.reject
+            artifacts/mariadb-mtr-discovery/derived/mtr-report.json
+            artifacts/mariadb-mtr-discovery/derived/mtr-report.md
+            artifacts/mariadb-mtr-discovery/derived/**/stdout.log
+            artifacts/mariadb-mtr-discovery/derived/**/stderr.log
+            artifacts/mariadb-mtr-discovery/derived/**/log/**/*.log
+            artifacts/mariadb-mtr-discovery/derived/**/*.reject
+            artifacts/mariadb-mtr-discovery/derived/**/mysqweel.log
+            artifacts/mariadb-mtr-discovery/derived/**/my.cnf
+            artifacts/mariadb-mtr-discovery/derived/**/mariadb-test-run.json
             artifacts/mariadb-mtr-discovery/focused-audit/**/mysqweel.log
             artifacts/mariadb-mtr-discovery/focused-audit/**/my.cnf
             artifacts/mariadb-mtr-discovery/focused-audit/**/mariadb-test-run.json

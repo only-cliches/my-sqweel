@@ -115,23 +115,36 @@ def merge_manifests(cases: list[TestCase], directory: Path) -> list[TestCase]:
     return list(merged.values())
 
 
-def mysql_test_file(suite_root: Path, name: str, layout: str = "mariadb") -> Path:
+def _mtr_file_candidates(suite_root: Path, name: str, suffix: str, layout: str) -> list[Path]:
     mysql_test = suite_root / "mysql-test"
     if "/" not in name:
-        main_directory = "main" if layout == "mariadb" else "t"
-        return mysql_test / main_directory / f"{name}.test"
+        main_directory = "main" if layout == "mariadb" else ("r" if suffix == ".result" else "t")
+        return [mysql_test / main_directory / f"{name}{suffix}"]
     suite, test = name.split("/", 1)
-    return mysql_test / "suite" / suite / "t" / f"{test}.test"
+    # MariaDB packages have historically shipped both suite/t+suite/r and
+    # suite/name.ext views.  Treat both as valid, but never silently choose a
+    # duplicate when a staged suite contains both layouts.
+    return [
+        mysql_test / "suite" / suite / ("r" if suffix == ".result" else "t") / f"{test}{suffix}",
+        mysql_test / "suite" / suite / f"{test}{suffix}",
+    ]
+
+
+def _resolve_mtr_file(suite_root: Path, name: str, suffix: str, layout: str) -> Path:
+    candidates = _mtr_file_candidates(suite_root, name, suffix, layout)
+    existing = [path for path in candidates if path.is_file()]
+    if len(existing) > 1:
+        joined = ", ".join(str(path) for path in existing)
+        raise ValueError(f"ambiguous MTR {suffix} files for {name!r}: {joined}")
+    return existing[0] if existing else candidates[0]
+
+
+def mysql_test_file(suite_root: Path, name: str, layout: str = "mariadb") -> Path:
+    return _resolve_mtr_file(suite_root, name, ".test", layout)
 
 
 def mysql_result_file(suite_root: Path, name: str, layout: str = "mariadb") -> Path:
-    mysql_test = suite_root / "mysql-test"
-    if "/" not in name:
-        main_directory = "main" if layout == "mariadb" else "r"
-        return mysql_test / main_directory / f"{name}.result"
-    suite, test = name.split("/", 1)
-    return mysql_test / "suite" / suite / "r" / f"{test}.result"
-
+    return _resolve_mtr_file(suite_root, name, ".result", layout)
 
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
@@ -572,6 +585,85 @@ def prepare_external_mariadb_runner(runner: Path, destination: Path) -> Path:
     return destination
 
 
+def _is_skip_output(stdout: str, stderr: str, qualified_test: str) -> bool:
+    text = f"{stdout}\n{stderr}"
+    escaped = re.escape(qualified_test)
+    return bool(
+        re.search(
+            rf"(?im)^\s*(?:\[\s*\d+%\]\s+)?{escaped}\s+\[\s*(?:skip|skipped|disabled)\s*\]",
+            text,
+        )
+        or re.search(
+            rf"(?im)^\s*(?:skip|skipped|disabled)\s*:\s*{escaped}\b",
+            text,
+        )
+    )
+
+
+def _sql_failure_kind(text: str) -> str | None:
+    """Classify mysqltest diagnostics, not arbitrary runner startup failures."""
+    diagnostic = re.search(
+        r"(?ims)^\s*mysqltest:\s*(?:At line \d+:\s*)?"
+        r"(?:query(?:\s+'.*?')?\s+(?P<query_result>failed[^\n]*|succeeded[^\n]*)"
+        r"|(?P<result>Result (?:content |length )?mismatch))",
+        text,
+    )
+    if diagnostic is None:
+        return None
+    query_result = diagnostic.group("query_result")
+    # A wrong errno or unexpected success is a mismatch, even when one of
+    # the reported codes is ER_NOT_SUPPORTED_YET.
+    if query_result and re.match(
+        r"(?i)failed:\s*(?:ER_NOT_SUPPORTED_YET\s*\(1235\)|(?:ERROR\s+)?1235\b)",
+        query_result,
+    ):
+        return "unsupported"
+    return "sql-mismatch"
+
+
+def classify_case_outcome(
+    baseline: str | None,
+    mysqweel: str | None,
+) -> str:
+    """Apply the strict precedence used for a complete per-case outcome."""
+    statuses = (baseline, mysqweel)
+    if "infrastructure" in statuses:
+        return "infrastructure"
+    if baseline not in (None, "pass", "unsupported", "not-run"):
+        return "baseline-failure"
+    if "sql-mismatch" in statuses:
+        return "sql-mismatch"
+    if "unsupported" in statuses:
+        return "unsupported"
+    if "not-run" in statuses:
+        return "not-run"
+    if all(status in (None, "pass") for status in statuses) and "pass" in statuses:
+        return "pass"
+    return "not-run"
+
+
+def _setup_invocation(
+    server: Server,
+    case: TestCase,
+    artifact_dir: Path,
+    message: str,
+) -> Invocation:
+    case_artifact = artifact_dir / server.name / case.name.replace("/", "_")
+    case_artifact.mkdir(parents=True, exist_ok=True)
+    (case_artifact / "stdout.log").write_text("")
+    (case_artifact / "stderr.log").write_text(message)
+    return Invocation(
+        test=case.name,
+        server=server.name,
+        status="infrastructure",
+        returncode=None,
+        command=[],
+        stdout="",
+        stderr=message,
+        artifact_dir=str(case_artifact),
+    )
+
+
 def run_case(
     suite_root: Path,
     mysqltest_runner: Path,
@@ -591,10 +683,6 @@ def run_case(
         )
     vardir = Path(tempfile.mkdtemp(prefix="mysqweel-mtr-", dir="/tmp"))
     (vardir / "log").mkdir()
-    # MTR copies its roughly 500 MiB std_data directory into every vardir by
-    # default.  The allowlist runs against an external server, so the data is
-    # read-only input; linking it keeps the report bounded and avoids making a
-    # separate copy for every case.
     std_data = suite_root / "mysql-test" / "std_data"
     vardir_std_data = vardir / "std_data"
     if std_data.is_dir() and not vardir_std_data.exists():
@@ -628,28 +716,45 @@ def run_case(
         )
         stdout = completed.stdout
         stderr = completed.stderr
-        status = "pass" if completed.returncode == 0 else "fail"
         suite, test = (
             case.name.split("/", 1) if "/" in case.name else ("main", case.name)
         )
-        qualified_test = re.escape(f"{suite}.{test}")
+        qualified_test = f"{suite}.{test}"
+        escaped_test = re.escape(qualified_test)
         if layout == "mariadb":
             pass_line = re.compile(
-                rf"^\s*(?:\[\s*\d+%\]\s+)?{qualified_test}\s+\[\s*pass\s*\]",
+                rf"^\s*(?:\[\s*\d+%\]\s+)?{escaped_test}\s+\[\s*pass\s*\]",
                 re.MULTILINE,
             )
         else:
             pass_line = re.compile(
-                rf"^\[\s*\d+%\]\s+{qualified_test}\s+\[\s*pass\s*\]",
+                rf"^\[\s*\d+%\]\s+{escaped_test}\s+\[\s*pass\s*\]",
                 re.MULTILINE,
             )
-        if completed.returncode == 0 and (
-            not pass_line.search(stdout) or "Completed: All" not in stdout
+        combined_output = f"{stdout}\n{stderr}"
+        sql_failure = None
+        if completed.returncode != 0 and re.search(
+            rf"(?m)^\s*(?:\[\s*\d+%\]\s+)?{escaped_test}\s+\[\s*fail\s*\]",
+            stdout,
         ):
+            sql_failure = _sql_failure_kind(combined_output)
+        if _is_skip_output(stdout, stderr, qualified_test):
+            status = "unsupported"
+        elif completed.returncode == 0 and pass_line.search(stdout) and "Completed: All" in stdout:
+            status = "pass"
+        elif sql_failure:
+            status = sql_failure
+        elif completed.returncode == 0:
             status = "infrastructure"
             stderr = (
                 f"{stderr}\nMTR execution canary failed: the runner did not report "
                 f"a completed pass for {case.name}"
+            ).strip()
+        else:
+            status = "infrastructure"
+            stderr = (
+                f"{stderr}\nMTR exited {completed.returncode} without concrete "
+                "SQL result diagnostics"
             ).strip()
         preserve_vardir()
         (case_artifact / "stdout.log").write_text(stdout)
@@ -684,8 +789,6 @@ def run_case(
             stderr=f"MTR test timed out after {timeout} seconds\n{stderr}",
             artifact_dir=str(case_artifact),
         )
-
-
 def start_mysqweel(binary: Path, report_dir: Path, timezone: str = "+00:00") -> tuple[Server, subprocess.Popen[str]]:
     host = "127.0.0.1"
     port = free_port(host)
@@ -713,33 +816,45 @@ def render_markdown(report: dict) -> str:
     counts = report["counts"]
     baseline_label = report.get("baseline_label", "Baseline")
     baseline_version = report.get("baseline_version", "unknown")
+    coverage_kind = report.get("coverage_kind", "complete-upstream")
     lines = [
-        f"# {baseline_label} {baseline_version} upstream compatibility",
+        f"# {baseline_label} {baseline_version} {coverage_kind} compatibility",
         "",
-        f"- Source revision: `{report['source_revision']}`",
+        f"- Coverage kind: `{coverage_kind}`",
+        f"- Source revision: `{report.get('source_revision', 'unknown')}`",
         f"- Target: `{report.get('target', 'both')}`",
-        f"- Included tests: {counts['included']}",
+        f"- Included tests: {counts.get('included', 0)}",
         f"- Test-file SQL statements: {counts.get('statements', 0)}",
         f"- Statements in passing tests: {counts.get('passed_statements', 0)}",
-        f"- Passed: {counts['passed']}",
-        f"- Failed: {counts['failed']}",
-        f"- Infrastructure failures: {counts['infrastructure']}",
-        f"- Score: {report['score_percent']:.1f}%",
+        f"- Passed: {counts.get('passed', 0)}",
+        f"- SQL mismatches: {counts.get('sql_mismatches', 0)}",
+        f"- Unsupported/skipped: {counts.get('unsupported', 0)}",
+        f"- Baseline failures: {counts.get('baseline_failures', 0)}",
+        f"- Infrastructure failures: {counts.get('infrastructure', 0)}",
+        f"- Not run: {counts.get('not_run', 0)}",
+        f"- Score: {report.get('score_percent', 0.0):.1f}%",
         f"- Required floor: {report.get('minimum_percent', 90.0):.1f}%",
-        f"- Status: **{report['status']}**",
-        "",
+        f"- Status: **{report.get('status', 'invalid')}**",
         (
-            "A compatibility test is counted only when the unmodified, hash-pinned upstream "
-            "MTR test passes for every server evaluated by this report."
+            "An included case passes only when MTR reports a completed pass for every "
+            "server required by this report's target. Inputs are hash-pinned; skips "
+            "and unsupported cases never count as passes."
+        ),
+        (
+            "Derived scenarios are isolated, range-pinned audit evidence and are never "
+            "eligible for complete-file promotion."
+            if coverage_kind == "derived-scenarios" else
+            "Complete-upstream results may be considered for promotion only after independent review."
         ),
         "",
-        f"| Test | Feature | Statements | {baseline_label} baseline | MySqweel |",
-        "| --- | --- | ---: | --- | --- |",
+        f"| Test | Feature | Statements | {baseline_label} baseline | MySqweel | Outcome |",
+        "| --- | --- | ---: | --- | --- | --- |",
     ]
-    for result in report["results"]:
+    for result in report.get("results", []):
         lines.append(
             f"| `{result['test']}` | `{result['feature']}` | {result.get('statements', 0)} | "
-            f"{result.get('baseline', 'not-run')} | {result['mysqweel']} |"
+            f"{result.get('baseline', 'not-run')} | {result.get('mysqweel', 'not-run')} | "
+            f"{result.get('status', result.get('outcome', 'not-run'))} |"
         )
 
     if report.get("runner_adaptation"):
@@ -770,59 +885,72 @@ def render_markdown(report: dict) -> str:
                 ]
             )
             lines.extend(f"    {line}" for line in (output or "No output captured.").splitlines())
+    if report.get("error"):
+        lines.extend(["", "## Runner error", "", report["error"]])
     return "\n".join(lines) + "\n"
 
 
 def run(args: argparse.Namespace) -> int:
-    suite_root = args.suite_root.resolve()
-    allowlist = args.allowlist.resolve()
     report_dir = args.report_dir.resolve()
     report_dir.mkdir(parents=True, exist_ok=True)
-    cases = parse_manifest(allowlist)
-    additional = getattr(args, "additional_allowlist_dir", None)
-    if additional is not None:
-        cases = merge_manifests(cases, additional)
-    validate_cases(suite_root, cases, args.mtr_layout)
+    coverage_kind = getattr(args, "coverage_kind", "complete-upstream")
+    cases: list[TestCase] = []
 
-    runner_name = "mariadb-test-run.pl" if args.mtr_layout == "mariadb" else "mysql-test-run.pl"
-    runner = (args.mtr_runner or suite_root / "mysql-test" / runner_name).resolve()
-    if not runner.is_file():
-        raise FileNotFoundError(f"MTR runner not found: {runner}")
-    mysqltest = args.mysqltest_bin or shutil.which("mysqltest")
-    if not mysqltest:
-        raise FileNotFoundError("mysqltest-compatible binary not found; pass --mysqltest-bin")
-    mysqltest_path = Path(mysqltest).resolve()
-    client_bindir = args.client_bindir.resolve() if args.client_bindir else mysqltest_path.parent
-    if not (client_bindir / "mysql").exists():
-        raise FileNotFoundError(f"MariaDB client not found in {client_bindir}")
-    safe_process = (
-        args.safe_process_bin.resolve()
-        if args.safe_process_bin
-        else client_bindir / "mysqltest_safe_process"
-    )
-    if not safe_process.is_file() and args.mtr_layout == "mariadb":
-        safe_process = suite_root / "mysql-test" / "lib" / "My" / "SafeProcess" / "my_safe_process"
-    validate_mtr_runtime(client_bindir, mysqltest_path, safe_process)
+    def write_report(report: dict) -> None:
+        (report_dir / "mtr-report.json").write_text(json.dumps(report, indent=2) + "\n")
+        (report_dir / "mtr-report.md").write_text(render_markdown(report))
+        print(render_markdown(report), end="")
 
-    run_baseline = args.target in ("baseline", "both")
-    run_mysqweel = args.target in ("mysqweel", "both")
-    baseline_server: Server | None = None
-    baseline_url = args.baseline_url or os.environ.get("MARIADB_COMPARE_URL")
-    baseline_name = re.sub(r"[^a-z0-9]+", "-", args.baseline_label.lower()).strip("-") or "baseline"
-    if run_baseline:
-        if not baseline_url:
-            raise ValueError("--baseline-url or MARIADB_COMPARE_URL is required for the baseline target")
-        baseline_server = Server(baseline_name, baseline_url)
-        ensure_mtr_database(
-            baseline_server,
-            client_bindir,
-            mariadb=args.mtr_layout == "mariadb",
+    try:
+        suite_root = args.suite_root.resolve()
+        allowlist = args.allowlist.resolve()
+        cases = parse_manifest(allowlist)
+        additional = getattr(args, "additional_allowlist_dir", None)
+        if additional is not None:
+            cases = merge_manifests(cases, additional)
+        validate_cases(suite_root, cases, args.mtr_layout)
+
+        runner_name = "mariadb-test-run.pl" if args.mtr_layout == "mariadb" else "mysql-test-run.pl"
+        runner = (args.mtr_runner or suite_root / "mysql-test" / runner_name).resolve()
+        if not runner.is_file():
+            raise FileNotFoundError(f"MTR runner not found: {runner}")
+        mysqltest = args.mysqltest_bin or shutil.which("mysqltest")
+        if not mysqltest:
+            raise FileNotFoundError("mysqltest-compatible binary not found; pass --mysqltest-bin")
+        mysqltest_path = Path(mysqltest).resolve()
+        client_bindir = args.client_bindir.resolve() if args.client_bindir else mysqltest_path.parent
+        if not (client_bindir / "mysql").exists():
+            raise FileNotFoundError(f"MariaDB client not found in {client_bindir}")
+        safe_process = (
+            args.safe_process_bin.resolve()
+            if args.safe_process_bin
+            else client_bindir / "mysqltest_safe_process"
         )
-    if baseline_url:
-        validate_distinct_servers(baseline_url, args.mysqweel_url)
-    binary = (args.mysqweel_bin or Path("target/debug/sqwl")).resolve()
-    if run_mysqweel and not args.mysqweel_url and not binary.is_file():
-        raise FileNotFoundError(f"MySqweel binary not found: {binary}")
+        if not safe_process.is_file() and args.mtr_layout == "mariadb":
+            safe_process = suite_root / "mysql-test" / "lib" / "My" / "SafeProcess" / "my_safe_process"
+        validate_mtr_runtime(client_bindir, mysqltest_path, safe_process)
+
+        run_baseline = args.target in ("baseline", "both")
+        run_mysqweel = args.target in ("mysqweel", "both")
+        baseline_server: Server | None = None
+        baseline_url = args.baseline_url or os.environ.get("MARIADB_COMPARE_URL")
+        baseline_name = re.sub(r"[^a-z0-9]+", "-", args.baseline_label.lower()).strip("-") or "baseline"
+        if run_baseline:
+            if not baseline_url:
+                raise ValueError("--baseline-url or MARIADB_COMPARE_URL is required for the baseline target")
+            baseline_server = Server(baseline_name, baseline_url)
+            ensure_mtr_database(
+                baseline_server, client_bindir, mariadb=args.mtr_layout == "mariadb"
+            )
+        if baseline_url:
+            validate_distinct_servers(baseline_url, args.mysqweel_url)
+        binary = (args.mysqweel_bin or Path("target/debug/sqwl")).resolve()
+        if run_mysqweel and not args.mysqweel_url and not binary.is_file():
+            raise FileNotFoundError(f"MySqweel binary not found: {binary}")
+    except (FileNotFoundError, RuntimeError, ValueError, OSError, subprocess.SubprocessError) as error:
+        report = _failure_report(args, coverage_kind, cases, f"setup: {error}")
+        write_report(report)
+        return 1
 
     results: list[dict] = []
     invocations: list[Invocation] = []
@@ -830,70 +958,53 @@ def run(args: argparse.Namespace) -> int:
         baseline_result: Invocation | None = None
         mysqweel_result: Invocation | None = None
         if baseline_server is not None:
-            reset_test_database(
-                baseline_server,
-                client_bindir,
-                mariadb=args.mtr_layout == "mariadb",
-            )
-            configure_case_timezone(
-                baseline_server,
-                client_bindir,
-                suite_root,
-                case,
-                args.mtr_layout,
-            )
-            baseline_result = run_case(
-                suite_root,
-                runner,
-                client_bindir,
-                baseline_server,
-                case,
-                report_dir,
-                mysqltest_path,
-                args.mtr_layout,
-                args.case_timeout,
-            )
+            try:
+                reset_test_database(
+                    baseline_server, client_bindir, mariadb=args.mtr_layout == "mariadb"
+                )
+                configure_case_timezone(
+                    baseline_server, client_bindir, suite_root, case, args.mtr_layout
+                )
+                baseline_result = run_case(
+                    suite_root, runner, client_bindir, baseline_server, case, report_dir,
+                    mysqltest_path, args.mtr_layout, args.case_timeout
+                )
+            except (FileNotFoundError, RuntimeError, ValueError, OSError, subprocess.SubprocessError) as error:
+                baseline_result = _setup_invocation(
+                    baseline_server, case, report_dir, f"baseline setup: {error}"
+                )
             invocations.append(baseline_result)
 
-        mysqweel_process: subprocess.Popen[str] | None = None
         run_case_on_mysqweel = run_mysqweel and not (
             args.skip_mysqweel_after_baseline_failure
             and baseline_result is not None
             and baseline_result.status != "pass"
         )
+        mysqweel_process: subprocess.Popen[str] | None = None
         if run_case_on_mysqweel:
-            if args.mysqweel_url:
-                mysqweel_server = Server("mysqweel", args.mysqweel_url)
-            else:
-                mysqweel_server, mysqweel_process = start_mysqweel(
-                    binary, report_dir / "mysqweel" / case.name.replace("/", "_"),
-                    timezone=mtr_case_timezone(suite_root, case, args.mtr_layout)
-                )
+            mysqweel_server = Server("mysqweel", args.mysqweel_url or "")
             try:
+                if args.mysqweel_url:
+                    mysqweel_server = Server("mysqweel", args.mysqweel_url)
+                else:
+                    mysqweel_server, mysqweel_process = start_mysqweel(
+                        binary, report_dir / "mysqweel" / case.name.replace("/", "_"),
+                        timezone=mtr_case_timezone(suite_root, case, args.mtr_layout),
+                    )
                 reset_test_database(
-                    mysqweel_server,
-                    client_bindir,
-                    mariadb=args.mtr_layout == "mariadb",
+                    mysqweel_server, client_bindir, mariadb=args.mtr_layout == "mariadb"
                 )
                 configure_case_timezone(
-                    mysqweel_server,
-                    client_bindir,
-                    suite_root,
-                    case,
-                    args.mtr_layout,
+                    mysqweel_server, client_bindir, suite_root, case, args.mtr_layout
                 )
                 mysqweel_result = run_case(
-                    suite_root,
-                    runner,
-                    client_bindir,
-                    mysqweel_server,
-                    case,
-                    report_dir,
-                    mysqltest_path,
-                    args.mtr_layout,
-                    args.case_timeout,
+                    suite_root, runner, client_bindir, mysqweel_server, case, report_dir,
+                    mysqltest_path, args.mtr_layout, args.case_timeout
                 )
-                invocations.append(mysqweel_result)
+            except (FileNotFoundError, RuntimeError, ValueError, OSError, subprocess.SubprocessError) as error:
+                mysqweel_result = _setup_invocation(
+                    mysqweel_server, case, report_dir, f"MySqweel setup: {error}"
+                )
             finally:
                 if mysqweel_process is not None:
                     mysqweel_process.terminate()
@@ -902,46 +1013,50 @@ def run(args: argparse.Namespace) -> int:
                     except subprocess.TimeoutExpired:
                         mysqweel_process.kill()
                         mysqweel_process.wait()
+            invocations.append(mysqweel_result)
 
-        evaluated = [result for result in (baseline_result, mysqweel_result) if result is not None]
+        test_path = mysql_test_file(suite_root, case.name, args.mtr_layout)
+        outcome = classify_case_outcome(
+            baseline_result.status if baseline_result else None,
+            mysqweel_result.status if mysqweel_result else None,
+        )
         results.append(
             {
                 "test": case.name,
                 "feature": case.feature,
                 "test_sha256": case.test_sha256,
                 "result_sha256": case.result_sha256,
-                "statements": sql_statement_count(
-                    mysql_test_file(suite_root, case.name, args.mtr_layout).read_text(
-                        encoding="utf-8", errors="replace"
-                    )
-                ),
+                "statements": sql_statement_count(test_path.read_text(encoding="utf-8", errors="replace")),
                 "baseline": baseline_result.status if baseline_result else "not-run",
                 "mysqweel": mysqweel_result.status if mysqweel_result else "not-run",
-                "status": "pass"
-                if evaluated and all(result.status == "pass" for result in evaluated)
-                else "fail",
+                "status": outcome,
+                "outcome": outcome,
             }
         )
-
-    baseline_failures = sum(
-        result["baseline"] != "pass" for result in results if result["baseline"] != "not-run"
-    )
-    infrastructure = sum(
-        invocation.status == "infrastructure" for invocation in invocations
-    )
-    passed = sum(result["status"] == "pass" for result in results)
-    failed = len(results) - passed
-    statement_count = sum(result["statements"] for result in results)
-    passed_statement_count = sum(
+    counts = {
+        "included": len(results),
+        "passed": sum(result["status"] == "pass" for result in results),
+        "sql_mismatches": sum(result["status"] == "sql-mismatch" for result in results),
+        "unsupported": sum(result["status"] == "unsupported" for result in results),
+        "baseline_failures": sum(result["status"] == "baseline-failure" for result in results),
+        "infrastructure": sum(result["status"] == "infrastructure" for result in results),
+        "not_run": sum(result["status"] == "not-run" for result in results),
+        "statements": sum(result["statements"] for result in results),
+    }
+    counts["failed"] = len(results) - counts["passed"]
+    counts["passed_statements"] = sum(
         result["statements"] for result in results if result["status"] == "pass"
     )
+    passed = counts["passed"]
+    score = passed * 100.0 / len(results) if results else 0.0
     status = (
         "invalid"
-        if baseline_failures or infrastructure
-        else ("pass" if passed * 100.0 / len(results) >= args.minimum_percent else "fail")
+        if counts["baseline_failures"] or counts["infrastructure"]
+        else ("pass" if score >= args.minimum_percent else "fail")
     )
     report = {
-        "schema": "my-sqweel.mtr-compatibility.v3",
+        "schema": "my-sqweel.mtr-compatibility.v4",
+        "coverage_kind": coverage_kind,
         "status": status,
         "target": args.target,
         "baseline_label": args.baseline_label,
@@ -955,23 +1070,55 @@ def run(args: argparse.Namespace) -> int:
             if args.mtr_layout == "mariadb" else None
         ),
         "minimum_percent": args.minimum_percent,
-        "counts": {
-            "included": len(results),
-            "passed": passed,
-            "failed": failed,
-            "infrastructure": infrastructure,
-            "baseline_failures": baseline_failures,
-            "statements": statement_count,
-            "passed_statements": passed_statement_count,
-        },
-        "score_percent": passed * 100.0 / len(results),
+        "counts": counts,
+        "score_percent": score,
         "results": results,
         "invocations": [asdict(invocation) for invocation in invocations],
     }
-    (report_dir / "mtr-report.json").write_text(json.dumps(report, indent=2) + "\n")
-    (report_dir / "mtr-report.md").write_text(render_markdown(report))
-    print(render_markdown(report), end="")
+    write_report(report)
     return 0 if status == "pass" else 1
+
+
+def _failure_report(
+    args: argparse.Namespace,
+    coverage_kind: str,
+    cases: list[TestCase],
+    error: str,
+) -> dict:
+    results = [
+        {
+            "test": case.name,
+            "feature": case.feature,
+            "test_sha256": case.test_sha256,
+            "result_sha256": case.result_sha256,
+            "statements": 0,
+            "baseline": "not-run",
+            "mysqweel": "not-run",
+            "status": "not-run",
+            "outcome": "not-run",
+        }
+        for case in cases
+    ]
+    return {
+        "schema": "my-sqweel.mtr-compatibility.v4",
+        "coverage_kind": coverage_kind,
+        "status": "invalid",
+        "target": getattr(args, "target", "both"),
+        "baseline_label": getattr(args, "baseline_label", "MariaDB"),
+        "baseline_version": getattr(args, "baseline_version", "unknown"),
+        "source_revision": getattr(args, "source_revision", "unknown"),
+        "minimum_percent": getattr(args, "minimum_percent", 100.0),
+        "score_percent": 0.0,
+        "error": error,
+        "counts": {
+            "included": len(results), "passed": 0,
+            "sql_mismatches": 0, "unsupported": 0, "baseline_failures": 0,
+            "infrastructure": 1, "not_run": len(results),
+            "failed": len(results) + 1, "statements": 0, "passed_statements": 0,
+        },
+        "results": results,
+        "invocations": [],
+    }
 
 
 def parser() -> argparse.ArgumentParser:
@@ -993,6 +1140,11 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--baseline-label", default="MariaDB")
     result.add_argument("--baseline-version", "--mysql-version", dest="baseline_version", default="10.11.7")
     result.add_argument("--source-revision", default="mariadb-10.11.7-2ubuntu2")
+    result.add_argument(
+        "--coverage-kind",
+        choices=("complete-upstream", "derived-scenarios"),
+        default="complete-upstream",
+    )
     result.add_argument("--minimum-percent", type=float, default=100.0)
     result.add_argument("--case-timeout", type=int, default=300)
     result.add_argument(

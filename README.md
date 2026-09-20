@@ -422,28 +422,30 @@ instead of being silently evaluated as `NULL`, `FALSE`, or a partial result.
 ### Verification contract
 
 Compatibility verification targets pinned **MariaDB 10.11.7**. Differential corpus, exact parity,
-error-code, prepared-statement, and ORM-shaped suites exercise the supported surface. The results
-below predate the current storage, execution, command-dispatch, metadata, and wire-listener
-changes; they do not qualify the current working tree.
+error-code, prepared-statement, and ORM-shaped suites exercise the supported surface. Local
+upstream-corpus qualification reports separate passing gates from known compatibility gaps:
 
-- The previous local focused upstream audit passed **25/25 complete files**, containing **339 direct
-  SQL statements**, against both MariaDB and MySqweel, with zero infrastructure failures. The
-  hash-pinned scope is [`tests/mariadb-mtr-scope.txt`](tests/mariadb-mtr-scope.txt).
-- The scope includes `innodb/innodb_bug57255`: 18 statements exercising a transaction with 743
-  inserted rows and cascading deletes. Rust tests cover rollback, savepoints, autocommit,
-  session isolation, wire status, account persistence, and recovery.
-- The previous strict-manifest run passed **32/32 files / 381 statements** locally against both MariaDB 10.11.7
-  and the transactional MySqweel backend, with zero infrastructure failures.
-  Focused cases remain audit-only until CI qualification and promotion into
-  [`tests/mariadb-mtr-allowlist.txt`](tests/mariadb-mtr-allowlist.txt).
-- The [discovery workflow](.github/workflows/mariadb-mtr-discovery.yml) inventories **5,585 files**,
-  identifying **319 candidates / 20,082 direct and sourced statements**. Candidates are not passing
-  tests or a compatibility score; each must pass both engines before promotion.
+- The merged strict gate passes **35/35 complete files / 441 direct SQL statements** against both
+  MariaDB and MySqweel, with zero infrastructure failures. It merges
+  [`tests/mariadb-mtr-allowlist.txt`](tests/mariadb-mtr-allowlist.txt) with
+  [`tests/query_coverage_mtr/`](tests/query_coverage_mtr/); both CI MTR gates use that merged scope.
+- The focused audit contains **39 complete files / 693 direct statements**. All 39 pass MariaDB;
+  MySqweel passes **26**, with **9 SQL mismatches and 4 unsupported cases**, and no infrastructure
+  failures. All fourteen window files recovered from the false `PARTITION BY` exclusion remain in
+  [`tests/mariadb-mtr-scope.txt`](tests/mariadb-mtr-scope.txt), including the thirteen that fail.
+- The [discovery workflow](.github/workflows/mariadb-mtr-discovery.yml) accounts for **7,903 files**:
+  **248 static candidates / 16,616 direct and sourced statements**, plus explicit exclusions.
+  Unresolved dynamic SQL and includes are now excluded rather than assumed safe. These counts
+  are not passing tests or an overall SQL-compatibility percentage.
+- The separate [derived-scenario manifest](tests/mariadb-mtr-derived.json) selects one six-statement
+  contiguous block from upstream `func_math`. It passes repeated MariaDB baselines; MySqweel
+  consistently stops at unsupported `ACOS`. Derived results never count as complete-file passes.
 
 The external MTR runner’s startup probe is adapted to run `SHOW VARIABLES` in the configured
 database. Both engines receive the same adaptation, with original and adapted runner hashes
-recorded in `mariadb-test-run.json`. Upstream test files, expected results, and the test client
-binary remain unchanged.
+recorded in `mariadb-test-run.json`. Complete-file tests and expected results remain unchanged.
+Derived execution stages exact byte ranges with full-file hashes and immutable source provenance;
+it does not edit installed upstream files or weaken expected results. The test client is unchanged.
 
 Percentages describe only their versioned test scope, not the entire MariaDB grammar. Every
 reported edge case should become a regression case before its implementation is changed.
@@ -695,6 +697,7 @@ python3 tools/mariadb_mtr_compat.py \
   --target both \
   --suite-root "$MARIADB_MTR_ROOT" \
   --allowlist tests/mariadb-mtr-allowlist.txt \
+  --additional-allowlist-dir tests/query_coverage_mtr \
   --baseline-url "$MARIADB_COMPARE_URL" \
   --mtr-runner "$MTR_RUNNER" \
   --safe-process-bin "$MTR_SAFE_PROCESS" \
@@ -707,9 +710,27 @@ python3 tools/mariadb_mtr_compat.py \
   --minimum-percent 100
 ```
 
-To reproduce the focused transaction-inclusive audit, replace the allowlist with
-`tests/mariadb-mtr-scope.txt` and use `--report-dir artifacts/mariadb-mtr-focused`. The runner starts
-the local MySqweel binary automatically for `--target both`.
+To reproduce the focused audit, replace the allowlist with `tests/mariadb-mtr-scope.txt`, omit
+`--additional-allowlist-dir`, and use `--report-dir artifacts/mariadb-mtr-focused`. The runner starts
+the local MySqweel binary automatically for `--target both`. Known SQL failures make this audit
+return nonzero; missing reports, invalid baselines, and infrastructure failures remain CI errors.
+
+To execute the separate derived scenarios against the same disposable baseline:
+
+```sh
+python3 tools/mariadb_mtr_derived.py \
+  --suite-root "$MARIADB_MTR_ROOT" \
+  --manifest tests/mariadb-mtr-derived.json \
+  --target both \
+  --baseline-url "$MARIADB_COMPARE_URL" \
+  --mtr-runner "$MTR_RUNNER" \
+  --safe-process-bin "$MTR_SAFE_PROCESS" \
+  --mysqweel-bin target/debug/sqwl \
+  --report-dir artifacts/mariadb-mtr-derived
+```
+
+See [upstream admission and exclusion rules](tests/mariadb-mtr-exclusions.md) for the distinction
+between complete-file qualification, static discovery, and reviewed derived scenarios.
 
 Formatting and linting:
 

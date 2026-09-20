@@ -58,6 +58,45 @@ fn strict_profile_rejects_drift_and_exposes_typed_metadata() {
 }
 
 #[test]
+fn unix_timestamp_precision_does_not_depend_on_result_rows() {
+    let _guard = test_lock();
+    let engine = Engine::new(EngineConfig::mysql_strict());
+    engine.execute_sql("SET time_zone = '+00:00'").unwrap();
+    engine
+        .execute_sql("CREATE TABLE epoch_inputs (id INT PRIMARY KEY, stamp VARCHAR(30))")
+        .unwrap();
+    let query = "SELECT UNIX_TIMESTAMP(stamp) AS raw_epoch, \
+        UNIX_TIMESTAMP(CONCAT(stamp, '')) AS composed_epoch, \
+        UNIX_TIMESTAMP(STR_TO_DATE(stamp, '%Y-%m-%d %H:%i:%s')) AS parsed_epoch, \
+        UNIX_TIMESTAMP('2020-01-01 00:00:00') AS literal_epoch \
+        FROM epoch_inputs ORDER BY id";
+    let empty = engine.execute_sql(query).unwrap().remove(0);
+    engine
+        .execute_sql("INSERT INTO epoch_inputs VALUES (1, NULL), (2, '2020-01-01 00:00:00')")
+        .unwrap();
+    let populated = engine.execute_sql(query).unwrap().remove(0);
+    for result in [&empty, &populated] {
+        let types_and_scales: Vec<_> = result
+            .column_metadata
+            .iter()
+            .map(|column| (column.column_type, column.decimals))
+            .collect();
+        assert_eq!(
+            types_and_scales,
+            [
+                (MysqlColumnType::Decimal, 6),
+                (MysqlColumnType::Decimal, 6),
+                (MysqlColumnType::BigInt, 0),
+                (MysqlColumnType::BigInt, 0),
+            ]
+        );
+    }
+    assert!(empty.rows.is_empty());
+    assert_eq!(populated.rows[0]["raw_epoch"], Value::Null);
+    assert_eq!(populated.rows[1]["raw_epoch"].as_f64(), Some(1_577_836_800.0));
+}
+
+#[test]
 fn qualified_wildcards_join_variants_and_derived_joins_work() {
     let _guard = test_lock();
     let engine = Engine::default();

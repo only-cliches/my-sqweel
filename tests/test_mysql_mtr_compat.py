@@ -13,9 +13,14 @@ from pathlib import Path
 from tools.mariadb_mtr_core import (
     Server,
     TestCase,
+    _is_skip_output,
+    _sql_failure_kind,
+    classify_case_outcome,
     configure_case_timezone,
     mtr_case_timezone,
     mtr_command,
+    mysql_result_file,
+    mysql_test_file,
     parse_manifest,
     prepare_external_mariadb_runner,
     render_markdown,
@@ -369,6 +374,99 @@ INSERT INTO t1 VALUES ('a;b'), ("c;d"), (`value`);
             cases = discover_cases(root, "main", 200)
             selected = rotating_selection(cases, offset=2, limit=2)
             self.assertEqual([case.name for case in selected], ["charlie", "alpha"])
+
+    def test_flat_suite_paths_are_supported_and_duplicates_are_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            flat = root / "mysql-test" / "suite" / "json"
+            flat.mkdir(parents=True)
+            test_file = flat / "functions.test"
+            result_file = flat / "functions.result"
+            test_file.write_text("SELECT 1;\n")
+            result_file.write_text("1\n")
+            self.assertEqual(mysql_test_file(root, "json/functions"), test_file)
+            self.assertEqual(mysql_result_file(root, "json/functions"), result_file)
+            nested = flat / "t"
+            nested.mkdir()
+            (nested / "functions.test").write_text("SELECT 1;\n")
+            with self.assertRaisesRegex(ValueError, "ambiguous MTR"):
+                mysql_test_file(root, "json/functions")
+            results = flat / "r"
+            results.mkdir()
+            nested_result = results / result_file.name
+            result_file.rename(nested_result)
+            self.assertEqual(mysql_result_file(root, "json/functions"), nested_result)
+            result_file.write_text("1\n")
+            with self.assertRaisesRegex(ValueError, "ambiguous MTR"):
+                mysql_result_file(root, "json/functions")
+
+    def test_outcome_precedence_never_promotes_skip_or_mismatch(self):
+        self.assertEqual(classify_case_outcome("pass", "pass"), "pass")
+        self.assertEqual(classify_case_outcome("pass", "unsupported"), "unsupported")
+        self.assertEqual(classify_case_outcome("pass", "sql-mismatch"), "sql-mismatch")
+        self.assertEqual(classify_case_outcome("sql-mismatch", "unsupported"), "baseline-failure")
+        self.assertEqual(classify_case_outcome("pass", "not-run"), "not-run")
+        self.assertEqual(classify_case_outcome("pass", None), "pass")
+
+    def test_skip_output_is_anchored_to_requested_case(self):
+        self.assertTrue(
+            _is_skip_output("[ 100%] main.simple [ skipped ]\nCompleted: All", "", "main.simple")
+        )
+        self.assertFalse(
+            _is_skip_output("[ 100%] other.simple [ skipped ]\nCompleted: All", "", "main.simple")
+        )
+
+    def test_sql_diagnostics_distinguish_mismatch_unsupported_and_harness_errors(self):
+        diagnostics = [
+            ("mysqltest: At line 11: query 'SELECT 1\nFROM t' failed: "
+             "ER_NOT_SUPPORTED_YET (1235): unsupported SQL", "unsupported"),
+            ("mysqltest: At line 14: query 'SELECT f()' failed with wrong errno "
+             "ER_NOT_SUPPORTED_YET (1235): 'unsupported', instead of ER_PARSE_ERROR (1064)...",
+             "sql-mismatch"),
+            ("mysqltest: Result content mismatch", "sql-mismatch"),
+            ("mysqltest: At line 2: query 'SELECT 1' succeeded - should have failed "
+             "with errno 1235...", "sql-mismatch"),
+            ("mysqltest: At line 3: Could not open include file", None),
+            ("Can't locate mysql-test-run.pl", None),
+        ]
+        for diagnostic, expected in diagnostics:
+            with self.subTest(diagnostic=diagnostic):
+                self.assertEqual(_sql_failure_kind(diagnostic), expected)
+
+    def test_setup_failure_writes_audit_report(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            allowlist = root / "allowlist.txt"
+            allowlist.write_text(f"simple query {DIGEST_A} {DIGEST_B}\n")
+            report_dir = root / "report"
+            args = Namespace(
+                suite_root=root / "missing-suite",
+                allowlist=allowlist,
+                additional_allowlist_dir=None,
+                report_dir=report_dir,
+                target="both",
+                baseline_url=None,
+                mysqweel_url=None,
+                mysqweel_bin=None,
+                mtr_runner=None,
+                mysqltest_bin=None,
+                client_bindir=None,
+                safe_process_bin=None,
+                mtr_layout="mariadb",
+                baseline_label="MariaDB",
+                baseline_version="10.11.7",
+                source_revision="test",
+                coverage_kind="complete-upstream",
+                minimum_percent=100.0,
+                case_timeout=300,
+                skip_mysqweel_after_baseline_failure=False,
+            )
+            from tools.mariadb_mtr_core import run
+
+            self.assertEqual(run(args), 1)
+            report = json.loads((report_dir / "mtr-report.json").read_text())
+            self.assertEqual(report["counts"]["infrastructure"], 1)
+            self.assertEqual(report["results"][0]["status"], "not-run")
 
     def test_promotion_manifest_contains_only_dual_engine_passes(self):
         with tempfile.TemporaryDirectory() as directory:

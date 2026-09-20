@@ -12,7 +12,7 @@ import argparse
 import json
 import re
 from collections import Counter
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 try:
@@ -34,6 +34,14 @@ UNSAFE_HARNESS_DIRECTIVE = re.compile(
     r"(?im)^\s*(?:--\s*)?(?:exec|system|perl|shutdown|restart|write_file|append_file|"
     r"remove_file|copy_file|move_file|chmod|mkdir|rmdir|cat_file)\b"
 )
+DYNAMIC_HARNESS_DIRECTIVE = re.compile(
+    r"(?im)^\s*(?:--\s*)?eval\b"
+)
+LET_DIRECTIVE = re.compile(r"(?im)^\s*(?:--\s*)?let\b")
+SQL_IN_DYNAMIC_VALUE = re.compile(
+    r"(?:`|\$|\b(?:SELECT|INSERT|UPDATE|DELETE|REPLACE|WITH|CREATE|ALTER|DROP|CALL|DO|SET)\b)",
+    re.IGNORECASE,
+)
 SOURCE_DIRECTIVE = re.compile(
     r"(?im)^\s*(?:--\s*)?(?:source|include)\s+['\"]?([^'\"\s;]+)"
 )
@@ -50,10 +58,19 @@ UNSUPPORTED_SQL = re.compile(
     r"CREATE\s+RESOURCE\s+GROUP|ALTER\s+RESOURCE\s+GROUP|CLONE\s+INSTANCE)\b"
 )
 SPECIALIZED_SQL = re.compile(
-    r"(?is)\b(?:PARTITION(?:ING)?|FULLTEXT|SPATIAL)\b|"
+    r"\b(?:FULLTEXT|SPATIAL)\b|"
     r"\bENGINE\s*=\s*(?:ARCHIVE|ARIA|BLACKHOLE|CSV|MEMORY|HEAP|MYISAM|FEDERATED|NDB)\b|"
     r"\bLOAD\s+(?:DATA|XML)\s+(?:LOCAL\s+)?INFILE\b|"
-    r"\bINTO\s+(?:OUTFILE|DUMPFILE)\b"
+    r"\bINTO\s+(?:OUTFILE|DUMPFILE)\b",
+    re.IGNORECASE,
+)
+PARTITION_BY_SQL = re.compile(r"\bPARTITION\s+BY\b", re.IGNORECASE)
+TABLE_PARTITION_OPERATION = re.compile(
+    r"\b(?:REORGANIZE|ADD|DROP|COALESCE|EXCHANGE|ANALYZE|CHECK|OPTIMIZE|REPAIR)\s+PARTITION\b|"
+    r"\bTRUNCATE\s+(?:TABLE\s+[^\s;(),]+\s+)?PARTITION\b|"
+    r"\bREMOVE\s+PARTITIONING\b|"
+    r"\b(?:FROM|JOIN|INTO|UPDATE)\s+[^\s;(),]+\s+PARTITION\s*\(",
+    re.IGNORECASE,
 )
 SERVER_CONFIGURATION_SQL = re.compile(
     r"(?is)\b(?:SET\s+(?:@@)?GLOBAL|FLUSH\s|SHUTDOWN\b|RESTART\b|"
@@ -96,6 +113,142 @@ class DiscoveryCase:
     exclusion: str | None
 
 
+def sql_code(text: str) -> str:
+    """Return executable SQL with comments and quoted literals masked.
+
+    MTR executable comments (``/*! ... */`` and MariaDB ``/*M! ... */``)
+    are retained because the server executes their body. Everything else that
+    can contain SQL-looking words is replaced with spaces, preserving offsets
+    and statement boundaries.
+    """
+    output: list[str] = []
+    index = 0
+    quote: str | None = None
+    escaped = False
+    while index < len(text):
+        character = text[index]
+        following = text[index + 1] if index + 1 < len(text) else ""
+        if quote:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == quote:
+                if following == quote:
+                    output.extend((" ", " "))
+                    index += 2
+                    continue
+                quote = None
+            output.append(" ")
+            index += 1
+            continue
+        if character in ("'", '"', "`"):
+            quote = character
+            output.append(" ")
+            index += 1
+            continue
+        if character == "/" and following == "*":
+            marker = "!" if text[index + 2 : index + 3] == "!" else text[index + 2 : index + 4].lower()
+            executable = marker in {"!", "m!"}
+            end = text.find("*/", index + 2)
+            if end < 0:
+                end = len(text)
+            if executable:
+                body_start = index + (3 if marker == "!" else 4)
+                output.append(sql_code(text[body_start:end]))
+            else:
+                output.append(" " * (end - index + 2))
+            index = min(len(text), end + 2)
+            continue
+        if character == "#":
+            end = text.find("\n", index)
+            end = len(text) if end < 0 else end
+            output.append(" " * (end - index))
+            index = end
+            continue
+        if character == "-" and following == "-" and (
+            index + 2 == len(text) or text[index + 2].isspace()
+        ):
+            end = text.find("\n", index)
+            end = len(text) if end < 0 else end
+            output.append(" " * (end - index))
+            index = end
+            continue
+        output.append(character)
+        index += 1
+    return "".join(output)
+
+
+def window_partition_at(code: str, match_start: int) -> bool:
+    """Return whether a PARTITION BY lies inside OVER()/WINDOW ... AS()."""
+    stack: list[int] = []
+    index = 0
+    while index < match_start:
+        if code[index] == "(":
+            stack.append(index)
+        elif code[index] == ")" and stack:
+            stack.pop()
+        index += 1
+    if not stack:
+        return False
+    opening = stack[-1]
+    before = code[:opening]
+    if re.search(r"\bOVER\s*$", before, re.IGNORECASE):
+        return True
+    statement = before.rsplit(";", 1)[-1]
+    return bool(re.search(r"\bWINDOW\b.*\bAS\s*$", statement, re.IGNORECASE | re.DOTALL))
+
+
+def has_table_partition(sql: str) -> bool:
+    """Identify table partitioning without rejecting window partitions."""
+    code = sql_code(sql)
+    if TABLE_PARTITION_OPERATION.search(code):
+        return True
+    for match in PARTITION_BY_SQL.finditer(code):
+        if not window_partition_at(code, match.start()):
+            # A PARTITION BY outside an OVER()/WINDOW ... AS() clause is table
+            # partitioning. This intentionally errs on the side of exclusion.
+            return True
+    return False
+
+
+def unresolved_source_reason(
+    mysql_test_root: Path,
+    text: str,
+    visited: frozenset[Path] = frozenset(),
+) -> str | None:
+    """Reject dynamic, missing, or out-of-tree source/include dependencies."""
+    root = mysql_test_root.resolve()
+    seen = set(visited)
+    pending = [text]
+    while pending:
+        current = pending.pop()
+        for match in SOURCE_DIRECTIVE.finditer(current):
+            source = match.group(1)
+            if "$" in source:
+                return "unresolved-include"
+            source_file = (root / source).resolve()
+            if not source_file.is_relative_to(root) or not source_file.is_file():
+                return "unresolved-include"
+            if source_file in seen:
+                continue
+            seen.add(source_file)
+            pending.append(source_file.read_text(encoding="utf-8", errors="replace"))
+    return None
+
+
+def has_unresolved_dynamic_harness(text: str) -> bool:
+    if DYNAMIC_HARNESS_DIRECTIVE.search(text):
+        return True
+    for line in text.splitlines():
+        if not LET_DIRECTIVE.match(line):
+            continue
+        _, separator, value = line.partition("=")
+        if separator and SQL_IN_DYNAMIC_VALUE.search(value):
+            return True
+    return False
+
+
 def without_mtr_comments(text: str) -> str:
     return "\n".join(
         line
@@ -114,7 +267,8 @@ def expanded_mtr_text(
     MTR remains responsible for executing the original files. Expansion is used only
     to prevent a harmless-looking wrapper from hiding an excluded feature such as a
     stored routine, replication setup, or file-system side effect in an ``.inc`` file.
-    Dynamic source paths are left to the baseline execution audit.
+    Dynamic and missing source paths are explicitly rejected by discovery rather
+    than treated as safe candidates.
     """
     expanded = [text]
     pending = [text]
@@ -126,7 +280,11 @@ def expanded_mtr_text(
             if "$" in source:
                 continue
             source_file = (mysql_test_root / source).resolve()
-            if source_file in seen or not source_file.is_file():
+            if (
+                not source_file.is_relative_to(mysql_test_root.resolve())
+                or source_file in seen
+                or not source_file.is_file()
+            ):
                 continue
             seen.add(source_file)
             source_text = source_file.read_text(encoding="utf-8", errors="replace")
@@ -161,21 +319,27 @@ def test_name(mysql_test_root: Path, test_file: Path, layout: str = "mariadb") -
         return test_file.stem
     if len(parts) == 2 and parts[0] == "t":
         return test_file.stem
-    if parts and parts[0] == "suite" and "t" in parts[1:-1]:
-        test_directory = parts.index("t", 1)
-        suite = "/".join(parts[1:test_directory])
-        return f"{suite}/{test_file.stem}"
-    return None
+    if parts and parts[0] == "suite":
+        # MariaDB carries both suite/name.test and suite/t/name.test forms.
+        if len(parts) == 3:
+            return f"{parts[1]}/{test_file.stem}"
+        if len(parts) == 4 and parts[2] == "t":
+            return f"{parts[1]}/{test_file.stem}"
+    # Keep every non-executable layout in the inventory with a stable,
+    # path-derived identity instead of silently dropping it.
+    return "/".join((*parts[:-1], test_file.stem))
 
 
 def result_file_for_test(mysql_test_root: Path, test_file: Path, layout: str = "mariadb") -> Path:
     relative = test_file.relative_to(mysql_test_root)
     parts = list(relative.parts)
-    if layout == "mariadb" and parts[0] == "main":
+    if layout == "mariadb" and len(parts) == 2 and parts[0] == "main":
         return test_file.with_suffix(".result")
-    test_directory = parts.index("t")
-    parts[test_directory] = "r"
-    return mysql_test_root.joinpath(*parts).with_suffix(".result")
+    test_directories = [index for index, part in enumerate(parts[:-1]) if part == "t"]
+    if test_directories:
+        parts[test_directories[-1]] = "r"
+        return mysql_test_root.joinpath(*parts).with_suffix(".result")
+    return test_file.with_suffix(".result")
 
 
 def companion_file_exists(test_file: Path) -> bool:
@@ -189,6 +353,44 @@ def companion_file_exists(test_file: Path) -> bool:
     return any(path.exists() for path in companions)
 
 
+def layout_exclusion_reason(
+    mysql_test_root: Path,
+    test_file: Path,
+    name: str,
+) -> str | None:
+    parts = test_file.relative_to(mysql_test_root).parts
+    if not parts:
+        return "unsupported-layout"
+    if "include" in parts:
+        return "helper-layout"
+    if parts[0] == "plugin":
+        return "plugin-layout"
+    if parts[0] == "suite":
+        if len(parts) == 3 or (len(parts) == 4 and parts[2] == "t"):
+            return None
+        return "nested-suite-layout"
+    if parts[0] in {"main", "t"} and len(parts) == 2:
+        return None
+    return "unsupported-layout"
+
+
+def duplicate_names(cases: list[DiscoveryCase]) -> set[str]:
+    by_name: dict[str, int] = Counter(case.name for case in cases)
+    return {name for name, count in by_name.items() if count > 1}
+
+
+def apply_duplicate_exclusions(cases: list[DiscoveryCase]) -> list[DiscoveryCase]:
+    duplicates = duplicate_names(cases)
+    if not duplicates:
+        return cases
+    return [
+        replace(case, exclusion="ambiguous-execution-name")
+        if case.name in duplicates
+        else case
+        for case in cases
+    ]
+
+
 def exclusion_reason(
     name: str,
     text: str,
@@ -198,7 +400,12 @@ def exclusion_reason(
     test_file: Path,
     max_statements: int,
     include_safe_harness: bool = False,
+    mysql_test_root: Path | None = None,
 ) -> str | None:
+    if mysql_test_root is not None:
+        path_reason = layout_exclusion_reason(mysql_test_root, test_file, name)
+        if path_reason:
+            return path_reason
     if name.count("/") > 1:
         return "nested-suite-layout"
     if not TEST_NAME.fullmatch(name):
@@ -219,6 +426,10 @@ def exclusion_reason(
     if DELIMITER_DIRECTIVE.search(text):
         return "custom-delimiter"
     if include_safe_harness:
+        if unresolved_source_reason(mysql_test_root or test_file.parent, text):
+            return "unresolved-include"
+        if has_unresolved_dynamic_harness(text):
+            return "unresolved-dynamic"
         if UNSAFE_HARNESS_DIRECTIVE.search(text):
             return "harness-side-effect"
     elif DEPENDENT_DIRECTIVE.search(text):
@@ -229,10 +440,11 @@ def exclusion_reason(
         return "topology-suite"
     if UNSUPPORTED_SQL.search(sql) or SPECIALIZED_SQL.search(sql):
         return "outside-contract"
+    if has_table_partition(sql):
+        return "outside-contract"
     if SERVER_CONFIGURATION_SQL.search(sql):
         return "server-configuration"
     return None
-
 
 def discover_cases(
     suite_root: Path,
@@ -242,49 +454,54 @@ def discover_cases(
     include_safe_harness: bool = False,
 ) -> list[DiscoveryCase]:
     mysql_test_root = suite_root / "mysql-test"
-    patterns = [mysql_test_root / ("main" if layout == "mariadb" else "t")]
-    if scope == "all":
-        patterns.extend((mysql_test_root / "suite").glob("**/t"))
+    if scope == "main":
+        test_files = sorted(
+            (mysql_test_root / ("main" if layout == "mariadb" else "t")).glob("*.test")
+        )
+    elif scope == "all":
+        # Inventory every upstream .test file, including helpers and layouts
+        # that cannot be executed by the external MTR contract.
+        test_files = sorted(mysql_test_root.rglob("*.test"))
+    else:
+        raise ValueError(f"unsupported discovery scope: {scope}")
     cases: list[DiscoveryCase] = []
-    for test_dir in patterns:
-        if not test_dir.is_dir():
+    for test_file in test_files:
+        name = test_name(mysql_test_root, test_file, layout)
+        if not name:
             continue
-        for test_file in sorted(test_dir.glob("*.test")):
-            name = test_name(mysql_test_root, test_file, layout)
-            if not name:
-                continue
-            result_file = result_file_for_test(mysql_test_root, test_file, layout)
-            text = test_file.read_text(encoding="utf-8", errors="replace")
-            analysis_text = (
-                expanded_mtr_text(mysql_test_root, text, frozenset({test_file.resolve()}))
-                if include_safe_harness
-                else text
+        result_file = result_file_for_test(mysql_test_root, test_file, layout)
+        text = test_file.read_text(encoding="utf-8", errors="replace")
+        analysis_text = (
+            expanded_mtr_text(mysql_test_root, text, frozenset({test_file.resolve()}))
+            if include_safe_harness
+            else text
+        )
+        sql = sql_code(without_mtr_comments(analysis_text))
+        statements = sql_statement_count(analysis_text)
+        reason = exclusion_reason(
+            name,
+            analysis_text,
+            sql,
+            statements,
+            result_file,
+            test_file,
+            max_statements,
+            include_safe_harness,
+            mysql_test_root,
+        )
+        cases.append(
+            DiscoveryCase(
+                name=name,
+                feature=classify_feature(sql),
+                statements=statements,
+                test_sha256=sha256_file(test_file),
+                result_sha256=sha256_file(result_file) if result_file.is_file() else "",
+                test_file=str(test_file),
+                result_file=str(result_file),
+                exclusion=reason,
             )
-            sql = without_mtr_comments(analysis_text)
-            statements = sql_statement_count(analysis_text)
-            reason = exclusion_reason(
-                name,
-                analysis_text,
-                sql,
-                statements,
-                result_file,
-                test_file,
-                max_statements,
-                include_safe_harness,
-            )
-            cases.append(
-                DiscoveryCase(
-                    name=name,
-                    feature=classify_feature(sql),
-                    statements=statements,
-                    test_sha256=sha256_file(test_file),
-                    result_sha256=sha256_file(result_file) if result_file.is_file() else "",
-                    test_file=str(test_file),
-                    result_file=str(result_file),
-                    exclusion=reason,
-                )
-            )
-    return cases
+        )
+    return apply_duplicate_exclusions(cases)
 
 
 def rotating_selection(cases: list[DiscoveryCase], offset: int, limit: int) -> list[DiscoveryCase]:
@@ -409,6 +626,11 @@ def write_inventory(args: argparse.Namespace) -> int:
 
 def write_promotion_manifest(args: argparse.Namespace) -> int:
     report = json.loads(args.compat_report.read_text())
+    coverage_kind = report.get("coverage_kind", "complete-upstream")
+    if coverage_kind != "complete-upstream":
+        raise ValueError(
+            f"cannot promote {coverage_kind!r} reports; only complete-upstream reports are promotable"
+        )
     promoted = [
         result
         for result in report.get("results", [])

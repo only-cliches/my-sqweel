@@ -153,6 +153,14 @@ All notable changes to MySqweel will be documented in this file.
 - Added GitHub-attributed `NATURAL JOIN` coverage from [wenshao/sql-dialects](https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/query/joins/mysql.sql) for an independently authored warehouse-bin report that matches on multiple shared columns; fixed column-scope validation to merge NATURAL JOIN columns like `USING`.
 - Added the minimized GitHub-attributed NATURAL JOIN regression; MariaDB 10.11.7 and MySqweel now both return the shared columns and reject mismatched multi-column pairs across repeated fresh differential runs.
 
+### Upstream corpus coverage
+
+- Inventory every packaged MariaDB `.test` path, including flat suites, plugins, nested layouts, and helpers, with explicit exclusions instead of silently omitting layouts. Distinguish window `PARTITION BY` from physical table partitioning, including executable comments and mixed statements.
+- Add a separate upstream-derived scenario runner with immutable source provenance, full-file hashes, and byte-preserving contiguous test/result ranges. Derived scenarios cannot inflate complete-file coverage or enter complete-file promotion manifests.
+- Retain all fourteen newly exposed window files in the focused audit, including thirteen known MySqweel failures. Add repeatedly passing `win_percent_cume`, `win_std`, and `innodb/innodb_bug57255` to the merged strict gate.
+- Report SQL mismatches, unsupported execution, baseline failures, infrastructure failures, and unexecuted cases separately. Require an actual completed MTR pass, preserve setup-failure reports, and broaden discovery CI triggers to engine and wire changes.
+- Restore six-decimal `UNIX_TIMESTAMP` rendering for dynamic text arguments without deriving precision from the first result row; preserve integer results for whole-second literals and `STR_TO_DATE` formats. Cover empty results and a NULL first row with a regression.
+
 ## 0.4.4 Sep 9, 2026
 
 ### Transactions and persistence

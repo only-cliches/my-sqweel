@@ -1,0 +1,6 @@
+# Complete, unmodified MariaDB 10.11.7 cases, qualified three times locally.
+# Both CI MTR gates merge this manifest and verify the upstream file hashes.
+# Columns: test feature test_sha256 result_sha256
+win_percent_cume windows 1d6baa5772b2b7df53b184545e57f30929bdb1286a5cde4b9b31da1cf206d362 abe2471440d0c6d6dc21b7ce409708c64b0dd50f1eafdceae262f7d9c336943c
+win_std windows d3bf89c60d2c27da2debe70e18261158548645fcbf630a33243d8992a81da391 c1fee9255200a607b54bbff85e97cec71ca33725141d784229e830d1376a2650
+innodb/innodb_bug57255 transactions ce684e8330efb3ec775ded35d66e3a599d3e14a62f3f62afade351ab4d813a2b 104becd1dfe579ae2cc219e2e21869bf1716d99d86a91029387c32860df8134a

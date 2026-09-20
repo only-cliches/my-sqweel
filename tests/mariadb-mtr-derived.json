@@ -1,0 +1,22 @@
+{
+  "schema": "my-sqweel.mtr-derived.v1",
+  "upstream": {
+    "revision": "87e13722a95af5d9378d990caf48cb6874439347",
+    "revision_url": "https://github.com/MariaDB/server/commit/87e13722a95af5d9378d990caf48cb6874439347"
+  },
+  "scenarios": [
+    {
+      "id": "func_math-trig-boundaries",
+      "feature": "math",
+      "source_revision": "87e13722a95af5d9378d990caf48cb6874439347",
+      "source_url": "https://github.com/MariaDB/server/blob/87e13722a95af5d9378d990caf48cb6874439347/mysql-test/main/func_math.test",
+      "test_path": "main/func_math.test",
+      "result_path": "main/func_math.result",
+      "test_sha256": "eae0b55e148d1a5c188d388bdc98a0f6ed1469b6ac05bbdfe9dc6be9daa5eccc",
+      "result_sha256": "354a02c4b2da156e1137ecd4412d346f24debed3ebcdce3510862d7a475c544a",
+      "test_lines": [51, 56],
+      "result_lines": [130, 147],
+      "dependency_rationale": "Self-contained scalar trigonometric boundary block: six literal ACOS/ASIN expressions, no source/include directives, tables, plugins, server options, or EXPLAIN/optimizer-plan assertions."
+    }
+  ]
+}

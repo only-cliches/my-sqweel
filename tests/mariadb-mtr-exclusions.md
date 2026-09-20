@@ -1,8 +1,9 @@
 # MariaDB upstream test exclusions
 
-The MTR compatibility percentage uses the explicit manifest in
-`tests/mariadb-mtr-allowlist.txt`. Each entry names one complete, unmodified
-upstream file and pins the SHA-256 of both its `.test` and `.result` files.
+The strict MTR compatibility percentage uses the explicit manifest in
+`tests/mariadb-mtr-allowlist.txt` merged with `tests/query_coverage_mtr/*.txt`.
+Each entry names one complete, unmodified upstream file and pins the SHA-256
+of both its `.test` and `.result` files.
 The full MariaDB suite is not the denominator: many files combine supported SQL
 with behavior that MySqweel intentionally does not provide.
 
@@ -16,7 +17,7 @@ with behavior that MySqweel intentionally does not provide.
 | Tests whose main path requires stored-function creation (`create`, `func_math`) | The allowlist measures the supported SQL surface, not routines. |
 | File output/removal tests (`distinct`) | MTR file-system side effects are outside the SQL wire compatibility contract. |
 | Optimizer plans, hints, index statistics, and performance tests | Exact optimizer behavior is not part of the contract. |
-| GIS, full-text indexes, partitioning, and specialized storage engines | Not implemented by the in-memory engine. |
+| GIS, full-text indexes, physical table partitioning, and specialized storage engines | Not implemented by the in-memory engine. Window `PARTITION BY` is not table partitioning. |
 | Platform, crash, debug, and resource-limit tests | Environment or process behavior is not SQL compatibility. |
 
 ## Admission rules
@@ -39,7 +40,9 @@ also exercise excluded capabilities.
 
 ## Current upstream coverage
 
-The strict gate contains 32 complete files and 381 SQL statements:
+The merged strict gate passes 35 complete files and 441 direct SQL statements
+locally against both engines, with no infrastructure failures. These are local
+qualification results; both CI gates independently verify the same merged pins.
 
 | Area | Upstream files | Feature evidence |
 | --- | --- | --- |
@@ -49,28 +52,39 @@ The strict gate contains 32 complete files and 381 SQL statements:
 | Aggregation | `group_by_null`, `sum_distinct`, `innodb_group` | Grouping with null-producing expressions, distinct aggregates, and InnoDB aggregate edge cases. |
 | Subqueries | `subselect_nulls`, `subselect_nulls_innodb`, `in_datetime_241` | Correlated `IN`/`EXISTS`, null-safe joins, row comparisons, date-valued scalar subqueries, and three-valued null logic. |
 | Ordering | `order_by-mdev-10122` | Aggregate ordering inside parenthesized queries and `UNION` operands. |
-| Date/time | `adddate_454`, `timezone4`, `datetime_456`, `str_to_datetime_457`, `func_timestamp`, `type_interval` | Interval arithmetic, Unix timestamps, boundary values, temporal casts, warnings, decimal timestamp metadata, and interval extraction. |
-| Windows | `win_empty_over`, `win_insert_select` | Empty `OVER()` clauses, window aggregates, ranking, and windowed `INSERT ... SELECT`. |
+| Date/time | `adddate_454`, `timezone4`, `datetime_456`, `str_to_datetime_457`, `func_timestamp`, `type_interval` | Interval arithmetic, Unix timestamps, boundary values, temporal casts, warnings, decimal timestamp rendering, and interval extraction. |
+| Windows | `win_empty_over`, `win_insert_select`, `win_std`, `win_percent_cume` | Empty `OVER()` clauses, aggregates, ranking, variance, cumulative distributions, and windowed `INSERT ... SELECT`. |
 | JSON | `json_equals` | Structural equality, Unicode, numeric precision, nesting limits, recursive construction, and character sets. |
 | Generated columns | `vcol/delayed`, `vcol/mrr`, `gcol/innodb_prefix_index_check` | Generated indexes, indexed predicates, optimizer-switch independence, `REPLACE DELAYED`, and generated-column prefix indexes. |
 | Uniqueness | `unique` | Unique-key insertion, nullable duplicates, and indexed deletes. |
+| Scalar comparisons | `func_equal` | Upstream equality-comparison assertions. |
+| Transactions | `innodb/innodb_bug57255` | Committing parent/child inserts and cascading deletes. |
 
-The focused non-gating audit scope in
-[`tests/mariadb-mtr-scope.txt`](mariadb-mtr-scope.txt) contains 25 complete files and 339 SQL
-statements across DDL, DML, aggregates, subqueries, date/time, window functions, JSON, and
-generated columns, plus transactions. Its results are reported separately from the strict manifest. `win_std` now passes in full
-against both engines locally and remains audit-only pending CI qualification and promotion.
+The focused non-gating SQL audit in
+[`tests/mariadb-mtr-scope.txt`](mariadb-mtr-scope.txt) contains 39 complete files and
+693 direct statements. All 39 pass MariaDB. MySqweel passes 26, with nine SQL
+mismatches and four unsupported cases; there are no baseline or infrastructure
+failures. The thirteen failures are retained, not removed to improve the score.
 
-The transaction audit adds `innodb/innodb_bug57255`: one complete upstream file
-with 18 direct SQL statements, including a transaction that inserts 257 parent
-and 486 child rows before committing and exercising cascading deletes. The complete
-file passes locally against both MariaDB 10.11.7 and MySqweel. It remains in the
-non-gating audit pending CI qualification and strict-manifest promotion. The
-25-file focused scope now passes in full against both MariaDB and the transactional
-MySqweel backend (339 direct SQL statements), with no infrastructure failures.
-All 12 previously failing files pass after fixes to authorization parsing, session
-settings, warning propagation, and window result/error metadata. The manifest and
-upstream expected results were not reduced or weakened to achieve this result.
+Correcting the window-partition filter exposes fourteen files. Each passed two
+standalone MariaDB baselines, and three differential runs produced the same
+pass/fail outcomes. `win_percent_cume` passes; the remaining failures are:
+
+- Unsupported: `union_innodb` (correlated subquery shape), `win_bit` (`BIT_OR`
+  window function), `win_lead_lag`, and `win_nth_value` (window argument handling).
+- SQL mismatches: `win_as_arg_to_aggregate_func`, `win_avg`,
+  `win_first_last_value`, `win_min_max`, `win_ntile`, `win_orderby`,
+  `win_percentile`, `win_rank`, and `win_sum`. Wrong expected error codes,
+  including a returned 1235 instead of expected 1064, remain SQL mismatches.
+
+`win_percent_cume`, `win_std`, and `innodb/innodb_bug57255` each passed three
+complete-file comparisons before entering the additional strict manifest.
+The transaction case has 18 direct statements and inserts 257 parent and
+486 child rows before committing and exercising cascading deletes.
+
+The timestamp repair qualifies value rendering and engine metadata, not every
+wire metadata field: raw column-definition `Decimals` still reports zero for
+the six-decimal `UNIX_TIMESTAMP` text-input probe.
 
 The runner stages a copy of MariaDB's MTR script for each invocation and changes
 only its external-server feature probe from `USE mysql; SHOW VARIABLES` to
@@ -94,25 +108,62 @@ and XA; `rollback` requires nontransactional MyISAM behavior; and
 endpoint. Savepoint and rollback behavior remains covered by the focused backend
 and wire regression suites until suitable complete upstream files qualify.
 
-Features without a suitable complete upstream file are covered by the
-differential corpus and focused parity tests. They are not represented as an
-upstream MTR pass until a complete qualifying file is found or MySqweel grows
-to support the rest of the relevant upstream file.
+Features without a suitable complete upstream file can be exercised by the
+differential corpus, focused parity tests, or the separate derived track below.
+None of that evidence is represented as a complete upstream-file pass.
 
 ## Automated discovery
 
 The non-gating
 [MariaDB MTR discovery workflow](../.github/workflows/mariadb-mtr-discovery.yml)
-inventories the test files in the pinned MariaDB 10.11.7 ARM64 distribution. The
-static audit follows literal MTR `source`/`include` files and admits safe variables,
-multiple connections, and asynchronous send/reap behavior. It excludes missing results,
-custom delimiters, process or file-system side effects, server options and configuration,
-topology requirements, storage engines, and behavior outside the compatibility contract.
+inventories every `.test` path in the pinned MariaDB 10.11.7 distribution. Flat
+suites, plugin trees, helpers, and nested layouts receive explicit inventory
+entries and exclusion reasons; ambiguous execution names are rejected.
+The static audit follows contained literal MTR `source`/`include` files and
+admits safe bookkeeping variables, multiple connections, and asynchronous
+send/reap behavior. Missing or dynamic includes and unresolved dynamic SQL are
+excluded, as are custom delimiters, process/file-system side effects, server
+configuration, topology requirements, and out-of-contract storage behavior.
+Physical table partitions remain excluded, including after an earlier window
+clause; quoted text and ordinary comments do not trigger SQL exclusions, while
+standard and MariaDB executable comments are inspected.
 
-Each weekly, manual, or relevant push run inventories all 5,585 packaged files and executes every
-safely classifiable candidate rather than sampling a rotating batch. The current pinned inventory
-contains 319 candidates and 20,082 direct and sourced SQL statements. Each file is validated
-against MariaDB first, then run against MySqweel when the external-server baseline is valid. The
-workflow publishes the inventory, complete execution reports, and a generated promotion manifest
-containing only files that passed both engines. Promotion into the strict manifest still requires
-review against the admission rules above.
+The local pinned inventory accounts for all 7,903 paths: 248 static candidates
+and 16,616 direct and sourced statements, plus 7,655 explicitly excluded paths.
+The candidate count is smaller than the previous incomplete inventory because
+unresolved dynamic SQL and includes are no longer assumed safe. Candidacy is
+neither a passing result nor an exhaustive list of supported SQL.
+
+Weekly, manual, relevant push, and pull-request runs select every candidate,
+including after SQL-engine, storage, and wire-server changes. MariaDB runs
+first; MySqweel runs only when that baseline passes. The workflow publishes the
+inventory, complete-file audit, focused audit, and separate derived report.
+Reports distinguish pass, SQL mismatch, unsupported/skip, baseline failure,
+infrastructure failure, and not-run outcomes. A pass requires the requested
+case's MTR pass marker, successful exit, and completed-run summary. Missing
+reports, invalid baselines, and infrastructure failures fail CI even though
+ordinary SQL incompatibilities remain non-gating in the discovery workflow.
+
+Promotion output includes only complete files that passed both engines.
+Derived reports are rejected by the promotion command. Review against the
+admission rules is still required before merging any generated candidate.
+
+## Upstream-derived scenarios
+
+`tools/mariadb_mtr_derived.py` consumes `tests/mariadb-mtr-derived.json`. Each
+entry pins an immutable upstream commit and URL, full `.test`/`.result` hashes,
+inclusive contiguous line ranges, and a dependency rationale. The runner
+verifies pins and bounds, rejects includes, and stages byte-identical slices
+in a disposable installation view. Runtime files are shared through symlinks;
+installed SQL and expected-result files are never edited. Session-state and
+other dependency closure must be reviewed by the author, not inferred from
+the presence of a rationale string.
+
+The initial scenario selects `func_math.test` lines 51–56 and its result lines
+130–147 from [MariaDB commit
+87e13722a95af5d9378d990caf48cb6874439347](https://github.com/MariaDB/server/blob/87e13722a95af5d9378d990caf48cb6874439347/mysql-test/main/func_math.test).
+This six-statement scalar block has no tables, includes, or optimizer-plan
+assertions. Two MariaDB baseline runs pass. Three differential runs retain the
+same unsupported `ACOS` failure; the range and oracle were not weakened.
+Reports use `coverage_kind: derived-scenarios`, include original provenance,
+and keep scenario metrics separate from complete-file qualification.

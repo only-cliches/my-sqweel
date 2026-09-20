@@ -1554,8 +1554,14 @@ impl RawEngine {
                         MysqlColumnType::Double
                     }
                     "UNIX_TIMESTAMP" => {
-                        metadata.decimals = 0;
-                        MysqlColumnType::BigInt
+                        metadata.decimals = function_argument(function, 0).map_or(0, |argument| {
+                            self.unix_timestamp_precision(select, argument, first_row)
+                        });
+                        if metadata.decimals == 0 {
+                            MysqlColumnType::BigInt
+                        } else {
+                            MysqlColumnType::Decimal
+                        }
                     }
                     "AVG" | "SUM" | "STD" | "STDDEV" | "STDDEV_POP" | "STDDEV_SAMP"
                     | "VAR_POP" | "VAR_SAMP" | "VARIANCE" => {
@@ -1849,6 +1855,64 @@ impl RawEngine {
             metadata.decimals = 0;
         }
         metadata
+    }
+
+    fn unix_timestamp_precision(
+        &self,
+        select: &Select,
+        argument: &Expr,
+        first_row: Option<&Map<String, Value>>,
+    ) -> u8 {
+        if let Expr::Nested(inner) = argument {
+            return self.unix_timestamp_precision(select, inner, first_row);
+        }
+        if let Expr::Function(function) = argument
+            && function
+                .name
+                .0
+                .last()
+                .is_some_and(|name| name.value.eq_ignore_ascii_case("STR_TO_DATE"))
+        {
+            // STR_TO_DATE's precision is determined by its format, not by
+            // the fact that the evaluator represents temporal values as text.
+            let Some(Expr::Value(SqlValue::SingleQuotedString(format))) =
+                function_argument(function, 1)
+            else {
+                return 6;
+            };
+            let mut chars = format.chars();
+            while let Some(character) = chars.next() {
+                if character == '%' && chars.next() == Some('f') {
+                    return 6;
+                }
+            }
+            return 0;
+        }
+        let input = self.expression_metadata(select, argument, String::new(), first_row);
+        if numeric_type_rank(input.column_type) > 0
+            || matches!(
+                input.column_type,
+                MysqlColumnType::Date
+                    | MysqlColumnType::Time
+                    | MysqlColumnType::DateTime
+                    | MysqlColumnType::Timestamp
+            )
+        {
+            return input.decimals.min(6);
+        }
+        if let Expr::Value(
+            SqlValue::SingleQuotedString(text) | SqlValue::DoubleQuotedString(text),
+        ) = argument
+        {
+            return text.split_once('.').map_or(0, |(_, fraction)| {
+                fraction.bytes().take_while(u8::is_ascii_digit).count().min(6) as u8
+            });
+        }
+        if predicate_columns_available(argument, &Map::new()) {
+            return 0;
+        }
+        // Column-dependent text reserves six digits independently of its rows.
+        6
     }
 
     fn resolve_expression_column(
@@ -6581,6 +6645,21 @@ fn numeric_type_rank(type_: MysqlColumnType) -> u8 {
         MysqlColumnType::Decimal => 2,
         MysqlColumnType::Float | MysqlColumnType::Double => 3,
         _ => 0,
+    }
+}
+
+fn function_argument(function: &sqlparser::ast::Function, index: usize) -> Option<&Expr> {
+    let FunctionArguments::List(arguments) = &function.args else {
+        return None;
+    };
+    let argument = match arguments.args.get(index)? {
+        FunctionArg::Named { arg, .. }
+        | FunctionArg::ExprNamed { arg, .. }
+        | FunctionArg::Unnamed(arg) => arg,
+    };
+    match argument {
+        FunctionArgExpr::Expr(expr) => Some(expr),
+        FunctionArgExpr::Wildcard | FunctionArgExpr::QualifiedWildcard(_) => None,
     }
 }
 
