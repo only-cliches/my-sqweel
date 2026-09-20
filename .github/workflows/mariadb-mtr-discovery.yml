@@ -119,12 +119,17 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             ca-certificates \
             curl \
+            libconfig-inifiles-perl \
+            libedit2 \
+            libncurses6 \
             libnuma1 \
             libpcre2-8-0 \
             libpcre2-posix3 \
             libpmem1 \
             libssl3t64 \
+            libtinfo6 \
             liburing2 \
+            mysql-common \
             perl \
             zlib1g
       - name: Restore pinned MariaDB MTR packages
