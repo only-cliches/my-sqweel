@@ -11,6 +11,13 @@ on:
       - tools/mariadb_mtr_derived.py
       - tools/mariadb_mtr_discover.py
       - tools/mariadb_mtr_discover_core.py
+      - tools/mariadb_mtr_plan.py
+      - tools/mariadb_mtr_testing.py
+      - tools/mariadb_mtr_scope.py
+      - tests/test_mariadb_mtr_plan.py
+      - tests/test_mariadb_mtr_scope.py
+      - tests/test_mariadb_mtr_testing.py
+      - tests/mariadb-mtr-scope-reviews.json
       - tools/prepare_mariadb_mtr.sh
       - tests/mariadb-mtr-allowlist.txt
       - tests/mariadb-mtr-derived.json
@@ -33,7 +40,13 @@ on:
       - tools/mariadb_mtr_derived.py
       - tools/mariadb_mtr_discover.py
       - tools/mariadb_mtr_discover_core.py
-      - tools/prepare_mariadb_mtr.sh
+      - tools/mariadb_mtr_plan.py
+      - tools/mariadb_mtr_testing.py
+      - tools/mariadb_mtr_scope.py
+      - tests/test_mariadb_mtr_plan.py
+      - tests/test_mariadb_mtr_scope.py
+      - tests/test_mariadb_mtr_testing.py
+      - tests/mariadb-mtr-scope-reviews.json
       - tests/mariadb-mtr-allowlist.txt
       - tests/mariadb-mtr-derived.json
       - tests/mariadb-mtr-scope.txt
@@ -58,7 +71,7 @@ env:
 
 jobs:
   audit:
-    name: Audit all in-scope upstream MTR candidates
+    name: Account for every upstream MTR file
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 180
     services:
@@ -123,8 +136,8 @@ jobs:
           source "$RUNNER_TEMP/mariadb-mtr.env"
           python3 tools/mariadb_mtr_discover.py \
             --suite-root "$MARIADB_MTR_ROOT" \
-            --output-dir artifacts/mariadb-mtr-discovery \
             --scope all \
+            --output-dir artifacts/mariadb-mtr-discovery \
             --offset 0 \
             --limit 100000 \
             --max-statements 100000 \
@@ -132,9 +145,16 @@ jobs:
             --mtr-layout mariadb \
             --baseline-label MariaDB \
             --source-revision "$MARIADB_MTR_REVISION"
+      - name: Verify exhaustive testing plan integrity
+        run: |
+          set -euo pipefail
+          python3 tools/mariadb_mtr_plan.py \
+            --inventory artifacts/mariadb-mtr-discovery/mariadb-mtr-discovery.json \
+            --plan artifacts/mariadb-mtr-discovery/mariadb-mtr-testing-plan.json \
+            --report-dir artifacts/mariadb-mtr-discovery/coverage-planning
       - name: Build MySqweel binary
         run: cargo build --locked --bin sqwl
-      - name: Audit every in-scope file against MariaDB and MySqweel
+      - name: Audit runnable complete-file candidates
         id: compatibility-audit
         continue-on-error: true
         run: |
@@ -205,6 +225,17 @@ jobs:
             --case-timeout 300 \
             --skip-mysqweel-after-baseline-failure \
             --minimum-percent 100
+      - name: Generate final MariaDB MTR coverage report
+        if: always()
+        run: |
+          set -euo pipefail
+          python3 tools/mariadb_mtr_plan.py \
+            --inventory artifacts/mariadb-mtr-discovery/mariadb-mtr-discovery.json \
+            --plan artifacts/mariadb-mtr-discovery/mariadb-mtr-testing-plan.json \
+            --report-dir artifacts/mariadb-mtr-discovery/coverage \
+            --complete-report artifacts/mariadb-mtr-discovery/audit/mtr-report.json \
+            --complete-report artifacts/mariadb-mtr-discovery/focused-audit/mtr-report.json \
+            --derived-report artifacts/mariadb-mtr-discovery/derived/mtr-report.json
       - name: Require compatibility audit reports and infrastructure health
         if: always()
         run: |
@@ -237,6 +268,11 @@ jobs:
           set -euo pipefail
           discovery_dir="artifacts/mariadb-mtr-discovery"
           cat "$discovery_dir/mariadb-mtr-discovery.md" >> "$GITHUB_STEP_SUMMARY"
+          if [[ -f "$discovery_dir/coverage/mariadb-mtr-coverage.md" ]]; then
+            cat "$discovery_dir/coverage/mariadb-mtr-coverage.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "The final MariaDB MTR coverage report did not produce a report." >> "$GITHUB_STEP_SUMMARY"
+          fi
           compatibility_report="$discovery_dir/audit/mtr-report.json"
           if [[ -f "$compatibility_report" ]]; then
             coverage_kind="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("coverage_kind", "complete-upstream"))' "$compatibility_report")"
@@ -279,6 +315,11 @@ jobs:
           name: mariadb-mtr-discovery-${{ github.run_number }}
           path: |
             artifacts/mariadb-mtr-discovery/mariadb-mtr-discovery.json
+            artifacts/mariadb-mtr-discovery/mariadb-mtr-testing-plan.json
+            artifacts/mariadb-mtr-discovery/coverage-planning/mariadb-mtr-coverage.json
+            artifacts/mariadb-mtr-discovery/coverage-planning/mariadb-mtr-coverage.md
+            artifacts/mariadb-mtr-discovery/coverage/mariadb-mtr-coverage.json
+            artifacts/mariadb-mtr-discovery/coverage/mariadb-mtr-coverage.md
             artifacts/mariadb-mtr-discovery/mariadb-mtr-discovery.md
             artifacts/mariadb-mtr-discovery/mariadb-mtr-discovery-manifest.txt
             artifacts/mariadb-mtr-discovery/mariadb-mtr-promotion-candidates.txt

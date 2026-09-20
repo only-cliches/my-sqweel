@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Inventory pinned MariaDB MTR tests and build exhaustive or batched audit manifests.
 
-Discovery is intentionally non-gating. It identifies complete upstream files
-that are plausible external-server compatibility candidates, while the strict
-manifest remains limited to cases proven to pass on both MariaDB and MySqweel.
+Every upstream path receives testing intent independently of whether the external
+runner can execute it. Unknown and mixed files remain a required backlog; only
+explicit hash-pinned scope reviews can exempt a file.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ import argparse
 import json
 import re
 from collections import Counter
-from dataclasses import asdict, dataclass, replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 try:
@@ -21,8 +21,12 @@ try:
         sha256_file,
         sql_statement_count,
     )
+    from tools.mariadb_mtr_scope import classify_scope
+    from tools.mariadb_mtr_testing import build_testing_plan
 except ModuleNotFoundError:  # Direct execution adds tools/, not the repository root, to sys.path.
     from mariadb_mtr_core import TEST_NAME, sha256_file, sql_statement_count
+    from mariadb_mtr_scope import classify_scope
+    from mariadb_mtr_testing import build_testing_plan
 
 
 DEPENDENT_DIRECTIVE = re.compile(
@@ -69,7 +73,7 @@ TABLE_PARTITION_OPERATION = re.compile(
     r"\b(?:REORGANIZE|ADD|DROP|COALESCE|EXCHANGE|ANALYZE|CHECK|OPTIMIZE|REPAIR)\s+PARTITION\b|"
     r"\bTRUNCATE\s+(?:TABLE\s+[^\s;(),]+\s+)?PARTITION\b|"
     r"\bREMOVE\s+PARTITIONING\b|"
-    r"\b(?:FROM|JOIN|INTO|UPDATE)\s+[^\s;(),]+\s+PARTITION\s*\(",
+    r"\bPARTITION\s*\(",
     re.IGNORECASE,
 )
 SERVER_CONFIGURATION_SQL = re.compile(
@@ -111,6 +115,7 @@ class DiscoveryCase:
     test_file: str
     result_file: str
     exclusion: str | None
+    project_scope: dict
 
 
 def sql_code(text: str) -> str:
@@ -139,7 +144,7 @@ def sql_code(text: str) -> str:
                     index += 2
                     continue
                 quote = None
-            output.append(" ")
+            output.append("\n" if character == "\n" else " ")
             index += 1
             continue
         if character in ("'", '"', "`"):
@@ -155,9 +160,12 @@ def sql_code(text: str) -> str:
                 end = len(text)
             if executable:
                 body_start = index + (3 if marker == "!" else 4)
-                output.append(sql_code(text[body_start:end]))
+                body = re.sub(r"^\d{5,6}", lambda match: " " * len(match[0]), text[body_start:end])
+                output.append(" " * (body_start - index))
+                output.append(sql_code(body))
+                output.append(" " * (min(len(text), end + 2) - end))
             else:
-                output.append(" " * (end - index + 2))
+                output.append(re.sub(r"[^\n]", " ", text[index:min(len(text), end + 2)]))
             index = min(len(text), end + 2)
             continue
         if character == "#":
@@ -251,9 +259,8 @@ def has_unresolved_dynamic_harness(text: str) -> bool:
 
 def without_mtr_comments(text: str) -> str:
     return "\n".join(
-        line
+        "" if line.lstrip().startswith(("#", "--")) else line
         for line in text.splitlines()
-        if not line.lstrip().startswith(("#", "--"))
     )
 
 
@@ -476,7 +483,8 @@ def discover_cases(
             if include_safe_harness
             else text
         )
-        sql = sql_code(without_mtr_comments(analysis_text))
+        direct_sql = sql_code(without_mtr_comments(text))
+        sql = direct_sql if analysis_text == text else sql_code(without_mtr_comments(analysis_text))
         statements = sql_statement_count(analysis_text)
         reason = exclusion_reason(
             name,
@@ -499,6 +507,7 @@ def discover_cases(
                 test_file=str(test_file),
                 result_file=str(result_file),
                 exclusion=reason,
+                project_scope=classify_scope(direct_sql),
             )
         )
     return apply_duplicate_exclusions(cases)
@@ -528,19 +537,35 @@ def manifest_text(cases: list[DiscoveryCase], revision: str) -> str:
 
 def render_discovery_markdown(report: dict) -> str:
     counts = report["counts"]
+    planned = report["testing_plan_counts"]
     lines = [
         f"# {report['baseline_label']} MTR discovery inventory",
         "",
         f"- Source revision: `{report['source_revision']}`",
         f"- Scope: `{report['scope']}`",
         f"- Test files inspected: {counts['inspected']}",
-        f"- Static audit candidates: {counts['candidates']}",
+        f"- Runnable complete-file candidates: {counts['candidates']}",
         f"- Candidate SQL statements: {counts['candidate_statements']}",
         f"- Tests selected in this batch: {counts['selected']}",
         f"- SQL statements selected in this batch: {counts['selected_statements']}",
         "",
-        "Static candidacy only means a complete file appears viable in external-server mode. "
-        "A case is promotable only after the generated batch passes against both the baseline and MySqweel.",
+        "A runnable candidate is not a passing test. Testing intent is recorded for every "
+        "path in `mariadb-mtr-testing-plan.json`; blocked and unresolved files are not discarded.",
+        "",
+        "## Required testing backlog",
+        "",
+        f"- Required files: {planned['required']}",
+        f"- Ready for complete-file execution: {planned['ready']}",
+        f"- Blocked pending harness, scope review, or derived extraction: {planned['blocked']}",
+        f"- Explicit hash-reviewed scope exemptions: {planned['not_required']}",
+        f"- Files with partial derived scenarios: {planned['partial_derived_files']}",
+        "",
+        "Scope categories: " + ", ".join(
+            f"`{status}`: {count}" for status, count in sorted(planned["scope"].items())
+        ),
+        "",
+        "Enrollment is exhaustive; semantic review and execution coverage are not. "
+        "A directory, harness limitation, or unknown SQL never authorizes an exemption.",
         "",
         "## Candidate test-shape coverage",
         "",
@@ -552,7 +577,7 @@ def render_discovery_markdown(report: dict) -> str:
     lines.extend(
         [
             "",
-            "## Static exclusions",
+            "## Execution filters before reviewed overrides",
             "",
             "| Reason | Tests |",
             "| --- | ---: |",
@@ -574,6 +599,16 @@ def render_discovery_markdown(report: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+def inventory_record(case: DiscoveryCase, suite_root: Path) -> dict:
+    return {
+        "path": Path(case.test_file).relative_to(suite_root / "mysql-test").as_posix(),
+        "name": case.name, "feature": case.feature, "statements": case.statements,
+        "test_sha256": case.test_sha256, "result_sha256": case.result_sha256,
+        "test_file": case.test_file, "result_file": case.result_file,
+        "exclusion": case.exclusion,
+    }
+
+
 def write_inventory(args: argparse.Namespace) -> int:
     suite_root = args.suite_root.resolve()
     output_dir = args.output_dir.resolve()
@@ -585,7 +620,17 @@ def write_inventory(args: argparse.Namespace) -> int:
         args.mtr_layout,
         args.include_safe_harness,
     )
-    candidates = [case for case in cases if case.exclusion is None]
+    complete_manifests = args.complete_manifest
+    if complete_manifests is None:
+        complete_manifests = [
+            Path("tests/mariadb-mtr-allowlist.txt"),
+            Path("tests/mariadb-mtr-scope.txt"),
+            *sorted(Path("tests/query_coverage_mtr").glob("*.txt")),
+        ]
+    testing_plan, candidates = build_testing_plan(
+        suite_root, cases, args.source_revision, args.scope_reviews,
+        complete_manifests, args.derived_manifest, args.scope,
+    )
     selected = rotating_selection(candidates, args.offset, args.limit)
     exclusions = Counter(case.exclusion for case in cases if case.exclusion)
     feature_coverage: dict[str, dict[str, int]] = {}
@@ -594,7 +639,7 @@ def write_inventory(args: argparse.Namespace) -> int:
         coverage["tests"] += 1
         coverage["statements"] += case.statements
     report = {
-        "schema": "my-sqweel.mtr-discovery.v2",
+        "schema": "my-sqweel.mtr-discovery.v3",
         "baseline_label": args.baseline_label,
         "source_revision": args.source_revision,
         "scope": args.scope,
@@ -611,12 +656,16 @@ def write_inventory(args: argparse.Namespace) -> int:
         },
         "exclusions": dict(exclusions),
         "feature_coverage": feature_coverage,
-        "inventory": [asdict(case) for case in cases],
-        "candidates": [asdict(case) for case in candidates],
-        "selected": [asdict(case) for case in selected],
+        "inventory": [inventory_record(case, suite_root) for case in cases],
+        "candidates": [inventory_record(case, suite_root) for case in candidates],
+        "selected": [inventory_record(case, suite_root) for case in selected],
+        "testing_plan_counts": testing_plan["counts"],
     }
     manifest = output_dir / "mariadb-mtr-discovery-manifest.txt"
     manifest.write_text(manifest_text(selected, args.source_revision))
+    (output_dir / "mariadb-mtr-testing-plan.json").write_text(
+        json.dumps(testing_plan, indent=2) + "\n"
+    )
     (output_dir / "mariadb-mtr-discovery.json").write_text(json.dumps(report, indent=2) + "\n")
     markdown = render_discovery_markdown(report)
     (output_dir / "mariadb-mtr-discovery.md").write_text(markdown)
@@ -673,6 +722,10 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--source-revision", default="mariadb-10.11.7-2ubuntu2")
     result.add_argument("--mtr-layout", choices=("mariadb",), default="mariadb")
     result.add_argument("--baseline-label", default="MariaDB")
+    result.add_argument("--scope-reviews", type=Path, default=Path("tests/mariadb-mtr-scope-reviews.json"))
+    result.add_argument("--complete-manifest", type=Path, action="append",
+                        help="reviewed complete manifest; repeat to override the default strict/focused manifests")
+    result.add_argument("--derived-manifest", type=Path, default=Path("tests/mariadb-mtr-derived.json"))
     result.add_argument("--compat-report", type=Path)
     result.add_argument("--promote-manifest", type=Path)
     return result

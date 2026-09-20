@@ -45,6 +45,18 @@ class DiscoveryRegressionTests(unittest.TestCase):
         )
         self.assertTrue(has_table_partition("CREATE TABLE t (id INT) PARTITION BY HASH (id);"))
         self.assertTrue(has_table_partition("ALTER TABLE t DROP PARTITION p0;"))
+        self.assertTrue(has_table_partition("SELECT * FROM `t` PARTITION (p0);"))
+
+    def test_scope_evidence_preserves_lines_across_comments_and_literals(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write_case(root, "main/lines.test", "--echo ignored\n/* comment\nSELECT fake; */\nSELECT 'text\nGRANT fake';\nCREATE TABLE t (id INT);\n")
+            case = discover_cases(root, "all", 100, include_safe_harness=True)[0]
+            query = next(item for item in case.project_scope["evidence"] if item["feature"] == "queries")
+            self.assertEqual(query["line"], 4)
+            ddl = next(item for item in case.project_scope["evidence"] if item["feature"] == "ddl")
+            self.assertEqual(ddl["line"], 6)
+            self.assertFalse(any(item["kind"] == "outside-contract" for item in case.project_scope["evidence"]))
 
     def test_partition_words_in_literals_and_comments_are_ignored_but_executable_comments_remain(self):
         self.assertFalse(

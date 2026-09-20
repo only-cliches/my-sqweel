@@ -433,10 +433,13 @@ upstream-corpus qualification reports separate passing gates from known compatib
   MySqweel passes **26**, with **9 SQL mismatches and 4 unsupported cases**, and no infrastructure
   failures. All fourteen window files recovered from the false `PARTITION BY` exclusion remain in
   [`tests/mariadb-mtr-scope.txt`](tests/mariadb-mtr-scope.txt), including the thirteen that fail.
-- The [discovery workflow](.github/workflows/mariadb-mtr-discovery.yml) accounts for **7,903 files**:
-  **248 static candidates / 16,616 direct and sourced statements**, plus explicit exclusions.
-  Unresolved dynamic SQL and includes are now excluded rather than assumed safe. These counts
-  are not passing tests or an overall SQL-compatibility percentage.
+- The [discovery workflow](.github/workflows/mariadb-mtr-discovery.yml) enrolls all **7,903 files**:
+  **7,901 required for testing**, with only **2 explicitly reviewed, hash-pinned exemptions**.
+  The generated testing plan separates scope, testing intent, execution blockers, and observations:
+  **155 runnable complete-file candidates / 5,207 direct and sourced statements**, and
+  **7,746 blocked files**. Mixed files require derived coverage; uncertain files require scope review.
+  Harness limitations never imply out-of-scope. These are enrollment counts, not passing tests:
+  see the [scope policy and regeneration commands](tests/mariadb-mtr-exclusions.md#automated-discovery).
 - The separate [derived-scenario manifest](tests/mariadb-mtr-derived.json) selects one six-statement
   contiguous block from upstream `func_math`. It passes repeated MariaDB baselines; MySqweel
   consistently stops at unsupported `ACOS`. Derived results never count as complete-file passes.

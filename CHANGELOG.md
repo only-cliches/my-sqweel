@@ -160,6 +160,8 @@ All notable changes to MySqweel will be documented in this file.
 - Retain all fourteen newly exposed window files in the focused audit, including thirteen known MySqweel failures. Add repeatedly passing `win_percent_cume`, `win_std`, and `innodb/innodb_bug57255` to the merged strict gate.
 - Report SQL mismatches, unsupported execution, baseline failures, infrastructure failures, and unexecuted cases separately. Require an actual completed MTR pass, preserve setup-failure reports, and broaden discovery CI triggers to engine and wire changes.
 - Restore six-decimal `UNIX_TIMESTAMP` rendering for dynamic text arguments without deriving precision from the first result row; preserve integer results for whole-second literals and `STR_TO_DATE` formats. Cover empty results and a NULL first row with a regression.
+- Separate upstream semantic scope, required testing intent, harness eligibility, and execution evidence. Enroll all 7,903 inventoried files, retaining 7,901 as required and allowing only two explicitly reviewed, hash-pinned exemptions; keep mixed and unresolved files visible as blocked work.
+- Generate an exhaustive per-path testing plan and validate it in discovery CI. Reject missing entries, stale pins, unreviewed exemptions, missing selected outcomes, and inconsistent reports; bind partial derived observations to their exact source and byte-range provenance without claiming whole-file coverage.
 
 ## 0.4.4 Sep 9, 2026
 

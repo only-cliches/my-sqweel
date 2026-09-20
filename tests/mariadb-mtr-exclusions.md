@@ -7,12 +7,12 @@ of both its `.test` and `.result` files.
 The full MariaDB suite is not the denominator: many files combine supported SQL
 with behavior that MySqweel intentionally does not provide.
 
-| Excluded area | Reason |
+| Whole-file qualification boundary | Reason |
 | --- | --- |
 | Isolation levels other than `REPEATABLE READ`, fine-grained row locking, and XA | Outside the serialized transaction contract. Basic transactions, autocommit, and savepoints are eligible for discovery. |
 | DDL and catalog administration inside active transactions | The transactional backend rejects these operations rather than implicitly committing. |
 | Replication, binary logging, group replication, and NDB | Require server topology or storage engines that MySqweel does not implement. |
-| Users, grants, authentication plugins, and TLS | MySqweel exposes a local development wire endpoint, not MySQL access control. |
+| Full privilege-system behavior, authentication plugins, and TLS | Outside the development provisioning subset. `CREATE/DROP USER`, database-wide DML grants, and `REVOKE ALL PRIVILEGES` remain in scope. |
 | Stored procedures, stored functions, triggers, and events | Outside the supported SQL surface. |
 | Tests whose main path requires stored-function creation (`create`, `func_math`) | The allowlist measures the supported SQL surface, not routines. |
 | File output/removal tests (`distinct`) | MTR file-system side effects are outside the SQL wire compatibility contract. |
@@ -33,10 +33,10 @@ An upstream test is admitted only when all of the following are true:
 4. The manifest pins the exact upstream test and result hashes from Ubuntu
    package revision `1:10.11.7-2ubuntu2`.
 
-An excluded test must not be added merely to improve the percentage. Broad
-files such as `alter_table`, `select_all`, and `func_str` remain excluded even
-when MySqweel supports part of their behavior, because their complete files
-also exercise excluded capabilities.
+A file must not enter the strict gate merely to improve the percentage. Broad
+files such as `alter_table`, `select_all`, and `func_str` can remain outside that
+gate while still being required for testing: mixed files need derived scenarios
+for their relevant SQL. A whole-file execution blocker is not a scope exemption.
 
 ## Current upstream coverage
 
@@ -114,35 +114,85 @@ None of that evidence is represented as a complete upstream-file pass.
 
 ## Automated discovery
 
-The non-gating
-[MariaDB MTR discovery workflow](../.github/workflows/mariadb-mtr-discovery.yml)
-inventories every `.test` path in the pinned MariaDB 10.11.7 distribution. Flat
-suites, plugin trees, helpers, and nested layouts receive explicit inventory
-entries and exclusion reasons; ambiguous execution names are rejected.
-The static audit follows contained literal MTR `source`/`include` files and
-admits safe bookkeeping variables, multiple connections, and asynchronous
-send/reap behavior. Missing or dynamic includes and unresolved dynamic SQL are
-excluded, as are custom delimiters, process/file-system side effects, server
-configuration, topology requirements, and out-of-contract storage behavior.
-Physical table partitions remain excluded, including after an earlier window
-clause; quoted text and ordinary comments do not trigger SQL exclusions, while
-standard and MariaDB executable comments are inspected.
+The [MariaDB MTR discovery workflow](../.github/workflows/mariadb-mtr-discovery.yml)
+inventories every `.test` path in the pinned MariaDB 10.11.7 distribution,
+including flat suites, plugin trees, helpers, and nested layouts.
+`mariadb-mtr-testing-plan.json` has exactly one entry per inventoried path, with
+full test/result hashes and separate `scope` and `testing` records.
 
-The local pinned inventory accounts for all 7,903 paths: 248 static candidates
-and 16,616 direct and sourced statements, plus 7,655 explicitly excluded paths.
-The candidate count is smaller than the previous incomplete inventory because
-unresolved dynamic SQL and includes are no longer assumed safe. Candidacy is
-neither a passing result nor an exhaustive list of supported SQL.
+Enrollment is fail-closed: every file remains required unless an explicit
+out-of-scope review in `tests/mariadb-mtr-scope-reviews.json` matches its current
+hashes and supplies a rationale. Suite names, unsupported harness operations,
+missing results, and inability to execute are never sufficient exemptions.
+The two current exemptions are `main/flush_ssl.test` (TLS certificate reload)
+and `main/plugin_loaderr.test` (plugin startup failures), reviewed against
+MariaDB commit `87e13722a95af5d9378d990caf48cb6874439347`.
 
-Weekly, manual, relevant push, and pull-request runs select every candidate,
-including after SQL-engine, storage, and wire-server changes. MariaDB runs
-first; MySqweel runs only when that baseline passes. The workflow publishes the
-inventory, complete-file audit, focused audit, and separate derived report.
-Reports distinguish pass, SQL mismatch, unsupported/skip, baseline failure,
-infrastructure failure, and not-run outcomes. A pass requires the requested
-case's MTR pass marker, successful exit, and completed-run summary. Missing
-reports, invalid baselines, and infrastructure failures fail CI even though
-ordinary SQL incompatibilities remain non-gating in the discovery workflow.
+| Scope status | Testing intent | Pinned inventory |
+| --- | --- | ---: |
+| `in-scope` | Required complete-file comparison; blocked until executable | 1,432 |
+| `mixed` | Required derived coverage of relevant SQL; extraction remains blocked work | 4,686 |
+| `review-required` | Required semantic review; never silently excluded | 1,783 |
+| `out-of-scope` | Not required, only with a matching explicit review | 2 |
+
+These are conservative automatic scope signals, not 7,903 completed human
+reviews. Evidence records feature families and source line numbers. Unknown SQL
+and unsupported features do not establish that a whole file lacks relevant SQL.
+Existing hash-pinned complete-file manifests provide reviewed overrides;
+test success alone does not determine scope.
+
+The local inventory therefore marks **7,901 files required**, with **155 ready**
+and **7,746 blocked**. The ready set contains **5,207 direct and sourced statements**
+and preserves all 48 distinct files in the strict and focused manifests. The
+previous 248 static candidates plus manually selected `timezone4` are not an
+exhaustive testing plan: 94 of those files now have explicit mixed/uncertain
+scope blockers instead of being automatically queued. They remain required.
+
+Execution eligibility is narrower than scope. The static audit follows contained
+literal MTR includes and permits reviewed bookkeeping, connections, and send/reap
+operations. Dynamic SQL/includes, custom delimiters, filesystem/process effects,
+configuration, topology, and unsupported layouts remain execution blockers.
+Window `PARTITION BY` is not physical table partitioning. Quoted text and ordinary
+comments are masked; executable comments and original evidence line numbers are
+preserved. Old inventory `exclusion` labels describe execution filters only.
+
+Regenerate and validate the exhaustive plan:
+
+```sh
+python3 tools/mariadb_mtr_discover.py \
+  --suite-root "$MARIADB_MTR_ROOT" --scope all --include-safe-harness \
+  --limit 100000 --max-statements 100000 \
+  --source-revision 10.11.7-2ubuntu2 \
+  --output-dir artifacts/mariadb-mtr-discovery
+python3 tools/mariadb_mtr_plan.py \
+  --inventory artifacts/mariadb-mtr-discovery/mariadb-mtr-discovery.json \
+  --plan artifacts/mariadb-mtr-discovery/mariadb-mtr-testing-plan.json \
+  --report-dir artifacts/mariadb-mtr-discovery/coverage-planning
+```
+
+Weekly, manual, relevant push, and pull-request runs select every ready candidate.
+MariaDB runs first; MySqweel runs only when that baseline passes. CI checks exact
+path accounting, pins, reviewed exemptions, candidate selection, and derived
+source bindings before execution. Its final coverage command adds repeatable
+`--complete-report` and `--derived-report` arguments for canonical MTR reports.
+Missing selected outcomes, malformed or stale inputs, invalid baselines, and
+infrastructure failures fail CI. Ordinary SQL incompatibilities remain non-gating.
+
+The final report separates complete-file observations, partial derived
+observations, and unexecuted files. Blocked work remains visibly `blocked`, not
+covered or passed. Markdown gives bounded previews; JSON retains every path.
+A derived observation cannot complete its source file, including when attached
+to a file that still requires a complete comparison or semantic review.
+Planning-only reports say `planning`, never claim execution.
+
+The fresh 155-file local audit contains 4,079 direct statements and records
+36 passes, 50 SQL mismatches, 58 unsupported/skipped outcomes, six baseline
+failures, and five infrastructure outcomes. The 58 include eight MariaDB skips
+and 50 MySqweel unsupported cases. This audit is **invalid**, not a passing gate.
+The accounting report retains 136 completed whole-file comparisons and one
+partial derived observation; 7,764 required files have no completed comparison.
+All 155 selected files have explicit outcomes. Baseline and harness failures
+remain reported rather than being reclassified as scope exemptions.
 
 Promotion output includes only complete files that passed both engines.
 Derived reports are rejected by the promotion command. Review against the

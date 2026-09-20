@@ -1,0 +1,20 @@
+{
+  "schema": "my-sqweel.mtr-scope-reviews.v1",
+  "upstream_revision": "87e13722a95af5d9378d990caf48cb6874439347",
+  "entries": [
+    {
+      "path": "main/flush_ssl.test",
+      "test_sha256": "0868a91f306ed85e820a97d370f8b3e182708ccd6b879082bdc0e023481f2674",
+      "result_sha256": "52a3e00504ece8612830e8326d294a4f3590776c5014930684db72c4428d3bd4",
+      "status": "out-of-scope",
+      "rationale": "Every assertion concerns TLS certificate reload, SSL connection continuity, or SSL counters. The SELECT statements observe TLS state rather than an independent application-SQL scenario; server certificate lifecycle and TLS are outside the project contract."
+    },
+    {
+      "path": "main/plugin_loaderr.test",
+      "test_sha256": "cfaee755b984de858ce7ac7fb32eaba3a4005f4158f689e587d778a9b4e64270",
+      "result_sha256": "7a5ca21444385b3be7515442db40f77ab574c0200ff0f6f96925d3107d001ae8",
+      "status": "out-of-scope",
+      "rationale": "Tests InnoDB plugin startup under invalid server options, plugin load status, and forced plugin startup failure. Its only result query observes that plugin lifecycle; there is no independent relational-data scenario."
+    }
+  ]
+}
