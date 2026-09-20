@@ -47,19 +47,39 @@ jobs:
       mariadb:
         image: mariadb:10.11.7
         env:
-          MARIADB_ROOT_PASSWORD: my-sqweel
+          # Upstream MTR connect directives assume root has no password.
+          MARIADB_ALLOW_EMPTY_ROOT_PASSWORD: "1"
           MARIADB_DATABASE: test
         ports:
-          - 3307:3306
+          - 127.0.0.1:3307:3306
+        volumes:
+          - /tmp/mysqweel-mtr-socket:/run/mysqld
         options: >-
-          --health-cmd="mariadb-admin ping --silent -h 127.0.0.1 -pmy-sqweel"
+          --health-cmd="mariadb-admin ping --silent -h 127.0.0.1"
           --health-interval=5s
           --health-timeout=5s
           --health-retries=30
     env:
-      MARIADB_COMPARE_URL: mysql://root:my-sqweel@127.0.0.1:3307/test
+      MARIADB_COMPARE_URL: mysql://root@localhost/test?socket=/tmp/mysqweel-mtr-socket/mysqld.sock
     steps:
       - uses: actions/checkout@v4
+      - name: Configure upstream MTR baseline
+        env:
+          BASELINE_CONTAINER: ${{ job.services.mariadb.id }}
+        run: |
+          set -euo pipefail
+          docker exec "$BASELINE_CONTAINER" sh -c \
+            'printf "[mariadbd]\nperformance_schema=ON\n" > /etc/mysql/conf.d/mtr.cnf'
+          docker restart "$BASELINE_CONTAINER"
+          for attempt in {1..60}; do
+            if [[ "$(docker exec "$BASELINE_CONTAINER" mariadb --user=root --batch \
+                --skip-column-names --execute='SELECT @@performance_schema' 2>/dev/null)" == 1 ]]; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs "$BASELINE_CONTAINER"
+          exit 1
       - name: Install MariaDB MTR runtime dependencies
         run: |
           sudo apt-get update

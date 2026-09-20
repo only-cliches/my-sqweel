@@ -162,6 +162,8 @@ All notable changes to MySqweel will be documented in this file.
 - Restore six-decimal `UNIX_TIMESTAMP` rendering for dynamic text arguments without deriving precision from the first result row; preserve integer results for whole-second literals and `STR_TO_DATE` formats. Cover empty results and a NULL first row with a regression.
 - Separate upstream semantic scope, required testing intent, harness eligibility, and execution evidence. Enroll all 7,903 inventoried files, retaining 7,901 as required and allowing only two explicitly reviewed, hash-pinned exemptions; keep mixed and unresolved files visible as blocked work.
 - Generate an exhaustive per-path testing plan and validate it in discovery CI. Reject missing entries, stale pins, unreviewed exemptions, missing selected outcomes, and inconsistent reports; bind partial derived observations to their exact source and byte-range provenance without claiming whole-file coverage.
+- Restore native MTR baseline prerequisites in CI: official helper procedures, pinned timezone data, Performance Schema instrumentation, and socket-based `root@localhost` authentication. Keep MTR's empty-password test account confined to disposable services with loopback-only published ports; retain password authentication for feature parity.
+- Classify nested-include mysqltest SQL diagnostics without misreporting unsupported SQL or wrong error codes as infrastructure failures. Keep startup failures and incomplete runs gating, and avoid nondeterministic TCP fallback when MTR's external feature probe receives socket options.
 
 ## 0.4.4 Sep 9, 2026
 

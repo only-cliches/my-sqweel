@@ -58,6 +58,8 @@ for required_file in \
   "$client_bindir/mysqladmin" \
   "$mtr_runner" \
   "$safe_process" \
+  "$suite_root/mysql_test_data_timezone.sql" \
+  "$suite_root/mysql-test/include/mtr_warnings.sql" \
   "$suite_root/mysql-test/main/1st.test" \
   "$suite_root/mysql-test/main/1st.result"; do
   if [[ ! -e "$required_file" ]]; then

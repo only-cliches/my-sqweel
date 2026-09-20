@@ -185,14 +185,24 @@ A derived observation cannot complete its source file, including when attached
 to a file that still requires a complete comparison or semantic review.
 Planning-only reports say `planning`, never claim execution.
 
-The fresh 155-file local audit contains 4,079 direct statements and records
-36 passes, 50 SQL mismatches, 58 unsupported/skipped outcomes, six baseline
-failures, and five infrastructure outcomes. The 58 include eight MariaDB skips
-and 50 MySqweel unsupported cases. This audit is **invalid**, not a passing gate.
-The accounting report retains 136 completed whole-file comparisons and one
-partial derived observation; 7,764 required files have no completed comparison.
-All 155 selected files have explicit outcomes. Baseline and harness failures
-remain reported rather than being reclassified as scope exemptions.
+With native MTR baseline prerequisites restored, the 155-file local audit contains
+4,079 direct statements and records 36 passes, 54 SQL mismatches, and 65
+unsupported/skipped outcomes, with **zero baseline or infrastructure failures**.
+The 65 include eight MariaDB skips and 57 MySqweel unsupported cases.
+The accounting report retains 147 completed whole-file comparisons and one
+partial derived observation; 7,753 required files have no completed comparison.
+All 155 selected files have explicit outcomes. CI integrity and infrastructure
+checks pass; incomplete coverage remains visibly `blocked`, not fully covered.
+
+The disposable baseline loads the official `mtr_warnings.sql` helper procedures
+and `mysql_test_data_timezone.sql` fixture, enables Performance Schema, and uses
+socket authentication as `root@localhost`. Upstream explicit root connections
+require an empty password; only disposable MTR services use that setting, with
+loopback-only published TCP ports. The separate parity service stays passworded.
+This preserves native view definers, metadata instrumentation, and historical
+timezone expectations without modifying upstream tests or their expected output.
+SQL errors inside nested includes retain their SQL classification; missing
+includes, startup errors, and incomplete executions remain infrastructure errors.
 
 Promotion output includes only complete files that passed both engines.
 Derived reports are rejected by the promotion command. Review against the

@@ -107,18 +107,15 @@ class ManifestTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "does not match required"):
                 configure_case_timezone(Server("mysqweel", "mysql://root@localhost/test"), Path("/bin"), Path("/suite"), case)
 
-    def test_same_host_and_port_for_both_servers_is_rejected(self):
-        with self.assertRaisesRegex(ValueError, "same host and port"):
-            validate_distinct_servers(
-                "mysql://root:baseline@127.0.0.1:3306/test",
-                "mysql://root@127.0.0.1:3306/test",
-            )
-
-    def test_separate_mysqweel_server_is_accepted(self):
-        validate_distinct_servers(
-            "mysql://root:baseline@127.0.0.1:3306/test",
-            "mysql://root@127.0.0.1:3307/test",
-        )
+    def test_duplicate_tcp_or_socket_endpoints_are_rejected(self):
+        endpoints = [
+            ("mysql://root:baseline@127.0.0.1:3306/test", "mysql://root@127.0.0.1:3306/other"),
+            ("mysql://root@localhost/test?socket=/tmp/shared.sock",
+             "mysql://root@127.0.0.1/other?socket=/tmp/shared.sock"),
+        ]
+        for baseline, mysqweel in endpoints:
+            with self.subTest(baseline=baseline), self.assertRaises(ValueError):
+                validate_distinct_servers(baseline, mysqweel)
 
     def test_comments_and_duplicates(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -426,6 +423,18 @@ INSERT INTO t1 VALUES ('a;b'), ("c;d"), (`value`);
             ("mysqltest: Result content mismatch", "sql-mismatch"),
             ("mysqltest: At line 2: query 'SELECT 1' succeeded - should have failed "
              "with errno 1235...", "sql-mismatch"),
+            ('mysqltest: In included file "./include/nested.inc": \n'
+             'included from ./include/outer.inc at line 3:\n'
+             'included from /suite/main/sample.test at line 2:\n'
+             "At line 4: query 'SELECT missing_function(1)' failed: "
+             "ER_NOT_SUPPORTED_YET (1235): unsupported SQL function", "unsupported"),
+            ('mysqltest: In included file "./include/nested.inc": \n'
+             'included from /suite/main/sample.test at line 2:\n'
+             "At line 4: query 'SELECT bad_expression' failed with wrong errno "
+             "ER_NOT_SUPPORTED_YET (1235), instead of ER_PARSE_ERROR (1064)", "sql-mismatch"),
+            ('mysqltest: In included file "./include/nested.inc": \n'
+             'included from /suite/main/sample.test at line 2:\n'
+             "At line 4: Could not open include file", None),
             ("mysqltest: At line 3: Could not open include file", None),
             ("Can't locate mysql-test-run.pl", None),
         ]

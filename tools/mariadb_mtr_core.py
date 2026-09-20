@@ -24,7 +24,7 @@ import tempfile
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 
 DEFAULT_ALLOWLIST = Path("tests/mariadb-mtr-allowlist.txt")
@@ -245,7 +245,17 @@ def parse_server_url(url: str) -> dict[str, str]:
         "user": unquote(parsed.username or "root"),
         "password": unquote(parsed.password or ""),
         "database": parsed.path.lstrip("/") or "test",
+        "socket": parse_qs(parsed.query).get("socket", [""])[0],
     }
+
+
+def _client_connection_args(connection: dict[str, str]) -> list[str]:
+    transport = (
+        ["--protocol=SOCKET", f"--socket={connection['socket']}"]
+        if connection["socket"]
+        else ["--protocol=TCP", f"--host={connection['host']}", f"--port={connection['port']}"]
+    )
+    return [f"--user={connection['user']}", f"--password={connection['password']}", *transport]
 
 
 def validate_distinct_servers(baseline_url: str, mysqweel_url: str | None) -> None:
@@ -254,9 +264,14 @@ def validate_distinct_servers(baseline_url: str, mysqweel_url: str | None) -> No
         return
     baseline = parse_server_url(baseline_url)
     mysqweel = parse_server_url(mysqweel_url)
-    if (baseline["host"], baseline["port"]) == (mysqweel["host"], mysqweel["port"]):
+    same_endpoint = (
+        baseline["socket"] == mysqweel["socket"]
+        if baseline["socket"] or mysqweel["socket"]
+        else (baseline["host"], baseline["port"]) == (mysqweel["host"], mysqweel["port"])
+    )
+    if same_endpoint:
         raise ValueError(
-            "--baseline-url and --mysqweel-url point to the same host and port; "
+            "--baseline-url and --mysqweel-url point to the same endpoint; "
             "use --mysqweel-bin or a separately running MySqweel server"
         )
 
@@ -317,7 +332,9 @@ def free_port(host: str) -> int:
         return int(sock.getsockname()[1])
 
 
-def ensure_mtr_database(server: Server, client_bindir: Path, mariadb: bool = False) -> None:
+def ensure_mtr_database(
+    server: Server, client_bindir: Path, suite_root: Path, mariadb: bool = False
+) -> None:
     connection = parse_server_url(server.url)
     mysql = client_bindir / "mysql"
     setup_sql = (
@@ -335,6 +352,32 @@ def ensure_mtr_database(server: Server, client_bindir: Path, mariadb: bool = Fal
             "SET GLOBAL character_set_server = 'latin1'; "
             "SET GLOBAL collation_server = 'latin1_swedish_ci'; "
         )
+        # Use the same helper procedures and frozen timezone data as native MTR.
+        # Its bootstrap parser strips whole-line comments and the old delimiter
+        # suffix; the mysql client needs those directives normalized too.
+        warnings = suite_root / "mysql-test" / "include" / "mtr_warnings.sql"
+        timezone_paths = (
+            suite_root / "mysql_test_data_timezone.sql",
+            suite_root / "share" / "mysql_test_data_timezone.sql",
+        )
+        timezone_data = next((path for path in timezone_paths if path.is_file()), None)
+        if timezone_data is None:
+            raise FileNotFoundError("pinned MTR mysql_test_data_timezone.sql is missing")
+        warnings_sql = "\n".join(
+            line for line in warnings.read_text().splitlines()
+            if not line.lstrip().startswith("--")
+        ).replace("delimiter ||;", "delimiter ||", 1)
+        setup_sql += (
+            "DROP DATABASE IF EXISTS mtr; CREATE DATABASE mtr CHARACTER SET latin1;\n"
+            "USE mysql;\n"
+        )
+        setup_sql += "".join(
+            f"TRUNCATE TABLE {table};\n" for table in (
+                "time_zone", "time_zone_name", "time_zone_transition",
+                "time_zone_transition_type", "time_zone_leap_second",
+            )
+        )
+        setup_sql += timezone_data.read_text() + "\n" + warnings_sql + "\n"
     if not mariadb:
         setup_sql += (
             "DROP PROCEDURE IF EXISTS mtr.add_suppression; "
@@ -343,15 +386,11 @@ def ensure_mtr_database(server: Server, client_bindir: Path, mariadb: bool = Fal
     command = [
         str(mysql),
         "--no-defaults",
-        f"--user={connection['user']}",
-        f"--password={connection['password']}",
-        f"--host={connection['host']}",
-        f"--port={connection['port']}",
-        "--protocol=TCP",
-        f"--execute={setup_sql}",
+        *_client_connection_args(connection),
     ]
     completed = subprocess.run(
         command,
+        input=setup_sql,
         capture_output=True,
         text=True,
         errors="replace",
@@ -371,11 +410,7 @@ def reset_test_database(server: Server, client_bindir: Path, mariadb: bool = Fal
     base_command = [
         str(client_bindir / "mysql"),
         "--no-defaults",
-        f"--user={connection['user']}",
-        f"--password={connection['password']}",
-        f"--host={connection['host']}",
-        f"--port={connection['port']}",
-        "--protocol=TCP",
+        *_client_connection_args(connection),
     ]
 
     def query(sql: str, tabular: bool = False) -> subprocess.CompletedProcess[str]:
@@ -456,8 +491,16 @@ def mtr_command(
         "--skip-rpl",
         f"--suite={suite}",
     ]
-    for key in ("host", "port", "user", "password", "database"):
+    # MTR iterates external options in hash order. A later --port forces its
+    # feature-probe client back to TCP, even after --protocol=socket.
+    keys = ("user", "password", "database")
+    if not connection["socket"]:
+        keys = ("host", "port", *keys)
+    for key in keys:
         command.append(f"--extern={key}={connection[key]}")
+    command.append(f"--extern=protocol={'socket' if connection['socket'] else 'tcp'}")
+    if connection["socket"]:
+        command.append(f"--extern=socket={connection['socket']}")
     command.append(test)
     return command
 
@@ -529,11 +572,7 @@ def configure_case_timezone(
     command = [
         str(client_bindir / "mysql"),
         "--no-defaults",
-        f"--user={connection['user']}",
-        f"--password={connection['password']}",
-        f"--host={connection['host']}",
-        f"--port={connection['port']}",
-        "--protocol=TCP",
+        *_client_connection_args(connection),
         *(["--batch", "--skip-column-names"] if verify_timezone else []),
         (
             "--execute=SELECT @@time_zone"
@@ -603,7 +642,9 @@ def _is_skip_output(stdout: str, stderr: str, qualified_test: str) -> bool:
 def _sql_failure_kind(text: str) -> str | None:
     """Classify mysqltest diagnostics, not arbitrary runner startup failures."""
     diagnostic = re.search(
-        r"(?ims)^\s*mysqltest:\s*(?:At line \d+:\s*)?"
+        r"(?ims)^\s*mysqltest:\s*"
+        r"(?:In included file[^\n]*\n(?:[ \t]*included from[^\n]*\n)*)?"
+        r"\s*(?:At line \d+:\s*)?"
         r"(?:query(?:\s+'.*?')?\s+(?P<query_result>failed[^\n]*|succeeded[^\n]*)"
         r"|(?P<result>Result (?:content |length )?mismatch))",
         text,
@@ -940,7 +981,7 @@ def run(args: argparse.Namespace) -> int:
                 raise ValueError("--baseline-url or MARIADB_COMPARE_URL is required for the baseline target")
             baseline_server = Server(baseline_name, baseline_url)
             ensure_mtr_database(
-                baseline_server, client_bindir, mariadb=args.mtr_layout == "mariadb"
+                baseline_server, client_bindir, suite_root, mariadb=args.mtr_layout == "mariadb"
             )
         if baseline_url:
             validate_distinct_servers(baseline_url, args.mysqweel_url)

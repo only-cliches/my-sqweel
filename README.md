@@ -450,6 +450,13 @@ recorded in `mariadb-test-run.json`. Complete-file tests and expected results re
 Derived execution stages exact byte ranges with full-file hashes and immutable source provenance;
 it does not edit installed upstream files or weaken expected results. The test client is unchanged.
 
+MTR targets must be disposable: baseline setup replaces the `mtr` helper schema and timezone
+tables with the pinned upstream fixtures. CI enables native MTR's Performance Schema defaults
+and connects through a mounted Unix socket, preserving `root@localhost` view definers and the
+empty-password root connections used by upstream tests. Its published TCP port is loopback-only;
+the separate feature-parity job retains password authentication. External URLs accept
+`?socket=/absolute/path/to/mariadb.sock`; TCP remains the default when no socket is supplied.
+
 Percentages describe only their versioned test scope, not the entire MariaDB grammar. Every
 reported edge case should become a regression case before its implementation is changed.
 
