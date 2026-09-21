@@ -193,6 +193,7 @@ All notable changes to MySqweel will be documented in this file.
 - Added the minimized GitHub-attributed `MOD` decimal-metadata regression; MariaDB 10.11.7 and MySqweel now both return `1.80` with `MYSQL_TYPE_NEWDECIMAL` across repeated fresh differential runs.
 - Added GitHub-attributed `DAYOFMONTH` coverage from [svetasmirnova/mysqlcookbook](https://github.com/svetasmirnova/mysqlcookbook/blob/77a51ec49062d4853106ec0c242d44f965422501/recipes/dates/date.sql) for an independently authored billing-calendar audit covering leap-February and thirty-day month-end derivation, date arithmetic, and NULL propagation; fixed `DATE_ADD`/`DATE_SUB` result metadata for DATE and string-like inputs to match MariaDB 10.11.7.
 - Added the minimized GitHub-attributed `DAYOFMONTH` mixed-row metadata regression; MariaDB 10.11.7 and MySqweel now agree on month-end values and `MYSQL_TYPE_STRING` metadata across repeated fresh differential runs.
+- Added GitHub-attributed `BIT_COUNT`/`BIT_OR` coverage from [jk983294/CommonScript](https://github.com/jk983294/CommonScript/blob/4589db3c9d31174aebaaa1f8613e0db1c2a62dd2/db/mysql/select.sql#L56-L64) for an independently authored attendance-day audit covering duplicate day positions, nested bit aggregation, grouping, and NULL propagation; translated the source's `1 << day` notation to equivalent `POW(2, day)` because MySqweel's parser rejects the shift operator, and MariaDB 10.11.7 and MySqweel matched across repeated fresh differential runs without a source fix or minimized regression.
 
 ### Upstream corpus coverage
 
