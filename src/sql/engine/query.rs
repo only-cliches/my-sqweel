@@ -1729,7 +1729,7 @@ impl RawEngine {
                             _ => MysqlColumnType::Char,
                         }
                     }
-                    "FIELD" | "FIND_IN_SET" | "BIT_COUNT" => MysqlColumnType::Integer,
+                    "FIELD" | "FIND_IN_SET" | "BIT_COUNT" | "INSTR" => MysqlColumnType::Integer,
                     "YEAR" | "MONTH" | "DAY" | "DAYOFMONTH" | "DAYOFWEEK" | "WEEKDAY"
                     | "DAYOFYEAR" | "YEARWEEK" | "WEEKOFYEAR" | "QUARTER" | "HOUR" | "MINUTE"
                     | "SECOND" | "MICROSECOND" => MysqlColumnType::Integer,

@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "id": "instr_message_offsets_minimized",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "DataLinkDC/dinky",
+      "commit": "63b5a5aa2438a4c30efd1067da8aedf844951143",
+      "path": "script/sql/dinky-mysql.sql",
+      "url": "https://github.com/DataLinkDC/dinky/blob/63b5a5aa2438a4c30efd1067da8aedf844951143/script/sql/dinky-mysql.sql",
+      "sha256": "a0196e96dc23e80c96b8fd054d80ffb17d205cfdf44a98f7997233d9329f736d",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "script/sql/dinky-mysql.sql:533",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "INSTR returns the one-based first-match position of a needle in a string.",
+      "mysql_mariadb_translation": "Reduced to one independently authored scalar INSTR projection with an exact match, isolating the MariaDB integer result metadata from table setup, NULL handling, empty needles, and multibyte text."
+    },
+    "independently_authored": true,
+    "minimized_from": "instr_message_offsets"
+  },
+  "features": ["instr", "integer-metadata", "scalar-expression"],
+  "fixture_notes": "The fixed sentence contains INC-482 after ten preceding characters, isolating the one-based integer position contract.",
+  "determinism_notes": "The scalar strings are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "steps": [
+    {
+      "sql": "SELECT INSTR('Escalated INC-482 to review', 'INC-482') AS first_offset",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}

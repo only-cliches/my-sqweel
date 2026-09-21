@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "instr_message_offsets",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "DataLinkDC/dinky",
+      "commit": "63b5a5aa2438a4c30efd1067da8aedf844951143",
+      "path": "script/sql/dinky-mysql.sql",
+      "url": "https://github.com/DataLinkDC/dinky/blob/63b5a5aa2438a4c30efd1067da8aedf844951143/script/sql/dinky-mysql.sql",
+      "sha256": "a0196e96dc23e80c96b8fd054d80ffb17d205cfdf44a98f7997233d9329f736d",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "script/sql/dinky-mysql.sql:533",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL function catalog documents INSTR as a one-based search for the first occurrence of one string inside another, with NULL propagation when an argument is absent.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored message-offset report. Fixed messages locate an incident token, a repeated token, an empty needle, a missing token, a multibyte token, and SQL NULL; the source catalog row and values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["instr", "one-based-position", "empty-needle", "multibyte-text", "null-propagation", "deterministic-order"],
+  "fixture_notes": "Message 401 locates INC-482, 402 finds the first repeated token, 403 exercises an empty needle, 404 has no match, 405 locates a Greek token by character position, and 406 has NULL text.",
+  "determinism_notes": "Message IDs and text are fixed, and output is ordered by the primary key with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE message_offsets (message_id INT PRIMARY KEY, message_text VARCHAR(128) CHARACTER SET utf8mb4 NULL, needle VARCHAR(32) CHARACTER SET utf8mb4 NULL)",
+    "INSERT INTO message_offsets VALUES (401, 'Escalated INC-482 to the database team', 'INC-482'), (402, 'retry retry accepted', 'retry'), (403, 'empty needle remains defined', ''), (404, 'ordinary maintenance window', 'INC-999'), (405, 'prefix Ωmega marker', 'Ωmega'), (406, NULL, 'missing')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT message_id, needle, INSTR(message_text, needle) AS first_offset, CASE WHEN message_text IS NULL THEN 'missing-text' WHEN needle = '' THEN 'empty-needle' WHEN INSTR(message_text, needle) = 0 THEN 'not-found' ELSE 'found' END AS offset_class FROM message_offsets ORDER BY message_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT message_id, message_text, needle FROM message_offsets ORDER BY message_id",
+      "ordered": true
+    }
+  ]
+}
