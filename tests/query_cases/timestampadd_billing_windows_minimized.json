@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "id": "timestampadd_billing_windows_minimized",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "DataLinkDC/dinky",
+      "commit": "63b5a5aa2438a4c30efd1067da8aedf844951143",
+      "path": "script/sql/dinky-mysql.sql",
+      "url": "https://github.com/DataLinkDC/dinky/blob/63b5a5aa2438a4c30efd1067da8aedf844951143/script/sql/dinky-mysql.sql",
+      "sha256": "a0196e96dc23e80c96b8fd054d80ffb17d205cfdf44a98f7997233d9329f736d",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "script/sql/dinky-mysql.sql:569",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "TIMESTAMPADD applies a signed calendar interval to a time point and returns a date-time value.",
+      "mysql_mariadb_translation": "Reduced to one independently authored month-end scalar projection, isolating TIMESTAMPADD's MariaDB DATETIME result metadata from table setup, multiple units, and NULL propagation."
+    },
+    "independently_authored": true,
+    "minimized_from": "timestampadd_billing_windows"
+  },
+  "features": ["timestampadd", "datetime-metadata", "month-end-rollover"],
+  "fixture_notes": "One fixed January 31 timestamp and one-month interval isolate both calendar clamping and the returned DATETIME type.",
+  "determinism_notes": "The scalar timestamp and interval are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "steps": [
+    {
+      "sql": "SELECT TIMESTAMPADD(MONTH, 1, '2024-01-31 09:15:00') AS month_window",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}

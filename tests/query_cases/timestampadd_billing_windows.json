@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "timestampadd_billing_windows",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "DataLinkDC/dinky",
+      "commit": "63b5a5aa2438a4c30efd1067da8aedf844951143",
+      "path": "script/sql/dinky-mysql.sql",
+      "url": "https://github.com/DataLinkDC/dinky/blob/63b5a5aa2438a4c30efd1067da8aedf844951143/script/sql/dinky-mysql.sql",
+      "sha256": "a0196e96dc23e80c96b8fd054d80ffb17d205cfdf44a98f7997233d9329f736d",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "script/sql/dinky-mysql.sql:569",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL function catalog documents TIMESTAMPADD as a signed interval operation over a time point, with units including day, week, month, quarter, and year.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored billing-window report. Fixed invoice anchors apply month, day, and year offsets, including a leap-day year transition and a NULL timestamp; the source catalog schema, rows, and values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["timestampadd", "calendar-month-rollover", "leap-day", "negative-interval", "null-propagation", "deterministic-order"],
+  "fixture_notes": "Invoice 201 starts on January 31 and exercises month-end clamping; invoice 202 starts on leap day and exercises year rollover; invoice 203 applies a negative day offset; invoice 204 preserves NULL input.",
+  "determinism_notes": "Invoice IDs and timestamps are fixed, and output is ordered by the primary key with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE billing_windows (invoice_id INT PRIMARY KEY, base_at DATETIME NULL, month_shift INT NOT NULL, day_shift INT NOT NULL, year_shift INT NOT NULL)",
+    "INSERT INTO billing_windows VALUES (201, '2024-01-31 09:15:00', 1, -3, 0), (202, '2024-02-29 12:00:00', 0, 0, 1), (203, '2026-05-11 08:30:00', 0, -10, 0), (204, NULL, 2, 5, 1)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT invoice_id, base_at, TIMESTAMPADD(MONTH, month_shift, base_at) AS month_window, TIMESTAMPADD(DAY, day_shift, base_at) AS day_window, TIMESTAMPADD(YEAR, year_shift, base_at) AS year_window FROM billing_windows ORDER BY invoice_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT invoice_id, base_at, month_shift, day_shift, year_shift FROM billing_windows ORDER BY invoice_id",
+      "ordered": true
+    }
+  ]
+}

@@ -1706,6 +1706,29 @@ impl RawEngine {
                     }
                     "NOW" | "CURRENT_TIMESTAMP" | "FROM_UNIXTIME" => MysqlColumnType::DateTime,
                     "DATE_ADD" | "DATE_SUB" | "ADDDATE" | "SUBDATE" => MysqlColumnType::DateTime,
+                    "TIMESTAMPADD" => {
+                        let datetime_type = function_arguments(function)
+                            .ok()
+                            .and_then(|arguments| arguments.get(2).cloned().flatten())
+                            .map(|argument| {
+                                self.expression_metadata(
+                                    select,
+                                    &argument,
+                                    String::new(),
+                                    first_row,
+                                )
+                                .column_type
+                            });
+                        match datetime_type {
+                            Some(
+                                MysqlColumnType::Date
+                                | MysqlColumnType::Time
+                                | MysqlColumnType::DateTime
+                                | MysqlColumnType::Timestamp,
+                            ) => MysqlColumnType::DateTime,
+                            _ => MysqlColumnType::Char,
+                        }
+                    }
                     "FIELD" | "FIND_IN_SET" | "BIT_COUNT" => MysqlColumnType::Integer,
                     "YEAR" | "MONTH" | "DAY" | "DAYOFMONTH" | "DAYOFWEEK" | "WEEKDAY"
                     | "DAYOFYEAR" | "YEARWEEK" | "WEEKOFYEAR" | "QUARTER" | "HOUR" | "MINUTE"
