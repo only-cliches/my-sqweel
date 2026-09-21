@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "json_search_role_cleanup",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "composer/packagist",
+      "commit": "ab32b23d8a3c6b6c48e6776b0cf117700a08e003",
+      "path": "migrations/2026_06_user_frozen.sql",
+      "url": "https://github.com/composer/packagist/blob/ab32b23d8a3c6b6c48e6776b0cf117700a08e003/migrations/2026_06_user_frozen.sql",
+      "sha256": "b18f3bfa5355b4b0c418bb0c1f4e46b9cd5ddf26f47d8e3d84c4f9c49fec3bb0",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "migrations/2026_06_user_frozen.sql:12-13",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A migration finds a matching JSON array element with JSON_SEARCH, removes its path with JSON_REMOVE, and guards the update with JSON_CONTAINS.",
+      "mysql_mariadb_translation": "Retained the guarded JSON_SEARCH-to-JSON_REMOVE update composition, but authored a new account-role registry, fixed role arrays, freeze labels, and ordered final-state report. The source user table, role purpose, and migration values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["json-search", "json-remove", "json-contains", "json-array-update", "final-state-check", "deterministic-order"],
+  "fixture_notes": "Account 31 has ROLE_SPAMMER and loses only that array element while receiving a spam freeze reason. Accounts 32 and 33 do not match and remain unchanged. The report checks role counts, remaining first roles, spam membership, and freeze state.",
+  "determinism_notes": "Account IDs, role arrays, labels, and ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE account_role_state (account_id INT PRIMARY KEY, account_name VARCHAR(24) NOT NULL, roles JSON NOT NULL, freeze_reason VARCHAR(16) NULL)",
+    "INSERT INTO account_role_state VALUES (31, 'legacy-bot', '[\"ROLE_READER\",\"ROLE_SPAMMER\"]', NULL), (32, 'maintainer', '[\"ROLE_READER\",\"ROLE_ADMIN\"]', NULL), (33, 'new-user', '[]', NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE account_role_state SET freeze_reason = 'spam', roles = JSON_REMOVE(roles, JSON_UNQUOTE(JSON_SEARCH(roles, 'one', 'ROLE_SPAMMER'))) WHERE JSON_CONTAINS(roles, '\"ROLE_SPAMMER\"')",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT account_id, account_name, JSON_LENGTH(roles) AS role_count, JSON_UNQUOTE(JSON_EXTRACT(roles, '$[0]')) AS first_role, JSON_CONTAINS(roles, '\"ROLE_SPAMMER\"') AS still_spammer, freeze_reason FROM account_role_state ORDER BY account_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT account_id, account_name, roles, freeze_reason FROM account_role_state ORDER BY account_id",
+      "ordered": true
+    }
+  ]
+}

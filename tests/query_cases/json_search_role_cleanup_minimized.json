@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "id": "json_search_role_cleanup_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "composer/packagist",
+      "commit": "ab32b23d8a3c6b6c48e6776b0cf117700a08e003",
+      "path": "migrations/2026_06_user_frozen.sql",
+      "url": "https://github.com/composer/packagist/blob/ab32b23d8a3c6b6c48e6776b0cf117700a08e003/migrations/2026_06_user_frozen.sql",
+      "sha256": "b18f3bfa5355b4b0c418bb0c1f4e46b9cd5ddf26f47d8e3d84c4f9c49fec3bb0",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "migrations/2026_06_user_frozen.sql:12-13",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A scalar JSON_CONTAINS predicate reports whether a JSON array contains one role value.",
+      "mysql_mariadb_translation": "Reduced to one independently authored JSON_CONTAINS scalar projection over a fixed role array, removing the update, JSON_SEARCH, JSON_REMOVE, table, and final-state report while retaining the integer metadata contract."
+    },
+    "independently_authored": true,
+    "minimized_from": "json_search_role_cleanup"
+  },
+  "features": ["json-contains", "minimized-regression"],
+  "fixture_notes": "The fixed array contains ROLE_SPAMMER; one scalar predicate isolates JSON_CONTAINS result metadata.",
+  "determinism_notes": "The JSON literals are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT JSON_CONTAINS('[\"ROLE_READER\",\"ROLE_SPAMMER\"]', '\"ROLE_SPAMMER\"') AS has_role",
+      "ordered": true
+    }
+  ]
+}
