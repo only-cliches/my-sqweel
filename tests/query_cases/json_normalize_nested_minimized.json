@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "json_normalize_nested_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "json_normalize_document_audit",
+    "source": {
+      "kind": "github",
+      "repository": "markddrake/YADAMU---Yet-Another-DAta-Migration-Utility",
+      "commit": "8aff53691beaf2722feb9f522e5f1b7af884ef3e",
+      "path": "src/sql/mariadb/YADAMU_COMPARE_10_7.sql",
+      "url": "https://github.com/markddrake/YADAMU---Yet-Another-DAta-Migration-Utility/blob/8aff53691beaf2722feb9f522e5f1b7af884ef3e/src/sql/mariadb/YADAMU_COMPARE_10_7.sql",
+      "sha256": "517430217edcfa00282895bdc5fe82c9be652083e6420f9e41174349b694132f",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "src/sql/mariadb/YADAMU_COMPARE_10_7.sql:382",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB comparison expression normalizes JSON documents and their nested values before comparison.",
+      "mysql_mariadb_translation": "Reduced to one independently authored JSON column, one nested JSON_EXTRACT path, and one JSON_NORMALIZE projection; unrelated document rows and outer report columns are removed while nested extraction and result metadata remain observable."
+    },
+    "independently_authored": true,
+    "minimized_from": "json_normalize_document_audit"
+  },
+  "features": ["json-normalize", "json-extract", "nested-json", "metadata-regression", "deterministic-order"],
+  "fixture_notes": "The fixed document contains an array of two objects; normalizing the extracted array must preserve its canonical JSON text and LONG_BLOB metadata.",
+  "determinism_notes": "One fixed primary-key row and one ordered read are used; no clocks, randomness, sleeps, or concurrent connections are involved.",
+  "setup": [
+    "CREATE TABLE nested_normalize_probe (probe_id INT PRIMARY KEY, document_value JSON NOT NULL)",
+    "INSERT INTO nested_normalize_probe VALUES (1, '{\"items\":[{\"z\":0,\"y\":1},{\"z\":2,\"y\":3}]}')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT probe_id, JSON_NORMALIZE(JSON_EXTRACT(document_value, '$.items')) AS normalized_items FROM nested_normalize_probe ORDER BY probe_id",
+      "ordered": true
+    }
+  ]
+}

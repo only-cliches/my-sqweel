@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "json_normalize_document_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "markddrake/YADAMU---Yet-Another-DAta-Migration-Utility",
+      "commit": "8aff53691beaf2722feb9f522e5f1b7af884ef3e",
+      "path": "src/sql/mariadb/YADAMU_COMPARE_10_7.sql",
+      "url": "https://github.com/markddrake/YADAMU---Yet-Another-DAta-Migration-Utility/blob/8aff53691beaf2722feb9f522e5f1b7af884ef3e/src/sql/mariadb/YADAMU_COMPARE_10_7.sql",
+      "sha256": "517430217edcfa00282895bdc5fe82c9be652083e6420f9e41174349b694132f",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "src/sql/mariadb/YADAMU_COMPARE_10_7.sql:382",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB comparison query applies JSON_NORMALIZE to JSON-valued columns before comparing or hashing documents.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored document-canonicalization audit. JSON_NORMALIZE renders stable object-key and nested-array text, JSON_EXTRACT supplies a nested branch for a second normalization, and a SQL NULL document verifies NULL propagation; migration procedures and source schema are excluded."
+    },
+    "independently_authored": true
+  },
+  "features": ["json-normalize", "json-extract", "nested-json", "canonical-object-order", "null-propagation", "deterministic-order"],
+  "fixture_notes": "Document 1301 has two object keys in reverse insertion order, document 1302 nests an array of objects, and document 1303 is SQL NULL. Normalization must produce canonical JSON text and preserve NULL.",
+  "determinism_notes": "Document IDs and JSON values are fixed and ordered by the primary key; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE document_registry (document_id INT PRIMARY KEY, document_label VARCHAR(24) NOT NULL, document_value JSON NULL)",
+    "INSERT INTO document_registry VALUES (1301, 'reordered object', '{\"beta\":2,\"alpha\":1}'), (1302, 'nested array', '{\"items\":[{\"z\":0,\"y\":1},{\"z\":2,\"y\":3}]}'), (1303, 'missing document', NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT document_id, document_label, JSON_NORMALIZE(document_value) AS normalized_document, JSON_NORMALIZE(JSON_EXTRACT(document_value, '$.items')) AS normalized_items FROM document_registry ORDER BY document_id",
+      "ordered": true
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "json_normalize_document_audit_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "json_normalize_document_audit",
+    "source": {
+      "kind": "github",
+      "repository": "markddrake/YADAMU---Yet-Another-DAta-Migration-Utility",
+      "commit": "8aff53691beaf2722feb9f522e5f1b7af884ef3e",
+      "path": "src/sql/mariadb/YADAMU_COMPARE_10_7.sql",
+      "url": "https://github.com/markddrake/YADAMU---Yet-Another-DAta-Migration-Utility/blob/8aff53691beaf2722feb9f522e5f1b7af884ef3e/src/sql/mariadb/YADAMU_COMPARE_10_7.sql",
+      "sha256": "517430217edcfa00282895bdc5fe82c9be652083e6420f9e41174349b694132f",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "src/sql/mariadb/YADAMU_COMPARE_10_7.sql:382",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB comparison expression applies JSON_NORMALIZE directly to a JSON-valued column.",
+      "mysql_mariadb_translation": "Reduced to one independently authored JSON column and one JSON_NORMALIZE projection, removing nested extraction, multiple rows, labels, and unrelated document fields while retaining the result metadata contract."
+    },
+    "independently_authored": true,
+    "minimized_from": "json_normalize_document_audit"
+  },
+  "features": ["json-normalize", "json-column", "metadata-regression", "deterministic-order"],
+  "fixture_notes": "The fixed JSON column contains a two-key object; normalization isolates MariaDB's LONG_BLOB result metadata for JSON_NORMALIZE.",
+  "determinism_notes": "One fixed primary-key row and one ordered read are used; no clocks, randomness, sleeps, or concurrent connections are involved.",
+  "setup": [
+    "CREATE TABLE normalize_probe (probe_id INT PRIMARY KEY, document_value JSON NOT NULL)",
+    "INSERT INTO normalize_probe VALUES (1, '{\"beta\":2,\"alpha\":1}')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT probe_id, JSON_NORMALIZE(document_value) AS normalized_document FROM normalize_probe ORDER BY probe_id",
+      "ordered": true
+    }
+  ]
+}

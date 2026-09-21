@@ -340,30 +340,7 @@ fn eval_json_value_argument(
     if value == Value::Null {
         return Ok(None);
     }
-    let value = match value {
-        Value::String(value) if value.starts_with(MYSQL_BINARY_SENTINEL) => {
-            let hex = value.trim_start_matches(MYSQL_BINARY_SENTINEL);
-            let bytes = hex
-                .as_bytes()
-                .chunks_exact(2)
-                .map(|pair| {
-                    (pair[0] as char).to_digit(16).unwrap_or_default() * 16
-                        + (pair[1] as char).to_digit(16).unwrap_or_default()
-                })
-                .map(|value| value as u8)
-                .collect::<Vec<_>>();
-            let text = String::from_utf8(bytes.clone())
-                .unwrap_or_else(|_| bytes.into_iter().map(char::from).collect());
-            serde_json::from_str::<Value>(&text)
-                .map(mark_json_nulls)
-                .ok()
-        }
-        Value::String(value) => serde_json::from_str::<Value>(&value)
-            .map(mark_json_nulls)
-            .ok(),
-        other => Some(other),
-    };
-    Ok(value)
+    Ok(Some(parse_json_document_value(value)))
 }
 
 fn canonical_json(value: &Value) -> String {
