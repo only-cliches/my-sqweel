@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "adddate_calendar_shifts",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "ipratyaksh21/SQL-DATE-FUNCTIONS",
+      "commit": "8ea192e120929d5c545689a843fd0c48eefd7ed7",
+      "path": "ADDDATE().sql",
+      "url": "https://github.com/ipratyaksh21/SQL-DATE-FUNCTIONS/blob/8ea192e120929d5c545689a843fd0c48eefd7ed7/ADDDATE%28%29.sql",
+      "sha256": "2d4029cb8cddd9d045785d2d1a2595fd8705353b7f6f6dcb732a94358849b830",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "ADDDATE().sql:14-32",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL date-function exercise applies ADDDATE with day, month, year, and hour interval units to a date column.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored release-window audit. Fixed DATETIME anchors exercise day, month, quarter, year, and hour ADDDATE intervals, including month-end clamping and SQL NULL propagation; the source table, rows, aliases, and application purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["adddate", "day-interval", "month-interval", "quarter-interval", "year-interval", "hour-interval", "month-end-clamping", "null-propagation", "deterministic-order"],
+  "fixture_notes": "Release 301 starts on 2024-01-31 so month and quarter additions expose leap-year calendar clamping; release 302 crosses a year boundary; release 303 preserves SQL NULL through every ADDDATE projection.",
+  "determinism_notes": "Release IDs, DATETIME anchors, and interval literals are fixed, and output is ordered by the primary key with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE release_windows (release_id INT PRIMARY KEY, release_label VARCHAR(32) NOT NULL, anchor_at DATETIME NULL)",
+    "INSERT INTO release_windows VALUES (301, 'leap-month-end', '2024-01-31 08:15:00'), (302, 'year-boundary', '2023-12-15 23:45:00'), (303, 'unscheduled', NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT release_id, release_label, anchor_at, ADDDATE(anchor_at, INTERVAL 10 DAY) AS day_shift, ADDDATE(anchor_at, INTERVAL 1 MONTH) AS month_shift, ADDDATE(anchor_at, INTERVAL 1 QUARTER) AS quarter_shift, ADDDATE(anchor_at, INTERVAL 1 YEAR) AS year_shift, ADDDATE(anchor_at, INTERVAL 10 HOUR) AS hour_shift FROM release_windows ORDER BY release_id",
+      "ordered": true
+    }
+  ]
+}
