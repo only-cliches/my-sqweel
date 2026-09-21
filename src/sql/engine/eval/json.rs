@@ -362,7 +362,44 @@ fn eval_json_value_argument(
     if value == Value::Null {
         return Ok(None);
     }
-    Ok(Some(parse_json_document_value(value)))
+    Ok(parse_json_equals_argument(value))
+}
+
+/// `JSON_EQUALS` accepts JSON documents, rather than arbitrary SQL values.
+/// Keep the invalid-document state until this point: `parse_json_document_value`
+/// intentionally retains invalid JSON text for functions that need to operate
+/// on the original SQL value, while MariaDB returns NULL from JSON_EQUALS when
+/// either document is invalid.
+fn parse_json_equals_argument(value: Value) -> Option<Value> {
+    match value {
+        Value::String(value) if value.starts_with(MYSQL_BINARY_SENTINEL) => {
+            let hex = value.trim_start_matches(MYSQL_BINARY_SENTINEL);
+            let bytes = hex
+                .as_bytes()
+                .chunks_exact(2)
+                .map(|pair| {
+                    (pair[0] as char).to_digit(16).unwrap_or_default() * 16
+                        + (pair[1] as char).to_digit(16).unwrap_or_default()
+                })
+                .map(|value| value as u8)
+                .collect::<Vec<_>>();
+            serde_json::from_slice::<Value>(&bytes)
+                .ok()
+                .map(mark_json_nulls)
+        }
+        Value::String(value) if value.starts_with(JSON_EXTRACT_TEXT_SENTINEL) => value
+            .strip_prefix(JSON_EXTRACT_TEXT_SENTINEL)
+            .and_then(|text| serde_json::from_str::<Value>(text).ok())
+            .map(mark_json_nulls),
+        Value::String(value) if value.starts_with(JSON_AGGREGATE_TEXT_SENTINEL) => value
+            .strip_prefix(JSON_AGGREGATE_TEXT_SENTINEL)
+            .and_then(|text| serde_json::from_str::<Value>(text).ok())
+            .map(mark_json_nulls),
+        Value::String(value) => serde_json::from_str::<Value>(&value)
+            .ok()
+            .map(mark_json_nulls),
+        other => Some(other),
+    }
 }
 
 fn canonical_json(value: &Value) -> String {
@@ -1201,12 +1238,11 @@ fn eval_json_mutation_value(
     if value == Value::Null {
         return Ok(Value::Null);
     }
-    if arg
-        .trim_start()
-        .to_ascii_uppercase()
-        .starts_with("JSON_EXTRACT(")
-    {
-        return Ok(parse_json_document_value(value));
+    // JSON_QUERY and JSON_EXTRACT return their document through an internal
+    // text sentinel. Mutation functions consume that as JSON, not as a SQL
+    // string, so an object selected from a recursive CTE remains embedded.
+    if let Some(value) = json_extract_value(&value) {
+        return Ok(value);
     }
     Ok(value)
 }

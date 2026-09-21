@@ -365,6 +365,62 @@ fn json_constructors_preserve_typed_column_values_when_nested() {
 }
 
 #[test]
+fn json_equals_requires_documents_and_recursive_ctes_preserve_json_values() {
+    let engine = Engine::new(EngineConfig::mysql_strict());
+    let equality = engine
+        .execute_sql(
+            "SELECT \
+                JSON_EQUALS('', '') AS empty_values, \
+                JSON_EQUALS('', 1) AS empty_and_number, \
+                JSON_EQUALS(NOW(), NOW()) AS datetimes, \
+                JSON_EQUALS('{\"a\": 1}', '{\"a\":1}') AS equivalent_documents",
+        )
+        .unwrap();
+    let equality = &equality[0].rows[0];
+    assert_eq!(equality.get("empty_values"), Some(&serde_json::Value::Null));
+    assert_eq!(
+        equality.get("empty_and_number"),
+        Some(&serde_json::Value::Null)
+    );
+    assert_eq!(equality.get("datetimes"), Some(&serde_json::Value::Null));
+    assert_eq!(equality.get("equivalent_documents"), Some(&json!(1)));
+
+    let recursive = engine
+        .execute_sql(
+            "WITH RECURSIVE rec_json (step, obj) AS (\
+                SELECT 1, CAST('{\"key\":\"value\"}' AS VARCHAR(1000)) \
+                UNION \
+                SELECT step + 1, JSON_INSERT('{}', '$.obj', JSON_QUERY(obj, '$')) \
+                FROM rec_json WHERE step < 3\
+             ) \
+             SELECT step, obj, JSON_EQUALS(obj, obj) AS equals_self \
+             FROM rec_json ORDER BY step",
+        )
+        .unwrap();
+    let parse_cte_document = |index: usize| {
+        recursive[0].rows[index]
+            .get("obj")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
+    };
+    assert_eq!(parse_cte_document(0), Some(json!({"key": "value"})));
+    assert_eq!(
+        parse_cte_document(1),
+        Some(json!({"obj": {"key": "value"}}))
+    );
+    assert_eq!(
+        parse_cte_document(2),
+        Some(json!({"obj": {"obj": {"key": "value"}}}))
+    );
+    assert!(
+        recursive[0]
+            .rows
+            .iter()
+            .all(|row| row.get("equals_self") == Some(&json!(1)))
+    );
+}
+
+#[test]
 fn evaluates_extended_json_functions() {
     let engine = Engine::new(EngineConfig::mysql_strict());
     let result = engine

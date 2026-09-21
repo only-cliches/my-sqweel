@@ -1403,6 +1403,30 @@ fn recursive_ctes_return_mysql_rows() {
         )
         .expect("recursive CTE should execute");
     assert_eq!(rows, vec![1, 2, 3]);
+
+    let json_rows: Vec<(u32, String, u8)> = conn
+        .query(
+            "WITH RECURSIVE rec_json (step, obj) AS (\
+                SELECT 1, CAST('{\"key\":\"value\"}' AS VARCHAR(1000)) \
+                UNION \
+                SELECT step + 1, JSON_INSERT('{}', '$.obj', JSON_QUERY(obj, '$')) \
+                FROM rec_json WHERE step < 3\
+             ) \
+             SELECT step, obj, JSON_EQUALS(obj, obj) FROM rec_json ORDER BY step",
+        )
+        .expect("recursive JSON CTE should execute");
+    assert_eq!(
+        json_rows,
+        vec![
+            (1, "{\"key\":\"value\"}".to_string(), 1),
+            (2, "{\"obj\": {\"key\": \"value\"}}".to_string(), 1),
+            (
+                3,
+                "{\"obj\": {\"obj\": {\"key\": \"value\"}}}".to_string(),
+                1,
+            ),
+        ]
+    );
 }
 
 #[test]

@@ -7305,6 +7305,7 @@ fn recursive_value_cast(expr: Expr, metadata: &ColumnMetadata) -> Expr {
             }
         }
         MysqlColumnType::Date => sqlparser::ast::DataType::Date,
+        MysqlColumnType::Json => sqlparser::ast::DataType::JSON,
         _ => return expr,
     };
     Expr::Cast {
