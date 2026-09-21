@@ -183,6 +183,8 @@ All notable changes to MySqweel will be documented in this file.
 - Parked the GitHub-attributed `JSON_SCHEMA_VALID`/`JSON_SCHEMA_VALIDATION_REPORT` candidate from [antlr/grammars-v4](https://github.com/antlr/grammars-v4/blob/e356c2fb6dbd60ce4346841f6a2e5578014fadb4/sql/mariadb/examples/fast/dml_select.sql) because MariaDB 10.11.7 returned error 1305 (`42000`, `JSON_SCHEMA_VALIDATION_REPORT` unavailable); the independently authored schema-audit fixture was not retained.
 - Added GitHub-attributed `INSTR` coverage from [DataLinkDC/dinky](https://github.com/DataLinkDC/dinky/blob/63b5a5aa2438a4c30efd1067da8aedf844951143/script/sql/dinky-mysql.sql) for an independently authored message-offset report covering first-match positions, empty needles, missing matches, multibyte text, and NULL propagation; fixed `INSTR` result metadata to match MariaDB's `MYSQL_TYPE_LONG`.
 - Added the minimized GitHub-attributed `INSTR` integer-metadata regression; MariaDB 10.11.7 and MySqweel now agree on scalar and table-backed first-match positions across repeated fresh differential runs.
+- Added GitHub-attributed `JSON_VALID` coverage from [shopware/core](https://github.com/shopware/core/blob/bb5256957bff3ad9ee1336f99be0e1a543a2ab06/schema.sql) for an independently authored payload-ingestion audit covering JSON objects, arrays, scalars, malformed text, empty text, and SQL `NULL`; fixed result metadata to match MariaDB 10.11.7's `MYSQL_TYPE_LONG`.
+- Added the minimized GitHub-attributed `JSON_VALID` integer-metadata regression; MariaDB 10.11.7 and MySqweel now both return `0` with `MYSQL_TYPE_LONG` across repeated fresh differential runs.
 
 ### Upstream corpus coverage
 

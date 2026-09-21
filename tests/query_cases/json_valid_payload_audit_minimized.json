@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "id": "json_valid_payload_audit_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "shopware/core",
+      "commit": "bb5256957bff3ad9ee1336f99be0e1a543a2ab06",
+      "path": "schema.sql",
+      "url": "https://github.com/shopware/core/blob/bb5256957bff3ad9ee1336f99be0e1a543a2ab06/schema.sql",
+      "sha256": "61eafd2a7497393b4e23acc3c2852be2a3cc3b16f37ffcdf25df3e49b5fa528e",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "schema.sql:24-26",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL JSON_VALID predicate returns a numeric validity flag for malformed JSON text.",
+      "mysql_mariadb_translation": "Reduced to one independently authored scalar JSON_VALID projection over malformed text; the application table, schema constraint, and other payload classes are removed while the MariaDB integer metadata contract remains observable."
+    },
+    "independently_authored": true
+  },
+  "features": ["json-valid", "invalid-json", "metadata", "deterministic-order"],
+  "fixture_notes": "The malformed literal must return integer 0 with MariaDB MYSQL_TYPE_LONG metadata.",
+  "determinism_notes": "The input literal is fixed and the single-row result has no clocks, randomness, sleeps, or concurrent connections.",
+  "steps": [
+    {
+      "sql": "SELECT JSON_VALID('{broken') AS invalid_json",
+      "ordered": true
+    }
+  ]
+}

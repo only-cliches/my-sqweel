@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "json_valid_payload_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "shopware/core",
+      "commit": "bb5256957bff3ad9ee1336f99be0e1a543a2ab06",
+      "path": "schema.sql",
+      "url": "https://github.com/shopware/core/blob/bb5256957bff3ad9ee1336f99be0e1a543a2ab06/schema.sql",
+      "sha256": "61eafd2a7497393b4e23acc3c2852be2a3cc3b16f37ffcdf25df3e49b5fa528e",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "schema.sql:24-26",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL schema uses JSON_VALID in a CHECK constraint to reject malformed JSON payloads.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored payload-ingestion audit. Fixed object, array, scalar, malformed, empty, and SQL NULL text values are classified with JSON_VALID, while CASE labels the accepted and rejected states; the source schema, values, names, and application purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["json-valid", "valid-json", "invalid-json", "json-scalars", "null-propagation", "case-classification", "deterministic-order"],
+  "fixture_notes": "Payloads cover an object, array, quoted string, number, JSON null literal, malformed text, empty text, and SQL NULL. JSON_VALID returns 1 for parseable documents, 0 for malformed text, and NULL for SQL NULL; CASE converts those outcomes into explicit audit labels.",
+  "determinism_notes": "Payload IDs and text values are fixed, and output is ordered by the primary key with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE payload_validation (payload_id INT PRIMARY KEY, payload_label VARCHAR(32) NOT NULL, payload_text TEXT NULL)",
+    "INSERT INTO payload_validation VALUES (11, 'object', '{\"enabled\": true, \"limit\": 4}'), (22, 'array', '[\"red\", \"blue\"]'), (33, 'quoted-string', '\"ready\"'), (44, 'number', '17.50'), (55, 'json-null', 'null'), (66, 'malformed', '{broken'), (77, 'empty', ''), (88, 'sql-null', NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT payload_id, payload_label, JSON_VALID(payload_text) AS is_valid, CASE WHEN JSON_VALID(payload_text) IS NULL THEN 'missing' WHEN JSON_VALID(payload_text) = 1 THEN 'accepted' ELSE 'rejected' END AS validation_state FROM payload_validation ORDER BY payload_id",
+      "ordered": true
+    }
+  ]
+}
