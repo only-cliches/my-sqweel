@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "category_casefold_search",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "intellibitz/intellibitz",
+      "commit": "f6d8f0035a73124c281e9509e864e9b2f86c7278",
+      "path": "db/postgresql/myPgsql.sql",
+      "url": "https://github.com/intellibitz/intellibitz/blob/f6d8f0035a73124c281e9509e864e9b2f86c7278/db/postgresql/myPgsql.sql",
+      "sha256": "dce8e05c97a17a3324f902c0634858ce111257782014805596939d7261999357",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "db/postgresql/myPgsql.sql:305-308",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A PostgreSQL category search uses ILIKE to find a case-insensitive substring in a nullable description column.",
+      "mysql_mariadb_translation": "Translated ILIKE into explicit LOWER(column) LIKE LOWER(pattern) expressions so the fixture does not depend on a database collation. The independently authored report also classifies NULL descriptions separately and retains them alongside matching categories; schema, rows, labels, and reporting purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["case-insensitive-search", "lower-like", "null-preserving-filter", "case-classification", "deterministic-order"],
+  "fixture_notes": "Categories 11, 12, and 15 contain DISCUSS as a case-insensitive substring. Category 14 has a NULL description and is retained as missing, while category 13 is a non-matching description and is excluded. The result distinguishes matching text from NULL without relying on collation behavior.",
+  "determinism_notes": "Category IDs are unique and fixed; the report is ordered by category ID and contains no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE catalog_categories (category_id INT PRIMARY KEY, category_name VARCHAR(32) NOT NULL, description VARCHAR(160) NULL)",
+    "INSERT INTO catalog_categories VALUES (11, 'Compiler', 'Discuss release blockers before the next cut'), (12, 'Language', 'weekly discussion notes'), (13, 'Database', 'Index maintenance agenda'), (14, 'Support', NULL), (15, 'Research', 'DISCUSS experimental query planning')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT category_id, category_name, CASE WHEN description IS NULL THEN 'missing' WHEN LOWER(description) LIKE LOWER('%DISCUSS%') THEN 'match' ELSE 'miss' END AS match_state FROM catalog_categories WHERE description IS NULL OR LOWER(description) LIKE LOWER('%DISCUSS%') ORDER BY category_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT category_id, category_name, description FROM catalog_categories ORDER BY category_id",
+      "ordered": true
+    }
+  ]
+}
