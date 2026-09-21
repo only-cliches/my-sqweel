@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "time_format_shift_labels",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "svetasmirnova/mysqlcookbook",
+      "commit": "77a51ec49062d4853106ec0c242d44f965422501",
+      "path": "recipes/dates/date_rewrite.sql",
+      "url": "https://github.com/svetasmirnova/mysqlcookbook/blob/77a51ec49062d4853106ec0c242d44f965422501/recipes/dates/date_rewrite.sql",
+      "sha256": "b8bf6f14cbb2f526f2eb107404136d47e05079dff72954e3b456d8c1873902d3",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "recipes/dates/date_rewrite.sql:8-9",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL query renders one TIME value through both 12-hour and 24-hour TIME_FORMAT patterns.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored shift-label audit. Fixed early, midday, midnight, fractional-second, and NULL TIME values exercise 24-hour, 12-hour, meridiem, compact clock, and microsecond formatting; the source variables, literal, and purpose are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["time-format", "12-hour-format", "24-hour-format", "microseconds", "null-propagation", "deterministic-order"],
+  "fixture_notes": "Rows cover early morning, afternoon, midnight, a fractional-second late-night time, and a missing shift time. TIME_FORMAT projections remain NULL when the source TIME is NULL.",
+  "determinism_notes": "Shift IDs and TIME values are fixed, and output is ordered by the primary key with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE shift_times (shift_id INT PRIMARY KEY, shift_time TIME(6) NULL, shift_name VARCHAR(32) NOT NULL)",
+    "INSERT INTO shift_times VALUES (901, '05:07:09', 'opening'), (902, '13:47:53', 'afternoon'), (903, '00:00:00', 'midnight'), (904, '23:59:59.123456', 'close'), (905, NULL, 'unassigned')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT shift_id, shift_name, TIME_FORMAT(shift_time, '%H:%i:%s') AS twenty_four_hour, TIME_FORMAT(shift_time, '%h:%i %p') AS twelve_hour, TIME_FORMAT(shift_time, '%r') AS clock_label, TIME_FORMAT(shift_time, '%f') AS microseconds, CASE WHEN shift_time IS NULL THEN 'missing' WHEN HOUR(shift_time) < 12 THEN 'morning' ELSE 'afternoon-or-night' END AS shift_class FROM shift_times ORDER BY shift_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT shift_id, shift_name FROM shift_times ORDER BY shift_id",
+      "ordered": true
+    }
+  ]
+}
