@@ -384,6 +384,11 @@ fn parse_json_equals_argument(value: Value) -> Option<Value> {
                 .map(|value| value as u8)
                 .collect::<Vec<_>>();
             serde_json::from_slice::<Value>(&bytes)
+                .or_else(|_| {
+                    let text = String::from_utf8(bytes.clone())
+                        .unwrap_or_else(|_| bytes.into_iter().map(char::from).collect());
+                    serde_json::from_str::<Value>(&text)
+                })
                 .ok()
                 .map(mark_json_nulls)
         }

@@ -373,7 +373,8 @@ fn json_equals_requires_documents_and_recursive_ctes_preserve_json_values() {
                 JSON_EQUALS('', '') AS empty_values, \
                 JSON_EQUALS('', 1) AS empty_and_number, \
                 JSON_EQUALS(NOW(), NOW()) AS datetimes, \
-                JSON_EQUALS('{\"a\": 1}', '{\"a\":1}') AS equivalent_documents",
+                JSON_EQUALS('{\"a\": 1}', '{\"a\":1}') AS equivalent_documents, \
+                JSON_EQUALS(UNHEX('22CA22'), UNHEX('22C38A22')) AS cross_charset_documents",
         )
         .unwrap();
     let equality = &equality[0].rows[0];
@@ -384,6 +385,7 @@ fn json_equals_requires_documents_and_recursive_ctes_preserve_json_values() {
     );
     assert_eq!(equality.get("datetimes"), Some(&serde_json::Value::Null));
     assert_eq!(equality.get("equivalent_documents"), Some(&json!(1)));
+    assert_eq!(equality.get("cross_charset_documents"), Some(&json!(1)));
 
     let recursive = engine
         .execute_sql(
