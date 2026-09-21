@@ -29,7 +29,15 @@ pub struct TableSchemaHint {
     pub indexes: Vec<IndexHint>,
     #[serde(default)]
     pub foreign_keys: Vec<ForeignKeyHint>,
+    #[serde(default)]
+    pub check_constraints: Vec<CheckConstraintHint>,
     pub updated_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct CheckConstraintHint {
+    pub name: String,
+    pub expression: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]

@@ -37,6 +37,46 @@ impl RawEngine {
         QueryResult::default()
     }
 
+    fn parse_check_constraint_expression(expression: &str) -> Result<Expr> {
+        let mut statements = crate::sql::parse(&format!("SELECT {expression}"))?;
+        let statement = statements
+            .pop()
+            .ok_or_else(|| anyhow!("empty check constraint expression"))?;
+        let Statement::Query(query) = statement else {
+            return Err(anyhow!("invalid check constraint expression"));
+        };
+        let SetExpr::Select(select) = query.body.as_ref() else {
+            return Err(anyhow!("invalid check constraint expression"));
+        };
+        let Some(sqlparser::ast::SelectItem::UnnamedExpr(expr)) = select.projection.first() else {
+            return Err(anyhow!("invalid check constraint expression"));
+        };
+        Ok(expr.clone())
+    }
+
+    fn validate_check_constraints(&self, table: &str, data: &Map<String, Value>) -> Result<()> {
+        let checks = self
+            .schemas
+            .get(table)
+            .map(|schema| schema.check_constraints.clone())
+            .unwrap_or_default();
+        for check in checks {
+            let expression = Self::parse_check_constraint_expression(&check.expression)?;
+            let value = self.eval_expr_ctx(
+                &expression,
+                data,
+                self.last_insert_id.load(AtomicOrdering::Relaxed),
+            )?;
+            if matches!(sql_truth(&value), SqlTruth::False) {
+                return Err(anyhow!(
+                    "check constraint violation on {table}: {}",
+                    check.name
+                ));
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn insert_rows(&self, insert: sqlparser::ast::Insert) -> Result<QueryResult> {
         let table = object_name(&insert.table_name)?;
         let explicit_columns: Vec<String> = insert.columns.into_iter().map(|i| i.value).collect();
@@ -304,6 +344,12 @@ impl RawEngine {
             self.apply_defaults(table, &mut data)?;
             self.apply_generated_columns(table, &mut data)?;
             self.apply_schema_types(table, &mut data)?;
+            if let Err(error) = self.validate_check_constraints(table, &data) {
+                if options.ignore {
+                    continue;
+                }
+                return Err(error);
+            }
             // Validate before taking the table's DashMap write guard. A parent
             // table can hash to the same shard, and trying to read that shard
             // while holding the child guard deadlocks.
@@ -844,6 +890,13 @@ impl RawEngine {
             self.apply_defaults(&table_name, &mut updated_data)?;
             self.apply_generated_columns(&table_name, &mut updated_data)?;
             self.apply_schema_types(&table_name, &mut updated_data)?;
+            if let Err(error) = self.validate_check_constraints(&table_name, &updated_data) {
+                if update_ignore_mode() {
+                    next_rows.insert(old_key.clone(), current_row.clone());
+                    continue;
+                }
+                return Err(error);
+            }
             if let Err(error) = self.validate_foreign_key_row(&table_name, &updated_data) {
                 if update_ignore_mode() {
                     // UPDATE IGNORE leaves rows that would violate a foreign

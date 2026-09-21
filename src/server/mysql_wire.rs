@@ -1045,6 +1045,8 @@ fn mysql_error_kind(message: &str) -> ErrorKind {
         ErrorKind::ER_WRONG_VALUE_COUNT_ON_ROW
     } else if message.contains("referenced row") {
         ErrorKind::ER_ROW_IS_REFERENCED_2
+    } else if message.contains("check constraint violation") {
+        ErrorKind::ER_CHECK_CONSTRAINT_VIOLATED
     } else if message.contains("foreign key constraint fails") {
         ErrorKind::ER_NO_REFERENCED_ROW_2
     } else if message.contains("invalid group function use") {

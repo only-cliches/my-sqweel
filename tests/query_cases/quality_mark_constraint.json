@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "id": "quality_mark_constraint",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "uisky/notabenoid",
+      "commit": "0840a9dd1932f6d254a1c9a022b77fc478afadc4",
+      "path": "init.sql",
+      "url": "https://github.com/uisky/notabenoid/blob/0840a9dd1932f6d254a1c9a022b77fc478afadc4/init.sql",
+      "sha256": "35288fb5b87a81c579016fd40cdafff6f07beec29d50f91cf763fd9f3d3d9a9a",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "init.sql:700",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A table-level CHECK constraint uses ABS to restrict a stored mark to either negative one or positive one.",
+      "mysql_mariadb_translation": "Reauthored as an independent quality-mark ledger. A named CHECK constraint accepts only polarity values -1 and 1, rejects zero with an observable constraint error, and preserves the valid rows for a deterministic final-state read; the source table, names, and values are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "check-constraint",
+    "named-constraint",
+    "abs-expression",
+    "constraint-error",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Quality marks 410 and 411 carry the only accepted polarity values. The attempted zero mark must fail the named CHECK constraint and leave the two valid ledger rows unchanged.",
+  "determinism_notes": "IDs and integer marks are fixed; the invalid insert is isolated and the final read is ordered by the unique quality ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE quality_marks (quality_id INT PRIMARY KEY, subject_label VARCHAR(32) NOT NULL, mark INT NOT NULL, CONSTRAINT quality_mark_polarity CHECK (ABS(mark) = 1))",
+    "INSERT INTO quality_marks VALUES (410, 'alpha', 1), (411, 'beta', -1)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO quality_marks VALUES (412, 'gamma', 0)",
+      "expect_error": true
+    },
+    {
+      "sql": "SELECT quality_id, subject_label, mark FROM quality_marks ORDER BY quality_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT quality_id, subject_label, mark FROM quality_marks ORDER BY quality_id",
+      "ordered": true
+    }
+  ]
+}

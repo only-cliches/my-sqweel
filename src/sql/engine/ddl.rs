@@ -882,6 +882,14 @@ pub(super) fn table_schema_from_create(
                     prefix_lengths: Vec::new(),
                 });
             }
+            TableConstraint::Check { name, expr, .. } => {
+                hint.check_constraints.push(CheckConstraintHint {
+                    name: name
+                        .map(|name| name.value)
+                        .unwrap_or_else(|| format!("{}_check", hint.table)),
+                    expression: expr.to_string(),
+                });
+            }
             _ => {}
         }
         if let Some(foreign_key) = parse_foreign_key_hint(&hint.table, &constraint_text) {

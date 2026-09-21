@@ -1902,13 +1902,16 @@ pub enum ErrorKind {
     ER_SLAVE_HAS_MORE_GTIDS_THAN_MASTER = 1885,
     /// MariaDB: unacceptable combination of window frame bound specifications.
     ER_BAD_COMBINATION_OF_WINDOW_FRAME_BOUND_SPECS = 4014,
+    /// MariaDB: check constraint violated.
+    ER_CHECK_CONSTRAINT_VIOLATED = 4025,
 }
 
 impl From<u16> for ErrorKind {
     fn from(x: u16) -> Self {
         match x {
-            4014_u16 => ErrorKind::ER_BAD_COMBINATION_OF_WINDOW_FRAME_BOUND_SPECS,
             1000_u16 => ErrorKind::ER_HASHCHK,
+            4025_u16 => ErrorKind::ER_CHECK_CONSTRAINT_VIOLATED,
+            4014_u16 => ErrorKind::ER_BAD_COMBINATION_OF_WINDOW_FRAME_BOUND_SPECS,
             1001_u16 => ErrorKind::ER_NISAMCHK,
             1002_u16 => ErrorKind::ER_NO,
             1003_u16 => ErrorKind::ER_YES,
@@ -2876,6 +2879,7 @@ impl ErrorKind {
             | ErrorKind::ER_FOREIGN_DUPLICATE_KEY_WITH_CHILD_INFO
             | ErrorKind::ER_FOREIGN_DUPLICATE_KEY_WITHOUT_CHILD_INFO
             | ErrorKind::ER_DUP_UNKNOWN_IN_INDEX => b"23000",
+            ErrorKind::ER_CHECK_CONSTRAINT_VIOLATED => b"23000",
             ErrorKind::ER_DUP_FIELDNAME => b"42S21",
             ErrorKind::ER_SELECT_REDUCED
             | ErrorKind::ER_WARN_TOO_FEW_RECORDS

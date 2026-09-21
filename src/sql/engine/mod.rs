@@ -23,7 +23,7 @@ use sqlparser::ast::{
 };
 
 use crate::model::StoredRow;
-use crate::schema::{ColumnHint, ForeignKeyHint, IndexHint, TableSchemaHint};
+use crate::schema::{CheckConstraintHint, ColumnHint, ForeignKeyHint, IndexHint, TableSchemaHint};
 use crate::storage::RedisStore;
 
 mod catalog;

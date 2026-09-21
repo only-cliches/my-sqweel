@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "quality_mark_constraint_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "quality_mark_constraint",
+    "source": {
+      "kind": "github",
+      "repository": "uisky/notabenoid",
+      "commit": "0840a9dd1932f6d254a1c9a022b77fc478afadc4",
+      "path": "init.sql",
+      "url": "https://github.com/uisky/notabenoid/blob/0840a9dd1932f6d254a1c9a022b77fc478afadc4/init.sql",
+      "sha256": "35288fb5b87a81c579016fd40cdafff6f07beec29d50f91cf763fd9f3d3d9a9a",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "init.sql:700",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A table-level CHECK constraint uses ABS to restrict a stored mark to either negative one or positive one.",
+      "mysql_mariadb_translation": "Minimized independently authored constraint regression with one valid mark, one rejected zero mark, and one ordered final read; unrelated labels, extra rows, and ledger context are removed while named CHECK enforcement remains observable."
+    },
+    "independently_authored": true,
+    "minimized_from": "quality_mark_constraint"
+  },
+  "features": [
+    "check-constraint",
+    "abs-expression",
+    "constraint-error",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The valid mark remains and the zero mark must be rejected without changing the single stored row.",
+  "determinism_notes": "IDs and marks are fixed; the final read is ordered by the primary key with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE quality_mark (quality_id INT PRIMARY KEY, mark INT NOT NULL, CONSTRAINT quality_mark_polarity CHECK (ABS(mark) = 1))",
+    "INSERT INTO quality_mark VALUES (510, 1)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO quality_mark VALUES (511, 0)",
+      "expect_error": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT quality_id, mark FROM quality_mark ORDER BY quality_id",
+      "ordered": true
+    }
+  ]
+}
