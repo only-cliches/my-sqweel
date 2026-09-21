@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "id": "derived_top_releases",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Lakr233/TreeNewBee",
+      "commit": "3a575a75b2b57346fb1af88d6172713b2fad1df7",
+      "path": "TreeNewBee.sql",
+      "url": "https://github.com/Lakr233/TreeNewBee/blob/3a575a75b2b57346fb1af88d6172713b2fad1df7/TreeNewBee.sql",
+      "sha256": "31267ca264f1e07b15d6ade8b63958c5dcf9cdd296fca5f50a311fdb74ea2612",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "TreeNewBee.sql:34-37",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL script limits an ordered derived-table sample before aggregating the selected values with GROUP_CONCAT in a scalar subquery.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored release shortlist. A derived table applies a fixed launch-wave filter, score ordering, and LIMIT before GROUP_CONCAT serializes the selected release names; random ordering, session variables, source tables, and application labels are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "derived-table",
+    "order-by-limit",
+    "group-concat",
+    "custom-separator",
+    "tie-break-order",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The alpha wave has four candidates; the top three by score are Northwind, Bluebird, and Cedar, with candidate ID breaking the score tie. A beta-wave candidate must be excluded before the limit is applied.",
+  "determinism_notes": "Scores, IDs, wave labels, and the derived ordering are fixed. The aggregate orders by score descending and candidate ID ascending, and all result reads are deterministic without clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE release_candidates (candidate_id INT PRIMARY KEY, release_name VARCHAR(32) NOT NULL, launch_wave VARCHAR(16) NOT NULL, score INT NOT NULL)",
+    "INSERT INTO release_candidates VALUES (101, 'Northwind', 'alpha', 97), (102, 'Bluebird', 'alpha', 97), (103, 'Cedar', 'alpha', 88), (104, 'Delta', 'alpha', 82), (105, 'Echo', 'beta', 99)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT GROUP_CONCAT(release_name ORDER BY score DESC, candidate_id ASC SEPARATOR '|') AS featured_releases FROM (SELECT candidate_id, release_name, score FROM release_candidates WHERE launch_wave = 'alpha' ORDER BY score DESC, candidate_id ASC LIMIT 3) AS shortlist",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT candidate_id, release_name, launch_wave, score FROM release_candidates ORDER BY candidate_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT GROUP_CONCAT(release_name ORDER BY score DESC, candidate_id ASC SEPARATOR '|') AS featured_releases FROM (SELECT candidate_id, release_name, score FROM release_candidates WHERE launch_wave = 'alpha' ORDER BY score DESC, candidate_id ASC LIMIT 3) AS shortlist",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT candidate_id, release_name, launch_wave, score FROM release_candidates ORDER BY candidate_id",
+      "ordered": true
+    }
+  ]
+}
