@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "json_compact_access_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "MariaDB/server",
+      "commit": "45717ef4c736a6a92e0acf49399ce677bfcaea89",
+      "path": "scripts/mariadb_system_tables_fix.sql",
+      "url": "https://github.com/MariaDB/server/blob/45717ef4c736a6a92e0acf49399ce677bfcaea89/scripts/mariadb_system_tables_fix.sql",
+      "sha256": "0986bff7b31c567255411e323c70e8c2c67342f3e0164bb030018da2c7b692a9",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "scripts/mariadb_system_tables_fix.sql:844",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB system-table repair query wraps a JSON_OBJECT result with JSON_COMPACT before returning access metadata.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored access-policy audit. JSON_COMPACT removes insignificant whitespace from stored JSON text and from a generated JSON_OBJECT containing a JSON_ARRAY; system-table repair logic and source values are excluded."
+    },
+    "independently_authored": true
+  },
+  "features": ["json-compact", "json-object", "json-array", "json-column", "whitespace-normalization", "deterministic-order"],
+  "fixture_notes": "Stored policies deliberately contain spaces and newlines around JSON punctuation; generated policies exercise JSON_COMPACT over JSON_OBJECT and JSON_ARRAY. Results must be compact JSON text with MariaDB-compatible metadata.",
+  "determinism_notes": "Policy IDs and JSON values are fixed and ordered by the primary key; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE access_policy_snapshots (snapshot_id INT PRIMARY KEY, policy_label VARCHAR(32) NOT NULL, policy JSON NOT NULL)",
+    "INSERT INTO access_policy_snapshots VALUES (3401, 'editor policy', '{ \"access\" : [ \"read\", \"write\" ], \"enabled\" : true }'), (3402, 'viewer policy', '{\n  \"access\": [\"read\"],\n  \"enabled\": false\n}')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT snapshot_id, policy_label, JSON_COMPACT(policy) AS compact_policy, JSON_COMPACT(JSON_OBJECT('access', JSON_ARRAY('read', 'write'), 'enabled', TRUE)) AS generated_policy FROM access_policy_snapshots ORDER BY snapshot_id",
+      "ordered": true
+    }
+  ]
+}

@@ -4397,6 +4397,7 @@ pub(super) fn eval_function_text(
         "TIME_FORMAT" => eval_time_format(args.first(), args.get(1), data, last_insert_id),
         "JSON_EXTRACT" => eval_json_extract(args.as_slice(), data, last_insert_id),
         "JSON_QUERY" => eval_json_query(args.as_slice(), data, last_insert_id),
+        "JSON_COMPACT" => eval_json_compact(args.first(), data, last_insert_id),
         "JSON_EQUALS" => eval_json_equals(args.first(), args.get(1), data, last_insert_id),
         "JSON_NORMALIZE" => eval_json_normalize(args.first(), data, last_insert_id),
         "JSON_UNQUOTE" => eval_json_unquote(args.first(), data, last_insert_id),

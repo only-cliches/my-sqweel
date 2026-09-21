@@ -56,6 +56,21 @@ pub(super) fn eval_json_query(
     }
 }
 
+pub(super) fn eval_json_compact(
+    arg: Option<&String>,
+    data: &Map<String, Value>,
+    last_insert_id: u64,
+) -> Result<Value> {
+    let Some(arg) = arg else {
+        return Ok(Value::Null);
+    };
+    let value = eval_json_document(arg, data, last_insert_id)?;
+    if value == Value::Null {
+        return Ok(Value::Null);
+    }
+    Ok(Value::String(json_compact_text(&value)?))
+}
+
 pub(super) fn json_text_value(value: Value) -> Result<Value> {
     if matches!(&value, Value::String(value) if is_json_null(value)) {
         return Ok(json_null_value());

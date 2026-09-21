@@ -1824,6 +1824,30 @@ impl RawEngine {
                     "INTERVAL_FUNC" => MysqlColumnType::Integer,
                     "CONV" | "MAKE_SET" | "FORMAT" | "QUOTE" => MysqlColumnType::VarChar,
                     "JSON_DEPTH" | "JSON_LENGTH" => MysqlColumnType::Integer,
+                    "JSON_COMPACT" => {
+                        let argument = function_arguments(function)
+                            .ok()
+                            .and_then(|arguments| arguments.into_iter().next().flatten());
+                        match argument {
+                            Some(Expr::Function(_)) => MysqlColumnType::VarChar,
+                            Some(argument) => {
+                                let argument = self
+                                    .expression_metadata(
+                                        select,
+                                        &argument,
+                                        String::new(),
+                                        first_row,
+                                    )
+                                    .column_type;
+                                if argument == MysqlColumnType::Json {
+                                    MysqlColumnType::LongBlob
+                                } else {
+                                    MysqlColumnType::VarChar
+                                }
+                            }
+                            None => MysqlColumnType::VarChar,
+                        }
+                    }
                     "JSON_PRETTY" | "JSON_QUERY" => {
                         let argument = function_arguments(function)
                             .ok()

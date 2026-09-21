@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "id": "json_compact_access_audit_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "json_compact_access_audit",
+    "source": {
+      "kind": "github",
+      "repository": "MariaDB/server",
+      "commit": "45717ef4c736a6a92e0acf49399ce677bfcaea89",
+      "path": "scripts/mariadb_system_tables_fix.sql",
+      "url": "https://github.com/MariaDB/server/blob/45717ef4c736a6a92e0acf49399ce677bfcaea89/scripts/mariadb_system_tables_fix.sql",
+      "sha256": "0986bff7b31c567255411e323c70e8c2c67342f3e0164bb030018da2c7b692a9",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "scripts/mariadb_system_tables_fix.sql:844",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB system-table repair query applies JSON_COMPACT to a JSON document before returning it.",
+      "mysql_mariadb_translation": "Minimized to one independently authored JSON-column document so compact text and LONG_BLOB metadata are isolated from the original access-policy audit."
+    },
+    "independently_authored": true
+  },
+  "features": ["json-compact", "json-column", "metadata-regression", "deterministic-order"],
+  "fixture_notes": "The fixed JSON document contains insignificant whitespace; JSON_COMPACT must return compact text with MariaDB LONG_BLOB metadata.",
+  "determinism_notes": "One fixed primary-key row is selected in ID order. There are no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE compact_probe (probe_id INT PRIMARY KEY, policy JSON NOT NULL)",
+    "INSERT INTO compact_probe VALUES (1, '{ \"access\" : [ \"read\", \"write\" ], \"enabled\" : true }')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT probe_id, JSON_COMPACT(policy) AS compact_policy FROM compact_probe ORDER BY probe_id",
+      "ordered": true
+    }
+  ]
+}

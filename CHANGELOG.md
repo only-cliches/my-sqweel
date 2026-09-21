@@ -220,6 +220,8 @@ All notable changes to MySqweel will be documented in this file.
 - Added the minimized GitHub-attributed `JSON_EXISTS` nested-path regression; MariaDB 10.11.7 and MySqweel now agree on presence values and `MYSQL_TYPE_LONG` metadata across repeated fresh differential runs.
 - Added GitHub-attributed `JSON_QUERY` coverage from [mariadb-corporation/dev-example-json](https://github.com/mariadb-corporation/dev-example-json/blob/d4a03132d66dc6e4c480e092838d2df4f91f64bd/demos/locations.sql#L57-L57) for an independently authored catalog audit combining nested object and array extraction, scalar-path NULL behavior, missing paths, JSON type inspection, and array length checks; fixed object/array-only JSON_QUERY semantics, compact JSON text, and argument-sensitive `LONG_BLOB` metadata.
 - Added the minimized GitHub-attributed `JSON_QUERY` object-extraction regression; MariaDB 10.11.7 and MySqweel now agree on compact output and metadata across repeated fresh differential runs.
+- Added GitHub-attributed `JSON_COMPACT` coverage from [MariaDB/server](https://github.com/MariaDB/server/blob/45717ef4c736a6a92e0acf49399ce677bfcaea89/scripts/mariadb_system_tables_fix.sql#L844) for an independently authored access-policy audit combining JSON-column whitespace normalization with generated `JSON_OBJECT`/`JSON_ARRAY` compaction; implemented `JSON_COMPACT` evaluation and argument-sensitive metadata matching MariaDB 10.11.7 (`MYSQL_TYPE_LONG_BLOB` for direct JSON columns and `MYSQL_TYPE_VAR_STRING` for nested JSON constructors).
+- Added the minimized GitHub-attributed `JSON_COMPACT` direct-column metadata regression; MariaDB 10.11.7 and MySqweel now agree on compact output and metadata across repeated fresh differential runs.
 
 ### Upstream corpus coverage
 
