@@ -254,6 +254,7 @@ All notable changes to MySqweel will be documented in this file.
 - Added the minimized GitHub-attributed `CHECK` constraint regression; MariaDB 10.11.7 and MySqweel now agree on rejected invalid marks and preserved valid rows across repeated fresh differential runs.
 - Added GitHub-attributed chained-view/window coverage from [SpiderOak/nimbus.io](https://github.com/SpiderOak/nimbus.io/blob/3ce4feef219d1d50e6257a3948a678cba28b42c0/sql/gc.sql#L25-L62) for an independently authored dispatch-priority report combining `CREATE OR REPLACE VIEW`, filtered derived rows, `CASE`, and partitioned `ROW_NUMBER`; fixed recursive view expansion so a view can read from another view, and MariaDB 10.11.7 and MySqweel agree on per-depot ranks and filtered rows.
 - Added the minimized GitHub-attributed chained-view/window regression; MariaDB 10.11.7 and MySqweel now agree across repeated fresh differential runs.
+- Added GitHub-attributed conditional composite-index coverage from [HotPotatoC/twitter-clone](https://github.com/HotPotatoC/twitter-clone/blob/aff41f5512582094c94a7d12ce78554ba658f013/init.sql#L39) for an independently authored dispatch-order schema combining `CREATE INDEX IF NOT EXISTS`, repeated idempotent DDL, composite index-column metadata, and deterministic row verification; MariaDB 10.11.7 and MySqweel agree on the single secondary index and preserved rows across repeated fresh differential runs.
 
 ### Upstream corpus coverage
 

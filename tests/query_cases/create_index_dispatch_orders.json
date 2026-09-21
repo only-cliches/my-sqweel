@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "id": "create_index_dispatch_orders",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "HotPotatoC/twitter-clone",
+      "commit": "aff41f5512582094c94a7d12ce78554ba658f013",
+      "path": "init.sql",
+      "url": "https://github.com/HotPotatoC/twitter-clone/blob/aff41f5512582094c94a7d12ce78554ba658f013/init.sql",
+      "sha256": "875cb500ce4b7b566e59107e28ac3ca7c00209b0dafd52d87a124ddee084265e",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "init.sql:39",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL schema creates a secondary index conditionally with CREATE INDEX IF NOT EXISTS after defining its base table.",
+      "mysql_mariadb_translation": "Reauthored as an independent dispatch-order schema. A composite secondary index covers state, priority, and order ID, the conditional DDL is repeated to exercise idempotence, and information_schema.statistics verifies the resulting index columns without copying the source table or names."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "create-index-if-not-exists",
+    "composite-index",
+    "idempotent-ddl",
+    "information-schema-statistics",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The table's primary key and the new composite dispatch index must both appear in information_schema.statistics. Repeating CREATE INDEX IF NOT EXISTS must not add a duplicate index or change the rows.",
+  "determinism_notes": "Index column order is explicit and metadata is ordered by index name and sequence. IDs and rows are fixed with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE dispatch_orders (order_id INT PRIMARY KEY, order_state VARCHAR(12) NOT NULL, priority INT NOT NULL, route_code VARCHAR(12) NOT NULL)",
+    "INSERT INTO dispatch_orders VALUES (901, 'ready', 80, 'N-1'), (902, 'held', 99, 'N-2'), (903, 'ready', 60, 'S-1')"
+  ],
+  "steps": [
+    {
+      "sql": "CREATE INDEX IF NOT EXISTS dispatch_state_priority_idx ON dispatch_orders (order_state, priority, order_id)"
+    },
+    {
+      "sql": "CREATE INDEX IF NOT EXISTS dispatch_state_priority_idx ON dispatch_orders (order_state, priority, order_id)"
+    },
+    {
+      "sql": "SELECT index_name, seq_in_index, column_name FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = 'dispatch_orders' ORDER BY index_name, seq_in_index",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT order_id, order_state, priority, route_code FROM dispatch_orders WHERE order_state = 'ready' ORDER BY priority DESC, order_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT index_name, seq_in_index, column_name FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = 'dispatch_orders' ORDER BY index_name, seq_in_index",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT order_id, order_state, priority, route_code FROM dispatch_orders ORDER BY order_id",
+      "ordered": true
+    }
+  ]
+}
