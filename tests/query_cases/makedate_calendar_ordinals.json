@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "makedate_calendar_ordinals",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "bpbpublications/MySQL-Cookbook",
+      "commit": "a1bf69c06ab8b4ac124eed9603fc5447e0842d32",
+      "path": "Chapter 07/select_makedate.sql",
+      "url": "https://github.com/bpbpublications/MySQL-Cookbook/blob/a1bf69c06ab8b4ac124eed9603fc5447e0842d32/Chapter%2007/select_makedate.sql",
+      "sha256": "9640ef56f5c6f364a4388422e49dd111edccb58a039ffb34865101cc4327a1fd",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Chapter 07/select_makedate.sql:1",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL scalar query constructs a calendar date from a year and ordinal day number with MAKEDATE.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored calendar-ordinal audit. Fixed leap-year, year-end, out-of-range, zero-day, and NULL inputs exercise MAKEDATE's date construction and NULL behavior; the source literal and purpose are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["makedate", "ordinal-day", "leap-year", "invalid-input", "null-propagation", "deterministic-order"],
+  "fixture_notes": "Ordinal 60 maps to February 29 in leap year 2024; ordinal 365 maps to December 31 in 2023; ordinal 366 rolls into January 1 of 2024; zero and NULL inputs exercise NULL results.",
+  "determinism_notes": "Input IDs, years, and ordinal values are fixed, and output is ordered by the primary key with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE calendar_ordinals (input_id INT PRIMARY KEY, calendar_year INT NULL, ordinal_day INT NULL)",
+    "INSERT INTO calendar_ordinals VALUES (501, 2024, 60), (502, 2023, 365), (503, 2023, 366), (504, 2024, 0), (505, NULL, 10)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT input_id, calendar_year, ordinal_day, MAKEDATE(calendar_year, ordinal_day) AS constructed_date, CASE WHEN MAKEDATE(calendar_year, ordinal_day) IS NULL THEN 'invalid-or-missing' ELSE 'valid-date' END AS date_class FROM calendar_ordinals ORDER BY input_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT input_id, calendar_year, ordinal_day FROM calendar_ordinals ORDER BY input_id",
+      "ordered": true
+    }
+  ]
+}

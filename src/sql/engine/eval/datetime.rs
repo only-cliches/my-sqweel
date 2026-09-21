@@ -113,6 +113,36 @@ pub(super) fn eval_date_diff(
         left.date().signed_duration_since(right.date()).num_days(),
     )))
 }
+pub(super) fn eval_make_date(
+    year_arg: Option<&String>,
+    day_arg: Option<&String>,
+    data: &Map<String, Value>,
+    last_insert_id: u64,
+) -> Result<Value> {
+    let year = year_arg
+        .map(|arg| eval_scalar_text(arg, data, last_insert_id))
+        .transpose()?
+        .and_then(|value| value_to_i64(&value));
+    let day = day_arg
+        .map(|arg| eval_scalar_text(arg, data, last_insert_id))
+        .transpose()?
+        .and_then(|value| value_to_i64(&value));
+    let (Some(year), Some(day)) = (year, day) else {
+        return Ok(Value::Null);
+    };
+    if day <= 0 {
+        return Ok(Value::Null);
+    }
+    let Ok(year) = i32::try_from(year) else {
+        return Ok(Value::Null);
+    };
+    let Some(date) = NaiveDate::from_ymd_opt(year, 1, 1)
+        .and_then(|date| date.checked_add_signed(Duration::days(day - 1)))
+    else {
+        return Ok(Value::Null);
+    };
+    Ok(Value::String(date.to_string()))
+}
 
 pub(super) fn eval_add_sub_time(
     datetime_arg: Option<&String>,

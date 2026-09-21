@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "makedate_calendar_ordinals_min",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "bpbpublications/MySQL-Cookbook",
+      "commit": "a1bf69c06ab8b4ac124eed9603fc5447e0842d32",
+      "path": "Chapter 07/select_makedate.sql",
+      "url": "https://github.com/bpbpublications/MySQL-Cookbook/blob/a1bf69c06ab8b4ac124eed9603fc5447e0842d32/Chapter%2007/select_makedate.sql",
+      "sha256": "9640ef56f5c6f364a4388422e49dd111edccb58a039ffb34865101cc4327a1fd",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Chapter 07/select_makedate.sql:1",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL scalar query constructs a calendar date from a year and ordinal day number with MAKEDATE.",
+      "mysql_mariadb_translation": "Minimized to one out-of-range ordinal that rolls into the following year, isolating MAKEDATE evaluation and date metadata."
+    },
+    "independently_authored": true
+  },
+  "features": ["makedate", "ordinal-day", "out-of-range-rollover", "deterministic-order"],
+  "fixture_notes": "The single 2023 day-366 input must produce 2024-01-01 in MariaDB.",
+  "determinism_notes": "The fixture has one fixed row and one ordered select with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE calendar_ordinals (calendar_year INT NOT NULL, ordinal_day INT NOT NULL)",
+    "INSERT INTO calendar_ordinals VALUES (2023, 366)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT MAKEDATE(calendar_year, ordinal_day) AS constructed_date FROM calendar_ordinals",
+      "ordered": true
+    }
+  ]
+}

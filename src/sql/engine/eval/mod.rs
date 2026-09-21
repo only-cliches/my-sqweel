@@ -3683,6 +3683,7 @@ pub(super) fn eval_function_text(
             eval_date_add_sub(args.first(), args.get(1), data, last_insert_id, -1)
         }
         "STR_TO_DATE" => eval_str_to_date(args.first(), args.get(1), data, last_insert_id),
+        "MAKEDATE" => eval_make_date(args.first(), args.get(1), data, last_insert_id),
         "LAST_DAY" => eval_last_day(args.first(), data, last_insert_id),
         "GET_FORMAT" => {
             let kind = args

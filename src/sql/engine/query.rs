@@ -1698,7 +1698,7 @@ impl RawEngine {
                         }
                         MysqlColumnType::Decimal
                     }
-                    "CURRENT_DATE" | "CURDATE" | "DATE" | "FROM_DAYS" | "LAST_DAY" => {
+                    "CURRENT_DATE" | "CURDATE" | "DATE" | "FROM_DAYS" | "LAST_DAY" | "MAKEDATE" => {
                         MysqlColumnType::Date
                     }
                     "CURRENT_TIME" | "CURTIME" | "TIME" | "SEC_TO_TIME" | "TIMEDIFF" => {
