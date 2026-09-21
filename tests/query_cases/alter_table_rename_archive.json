@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "id": "alter_table_rename_archive",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "LibrePlan/libreplan",
+      "commit": "3aff1ef4f94c284045ab3f8dc9df947ca3b91cb9",
+      "path": "scripts/database/upgrade_1.3.0.sql",
+      "url": "https://github.com/LibrePlan/libreplan/blob/3aff1ef4f94c284045ab3f8dc9df947ca3b91cb9/scripts/database/upgrade_1.3.0.sql",
+      "sha256": "3f8ead3e6f3927816ce27792a54e4d52cf716a230e9cff57d4765671a9834f17",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "scripts/database/upgrade_1.3.0.sql:26-30",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB migration renames an existing table with ALTER TABLE ... RENAME TO while preserving its rows for subsequent migration work.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored archive-table migration. A live task queue is renamed to archived_tasks, a post-rename row is inserted through the new name, and the final ordered read verifies the renamed table and preserved data. The schema, names, rows, and operational purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "alter-table-rename",
+    "preserved-rows",
+    "post-rename-dml",
+    "ddl-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Task 501 exists before the rename and must remain queryable as archived task data; task 502 is inserted only after the table receives its new name. The final read verifies both rows through archived_tasks.",
+  "determinism_notes": "Task IDs, labels, states, and priorities are fixed; the final projection is ordered by the unique task ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE live_tasks (task_id INT PRIMARY KEY, task_label VARCHAR(32) NOT NULL, task_state VARCHAR(16) NOT NULL, priority INT NOT NULL)",
+    "INSERT INTO live_tasks VALUES (501, 'rebuild-index', 'queued', 2)"
+  ],
+  "steps": [
+    {
+      "sql": "ALTER TABLE live_tasks RENAME TO archived_tasks",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO archived_tasks VALUES (502, 'refresh-cache', 'complete', 1)",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT task_id, task_label, task_state, priority FROM archived_tasks ORDER BY task_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT task_id, task_label, task_state, priority FROM archived_tasks ORDER BY task_id",
+      "ordered": true
+    }
+  ]
+}
