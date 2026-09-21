@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "json_merge_alias_catalog_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "antlr/grammars-v4",
+      "commit": "e356c2fb6dbd60ce4346841f6a2e5578014fadb4",
+      "path": "sql/mariadb/examples/fast/dml_select.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/e356c2fb6dbd60ce4346841f6a2e5578014fadb4/sql/mariadb/examples/fast/dml_select.sql",
+      "sha256": "b9128ffb5b50bea79c534bc24a127d9d626fd2d21be8cb0a45deafd8d6c84f79",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/mariadb/examples/fast/dml_select.sql:150",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB JSON expression combines two documents with the deprecated JSON_MERGE alias, preserving duplicate values through merge-preserve semantics.",
+      "mysql_mariadb_translation": "Reauthored as a catalog reconciliation audit over new JSON-column documents. The report merges colliding category arrays, combines nested object fields, and autowraps a scalar collision while exercising the MariaDB-compatible JSON_MERGE alias without copying source schema, values, or query text."
+    },
+    "independently_authored": true
+  },
+  "features": ["json-merge-alias", "json-column", "array-concatenation", "nested-object-collision", "scalar-autowrap", "deterministic-order"],
+  "fixture_notes": "Catalog 8401 merges two category arrays and nested availability fields; catalog 8402 merges a scalar stock collision and adds a supplier flag. Complete merged documents are selected to preserve JSON value and metadata behavior.",
+  "determinism_notes": "Rows use fixed catalog IDs and the report orders by the primary key. There are no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE catalog_snapshots (catalog_id INT PRIMARY KEY, base_doc JSON NOT NULL, update_doc JSON NOT NULL)",
+    "INSERT INTO catalog_snapshots VALUES (8401, '{\"categories\":[\"office\"],\"availability\":{\"region\":\"west\"}}', '{\"categories\":[\"seasonal\"],\"availability\":{\"warehouse\":\"W3\"}}'), (8402, '{\"sku\":\"KM-4\",\"stock\":2}', '{\"stock\":6,\"supplier\":\"local\"}')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT catalog_id, JSON_MERGE(base_doc, update_doc) AS merged_doc FROM catalog_snapshots ORDER BY catalog_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT catalog_id FROM catalog_snapshots ORDER BY catalog_id",
+      "ordered": true
+    }
+  ]
+}

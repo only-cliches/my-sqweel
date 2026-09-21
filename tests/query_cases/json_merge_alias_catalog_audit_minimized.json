@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "json_merge_alias_catalog_audit_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "antlr/grammars-v4",
+      "commit": "e356c2fb6dbd60ce4346841f6a2e5578014fadb4",
+      "path": "sql/mariadb/examples/fast/dml_select.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/e356c2fb6dbd60ce4346841f6a2e5578014fadb4/sql/mariadb/examples/fast/dml_select.sql",
+      "sha256": "b9128ffb5b50bea79c534bc24a127d9d626fd2d21be8cb0a45deafd8d6c84f79",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/mariadb/examples/fast/dml_select.sql:150",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB JSON expression combines two documents with the deprecated JSON_MERGE alias, preserving duplicate values through merge-preserve semantics.",
+      "mysql_mariadb_translation": "Minimized to one JSON column pair and one merge projection so the JSON_MERGE alias result metadata is isolated from multiple rows and additional report logic."
+    },
+    "independently_authored": true,
+    "parent_case": "json_merge_alias_catalog_audit"
+  },
+  "features": ["json-merge-alias", "json-column", "result-metadata", "deterministic-order"],
+  "fixture_notes": "The single probe merges two fixed documents with one colliding array field. The complete JSON result is selected so the MariaDB LONG_BLOB versus MySqweel BLOB metadata contract is observable.",
+  "determinism_notes": "The probe uses a fixed primary key and has no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE merge_alias_probe (probe_id INT PRIMARY KEY, left_doc JSON NOT NULL, right_doc JSON NOT NULL)",
+    "INSERT INTO merge_alias_probe VALUES (1, '{\"tags\":[\"old\"]}', '{\"tags\":[\"new\"]}')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT probe_id, JSON_MERGE(left_doc, right_doc) AS merged_doc FROM merge_alias_probe ORDER BY probe_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT probe_id FROM merge_alias_probe ORDER BY probe_id",
+      "ordered": true
+    }
+  ]
+}

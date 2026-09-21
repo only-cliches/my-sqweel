@@ -1950,10 +1950,9 @@ impl RawEngine {
                     "JSON_ARRAYAGG" | "JSON_OBJECTAGG" => MysqlColumnType::Blob,
                     "JSON_ARRAY" => MysqlColumnType::VarChar,
                     "JSON_ARRAY_APPEND" | "JSON_ARRAY_INSERT" => MysqlColumnType::LongBlob,
-                    "JSON_MERGE_PRESERVE" => MysqlColumnType::LongBlob,
+                    "JSON_MERGE" | "JSON_MERGE_PRESERVE" => MysqlColumnType::LongBlob,
                     "JSON_EXTRACT"
                     | "JSON_INSERT"
-                    | "JSON_MERGE"
                     | "JSON_MERGE_PATCH"
                     | "JSON_OBJECT"
                     | "JSON_REMOVE"
