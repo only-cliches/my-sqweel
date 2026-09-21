@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "regexp_instr_message_offsets",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "calogica/dbt-expectations",
+      "commit": "db3dc81dada4bf987a3beee375978421568a240a",
+      "path": "macros/regex/regexp_instr.sql",
+      "url": "https://github.com/calogica/dbt-expectations/blob/db3dc81dada4bf987a3beee375978421568a240a/macros/regex/regexp_instr.sql",
+      "sha256": "e98b3b0e5498b584ff0a5b1dc3021e9fa60151a1953fb36e6049136a8ab47b92",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "macros/regex/regexp_instr.sql:1-17",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A cross-database SQL macro exposes REGEXP_INSTR with explicit starting-position and occurrence arguments so callers can locate a selected regular-expression match rather than only test whether text matches.",
+      "mysql_mariadb_translation": "Reauthored as an independent incident-message offset audit using MariaDB 10.11.7's compatible two-argument REGEXP_INSTR form. Fixed message text exercises first-match, nonmatching, and NULL behavior; the source macro's adapter dispatch, schema, and values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "regexp-instr",
+    "first-match-offset",
+    "zero-no-match",
+    "null-propagation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Message 901 contains two incident tokens, message 902 has none, message 903 is NULL, and message 904 begins with one token before a later second token. The first matching offset, zero no-match result, and NULL propagation must be observable.",
+  "determinism_notes": "Message IDs and text are fixed; output is ordered by the unique message ID with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE incident_messages (message_id INT PRIMARY KEY, message_text VARCHAR(128) NULL)",
+    "INSERT INTO incident_messages VALUES (901, 'Queue ERR-17 then ERR-23'), (902, 'No incident marker'), (903, NULL), (904, 'ERR-31 at start and ERR-44 later')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT message_id, REGEXP_INSTR(message_text, 'ERR-[0-9]+') AS first_offset FROM incident_messages ORDER BY message_id",
+      "ordered": true
+    }
+  ]
+}
