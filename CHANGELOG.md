@@ -216,6 +216,8 @@ All notable changes to MySqweel will be documented in this file.
 - Added minimized GitHub-attributed `JSON_NORMALIZE` metadata and nested-extraction regressions; MariaDB 10.11.7 and MySqweel now agree on canonical JSON text and metadata across repeated fresh differential runs.
 - Added GitHub-attributed `JSON_EQUALS` coverage from [mayhemheroes/teleport](https://github.com/mayhemheroes/teleport/blob/dfc17799b3f5ad655e1d83922883409fd522bd5e/lib/srv/db/mysql/sql/mariadb_activate_user.sql#L28) for an independently authored document-equality audit combining object-key-insensitive comparison, nested extraction, array-order sensitivity, scalar-type differences, and SQL NULL propagation; fixed `JSON_EQUALS` result metadata to match MariaDB 10.11.7's `MYSQL_TYPE_LONG`.
 - Added minimized GitHub-attributed `JSON_EQUALS` direct-column and nested-`JSON_EXTRACT` regressions; MariaDB 10.11.7 and MySqweel now agree on equality values and metadata across repeated fresh differential runs.
+- Added GitHub-attributed `JSON_EXISTS` coverage from [mariadb-corporation/dev-example-json](https://github.com/mariadb-corporation/dev-example-json/blob/d4a03132d66dc6e4c480e092838d2df4f91f64bd/demos/locations.sql#L115-L116) for an independently authored nested-path presence audit combining scalar fields, array elements, missing paths, SQL NULL propagation, and predicate filtering; implemented MariaDB-compatible `JSON_EXISTS` evaluation and integer result metadata.
+- Added the minimized GitHub-attributed `JSON_EXISTS` nested-path regression; MariaDB 10.11.7 and MySqweel now agree on presence values and `MYSQL_TYPE_LONG` metadata across repeated fresh differential runs.
 
 ### Upstream corpus coverage
 

@@ -1901,9 +1901,8 @@ impl RawEngine {
                             MysqlColumnType::VarChar
                         }
                     }
-                    "JSON_CONTAINS" | "JSON_CONTAINS_PATH" | "JSON_VALID" | "JSON_EQUALS" => {
-                        MysqlColumnType::Integer
-                    }
+                    "JSON_CONTAINS" | "JSON_CONTAINS_PATH" | "JSON_VALID" | "JSON_EQUALS"
+                    | "JSON_EXISTS" => MysqlColumnType::Integer,
                     "JSON_OVERLAPS" => MysqlColumnType::Integer,
                     "JSON_ARRAYAGG" | "JSON_OBJECTAGG" => MysqlColumnType::Blob,
                     "JSON_ARRAY" => MysqlColumnType::VarChar,

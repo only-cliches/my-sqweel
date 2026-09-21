@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "id": "json_exists_location_audit_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "json_exists_location_audit",
+    "source": {
+      "kind": "github",
+      "repository": "mariadb-corporation/dev-example-json",
+      "commit": "d4a03132d66dc6e4c480e092838d2df4f91f64bd",
+      "path": "demos/locations.sql",
+      "url": "https://github.com/mariadb-corporation/dev-example-json/blob/d4a03132d66dc6e4c480e092838d2df4f91f64bd/demos/locations.sql",
+      "sha256": "9763c6543fddbdc7c9cc851a5bc4fe546ed46b13b082e5d8f07300153c331e83",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "demos/locations.sql:115-116",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB location filter uses JSON_EXISTS to test whether a nested detail field is present.",
+      "mysql_mariadb_translation": "Minimized to one independently authored JSON document and one nested field-presence predicate so routine support and integer result metadata are isolated from the original catalog audit."
+    },
+    "independently_authored": true
+  },
+  "features": ["json-exists", "json-path", "metadata-regression", "deterministic-order"],
+  "fixture_notes": "The fixed document contains capacity under details, so JSON_EXISTS must return integer 1.",
+  "determinism_notes": "One fixed primary-key row is selected in ID order. There are no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE existence_probe (probe_id INT PRIMARY KEY, attributes JSON NOT NULL)",
+    "INSERT INTO existence_probe VALUES (1, '{\"details\":{\"capacity\":450}}')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT probe_id, JSON_EXISTS(attributes, '$.details.capacity') AS has_capacity FROM existence_probe ORDER BY probe_id",
+      "ordered": true
+    }
+  ]
+}

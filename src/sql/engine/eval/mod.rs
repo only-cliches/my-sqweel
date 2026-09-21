@@ -4405,6 +4405,7 @@ pub(super) fn eval_function_text(
         "JSON_CONTAINS" => {
             eval_json_contains(args.first(), args.get(1), args.get(2), data, last_insert_id)
         }
+        "JSON_EXISTS" => eval_json_exists(args.first(), args.get(1), data, last_insert_id),
         "JSON_CONTAINS_PATH" => eval_json_contains_path(args.as_slice(), data, last_insert_id),
         "JSON_DEPTH" => eval_json_depth(args.first(), data, last_insert_id),
         "JSON_LENGTH" => eval_json_length(args.as_slice(), data, last_insert_id),

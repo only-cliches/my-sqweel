@@ -519,6 +519,27 @@ pub(super) fn eval_json_contains_path(
     Ok(Value::Number(Number::from(result as u8)))
 }
 
+pub(super) fn eval_json_exists(
+    document_arg: Option<&String>,
+    path_arg: Option<&String>,
+    data: &Map<String, Value>,
+    last_insert_id: u64,
+) -> Result<Value> {
+    let Some(document_arg) = document_arg else {
+        return Ok(Value::Null);
+    };
+    let Some(path_arg) = path_arg else {
+        return Ok(Value::Null);
+    };
+    let document = eval_json_document(document_arg, data, last_insert_id)?;
+    if document == Value::Null {
+        return Ok(Value::Null);
+    }
+    let path = eval_scalar_text(path_arg, data, last_insert_id)?;
+    let exists = !json_extract_matches(&document, &json_scalar_to_string(&path)).is_empty();
+    Ok(Value::Number(Number::from(exists as u8)))
+}
+
 pub(super) fn eval_json_overlaps(
     left_arg: Option<&String>,
     right_arg: Option<&String>,
