@@ -222,6 +222,8 @@ All notable changes to MySqweel will be documented in this file.
 - Added the minimized GitHub-attributed `JSON_QUERY` object-extraction regression; MariaDB 10.11.7 and MySqweel now agree on compact output and metadata across repeated fresh differential runs.
 - Added GitHub-attributed `JSON_COMPACT` coverage from [MariaDB/server](https://github.com/MariaDB/server/blob/45717ef4c736a6a92e0acf49399ce677bfcaea89/scripts/mariadb_system_tables_fix.sql#L844) for an independently authored access-policy audit combining JSON-column whitespace normalization with generated `JSON_OBJECT`/`JSON_ARRAY` compaction; implemented `JSON_COMPACT` evaluation and argument-sensitive metadata matching MariaDB 10.11.7 (`MYSQL_TYPE_LONG_BLOB` for direct JSON columns and `MYSQL_TYPE_VAR_STRING` for nested JSON constructors).
 - Added the minimized GitHub-attributed `JSON_COMPACT` direct-column metadata regression; MariaDB 10.11.7 and MySqweel now agree on compact output and metadata across repeated fresh differential runs.
+- Added GitHub-attributed `JSON_ARRAY_APPEND` coverage from [antlr/grammars-v4](https://github.com/antlr/grammars-v4/blob/e356c2fb6dbd60ce4346841f6a2e5578014fadb4/sql/mariadb/examples/fast/dml_select.sql#L147) for an independently authored shipment-manifest audit combining JSON-column array mutation, nested `JSON_OBJECT` values, scalar-path wrapping, and deterministic ordered output; fixed `JSON_ARRAY_APPEND` result metadata to match MariaDB 10.11.7's `MYSQL_TYPE_LONG_BLOB`.
+- Added the minimized GitHub-attributed `JSON_ARRAY_APPEND` direct-column metadata regression; MariaDB 10.11.7 and MySqweel now agree on appended JSON values and metadata across repeated fresh differential runs.
 
 ### Upstream corpus coverage
 

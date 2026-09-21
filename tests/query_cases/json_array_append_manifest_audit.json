@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "json_array_append_manifest_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "antlr/grammars-v4",
+      "commit": "e356c2fb6dbd60ce4346841f6a2e5578014fadb4",
+      "path": "sql/mariadb/examples/fast/dml_select.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/e356c2fb6dbd60ce4346841f6a2e5578014fadb4/sql/mariadb/examples/fast/dml_select.sql",
+      "sha256": "b9128ffb5b50bea79c534bc24a127d9d626fd2d21be8cb0a45deafd8d6c84f79",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/mariadb/examples/fast/dml_select.sql:147",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB JSON expression appends a scalar value at a selected array path with JSON_ARRAY_APPEND.",
+      "mysql_mariadb_translation": "Reauthored as a shipment-manifest audit over new JSON-column documents. The report appends a generated JSON object to an event array, appends text to a label array, and appends text to a scalar status path so array wrapping and nested JSON expression handling are observed without copying source SQL or data."
+    },
+    "independently_authored": true
+  },
+  "features": ["json-array-append", "json-column", "nested-json-object", "array-path-mutation", "scalar-path-wrapping", "deterministic-order"],
+  "fixture_notes": "Manifest 8101 starts with one event, one label, and a scalar status; manifest 8102 starts with empty event and label arrays and a different scalar status. The projection exposes the complete mutated documents to preserve JSON value and metadata differences.",
+  "determinism_notes": "Rows use fixed manifest IDs and the report orders by the primary key. There are no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE shipment_manifests (manifest_id INT PRIMARY KEY, manifest JSON NOT NULL)",
+    "INSERT INTO shipment_manifests VALUES (8101, '{\"events\":[{\"state\":\"queued\"}],\"labels\":[\"fragile\"],\"status\":\"ready\"}'), (8102, '{\"events\":[],\"labels\":[],\"status\":\"held\"}')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT manifest_id, JSON_ARRAY_APPEND(manifest, '$.events', JSON_OBJECT('state', 'sealed', 'sequence', 2)) AS event_manifest, JSON_ARRAY_APPEND(manifest, '$.labels', 'audit') AS label_manifest, JSON_ARRAY_APPEND(manifest, '$.status', 'closed') AS status_manifest FROM shipment_manifests ORDER BY manifest_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT manifest_id FROM shipment_manifests ORDER BY manifest_id",
+      "ordered": true
+    }
+  ]
+}

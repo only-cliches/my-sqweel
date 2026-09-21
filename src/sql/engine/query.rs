@@ -1930,8 +1930,8 @@ impl RawEngine {
                     "JSON_OVERLAPS" => MysqlColumnType::Integer,
                     "JSON_ARRAYAGG" | "JSON_OBJECTAGG" => MysqlColumnType::Blob,
                     "JSON_ARRAY" => MysqlColumnType::VarChar,
-                    "JSON_ARRAY_APPEND"
-                    | "JSON_ARRAY_INSERT"
+                    "JSON_ARRAY_APPEND" => MysqlColumnType::LongBlob,
+                    "JSON_ARRAY_INSERT"
                     | "JSON_EXTRACT"
                     | "JSON_INSERT"
                     | "JSON_MERGE"

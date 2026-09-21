@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "json_array_append_manifest_audit_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "antlr/grammars-v4",
+      "commit": "e356c2fb6dbd60ce4346841f6a2e5578014fadb4",
+      "path": "sql/mariadb/examples/fast/dml_select.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/e356c2fb6dbd60ce4346841f6a2e5578014fadb4/sql/mariadb/examples/fast/dml_select.sql",
+      "sha256": "b9128ffb5b50bea79c534bc24a127d9d626fd2d21be8cb0a45deafd8d6c84f79",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/mariadb/examples/fast/dml_select.sql:147",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB JSON expression appends a scalar value at a selected array path with JSON_ARRAY_APPEND.",
+      "mysql_mariadb_translation": "Minimized to one JSON column and one scalar append so the JSON_ARRAY_APPEND result metadata is isolated from multiple rows, paths, and nested JSON constructors."
+    },
+    "independently_authored": true,
+    "parent_case": "json_array_append_manifest_audit"
+  },
+  "features": ["json-array-append", "json-column", "result-metadata", "deterministic-order"],
+  "fixture_notes": "The single probe stores one event array and appends a fixed text value. The complete JSON result is selected so the MariaDB LONG_BLOB versus MySqweel BLOB metadata contract is observable.",
+  "determinism_notes": "The probe uses a fixed primary key and has no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE append_probe (probe_id INT PRIMARY KEY, payload JSON NOT NULL)",
+    "INSERT INTO append_probe VALUES (1, '{\"events\":[\"queued\"]}')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT probe_id, JSON_ARRAY_APPEND(payload, '$.events', 'sealed') AS appended_payload FROM append_probe ORDER BY probe_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT probe_id FROM append_probe ORDER BY probe_id",
+      "ordered": true
+    }
+  ]
+}
