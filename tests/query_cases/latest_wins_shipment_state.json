@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "id": "latest_wins_shipment_state",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "singlestore-labs/singlestore-logistics-sim",
+      "commit": "4951682fecb0fc86f1956f0c6dcddc3a723e3c4e",
+      "path": "schema.sql",
+      "url": "https://github.com/singlestore-labs/singlestore-logistics-sim/blob/4951682fecb0fc86f1956f0c6dcddc3a723e3c4e/schema.sql",
+      "sha256": "590e6a4b248b82fb5157d4a5189aff9c45889e0bffe139242481f47fef692712",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "schema.sql:168-199",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL-compatible logistics update loads non-terminal scans with INSERT ... SELECT and ON DUPLICATE KEY UPDATE, using IF and VALUES to replace every state field only when the incoming sequence is newer; delivered scans are removed afterward with a joined DELETE.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored shipment-state refresh. A stale scan must leave the existing state untouched, newer scans update all state fields, unseen shipments are inserted, and a delivered scan removes an existing shipment through a separate joined DELETE. The source schema, identifiers, values, and logistics labels are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "insert-select",
+    "on-duplicate-key-update",
+    "values-function",
+    "conditional-latest-wins",
+    "multi-column-upsert",
+    "joined-delete",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Shipment 501 receives an older scan and must retain its existing state; shipment 502 receives a newer scan and updates every state column; shipment 504 is inserted; shipment 503 is removed because its incoming scan is delivered.",
+  "determinism_notes": "Each shipment has one source scan and one primary-key state row, sequence numbers are fixed, and every result is ordered by shipment ID. There are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE shipment_scans (scan_id INT PRIMARY KEY, shipment_id INT NOT NULL, scan_seq INT NOT NULL, location_code VARCHAR(16) NOT NULL, scan_state VARCHAR(16) NOT NULL, recorded_label VARCHAR(32) NOT NULL)",
+    "CREATE TABLE shipment_state (shipment_id INT PRIMARY KEY, scan_seq INT NOT NULL, location_code VARCHAR(16) NOT NULL, scan_state VARCHAR(16) NOT NULL, recorded_label VARCHAR(32) NOT NULL)",
+    "INSERT INTO shipment_scans VALUES (1001, 501, 2, 'HUB-B', 'in_transit', 'late'), (1002, 502, 4, 'HUB-C', 'arrived', 'dock'), (1003, 503, 5, 'HUB-Z', 'delivered', 'final'), (1004, 504, 7, 'HUB-Q', 'in_transit', 'new')",
+    "INSERT INTO shipment_state VALUES (501, 3, 'HUB-A', 'in_transit', 'previous'), (503, 4, 'HUB-D', 'arrived', 'held')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO shipment_state (shipment_id, scan_seq, location_code, scan_state, recorded_label) SELECT shipment_id, scan_seq, location_code, scan_state, recorded_label FROM shipment_scans WHERE scan_state <> 'delivered' ON DUPLICATE KEY UPDATE scan_seq = IF(VALUES(scan_seq) > shipment_state.scan_seq, VALUES(scan_seq), shipment_state.scan_seq), location_code = IF(VALUES(scan_seq) > shipment_state.scan_seq, VALUES(location_code), shipment_state.location_code), scan_state = IF(VALUES(scan_seq) > shipment_state.scan_seq, VALUES(scan_state), shipment_state.scan_state), recorded_label = IF(VALUES(scan_seq) > shipment_state.scan_seq, VALUES(recorded_label), shipment_state.recorded_label)"
+    },
+    {
+      "sql": "DELETE shipment_state FROM shipment_state JOIN shipment_scans ON shipment_scans.shipment_id = shipment_state.shipment_id WHERE shipment_scans.scan_state = 'delivered'"
+    },
+    {
+      "sql": "SELECT shipment_id, scan_seq, location_code, scan_state, recorded_label FROM shipment_state ORDER BY shipment_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT scan_id, shipment_id, scan_seq, location_code, scan_state, recorded_label FROM shipment_scans ORDER BY scan_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT shipment_id, scan_seq, location_code, scan_state, recorded_label FROM shipment_state ORDER BY shipment_id",
+      "ordered": true
+    }
+  ]
+}
