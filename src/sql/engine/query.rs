@@ -596,6 +596,7 @@ impl RawEngine {
             )? {
                 return Ok(self.with_select_metadata(&select, aggregate));
             }
+            let result_metadata = result.column_metadata;
             let mut finished = self.finish_select_rows(
                 &select,
                 result.rows,
@@ -612,6 +613,17 @@ impl RawEngine {
                     .collect::<Vec<_>>();
                 finished.columns =
                     virtual_select_result_with_empty_schema(&select, vec![], &columns)?.columns;
+                finished.column_metadata = finished
+                    .columns
+                    .iter()
+                    .map(|column| {
+                        result_metadata
+                            .iter()
+                            .find(|metadata| metadata.name.eq_ignore_ascii_case(column))
+                            .cloned()
+                            .unwrap_or_else(|| ColumnMetadata::from_value(column, None))
+                    })
+                    .collect();
             }
             return Ok(finished);
         }
@@ -4146,7 +4158,7 @@ impl RawEngine {
                 }
             }
         }
-        virtual_select_result_with_empty_schema(
+        let mut result = virtual_select_result_with_empty_schema(
             select,
             rows,
             &[
@@ -4157,7 +4169,22 @@ impl RawEngine {
                 "seq_in_index",
                 "non_unique",
             ],
-        )
+        )?;
+        result.column_metadata = result
+            .columns
+            .iter()
+            .map(|column| {
+                let mut metadata = ColumnMetadata::from_value(column, None);
+                if matches!(
+                    column.to_ascii_lowercase().as_str(),
+                    "seq_in_index" | "non_unique"
+                ) {
+                    metadata.column_type = MysqlColumnType::BigInt;
+                }
+                metadata
+            })
+            .collect();
+        Ok(result)
     }
 
     pub(super) fn select_information_schema_key_column_usage(

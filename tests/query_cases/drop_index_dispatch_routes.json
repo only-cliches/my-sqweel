@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "id": "drop_index_dispatch_routes",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "johnfound/asmbb",
+      "commit": "35077a2c090b6d6ed9881f72a23a43fb7a393562",
+      "path": "source/phpbb.sql",
+      "url": "https://github.com/johnfound/asmbb/blob/35077a2c090b6d6ed9881f72a23a43fb7a393562/source/phpbb.sql",
+      "sha256": "e50efc605b281c6b3a37fe1948ba576732261472bc6f8aa873a4c1352c970a74",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "source/phpbb.sql:10-14",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL schema migration removes named secondary indexes as part of table maintenance.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored dispatch-route migration. A composite secondary index is created for an existing route table, then removed with qualified DROP INDEX syntax and an idempotent DROP INDEX IF EXISTS repeat; information_schema.statistics and ordered rows verify that only index metadata changes. The source schema, names, values, and application purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "drop-index",
+    "drop-index-if-exists",
+    "composite-index-metadata",
+    "ddl-idempotence",
+    "data-preservation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The route table starts with a composite priority index. The first DROP INDEX removes it, the repeated conditional drop is harmless, and both route rows must remain unchanged after the schema mutation.",
+  "determinism_notes": "Route IDs, states, priorities, and index columns are fixed; metadata and row checks use explicit ordering. There are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE dispatch_routes (route_id INT PRIMARY KEY, route_state VARCHAR(16) NOT NULL, priority INT NOT NULL, destination VARCHAR(32) NOT NULL)",
+    "INSERT INTO dispatch_routes VALUES (601, 'ready', 90, 'north-queue'), (602, 'held', 40, 'south-queue')",
+    "CREATE INDEX dispatch_route_priority_idx ON dispatch_routes (route_state, priority)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT index_name, seq_in_index, column_name FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = 'dispatch_routes' AND index_name = 'dispatch_route_priority_idx' ORDER BY seq_in_index",
+      "ordered": true
+    },
+    {
+      "sql": "DROP INDEX dispatch_route_priority_idx ON dispatch_routes"
+    },
+    {
+      "sql": "DROP INDEX IF EXISTS dispatch_route_priority_idx ON dispatch_routes"
+    },
+    {
+      "sql": "SELECT route_id, route_state, priority, destination FROM dispatch_routes ORDER BY route_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT index_name, seq_in_index, column_name FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = 'dispatch_routes' AND index_name = 'dispatch_route_priority_idx' ORDER BY seq_in_index",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT route_id, route_state, priority, destination FROM dispatch_routes ORDER BY route_id",
+      "ordered": true
+    }
+  ]
+}

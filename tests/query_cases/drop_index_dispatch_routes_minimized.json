@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "id": "drop_index_dispatch_routes_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "drop_index_dispatch_routes",
+    "source": {
+      "kind": "github",
+      "repository": "johnfound/asmbb",
+      "commit": "35077a2c090b6d6ed9881f72a23a43fb7a393562",
+      "path": "source/phpbb.sql",
+      "url": "https://github.com/johnfound/asmbb/blob/35077a2c090b6d6ed9881f72a23a43fb7a393562/source/phpbb.sql",
+      "sha256": "e50efc605b281c6b3a37fe1948ba576732261472bc6f8aa873a4c1352c970a74",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "source/phpbb.sql:10-14",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL schema migration removes named secondary indexes as part of table maintenance.",
+      "mysql_mariadb_translation": "Reduced to one independently authored table and one composite index. After DROP INDEX removes the index, an empty information_schema.statistics result must retain MariaDB's numeric seq_in_index metadata even though no rows remain."
+    },
+    "independently_authored": true,
+    "minimized_from": "drop_index_dispatch_routes"
+  },
+  "features": [
+    "drop-index",
+    "empty-information-schema-result",
+    "numeric-metadata",
+    "deterministic-order"
+  ],
+  "fixture_notes": "One secondary index is removed before the metadata query, isolating the empty statistics result and its seq_in_index type from the original idempotence and row-preservation flow.",
+  "determinism_notes": "The table, index, and query predicates are fixed; the empty metadata result has no row-order dependence and uses no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE dispatch_route_min (route_id INT PRIMARY KEY, route_state VARCHAR(16) NOT NULL, priority INT NOT NULL)",
+    "INSERT INTO dispatch_route_min VALUES (701, 'ready', 90)",
+    "CREATE INDEX dispatch_route_min_priority_idx ON dispatch_route_min (route_state, priority)"
+  ],
+  "steps": [
+    {
+      "sql": "DROP INDEX dispatch_route_min_priority_idx ON dispatch_route_min"
+    },
+    {
+      "sql": "SELECT index_name, seq_in_index, column_name FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = 'dispatch_route_min' AND index_name = 'dispatch_route_min_priority_idx' ORDER BY seq_in_index",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT index_name, seq_in_index, column_name FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = 'dispatch_route_min' AND index_name = 'dispatch_route_min_priority_idx' ORDER BY seq_in_index",
+      "ordered": true
+    }
+  ]
+}
