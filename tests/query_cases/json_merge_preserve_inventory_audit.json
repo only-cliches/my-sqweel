@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "json_merge_preserve_inventory_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "antlr/grammars-v4",
+      "commit": "e356c2fb6dbd60ce4346841f6a2e5578014fadb4",
+      "path": "sql/mariadb/examples/fast/dml_select.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/e356c2fb6dbd60ce4346841f6a2e5578014fadb4/sql/mariadb/examples/fast/dml_select.sql",
+      "sha256": "b9128ffb5b50bea79c534bc24a127d9d626fd2d21be8cb0a45deafd8d6c84f79",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/mariadb/examples/fast/dml_select.sql:152",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB JSON expression combines two documents with JSON_MERGE_PRESERVE, retaining duplicate values through array combination semantics.",
+      "mysql_mariadb_translation": "Reauthored as an inventory reconciliation audit over new JSON-column documents. The report preserves colliding object fields, concatenates arrays, and autowraps a scalar collision so merge-preserve semantics and result metadata are observed without copying source schema, values, or query text."
+    },
+    "independently_authored": true
+  },
+  "features": ["json-merge-preserve", "json-column", "object-collision", "array-concatenation", "scalar-autowrap", "deterministic-order"],
+  "fixture_notes": "Item 7301 merges colliding warehouse arrays and a nested object; item 7302 merges a scalar quantity collision and adds a new flags array. Complete merged documents are selected to preserve JSON value and metadata differences.",
+  "determinism_notes": "Rows use fixed item IDs and the report orders by the primary key. There are no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE inventory_snapshots (item_id INT PRIMARY KEY, current_doc JSON NOT NULL, incoming_doc JSON NOT NULL)",
+    "INSERT INTO inventory_snapshots VALUES (7301, '{\"sku\":\"AX-7\",\"warehouses\":[\"north\"],\"limits\":{\"daily\":12}}', '{\"warehouses\":[\"south\"],\"limits\":{\"burst\":4}}'), (7302, '{\"sku\":\"BZ-2\",\"quantity\":5}', '{\"quantity\":7,\"flags\":[\"recount\"]}')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT item_id, JSON_MERGE_PRESERVE(current_doc, incoming_doc) AS preserved_doc FROM inventory_snapshots ORDER BY item_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT item_id FROM inventory_snapshots ORDER BY item_id",
+      "ordered": true
+    }
+  ]
+}
