@@ -1769,7 +1769,29 @@ impl RawEngine {
                         }
                     }
                     "NOW" | "CURRENT_TIMESTAMP" | "FROM_UNIXTIME" => MysqlColumnType::DateTime,
-                    "DATE_ADD" | "DATE_SUB" | "ADDDATE" | "SUBDATE" => MysqlColumnType::DateTime,
+                    "DATE_ADD" | "DATE_SUB" | "ADDDATE" | "SUBDATE" => {
+                        let first_argument = function_arguments(function)
+                            .ok()
+                            .and_then(|arguments| arguments.into_iter().next().flatten());
+                        let first_argument_type = first_argument.as_ref().map(|argument| {
+                            self.expression_metadata(select, argument, String::new(), first_row)
+                                .column_type
+                        });
+                        let function_text = function.to_string().to_ascii_uppercase();
+                        let has_time_interval = function_text.contains("HOUR")
+                            || function_text.contains("MINUTE")
+                            || function_text.contains("SECOND")
+                            || function_text.contains("MICROSECOND");
+                        match first_argument_type {
+                            Some(MysqlColumnType::Date) if !has_time_interval => {
+                                MysqlColumnType::Date
+                            }
+                            Some(MysqlColumnType::Date) => MysqlColumnType::DateTime,
+                            Some(MysqlColumnType::DateTime | MysqlColumnType::Timestamp)
+                            | Some(MysqlColumnType::Time) => MysqlColumnType::DateTime,
+                            _ => MysqlColumnType::Char,
+                        }
+                    }
                     "TIMESTAMPADD" => {
                         let datetime_type = function_arguments(function)
                             .ok()

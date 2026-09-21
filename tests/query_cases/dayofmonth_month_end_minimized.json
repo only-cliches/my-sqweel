@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "dayofmonth_month_end_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "svetasmirnova/mysqlcookbook",
+      "commit": "77a51ec49062d4853106ec0c242d44f965422501",
+      "path": "recipes/dates/date.sql",
+      "url": "https://github.com/svetasmirnova/mysqlcookbook/blob/77a51ec49062d4853106ec0c242d44f965422501/recipes/dates/date.sql",
+      "sha256": "57d83361f577ad7306947ecd4a8326f92694a61292d33955b54715410304c89c",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "recipes/dates/date.sql:34-40",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "DAYOFMONTH extracts the final day number after month-start date arithmetic.",
+      "mysql_mariadb_translation": "Reduced to independently authored mixed DATE rows with both the derived month-end value and DAYOFMONTH projection, retaining row-dependent date evaluation and NULL propagation."
+    },
+    "independently_authored": true
+  },
+  "features": ["dayofmonth", "date-arithmetic", "month-end", "null-propagation", "metadata", "deterministic-order"],
+  "fixture_notes": "A valid February DATE followed by a NULL DATE must produce 2024-02-29/29 then NULL/NULL.",
+  "determinism_notes": "The two fixed rows and arithmetic intervals are fixed with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE month_end_min (row_id INT PRIMARY KEY, anchor_date DATE NULL)",
+    "INSERT INTO month_end_min VALUES (1, '2024-02-17'), (2, NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT row_id, DATE_SUB(DATE_ADD(CONCAT(YEAR(anchor_date), '-', MONTH(anchor_date), '-01'), INTERVAL 1 MONTH), INTERVAL 1 DAY) AS month_end, DAYOFMONTH(DATE_SUB(DATE_ADD(CONCAT(YEAR(anchor_date), '-', MONTH(anchor_date), '-01'), INTERVAL 1 MONTH), INTERVAL 1 DAY)) AS month_end_day FROM month_end_min ORDER BY row_id",
+      "ordered": true
+    }
+  ]
+}

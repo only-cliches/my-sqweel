@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "dayofmonth_month_end",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "svetasmirnova/mysqlcookbook",
+      "commit": "77a51ec49062d4853106ec0c242d44f965422501",
+      "path": "recipes/dates/date.sql",
+      "url": "https://github.com/svetasmirnova/mysqlcookbook/blob/77a51ec49062d4853106ec0c242d44f965422501/recipes/dates/date.sql",
+      "sha256": "57d83361f577ad7306947ecd4a8326f92694a61292d33955b54715410304c89c",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "recipes/dates/date.sql:18-40",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL date recipe computes the last day of a month by advancing the first day of the current month and subtracting one day, then extracts its day number with DAYOFMONTH.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored billing-calendar audit. Fixed anchor dates cover leap-February, a thirty-day month, and SQL NULL; YEAR, MONTH, DATE_ADD, DATE_SUB, and DAYOFMONTH derive and expose each month end without copying the source variables or literals."
+    },
+    "independently_authored": true
+  },
+  "features": ["dayofmonth", "date-arithmetic", "month-end", "leap-year", "null-propagation", "deterministic-order"],
+  "fixture_notes": "Anchor 701 exercises leap-year February, anchor 702 exercises April month-end, and anchor 703 preserves NULL through the derived month-end and day-number expressions.",
+  "determinism_notes": "Anchor dates, labels, arithmetic intervals, and ordering are fixed with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE billing_anchors (anchor_id INT PRIMARY KEY, anchor_label VARCHAR(32) NOT NULL, anchor_date DATE NULL)",
+    "INSERT INTO billing_anchors VALUES (701, 'leap-february', '2024-02-17'), (702, 'thirty-day-april', '2023-04-08'), (703, 'missing-date', NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT anchor_id, anchor_label, anchor_date, DATE_SUB(DATE_ADD(CONCAT(YEAR(anchor_date), '-', MONTH(anchor_date), '-01'), INTERVAL 1 MONTH), INTERVAL 1 DAY) AS month_end, DAYOFMONTH(DATE_SUB(DATE_ADD(CONCAT(YEAR(anchor_date), '-', MONTH(anchor_date), '-01'), INTERVAL 1 MONTH), INTERVAL 1 DAY)) AS month_end_day FROM billing_anchors ORDER BY anchor_id",
+      "ordered": true
+    }
+  ]
+}
