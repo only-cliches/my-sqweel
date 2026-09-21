@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "found_rows_pagination",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "roxma/cpp_learn",
+      "commit": "71dafa42c399c715b8091c43d96d3950cb3073aa",
+      "path": "mysql/select/found_rows.sql",
+      "url": "https://github.com/roxma/cpp_learn/blob/71dafa42c399c715b8091c43d96d3950cb3073aa/mysql/select/found_rows.sql",
+      "sha256": "a7a23cd1fb80216ea038a837601031ca7175ed5671c90b5fde6ddc97c0c44903",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "mysql/select/found_rows.sql:5-10",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "SQL_CALC_FOUND_ROWS captures the full matching-row count for a limited result, and FOUND_ROWS() returns that count on the same connection before a later ordinary limited SELECT replaces it.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored inventory pagination report. A filtered stock table has five matching rows; a two-row SQL_CALC_FOUND_ROWS page is followed by FOUND_ROWS(), then an ordinary two-row page and a second FOUND_ROWS() call to distinguish the full-match count from the latest result count."
+    },
+    "independently_authored": true
+  },
+  "features": ["sql-calc-found-rows", "found-rows", "limit", "session-state", "filtered-pagination", "deterministic-order"],
+  "fixture_notes": "Five active inventory rows match the filter. The first page returns two rows but FOUND_ROWS() must report five; the later ordinary page returns two rows and FOUND_ROWS() must then report two.",
+  "determinism_notes": "Inventory IDs, quantities, labels, and page size are fixed; each page is ordered by the unique inventory ID with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE inventory_items (item_id INT PRIMARY KEY, item_label VARCHAR(32) NOT NULL, quantity INT NOT NULL, active TINYINT NOT NULL)",
+    "INSERT INTO inventory_items VALUES (11, 'alpha', 4, 1), (12, 'bravo', 7, 1), (13, 'charlie', 0, 0), (14, 'delta', 9, 1), (15, 'echo', 2, 1), (16, 'foxtrot', 5, 1), (17, 'golf', 1, 0)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT SQL_CALC_FOUND_ROWS item_id, item_label, quantity FROM inventory_items WHERE active = 1 ORDER BY item_id LIMIT 2",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT FOUND_ROWS() AS matching_count",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT item_id, item_label, quantity FROM inventory_items WHERE active = 1 ORDER BY item_id LIMIT 2",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT FOUND_ROWS() AS latest_page_count",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT item_id, item_label, quantity, active FROM inventory_items ORDER BY item_id",
+      "ordered": true
+    }
+  ]
+}

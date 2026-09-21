@@ -1014,12 +1014,43 @@ impl RawEngine {
             self.last_found_rows.store(0, AtomicOrdering::Relaxed);
             return;
         }
-        let count = if upper.contains("COUNT(") && result.rows.is_empty() {
+        let count = if upper.contains("SQL_CALC_FOUND_ROWS") {
+            self.calculate_found_rows(sql)
+                .unwrap_or(result.rows.len() as u64)
+        } else if upper.contains("COUNT(") && result.rows.is_empty() {
             1
         } else {
             result.rows.len() as u64
         };
         self.last_found_rows.store(count, AtomicOrdering::Relaxed);
+    }
+
+    fn calculate_found_rows(&self, sql: &str) -> Option<u64> {
+        let parse_sql = self.rewrite_sql_for_parser(&strip_select_modifiers(sql));
+        let mut statements = super::parse(&parse_sql).ok()?;
+        let Statement::Query(mut query) = statements.pop()? else {
+            return None;
+        };
+        query.limit = None;
+        query.offset = None;
+        Some(self.select_query(*query).ok()?.rows.len() as u64)
+    }
+
+    fn found_rows_column_name(&self, sql: &str) -> String {
+        let parse_sql = self.rewrite_sql_for_parser(sql);
+        let Ok(mut statements) = super::parse(&parse_sql) else {
+            return "found_rows()".to_string();
+        };
+        let Some(Statement::Query(query)) = statements.pop() else {
+            return "found_rows()".to_string();
+        };
+        let SetExpr::Select(select) = *query.body else {
+            return "found_rows()".to_string();
+        };
+        match select.projection.first() {
+            Some(SelectItem::ExprWithAlias { alias, .. }) => alias.value.clone(),
+            _ => "found_rows()".to_string(),
+        }
     }
 
     fn can_parse_without_compat_rewrites(&self, sql: &str) -> bool {
@@ -3866,10 +3897,11 @@ impl RawEngine {
         }
         if upper.starts_with("SELECT FOUND_ROWS()") {
             let value = self.last_found_rows.load(AtomicOrdering::Relaxed);
+            let column = self.found_rows_column_name(trimmed);
             return Ok(Some(QueryResult {
-                columns: vec!["found_rows()".to_string()],
+                columns: vec![column.clone()],
                 rows: vec![Map::from_iter([(
-                    "found_rows()".to_string(),
+                    column,
                     Value::Number(serde_json::Number::from(value)),
                 )])],
                 ..QueryResult::default()
