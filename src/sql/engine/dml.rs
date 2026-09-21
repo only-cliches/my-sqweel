@@ -856,6 +856,23 @@ impl RawEngine {
 
             let (row_id, new_key) =
                 self.updated_row_identity(&table_name, current_row, &updated_data);
+            if update_ignore_mode() {
+                let mut conflict_rows = next_rows.clone();
+                for (key, row) in &current_rows {
+                    if key != old_key && !conflict_rows.contains_key(key) {
+                        conflict_rows.insert(key.clone(), row.clone());
+                    }
+                }
+                if !self
+                    .find_conflict_keys(&table_name, &new_key, &updated_data, &conflict_rows)
+                    .is_empty()
+                {
+                    // UPDATE IGNORE leaves rows that would violate a unique
+                    // constraint unchanged instead of aborting the statement.
+                    next_rows.insert(old_key.clone(), current_row.clone());
+                    continue;
+                }
+            }
 
             let mut updated_row = current_row.clone();
             updated_row.id = row_id;

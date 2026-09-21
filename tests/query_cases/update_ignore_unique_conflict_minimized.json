@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "update_ignore_unique_conflict_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "ProjectSkyfire/SkyFire_548",
+      "commit": "aa8c59bab6bba1c0b9f1b15622da924576a4d8e8",
+      "path": "sql/old/3.1.3/05353_characters_character_spell.sql",
+      "url": "https://github.com/ProjectSkyfire/SkyFire_548/blob/aa8c59bab6bba1c0b9f1b15622da924576a4d8e8/sql/old/3.1.3/05353_characters_character_spell.sql",
+      "sha256": "c4be063c560a627633aacdbc89403ff9157f5ea2161e3f73991e000e82a9796b",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/old/3.1.3/05353_characters_character_spell.sql:3",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "UPDATE IGNORE suppresses a duplicate-key conflict and preserves the conflicting row.",
+      "mysql_mariadb_translation": "Reduced to two independently authored candidate rows and one occupied unique code. UPDATE IGNORE attempts one conflicting and one free reassignment, removing names, active flags, and source-domain values while retaining partial-mutation behavior."
+    },
+    "independently_authored": true,
+    "minimized_from": "update_ignore_unique_conflict"
+  },
+  "features": ["update-ignore", "unique-conflict", "case-assignment", "partial-mutation", "minimized-regression"],
+  "fixture_notes": "Row 1 targets occupied code 30 and must remain code 10; row 2 targets free code 40 and must update.",
+  "determinism_notes": "Fixed IDs and codes are ordered by primary key; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE update_ignore_min (row_id INT PRIMARY KEY, code INT NOT NULL UNIQUE)",
+    "INSERT INTO update_ignore_min VALUES (1, 10), (2, 20), (3, 30)"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE IGNORE update_ignore_min SET code = CASE WHEN row_id = 1 THEN 30 ELSE 40 END WHERE row_id IN (1, 2)",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT row_id, code FROM update_ignore_min ORDER BY row_id",
+      "ordered": true
+    }
+  ]
+}

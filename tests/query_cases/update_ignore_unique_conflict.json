@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "update_ignore_unique_conflict",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "ProjectSkyfire/SkyFire_548",
+      "commit": "aa8c59bab6bba1c0b9f1b15622da924576a4d8e8",
+      "path": "sql/old/3.1.3/05353_characters_character_spell.sql",
+      "url": "https://github.com/ProjectSkyfire/SkyFire_548/blob/aa8c59bab6bba1c0b9f1b15622da924576a4d8e8/sql/old/3.1.3/05353_characters_character_spell.sql",
+      "sha256": "c4be063c560a627633aacdbc89403ff9157f5ea2161e3f73991e000e82a9796b",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/old/3.1.3/05353_characters_character_spell.sql:3-4",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL UPDATE IGNORE migration changes selected legacy codes while allowing conflicting rows to remain unchanged instead of aborting the statement.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored spell-alias cleanup. UPDATE IGNORE attempts to canonicalize two legacy codes under a unique constraint; one row conflicts with an existing canonical code and remains unchanged, while the other moves to a free replacement code. The source table, values, labels, and game semantics are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["update-ignore", "unique-conflict", "case-assignment", "partial-mutation", "final-state-check", "deterministic-order"],
+  "fixture_notes": "Alias 1 targets an already-occupied canonical code and must remain unchanged; alias 2 targets an unused replacement code and must update. The unique constraint makes UPDATE IGNORE behavior observable.",
+  "determinism_notes": "Alias IDs and replacement codes are fixed, and final rows are ordered by the primary key; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE spell_aliases (alias_id INT PRIMARY KEY, spell_code INT NOT NULL UNIQUE, spell_name VARCHAR(24) NOT NULL, active TINYINT NOT NULL)",
+    "INSERT INTO spell_aliases VALUES (1, 7405, 'ember-bind', 1), (2, 8380, 'frost-mark', 1), (3, 7386, 'arcane-shield', 1), (4, 9000, 'plain-strike', 1)"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE IGNORE spell_aliases SET spell_code = CASE WHEN alias_id = 1 THEN 7386 ELSE 8390 END WHERE spell_code IN (7405, 8380)",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT alias_id, spell_code, spell_name, active FROM spell_aliases ORDER BY alias_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT spell_code, COUNT(*) AS code_count FROM spell_aliases GROUP BY spell_code ORDER BY spell_code",
+      "ordered": true
+    }
+  ]
+}
