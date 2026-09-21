@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "schedule_shift_addtime",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "chiqors/GIO-docker-braindead",
+      "commit": "ed0cc8ae0184f363b903da3b84b39d5d1b0a507b",
+      "path": "3.1_dev/adjust.sql",
+      "url": "https://github.com/chiqors/GIO-docker-braindead/blob/ed0cc8ae0184f363b903da3b84b39d5d1b0a507b/3.1_dev/adjust.sql",
+      "sha256": "9a082c9939afb7d9404f1e69e20baf90cecc3c4297fc7b1bc87c3466f52a1292",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "3.1_dev/adjust.sql:13",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A schedule update moves each end timestamp by the original duration computed with TIMEDIFF and ADDTIME, then assigns a common new start timestamp.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored service-window migration. A fixed anchor timestamp replaces the source clock variable, ADDTIME(TIMEDIFF(...)) preserves each active window duration, disabled rows remain unchanged, and NULL timestamps exercise null propagation. The source tables, values, labels, and application purpose are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["update", "addtime", "timediff", "datetime-arithmetic", "null-propagation", "conditional-mutation", "final-state-check", "deterministic-order"],
+  "fixture_notes": "Two enabled service windows shift to the fixed anchor while retaining their original durations. One disabled row is untouched, and one enabled row with NULL timestamps remains NULL through TIMEDIFF and ADDTIME.",
+  "determinism_notes": "The anchor timestamp, durations, row IDs, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE service_windows (window_id INT PRIMARY KEY, service_name VARCHAR(24) NOT NULL, begins_at DATETIME NULL, ends_at DATETIME NULL, enabled TINYINT NOT NULL)",
+    "INSERT INTO service_windows VALUES (41, 'morning', '2026-09-21 08:15:00', '2026-09-21 09:45:30', 1), (42, 'evening', '2026-09-21 22:30:15', '2026-09-21 23:10:45', 1), (43, 'paused', '2026-09-21 11:00:00', '2026-09-21 11:20:00', 0), (44, 'unplanned', NULL, NULL, 1)"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE service_windows SET ends_at = ADDTIME('2026-09-22 12:00:00', TIMEDIFF(ends_at, begins_at)), begins_at = '2026-09-22 12:00:00' WHERE enabled = 1",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT window_id, service_name, begins_at, ends_at, TIMEDIFF(ends_at, begins_at) AS duration_after FROM service_windows ORDER BY window_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT window_id, enabled, begins_at, ends_at FROM service_windows ORDER BY window_id",
+      "ordered": true
+    }
+  ]
+}
