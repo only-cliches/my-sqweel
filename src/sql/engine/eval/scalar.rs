@@ -311,6 +311,33 @@ pub(super) fn eval_inet_aton_value(value: Value) -> Result<Value> {
     Ok(Value::Number(Number::from(address)))
 }
 
+pub(super) fn eval_inet_ntoa(
+    value_arg: Option<&String>,
+    data: &Map<String, Value>,
+    last_insert_id: u64,
+) -> Result<Value> {
+    eval_inet_ntoa_value(eval_arg(value_arg, data, last_insert_id)?)
+}
+
+pub(super) fn eval_inet_ntoa_value(value: Value) -> Result<Value> {
+    if value == Value::Null {
+        return Ok(Value::Null);
+    }
+    let Some(address) =
+        value_to_i64(&value).filter(|address| (0..=u32::MAX as i64).contains(address))
+    else {
+        return Ok(Value::Null);
+    };
+    let address = address as u32;
+    Ok(Value::String(format!(
+        "{}.{}.{}.{}",
+        address >> 24,
+        (address >> 16) & 0xff,
+        (address >> 8) & 0xff,
+        address & 0xff
+    )))
+}
+
 pub(super) fn eval_inet6_aton(
     value_arg: Option<&String>,
     data: &Map<String, Value>,

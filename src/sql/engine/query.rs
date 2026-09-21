@@ -1523,6 +1523,7 @@ impl RawEngine {
                         MysqlColumnType::BigInt
                     }
                     "INET6_ATON" => MysqlColumnType::VarBinary,
+                    "INET_NTOA" => MysqlColumnType::VarChar,
                     "TO_BASE64" => {
                         let argument = function_arguments(function)
                             .ok()

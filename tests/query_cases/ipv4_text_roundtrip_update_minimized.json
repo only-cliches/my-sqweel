@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "id": "ipv4_text_roundtrip_update_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "echothrust/echofish",
+      "commit": "0e402fdac605ad9b4e1081c48a5c3028b423d646",
+      "path": "schema/updates/v0.5-to-v0.6.sql",
+      "url": "https://github.com/echothrust/echofish/blob/0e402fdac605ad9b4e1081c48a5c3028b423d646/schema/updates/v0.5-to-v0.6.sql",
+      "sha256": "32632f6223dc5b2fc1951de17f83395a35d0fc9d3fa929ed0fd9d9e80750c8a7",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "schema/updates/v0.5-to-v0.6.sql:18-19",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A scalar expression nests INET_NTOA inside INET6_ATON to round-trip an IPv4 value through text and binary forms.",
+      "mysql_mariadb_translation": "Reduced to one independently authored unsigned IPv4 integer and one HEX projection of the nested conversion; the migration update, table state, and unrelated rows are removed while the function composition remains."
+    },
+    "independently_authored": true,
+    "minimized_from": "ipv4_text_roundtrip_update"
+  },
+  "features": ["inet-ntoa", "inet6-aton", "nested-function", "metadata-regression", "deterministic-order"],
+  "fixture_notes": "One fixed integer IPv4 value must render as C0000201 after the nested text/binary round trip.",
+  "determinism_notes": "The scalar integer and output projection are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT HEX(INET6_ATON(INET_NTOA(3221225985))) AS address_hex",
+      "ordered": true
+    }
+  ]
+}

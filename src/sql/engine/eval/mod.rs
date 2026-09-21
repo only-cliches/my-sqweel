@@ -3490,6 +3490,14 @@ where
                 .unwrap_or(Value::Null);
             eval_inet_aton_value(value)
         })()),
+        "INET_NTOA" => Some((|| {
+            let value = args
+                .first()
+                .map(eval_arg)
+                .transpose()?
+                .unwrap_or(Value::Null);
+            eval_inet_ntoa_value(value)
+        })()),
         "INET6_ATON" => Some((|| {
             let value = args
                 .first()
@@ -3953,6 +3961,7 @@ pub(super) fn eval_function_text(
                 .collect::<Result<Vec<_>>>()?;
             eval_regexp_replace_values(&values)
         }
+        "INET_NTOA" => eval_inet_ntoa(args.first(), data, last_insert_id),
         "REGEXP_SUBSTR" => {
             let values = args
                 .iter()
