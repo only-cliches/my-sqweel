@@ -208,6 +208,7 @@ allowlist = [
     "domain=archive.ubuntu.com",
     "domain=packages.ubuntu.com",
     "domain=productionresultssa10.blob.core.windows.net",
+    "domain=static.rust-lang.org",
 ]
 denylist = [
     "domain=sdmntprsouthcentralus.oaiusercontent.com",
