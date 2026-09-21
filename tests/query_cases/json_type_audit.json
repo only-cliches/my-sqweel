@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "json_type_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/3639.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/3639.sql",
+      "sha256": "1f8ca89d313541bc913e05c166621b842f55192a33f3beaf265f8ae93de6a8fb",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/docker/fuzz_root/mysql_initlib/3639.sql:1-24",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL query applies JSON_TYPE to arrays, objects, and scalar JSON values to classify their outermost JSON type.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored payload-type audit over fixed JSON column values. The report classifies object, integer, string, boolean, and SQL NULL roots, then classifies an extracted nested value without copying the source literals or rows."
+    },
+    "independently_authored": true
+  },
+  "features": ["json-type", "json-extract", "object-array-scalars", "null-propagation", "deterministic-order"],
+  "fixture_notes": "Payload 801 is an object with an integer member, 802 is a string scalar, 803 is a boolean scalar, 804 is an array, and 805 is SQL NULL. The nested type column extracts `$.account_id` where present.",
+  "determinism_notes": "Payload IDs and JSON values are fixed and ordered by the primary key; type classification has no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE payload_type_audit (payload_id INT PRIMARY KEY, payload_label VARCHAR(24) NOT NULL, payload JSON NULL)",
+    "INSERT INTO payload_type_audit VALUES (801, 'object integer', '{\"account_id\":42,\"active\":true}'), (802, 'string scalar', '\"ready\"'), (803, 'boolean scalar', 'false'), (804, 'array root', '[1,2,3]'), (805, 'missing payload', NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT payload_id, payload_label, JSON_TYPE(payload) AS root_type, JSON_TYPE(JSON_EXTRACT(payload, '$.account_id')) AS account_id_type FROM payload_type_audit ORDER BY payload_id",
+      "ordered": true
+    }
+  ]
+}
