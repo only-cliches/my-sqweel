@@ -224,6 +224,8 @@ All notable changes to MySqweel will be documented in this file.
 - Added the minimized GitHub-attributed `JSON_COMPACT` direct-column metadata regression; MariaDB 10.11.7 and MySqweel now agree on compact output and metadata across repeated fresh differential runs.
 - Added GitHub-attributed `JSON_ARRAY_APPEND` coverage from [antlr/grammars-v4](https://github.com/antlr/grammars-v4/blob/e356c2fb6dbd60ce4346841f6a2e5578014fadb4/sql/mariadb/examples/fast/dml_select.sql#L147) for an independently authored shipment-manifest audit combining JSON-column array mutation, nested `JSON_OBJECT` values, scalar-path wrapping, and deterministic ordered output; fixed `JSON_ARRAY_APPEND` result metadata to match MariaDB 10.11.7's `MYSQL_TYPE_LONG_BLOB`.
 - Added the minimized GitHub-attributed `JSON_ARRAY_APPEND` direct-column metadata regression; MariaDB 10.11.7 and MySqweel now agree on appended JSON values and metadata across repeated fresh differential runs.
+- Added GitHub-attributed `JSON_ARRAY_INSERT` coverage from [antlr/grammars-v4](https://github.com/antlr/grammars-v4/blob/e356c2fb6dbd60ce4346841f6a2e5578014fadb4/sql/mariadb/examples/fast/dml_select.sql#L148) for an independently authored route-plan audit combining JSON-column nested-array insertion, multiple path/value pairs, and deterministic ordered output; fixed `JSON_ARRAY_INSERT` result metadata to match MariaDB 10.11.7's `MYSQL_TYPE_LONG_BLOB`.
+- Added the minimized GitHub-attributed `JSON_ARRAY_INSERT` direct-column metadata regression; MariaDB 10.11.7 and MySqweel now agree on inserted JSON values and metadata across repeated fresh differential runs.
 
 ### Upstream corpus coverage
 

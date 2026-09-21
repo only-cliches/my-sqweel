@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "json_array_insert_route_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "antlr/grammars-v4",
+      "commit": "e356c2fb6dbd60ce4346841f6a2e5578014fadb4",
+      "path": "sql/mariadb/examples/fast/dml_select.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/e356c2fb6dbd60ce4346841f6a2e5578014fadb4/sql/mariadb/examples/fast/dml_select.sql",
+      "sha256": "b9128ffb5b50bea79c534bc24a127d9d626fd2d21be8cb0a45deafd8d6c84f79",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/mariadb/examples/fast/dml_select.sql:148",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB JSON expression inserts a value at a selected array index with JSON_ARRAY_INSERT.",
+      "mysql_mariadb_translation": "Reauthored as a route-plan audit over new JSON-column documents. The report inserts a stop into a nested array and applies two ordered insertions in one call, preserving the public function's path-index semantics without copying source schema, values, or query text."
+    },
+    "independently_authored": true
+  },
+  "features": ["json-array-insert", "json-column", "nested-array-path", "multiple-path-pairs", "deterministic-order"],
+  "fixture_notes": "Route 9201 starts with two stops and receives one middle insertion or two ordered insertions. Route 9202 starts with one stop so the second insertion exercises a later valid index. The complete mutated documents are selected to preserve JSON value and metadata differences.",
+  "determinism_notes": "Rows use fixed route IDs and the report orders by the primary key. There are no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE route_plans (route_id INT PRIMARY KEY, route_doc JSON NOT NULL)",
+    "INSERT INTO route_plans VALUES (9201, '{\"stops\":[\"depot\",\"dock\"],\"priority\":\"normal\"}'), (9202, '{\"stops\":[\"depot\"],\"priority\":\"urgent\"}')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT route_id, JSON_ARRAY_INSERT(route_doc, '$.stops[1]', 'crossdock') AS middle_route, JSON_ARRAY_INSERT(route_doc, '$.stops[0]', 'gate', '$.stops[2]', 'handoff') AS expanded_route FROM route_plans ORDER BY route_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT route_id FROM route_plans ORDER BY route_id",
+      "ordered": true
+    }
+  ]
+}

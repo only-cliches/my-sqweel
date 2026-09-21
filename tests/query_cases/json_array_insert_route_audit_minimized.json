@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "json_array_insert_route_audit_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "antlr/grammars-v4",
+      "commit": "e356c2fb6dbd60ce4346841f6a2e5578014fadb4",
+      "path": "sql/mariadb/examples/fast/dml_select.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/e356c2fb6dbd60ce4346841f6a2e5578014fadb4/sql/mariadb/examples/fast/dml_select.sql",
+      "sha256": "b9128ffb5b50bea79c534bc24a127d9d626fd2d21be8cb0a45deafd8d6c84f79",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/mariadb/examples/fast/dml_select.sql:148",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB JSON expression inserts a value at a selected array index with JSON_ARRAY_INSERT.",
+      "mysql_mariadb_translation": "Minimized to one JSON column and one indexed insertion so the JSON_ARRAY_INSERT result metadata is isolated from multiple rows, paths, and projections."
+    },
+    "independently_authored": true,
+    "parent_case": "json_array_insert_route_audit"
+  },
+  "features": ["json-array-insert", "json-column", "result-metadata", "deterministic-order"],
+  "fixture_notes": "The single probe stores one two-element stop array and inserts a fixed text value at index one. The complete JSON result is selected so the MariaDB LONG_BLOB versus MySqweel BLOB metadata contract is observable.",
+  "determinism_notes": "The probe uses a fixed primary key and has no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE insert_probe (probe_id INT PRIMARY KEY, payload JSON NOT NULL)",
+    "INSERT INTO insert_probe VALUES (1, '{\"stops\":[\"depot\",\"dock\"]}')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT probe_id, JSON_ARRAY_INSERT(payload, '$.stops[1]', 'crossdock') AS inserted_payload FROM insert_probe ORDER BY probe_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT probe_id FROM insert_probe ORDER BY probe_id",
+      "ordered": true
+    }
+  ]
+}
