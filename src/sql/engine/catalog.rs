@@ -509,6 +509,20 @@ impl Catalog {
                 "ALTER TABLE {table} DROP INDEX {conditional}{index}"
             ));
         }
+        if let Some((mut table, old_name, new_name)) = parse_index_rename(sql)? {
+            ensure!(self.is_admin(identity), "Administrative command denied");
+            DatabaseVisitor {
+                catalog: self,
+                identity,
+                database,
+                read_only: false,
+                rewritten: false,
+            }
+            .relation(&mut table)?;
+            return Ok(format!(
+                "ALTER TABLE {table} RENAME KEY {old_name} TO {new_name}"
+            ));
+        }
         if let Some((mut table, next)) = parse_auto_increment_option(sql)? {
             ensure!(self.is_admin(identity), "Administrative command denied");
             DatabaseVisitor {
@@ -1104,6 +1118,27 @@ pub(super) fn parse_index_drop(sql: &str) -> Result<Option<(ObjectName, Ident, b
         return Ok(Some((table, index, if_exists)));
     }
     Ok(None)
+}
+
+pub(super) fn parse_index_rename(sql: &str) -> Result<Option<(ObjectName, Ident, Ident)>> {
+    if !may_start_with(sql, &["ALTER"]) {
+        return Ok(None);
+    }
+    let mut tokens = Tokens::new(sql)?;
+    if !tokens.take_keyword("ALTER") || !tokens.take_keyword("TABLE") {
+        return Ok(None);
+    }
+    let table = tokens.object_name()?;
+    if !tokens.take_keyword("RENAME")
+        || !(tokens.take_keyword("INDEX") || tokens.take_keyword("KEY"))
+    {
+        return Ok(None);
+    }
+    let old_name = Ident::with_quote('`', tokens.identifier()?);
+    tokens.keyword("TO")?;
+    let new_name = Ident::with_quote('`', tokens.identifier()?);
+    tokens.finish()?;
+    Ok(Some((table, old_name, new_name)))
 }
 
 fn normalize_rename(sql: &str) -> Result<Option<String>> {

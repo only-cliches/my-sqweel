@@ -4410,7 +4410,10 @@ fn rewrite_alter_rename_syntax(sql: &str) -> String {
     let Some(rename) = upper.find(" RENAME ") else {
         return sql.to_string();
     };
-    if upper[rename + " RENAME ".len()..].starts_with("COLUMN ") {
+    if upper[rename + " RENAME ".len()..].starts_with("COLUMN ")
+        || upper[rename + " RENAME ".len()..].starts_with("INDEX ")
+        || upper[rename + " RENAME ".len()..].starts_with("KEY ")
+    {
         return sql.to_string();
     }
     let insert_at = rename + " RENAME ".len();

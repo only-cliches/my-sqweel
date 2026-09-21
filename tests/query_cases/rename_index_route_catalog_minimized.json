@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "id": "rename_index_route_catalog_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "rename_index_route_catalog",
+    "source": {
+      "kind": "github",
+      "repository": "banzaicloud/pipeline",
+      "commit": "e7c744b8d316eb5356e3b4e719ec50c8d8841076",
+      "path": "database/migrations/mysql/1556881148_update_indexes.up.sql",
+      "url": "https://github.com/banzaicloud/pipeline/blob/e7c744b8d316eb5356e3b4e719ec50c8d8841076/database/migrations/mysql/1556881148_update_indexes.up.sql",
+      "sha256": "442b85c40614181e9b01891d51f9f7a1d47f4f193d04f97fbe4560a5e3f740e8",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "database/migrations/mysql/1556881148_update_indexes.up.sql:1-5",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL migration renames existing indexes in place so index names follow the table-specific naming convention without rebuilding the indexed data.",
+      "mysql_mariadb_translation": "Reduced to one independently authored table, one composite index, and one ALTER TABLE RENAME INDEX statement. The metadata query isolates the renamed index definition from the original migration's multiple tables and sequential rename flow."
+    },
+    "independently_authored": true,
+    "minimized_from": "rename_index_route_catalog"
+  },
+  "features": [
+    "alter-table-rename-index",
+    "composite-index-metadata",
+    "deterministic-order"
+  ],
+  "fixture_notes": "One composite index is renamed once; its two indexed columns must remain visible under the new name.",
+  "determinism_notes": "The table, index names, columns, and metadata ordering are fixed with no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE route_catalog_min (route_id INT PRIMARY KEY, route_state VARCHAR(16) NOT NULL, priority INT NOT NULL)",
+    "INSERT INTO route_catalog_min VALUES (951, 'ready', 80)",
+    "CREATE INDEX route_priority_old ON route_catalog_min (route_state, priority)"
+  ],
+  "steps": [
+    {
+      "sql": "ALTER TABLE route_catalog_min RENAME INDEX route_priority_old TO route_priority_new"
+    },
+    {
+      "sql": "SELECT index_name, seq_in_index, column_name FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = 'route_catalog_min' AND index_name = 'route_priority_new' ORDER BY seq_in_index",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT index_name, seq_in_index, column_name FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = 'route_catalog_min' AND index_name = 'route_priority_new' ORDER BY seq_in_index",
+      "ordered": true
+    }
+  ]
+}
