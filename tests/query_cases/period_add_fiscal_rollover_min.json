@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "id": "period_add_fiscal_rollover_min",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "bpbpublications/MySQL-Cookbook",
+      "commit": "a1bf69c06ab8b4ac124eed9603fc5447e0842d32",
+      "path": "Chapter 07/select_period_add.sql",
+      "url": "https://github.com/bpbpublications/MySQL-Cookbook/blob/a1bf69c06ab8b4ac124eed9603fc5447e0842d32/Chapter%2007/select_period_add.sql",
+      "sha256": "1482e348e609c63e147d833dd46bb671986f84ffdb60168bc030b34e2391de40",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Chapter 07/select_period_add.sql:1",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL scalar query advances a YYYYMM period code by a number of months with PERIOD_ADD.",
+      "mysql_mariadb_translation": "Reduced to one independently authored year-boundary PERIOD_ADD projection, isolating function evaluation and integer metadata from the original audit's rows and classification."
+    },
+    "independently_authored": true,
+    "minimized_from": "period_add_fiscal_rollover"
+  },
+  "features": ["period-add", "year-boundary", "minimized-regression"],
+  "fixture_notes": "One fixed December period and two-month offset isolate the rollover result 202402 and its integer metadata.",
+  "determinism_notes": "The scalar period and offset are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT PERIOD_ADD(202312, 2) AS shifted_period",
+      "ordered": true
+    }
+  ]
+}

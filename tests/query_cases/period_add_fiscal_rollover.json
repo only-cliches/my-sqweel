@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "period_add_fiscal_rollover",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "bpbpublications/MySQL-Cookbook",
+      "commit": "a1bf69c06ab8b4ac124eed9603fc5447e0842d32",
+      "path": "Chapter 07/select_period_add.sql",
+      "url": "https://github.com/bpbpublications/MySQL-Cookbook/blob/a1bf69c06ab8b4ac124eed9603fc5447e0842d32/Chapter%2007/select_period_add.sql",
+      "sha256": "1482e348e609c63e147d833dd46bb671986f84ffdb60168bc030b34e2391de40",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Chapter 07/select_period_add.sql:1",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL scalar query advances a YYYYMM period code by a number of months with PERIOD_ADD.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored fiscal-period rollover audit. Fixed year-boundary, backward, zero-offset, and NULL inputs exercise PERIOD_ADD's integer period arithmetic; the source literal and purpose are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["period-add", "year-boundary", "negative-offset", "null-propagation", "deterministic-order"],
+  "fixture_notes": "Period codes use YYYYMM notation. Rows cross December-to-January forward, January-to-November backward, hold with a zero offset, and propagate a missing period.",
+  "determinism_notes": "Audit IDs, period codes, and month offsets are fixed, and output is ordered by the primary key with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE fiscal_periods (audit_id INT PRIMARY KEY, period_code INT NULL, month_offset INT NULL)",
+    "INSERT INTO fiscal_periods VALUES (701, 202312, 2), (702, 202401, -2), (703, 202406, 0), (704, NULL, 3)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT audit_id, period_code, month_offset, PERIOD_ADD(period_code, month_offset) AS shifted_period, CASE WHEN PERIOD_ADD(period_code, month_offset) IS NULL THEN 'missing-period' WHEN month_offset < 0 THEN 'backward-adjustment' WHEN month_offset = 0 THEN 'unchanged-period' ELSE 'forward-adjustment' END AS adjustment_class FROM fiscal_periods ORDER BY audit_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT audit_id, period_code, month_offset FROM fiscal_periods ORDER BY audit_id",
+      "ordered": true
+    }
+  ]
+}

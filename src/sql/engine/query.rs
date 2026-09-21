@@ -1728,7 +1728,9 @@ impl RawEngine {
                             _ => MysqlColumnType::Char,
                         }
                     }
-                    "FIELD" | "FIND_IN_SET" | "BIT_COUNT" | "INSTR" => MysqlColumnType::Integer,
+                    "FIELD" | "FIND_IN_SET" | "BIT_COUNT" | "INSTR" | "PERIOD_ADD" => {
+                        MysqlColumnType::Integer
+                    }
                     "YEAR" | "MONTH" | "DAY" | "DAYOFMONTH" | "DAYOFWEEK" | "WEEKDAY"
                     | "DAYOFYEAR" | "YEARWEEK" | "WEEKOFYEAR" | "QUARTER" | "HOUR" | "MINUTE"
                     | "SECOND" | "MICROSECOND" => MysqlColumnType::Integer,

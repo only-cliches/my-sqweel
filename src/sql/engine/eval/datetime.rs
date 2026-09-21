@@ -179,6 +179,45 @@ pub(super) fn eval_make_time(
         total_seconds * sign,
     ))))
 }
+pub(super) fn eval_period_add(
+    period_arg: Option<&String>,
+    months_arg: Option<&String>,
+    data: &Map<String, Value>,
+    last_insert_id: u64,
+) -> Result<Value> {
+    let period = period_arg
+        .map(|arg| eval_scalar_text(arg, data, last_insert_id))
+        .transpose()?
+        .and_then(|value| value_to_i64(&value));
+    let months = months_arg
+        .map(|arg| eval_scalar_text(arg, data, last_insert_id))
+        .transpose()?
+        .and_then(|value| value_to_i64(&value));
+    let (Some(period), Some(months)) = (period, months) else {
+        return Ok(Value::Null);
+    };
+    let period_year = period / 100;
+    let year = if period >= 100_000 {
+        period_year
+    } else if period_year < 70 {
+        2_000 + period_year
+    } else {
+        1_900 + period_year
+    };
+    let month = period.rem_euclid(100);
+    let Some(total_months) = year
+        .checked_mul(12)
+        .and_then(|value| value.checked_add(month - 1))
+        .and_then(|value| value.checked_add(months))
+    else {
+        return Ok(Value::Null);
+    };
+    let result_year = total_months.div_euclid(12);
+    let result_month = total_months.rem_euclid(12) + 1;
+    Ok(Value::Number(Number::from(
+        result_year * 100 + result_month,
+    )))
+}
 
 pub(super) fn eval_add_sub_time(
     datetime_arg: Option<&String>,
