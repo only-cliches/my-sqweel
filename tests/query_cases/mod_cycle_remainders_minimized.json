@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "id": "mod_cycle_remainders_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Elinasu001/sql_jdbc",
+      "commit": "f2fde7857f500ab3cc02367062ed2e19cfe26dd9",
+      "path": "02_DQL(SELECT)_함수.sql",
+      "url": "https://github.com/Elinasu001/sql_jdbc/blob/f2fde7857f500ab3cc02367062ed2e19cfe26dd9/02_DQL%28SELECT%29_%ED%95%A8%EC%88%98.sql",
+      "sha256": "151257e0926a3c0ef0aa667f46ca2ed2a29835f10008521daee80010a9778d3e",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "02_DQL(SELECT)_함수.sql:310-326",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "MOD over a decimal operand returns a decimal remainder with MariaDB numeric metadata.",
+      "mysql_mariadb_translation": "Reduced to one independently authored decimal MOD projection; the source DUAL query, schema, and surrounding examples are removed while the exact-decimal result metadata remains observable."
+    },
+    "independently_authored": true
+  },
+  "features": ["mod", "decimal-operands", "metadata", "deterministic-order"],
+  "fixture_notes": "The fixed decimal remainder must retain MariaDB MYSQL_TYPE_NEWDECIMAL metadata.",
+  "determinism_notes": "The numeric literals are fixed and the single result row has no clocks, randomness, sleeps, or concurrent connections.",
+  "steps": [
+    {
+      "sql": "SELECT MOD(10.80, 3) AS decimal_remainder",
+      "ordered": true
+    }
+  ]
+}

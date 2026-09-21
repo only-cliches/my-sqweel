@@ -1698,6 +1698,43 @@ impl RawEngine {
                         }
                         MysqlColumnType::Decimal
                     }
+                    "MOD" => {
+                        let argument_metadata = function_arguments(function)
+                            .ok()
+                            .map(|arguments| {
+                                arguments
+                                    .into_iter()
+                                    .flatten()
+                                    .map(|argument| {
+                                        self.expression_metadata(
+                                            select,
+                                            &argument,
+                                            String::new(),
+                                            first_row,
+                                        )
+                                    })
+                                    .collect::<Vec<_>>()
+                            })
+                            .unwrap_or_default();
+                        let rank = argument_metadata
+                            .iter()
+                            .map(|metadata| numeric_type_rank(metadata.column_type))
+                            .max()
+                            .unwrap_or_default();
+                        match rank {
+                            1 => MysqlColumnType::BigInt,
+                            2 => {
+                                metadata.decimals = argument_metadata
+                                    .iter()
+                                    .map(|metadata| metadata.decimals)
+                                    .max()
+                                    .unwrap_or_default();
+                                MysqlColumnType::Decimal
+                            }
+                            3 => MysqlColumnType::Double,
+                            _ => metadata.column_type,
+                        }
+                    }
                     "CURRENT_DATE" | "CURDATE" | "DATE" | "FROM_DAYS" | "LAST_DAY" | "MAKEDATE" => {
                         MysqlColumnType::Date
                     }

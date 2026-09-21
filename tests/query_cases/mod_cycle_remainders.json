@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "mod_cycle_remainders",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Elinasu001/sql_jdbc",
+      "commit": "f2fde7857f500ab3cc02367062ed2e19cfe26dd9",
+      "path": "02_DQL(SELECT)_함수.sql",
+      "url": "https://github.com/Elinasu001/sql_jdbc/blob/f2fde7857f500ab3cc02367062ed2e19cfe26dd9/02_DQL%28SELECT%29_%ED%95%A8%EC%88%98.sql",
+      "sha256": "151257e0926a3c0ef0aa667f46ca2ed2a29835f10008521daee80010a9778d3e",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "02_DQL(SELECT)_함수.sql:310-326",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL-compatible function exercise uses MOD with positive, negative, and decimal operands to return remainders.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored cycle-offset audit. Fixed signed integer and decimal measurements are reduced by their cycle lengths, with a NULL measurement verifying null propagation; the source DUAL query, literals, labels, schema, and application purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["mod", "signed-operands", "decimal-operands", "null-propagation", "deterministic-order"],
+  "fixture_notes": "Cycle 601 exercises positive integer and decimal remainders, cycle 602 exercises negative operands, and cycle 603 preserves SQL NULL through both MOD projections.",
+  "determinism_notes": "Cycle IDs, measurements, divisors, and ordering are fixed with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE cycle_offsets (cycle_id INT PRIMARY KEY, cycle_label VARCHAR(32) NOT NULL, integer_measurement INT NULL, decimal_measurement DECIMAL(6,2) NULL, cycle_length INT NOT NULL)",
+    "INSERT INTO cycle_offsets VALUES (601, 'positive', 10, 10.80, 3), (602, 'negative', -10, -7.50, 3), (603, 'missing', NULL, NULL, 4)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT cycle_id, cycle_label, integer_measurement, decimal_measurement, cycle_length, MOD(integer_measurement, cycle_length) AS integer_remainder, MOD(decimal_measurement, cycle_length) AS decimal_remainder FROM cycle_offsets ORDER BY cycle_id",
+      "ordered": true
+    }
+  ]
+}
