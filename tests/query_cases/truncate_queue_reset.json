@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "id": "truncate_queue_reset",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "antlr/grammars-v4",
+      "commit": "e356c2fb6dbd60ce4346841f6a2e5578014fadb4",
+      "path": "sql/mariadb/examples/fast/ddl_create.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/e356c2fb6dbd60ce4346841f6a2e5578014fadb4/sql/mariadb/examples/fast/ddl_create.sql",
+      "sha256": "a527e2374a757928e38ef3e1842e1e104ab7f0dc61727d8802319740466ece1c",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/mariadb/examples/fast/ddl_create.sql:253-254",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB DDL exercise truncates a table as a standalone operation that removes all rows.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored dispatch-queue reset. Two auto-increment jobs are seeded, TRUNCATE removes them and resets the generated-key sequence, and a subsequent insert plus ordered read verifies the first post-reset identifier. The schema, names, rows, and queue purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "truncate-table",
+    "auto-increment-reset",
+    "ddl-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The seed jobs consume generated IDs 1 and 2. TRUNCATE must remove both jobs and reset the sequence so the post-reset job receives ID 1.",
+  "determinism_notes": "Job labels and priorities are fixed; the final queue read is ordered by the unique generated job ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE dispatch_queue (job_id INT AUTO_INCREMENT PRIMARY KEY, job_name VARCHAR(32) NOT NULL, priority INT NOT NULL)",
+    "INSERT INTO dispatch_queue (job_name, priority) VALUES ('warmup-a', 3), ('warmup-b', 5)"
+  ],
+  "steps": [
+    {
+      "sql": "TRUNCATE TABLE dispatch_queue",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO dispatch_queue (job_name, priority) VALUES ('after-reset', 9)",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT job_id, job_name, priority FROM dispatch_queue ORDER BY job_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT job_id, job_name, priority FROM dispatch_queue ORDER BY job_id",
+      "ordered": true
+    }
+  ]
+}
