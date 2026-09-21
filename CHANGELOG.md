@@ -239,6 +239,7 @@ All notable changes to MySqweel will be documented in this file.
 - Added the minimized GitHub-attributed `JSON_DETAILED` direct-literal regression; MariaDB 10.11.7 and MySqweel now agree on detailed JSON text and metadata across repeated fresh differential runs.
 - Added GitHub-attributed `INET6_NTOA` coverage from [jpalanco/alienvault-ossim](https://github.com/jpalanco/alienvault-ossim/blob/a1a449d0cf487f9eafe6e907d1acd55a85973523/os-sim/ossim-mysql/db/00-create_alienvault_tbls_mysql.sql#L4383) for an independently authored binary IPv6 inventory report combining canonical address rendering, all-zero and NULL inputs, and deterministic ordered output; implemented MariaDB-compatible `INET6_NTOA` conversion and `VARCHAR` result metadata.
 - Added the minimized GitHub-attributed `INET6_NTOA` binary-literal regression; MariaDB 10.11.7 and MySqweel now agree on canonical IPv6 text and metadata across repeated fresh differential runs.
+- Parked the GitHub-attributed `UUID_TO_BIN`/`BIN_TO_UUID` candidate from [shuhei0720/modern-azure-app](https://github.com/shuhei0720/modern-azure-app/blob/e8d14c059c97124960403aab2eed633da5dd0e6e/app/lib/sql/SELECT_NOTE_LIST.sql#L1-L22) after MariaDB 10.11.7 returned error 1305 (`42000`, `UUID_TO_BIN` unavailable) during the baseline run; the independently authored binary-UUID note-report fixture was not retained.
 
 ### Upstream corpus coverage
 
