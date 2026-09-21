@@ -365,6 +365,27 @@ pub(super) fn eval_inet6_aton_value(value: Value) -> Result<Value> {
     Ok(Value::String(format!("{MYSQL_BINARY_SENTINEL}{hex}")))
 }
 
+pub(super) fn eval_inet6_ntoa(
+    value_arg: Option<&String>,
+    data: &Map<String, Value>,
+    last_insert_id: u64,
+) -> Result<Value> {
+    eval_inet6_ntoa_value(eval_arg(value_arg, data, last_insert_id)?)
+}
+
+pub(super) fn eval_inet6_ntoa_value(value: Value) -> Result<Value> {
+    if value == Value::Null {
+        return Ok(Value::Null);
+    }
+    let Some(bytes) = binary_value_bytes(&value) else {
+        return Ok(Value::Null);
+    };
+    let Ok(bytes) = <[u8; 16]>::try_from(bytes.as_slice()) else {
+        return Ok(Value::Null);
+    };
+    Ok(Value::String(std::net::Ipv6Addr::from(bytes).to_string()))
+}
+
 pub(super) fn eval_mod(
     left_arg: Option<&String>,
     right_arg: Option<&String>,

@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "inet6_ntoa_address_inventory",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "jpalanco/alienvault-ossim",
+      "commit": "a1a449d0cf487f9eafe6e907d1acd55a85973523",
+      "path": "os-sim/ossim-mysql/db/00-create_alienvault_tbls_mysql.sql",
+      "url": "https://github.com/jpalanco/alienvault-ossim/blob/a1a449d0cf487f9eafe6e907d1acd55a85973523/os-sim/ossim-mysql/db/00-create_alienvault_tbls_mysql.sql",
+      "sha256": "d74cecffd4f34e2a9f48e5f1b95fbc1f96695b1de9b8afea5f1225ae66e1d3fa",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "os-sim/ossim-mysql/db/00-create_alienvault_tbls_mysql.sql:4383",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL configuration write converts binary IPv6 data to presentation text with INET6_NTOA after decoding hexadecimal input.",
+      "mysql_mariadb_translation": "Reauthored as a network-address inventory report over newly authored binary address rows. INET6_NTOA renders a documentation IPv6 address, the all-zero address, and NULL propagation without copying the source schema, variables, or application data."
+    },
+    "independently_authored": true
+  },
+  "features": ["inet6-ntoa", "binary-ipv6", "null-propagation", "deterministic-order"],
+  "fixture_notes": "Address 801 stores 2001:db8::1, address 802 stores the all-zero IPv6 address, and address 803 has NULL bytes. The converted text is selected directly so binary-to-text behavior and metadata are observable.",
+  "determinism_notes": "Address IDs and byte strings are fixed, and output is ordered by the unique address ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE network_address_inventory (address_id INT PRIMARY KEY, address_bytes VARBINARY(16) NULL)",
+    "INSERT INTO network_address_inventory VALUES (801, UNHEX('20010DB8000000000000000000000001')), (802, UNHEX('00000000000000000000000000000000')), (803, NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT address_id, INET6_NTOA(address_bytes) AS address_text FROM network_address_inventory ORDER BY address_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT address_id, HEX(address_bytes) AS address_hex FROM network_address_inventory ORDER BY address_id",
+      "ordered": true
+    }
+  ]
+}

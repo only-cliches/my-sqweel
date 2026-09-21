@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "id": "inet6_ntoa_address_inventory_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "jpalanco/alienvault-ossim",
+      "commit": "a1a449d0cf487f9eafe6e907d1acd55a85973523",
+      "path": "os-sim/ossim-mysql/db/00-create_alienvault_tbls_mysql.sql",
+      "url": "https://github.com/jpalanco/alienvault-ossim/blob/a1a449d0cf487f9eafe6e907d1acd55a85973523/os-sim/ossim-mysql/db/00-create_alienvault_tbls_mysql.sql",
+      "sha256": "d74cecffd4f34e2a9f48e5f1b95fbc1f96695b1de9b8afea5f1225ae66e1d3fa",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "os-sim/ossim-mysql/db/00-create_alienvault_tbls_mysql.sql:4383",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL expression converts binary IPv6 data into canonical text with INET6_NTOA.",
+      "mysql_mariadb_translation": "Reduced to one fixed hexadecimal IPv6 value passed through UNHEX and INET6_NTOA so function recognition and canonical rendering are isolated from table state and report logic."
+    },
+    "independently_authored": true,
+    "parent_case": "inet6_ntoa_address_inventory"
+  },
+  "features": ["inet6-ntoa", "minimized-regression", "binary-ipv6"],
+  "fixture_notes": "One documentation IPv6 address isolates binary-to-text conversion and VARCHAR result metadata without schema setup or multiple rows.",
+  "determinism_notes": "The hexadecimal address is fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT INET6_NTOA(UNHEX('20010DB8000000000000000000000001')) AS address_text",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
