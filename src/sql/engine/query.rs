@@ -3273,6 +3273,22 @@ impl RawEngine {
                     .name
                     .0
                     .last()
+                    .is_some_and(|name| name.value.eq_ignore_ascii_case("LAST_INSERT_ID"))
+                    && let Some(argument) = function_argument(function, 0)
+                {
+                    let value = self.eval_expr_ctx(argument, data, last_insert_id)?;
+                    if value == Value::Null {
+                        return Ok(Value::Null);
+                    }
+                    let value = eval::value_to_u64(&value)
+                        .ok_or_else(|| anyhow!("LAST_INSERT_ID expression must be numeric"))?;
+                    self.last_insert_id.store(value, AtomicOrdering::Relaxed);
+                    return Ok(Value::Number(Number::from(value)));
+                }
+                if function
+                    .name
+                    .0
+                    .last()
                     .is_some_and(|name| name.value.eq_ignore_ascii_case("USER_VAR_ASSIGN"))
                 {
                     let text = function.to_string();

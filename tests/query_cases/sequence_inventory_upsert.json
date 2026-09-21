@@ -1,0 +1,68 @@
+{
+  "version": 1,
+  "id": "sequence_inventory_upsert",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "DeNADev/mobage-jssdk-sample-payment",
+      "commit": "54f046eb2801b3c00e60c74004839b78ab433e2c",
+      "path": "db_setting/query.sql",
+      "url": "https://github.com/DeNADev/mobage-jssdk-sample-payment/blob/54f046eb2801b3c00e60c74004839b78ab433e2c/db_setting/query.sql",
+      "sha256": "8262eb5e1a08912723d348b6635ddabdec340cfd989db1813face06038c2e7e4",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "db_setting/query.sql:12-20 and 47-50",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A transaction advances a singleton sequence with LAST_INSERT_ID(expr), reuses the connection-local value for a new order, and increments an existing item quantity with ON DUPLICATE KEY UPDATE.",
+      "mysql_mariadb_translation": "Reauthored as an independent purchase reservation flow. A fixed sequence row allocates an order number through LAST_INSERT_ID(expr), the same connection inserts that number into a new order, and a two-row inventory upsert increments one existing SKU while inserting another. The tables, identifiers, values, and business meaning are new; clocks and application code are omitted."
+    },
+    "independently_authored": true
+  },
+  "features": ["transaction", "last-insert-id-expression", "sequence-update", "connection-state", "on-duplicate-key-update", "multi-row-upsert", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "The purchase sequence starts at 900, so the transaction allocates order 901. The same connection reads 901 and inserts it into purchase_orders. SKU-A already has five units and receives two more; SKU-B is inserted with four units. Final checks cover the sequence, order, and both inventory paths.",
+  "determinism_notes": "The singleton sequence and composite inventory key each identify one deterministic row; all reads use fixed primary-key ordering and the transaction has no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE order_sequences (sequence_name VARCHAR(24) PRIMARY KEY, next_value INT NOT NULL)",
+    "CREATE TABLE purchase_orders (order_id INT PRIMARY KEY, order_code VARCHAR(32) NOT NULL UNIQUE, customer_id INT NOT NULL, order_state VARCHAR(16) NOT NULL)",
+    "CREATE TABLE customer_items (customer_id INT NOT NULL, item_code VARCHAR(24) NOT NULL, item_count INT NOT NULL, PRIMARY KEY (customer_id, item_code))",
+    "INSERT INTO order_sequences VALUES ('purchase', 900)",
+    "INSERT INTO customer_items VALUES (42, 'sku-A', 5)"
+  ],
+  "steps": [
+    {
+      "sql": "START TRANSACTION"
+    },
+    {
+      "sql": "UPDATE order_sequences SET next_value = LAST_INSERT_ID(next_value + 1) WHERE sequence_name = 'purchase'"
+    },
+    {
+      "sql": "SELECT LAST_INSERT_ID() AS allocated_order_id",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO purchase_orders (order_id, order_code, customer_id, order_state) VALUES (LAST_INSERT_ID(), 'purchase-901', 42, 'reserved')"
+    },
+    {
+      "sql": "INSERT INTO customer_items (customer_id, item_code, item_count) VALUES (42, 'sku-A', 2), (42, 'sku-B', 4) ON DUPLICATE KEY UPDATE item_count = item_count + VALUES(item_count)"
+    },
+    {
+      "sql": "COMMIT"
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT sequence_name, next_value FROM order_sequences ORDER BY sequence_name",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT order_id, order_code, customer_id, order_state FROM purchase_orders ORDER BY order_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT customer_id, item_code, item_count FROM customer_items ORDER BY customer_id, item_code",
+      "ordered": true
+    }
+  ]
+}

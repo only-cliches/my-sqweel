@@ -839,7 +839,14 @@ impl RawEngine {
                 };
                 for statement in statements {
                     validate_statement_support(&statement)?;
+                    let previous_last_insert_id = self.last_insert_id.load(AtomicOrdering::Relaxed);
                     let mut result = self.execute_statement_unobserved(statement)?;
+                    let current_last_insert_id = self.last_insert_id.load(AtomicOrdering::Relaxed);
+                    if result.last_insert_id == 0
+                        && current_last_insert_id != previous_last_insert_id
+                    {
+                        result.last_insert_id = current_last_insert_id;
+                    }
                     if raw
                         .trim_start()
                         .to_ascii_uppercase()

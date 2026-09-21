@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "sequence_last_insert_id_expression_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "DeNADev/mobage-jssdk-sample-payment",
+      "commit": "54f046eb2801b3c00e60c74004839b78ab433e2c",
+      "path": "db_setting/query.sql",
+      "url": "https://github.com/DeNADev/mobage-jssdk-sample-payment/blob/54f046eb2801b3c00e60c74004839b78ab433e2c/db_setting/query.sql",
+      "sha256": "8262eb5e1a08912723d348b6635ddabdec340cfd989db1813face06038c2e7e4",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "db_setting/query.sql:14-16",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "LAST_INSERT_ID(expr) both returns an expression result and updates the connection-local value used by a following SELECT LAST_INSERT_ID().",
+      "mysql_mariadb_translation": "Reduced to an independently authored counter table with one update and one same-connection read; the application transaction, order table, and inventory upsert are removed so only LAST_INSERT_ID(expr) state propagation remains observable."
+    },
+    "independently_authored": true,
+    "minimized_from": "sequence_inventory_upsert"
+  },
+  "features": ["last-insert-id-expression", "connection-state", "minimized-regression", "deterministic-order"],
+  "fixture_notes": "The counter advances from 40 to 41. The following same-connection LAST_INSERT_ID() must return 41 rather than the initial zero value.",
+  "determinism_notes": "One fixed counter row and sequential statements make the connection-state transition deterministic; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE allocation_counter (counter_name VARCHAR(24) PRIMARY KEY, counter_value INT NOT NULL)",
+    "INSERT INTO allocation_counter VALUES ('ticket', 40)"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE allocation_counter SET counter_value = LAST_INSERT_ID(counter_value + 1) WHERE counter_name = 'ticket'"
+    },
+    {
+      "sql": "SELECT LAST_INSERT_ID() AS allocated_value",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT counter_name, counter_value FROM allocation_counter ORDER BY counter_name",
+      "ordered": true
+    }
+  ]
+}

@@ -118,7 +118,11 @@ impl RawEngine {
                                     };
                                     Value::String(format!("-{number}"))
                                 }
-                                _ => self.eval_expr_ctx(expr, &value_context, 0)?,
+                                _ => self.eval_expr_ctx(
+                                    expr,
+                                    &value_context,
+                                    self.last_insert_id.load(AtomicOrdering::Relaxed),
+                                )?,
                             };
                             data.insert(col.clone(), value);
                         }
@@ -830,7 +834,11 @@ impl RawEngine {
                     updated_data.insert(col, Value::Null);
                     continue;
                 }
-                let value = self.eval_expr_ctx(&assignment.value, &value_context, 0)?;
+                let value = self.eval_expr_ctx(
+                    &assignment.value,
+                    &value_context,
+                    self.last_insert_id.load(AtomicOrdering::Relaxed),
+                )?;
                 updated_data.insert(col, value);
             }
             self.apply_defaults(&table_name, &mut updated_data)?;
@@ -1493,7 +1501,11 @@ impl RawEngine {
             };
             let expression = parse_scalar_expr(expression)
                 .ok_or_else(|| anyhow!("invalid generated column expression: {expression}"))?;
-            let value = self.eval_expr_ctx(&expression, data, 0)?;
+            let value = self.eval_expr_ctx(
+                &expression,
+                data,
+                self.last_insert_id.load(AtomicOrdering::Relaxed),
+            )?;
             data.insert(column, value);
         }
         Ok(())
