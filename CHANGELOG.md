@@ -186,6 +186,7 @@ All notable changes to MySqweel will be documented in this file.
 - Added GitHub-attributed `JSON_VALID` coverage from [shopware/core](https://github.com/shopware/core/blob/bb5256957bff3ad9ee1336f99be0e1a543a2ab06/schema.sql) for an independently authored payload-ingestion audit covering JSON objects, arrays, scalars, malformed text, empty text, and SQL `NULL`; fixed result metadata to match MariaDB 10.11.7's `MYSQL_TYPE_LONG`.
 - Added the minimized GitHub-attributed `JSON_VALID` integer-metadata regression; MariaDB 10.11.7 and MySqweel now both return `0` with `MYSQL_TYPE_LONG` across repeated fresh differential runs.
 - Added GitHub-attributed `ADDDATE` coverage from [ipratyaksh21/SQL-DATE-FUNCTIONS](https://github.com/ipratyaksh21/SQL-DATE-FUNCTIONS/blob/8ea192e120929d5c545689a843fd0c48eefd7ed7/ADDDATE%28%29.sql) for an independently authored release-window audit covering day, month, quarter, year, and hour intervals, month-end clamping, and NULL propagation; MariaDB 10.11.7 and MySqweel matched across repeated fresh differential runs without a source fix.
+- Added GitHub-attributed `SUBDATE` coverage from [jjang1129/back-end-workspace](https://github.com/jjang1129/back-end-workspace/blob/03ac2070b7fd471f5289374c5d696ba3358bb4ce/1_MySQL/03_SELECT_FUCTION.sql) for an independently authored billing-cutoff audit covering day, month, quarter, year, and hour intervals, leap-day month-end clamping, and NULL propagation; MariaDB 10.11.7 and MySqweel matched across repeated fresh differential runs without a source fix.
 
 ### Upstream corpus coverage
 

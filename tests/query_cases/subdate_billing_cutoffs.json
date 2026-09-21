@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "subdate_billing_cutoffs",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "jjang1129/back-end-workspace",
+      "commit": "03ac2070b7fd471f5289374c5d696ba3358bb4ce",
+      "path": "1_MySQL/03_SELECT_FUCTION.sql",
+      "url": "https://github.com/jjang1129/back-end-workspace/blob/03ac2070b7fd471f5289374c5d696ba3358bb4ce/1_MySQL/03_SELECT_FUCTION.sql",
+      "sha256": "e2dea13d0d5761a0877b4066d7d5ee2fd405cf38a56034ccd1be58402e98e634",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "1_MySQL/03_SELECT_FUCTION.sql:205-218",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL date-function example subtracts a fixed interval from a date with SUBDATE alongside related temporal arithmetic functions.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored billing-cutoff audit. Fixed DATETIME anchors exercise day, month, quarter, year, and hour SUBDATE intervals, including leap-day month-end clamping and SQL NULL propagation; the source tables, values, dynamic clock, labels, and application purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["subdate", "day-interval", "month-interval", "quarter-interval", "year-interval", "hour-interval", "month-end-clamping", "null-propagation", "deterministic-order"],
+  "fixture_notes": "Invoice 401 starts on 2024-03-31 so subtracting one month reaches leap-day February; invoice 402 crosses a year boundary; invoice 403 preserves SQL NULL through every SUBDATE projection.",
+  "determinism_notes": "Invoice IDs, DATETIME anchors, and interval literals are fixed, and output is ordered by the primary key with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE billing_cutoffs (invoice_id INT PRIMARY KEY, invoice_label VARCHAR(32) NOT NULL, issued_at DATETIME NULL)",
+    "INSERT INTO billing_cutoffs VALUES (401, 'leap-month-end', '2024-03-31 12:30:00'), (402, 'year-boundary', '2025-01-01 00:15:00'), (403, 'unissued', NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT invoice_id, invoice_label, issued_at, SUBDATE(issued_at, INTERVAL 10 DAY) AS day_cutoff, SUBDATE(issued_at, INTERVAL 1 MONTH) AS month_cutoff, SUBDATE(issued_at, INTERVAL 1 QUARTER) AS quarter_cutoff, SUBDATE(issued_at, INTERVAL 1 YEAR) AS year_cutoff, SUBDATE(issued_at, INTERVAL 2 HOUR) AS hour_cutoff FROM billing_cutoffs ORDER BY invoice_id",
+      "ordered": true
+    }
+  ]
+}
