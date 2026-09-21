@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "id": "convert_tz_schedule_times_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "minimized_from": "convert_tz_schedule_times",
+    "source": {
+      "kind": "github",
+      "repository": "temporalio/temporal",
+      "commit": "41f478ae2614ff63797e623b88d71266e4450429",
+      "path": "schema/mysql/v8/visibility/schema.sql",
+      "url": "https://github.com/temporalio/temporal/blob/41f478ae2614ff63797e623b88d71266e4450429/schema/mysql/v8/visibility/schema.sql",
+      "sha256": "68b8fbe40bdd87d89c700b16d0b4a8915a35cbaec5b76185eb14066cadd145d7",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "schema/mysql/v8/visibility/schema.sql:37-42",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "CONVERT_TZ converts a datetime string from a numeric source offset to UTC.",
+      "mysql_mariadb_translation": "Reduced to one fixed datetime and two numeric timezone offsets, removing JSON extraction, regular-expression cleanup, tables, and unrelated projections so the CONVERT_TZ contract is isolated."
+    },
+    "independently_authored": true
+  },
+  "features": ["convert-tz", "timezone-offset", "minimized-regression"],
+  "fixture_notes": "One fixed wall time at +02:00 must become 09:30 UTC with DATETIME metadata.",
+  "determinism_notes": "All literals are fixed; the scalar projection has no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT CONVERT_TZ('2026-05-01 11:30:00', '+02:00', '+00:00') AS utc_start",
+      "ordered": true
+    }
+  ]
+}

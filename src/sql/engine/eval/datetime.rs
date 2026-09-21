@@ -15,6 +15,78 @@ pub(super) fn eval_bare_datetime_keyword(name: &str) -> Option<Value> {
     }
 }
 
+pub(super) fn eval_convert_tz(
+    datetime_arg: Option<&String>,
+    from_tz_arg: Option<&String>,
+    to_tz_arg: Option<&String>,
+    data: &Map<String, Value>,
+    last_insert_id: u64,
+) -> Result<Value> {
+    let datetime_is_expression = datetime_arg.is_some_and(|arg| {
+        let trimmed = arg.trim();
+        !(trimmed.len() >= 2
+            && ((trimmed.starts_with('\'') && trimmed.ends_with('\''))
+                || (trimmed.starts_with('"') && trimmed.ends_with('"'))))
+    });
+    let datetime = datetime_arg
+        .map(|arg| eval_scalar_text(arg, data, last_insert_id))
+        .transpose()?
+        .unwrap_or(Value::Null);
+    let from_tz = from_tz_arg
+        .map(|arg| eval_scalar_text(arg, data, last_insert_id))
+        .transpose()?
+        .unwrap_or(Value::Null);
+    let to_tz = to_tz_arg
+        .map(|arg| eval_scalar_text(arg, data, last_insert_id))
+        .transpose()?
+        .unwrap_or(Value::Null);
+    if datetime == Value::Null || from_tz == Value::Null || to_tz == Value::Null {
+        return Ok(Value::Null);
+    }
+    let (Some(datetime), Some(from_offset), Some(to_offset)) = (
+        parse_mysql_datetime_value(&datetime),
+        parse_timezone_offset(&from_tz),
+        parse_timezone_offset(&to_tz),
+    ) else {
+        return Ok(Value::Null);
+    };
+    let Some(offset) = to_offset.checked_sub(from_offset) else {
+        return Ok(Value::Null);
+    };
+    Ok(datetime
+        .checked_add_signed(Duration::seconds(offset))
+        .map(|value| {
+            let text = if datetime_is_expression {
+                value.format("%Y-%m-%d %H:%M:%S%.6f").to_string()
+            } else {
+                value.to_string()
+            };
+            Value::String(text)
+        })
+        .unwrap_or(Value::Null))
+}
+
+fn parse_timezone_offset(value: &Value) -> Option<i64> {
+    let timezone = json_scalar_to_string(value);
+    let timezone = timezone.trim();
+    if timezone.eq_ignore_ascii_case("UTC") || timezone.eq_ignore_ascii_case("Z") {
+        return Some(0);
+    }
+    let bytes = timezone.as_bytes();
+    if bytes.len() != 6 || (bytes[0] != b'+' && bytes[0] != b'-') || bytes[3] != b':' {
+        return None;
+    }
+    let hours = timezone[1..3].parse::<i64>().ok()?;
+    let minutes = timezone[4..6].parse::<i64>().ok()?;
+    if hours > 14 || minutes >= 60 || (hours == 14 && minutes != 0) {
+        return None;
+    }
+    let seconds = hours
+        .checked_mul(3_600)?
+        .checked_add(minutes.checked_mul(60)?)?;
+    Some(if bytes[0] == b'-' { -seconds } else { seconds })
+}
+
 pub(super) fn eval_timestamp_add(
     unit_arg: Option<&String>,
     amount_arg: Option<&String>,

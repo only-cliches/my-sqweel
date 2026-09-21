@@ -3793,6 +3793,9 @@ pub(super) fn eval_function_text(
                 Ok(Value::String(local.format("%Y-%m-%d %H:%M:%S").to_string()))
             }
         }
+        "CONVERT_TZ" => {
+            eval_convert_tz(args.first(), args.get(1), args.get(2), data, last_insert_id)
+        }
         "TIMESTAMPADD" => {
             eval_timestamp_add(args.first(), args.get(1), args.get(2), data, last_insert_id)
         }

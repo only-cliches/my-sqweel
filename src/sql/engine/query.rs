@@ -1770,7 +1770,9 @@ impl RawEngine {
                             _ => MysqlColumnType::VarChar,
                         }
                     }
-                    "NOW" | "CURRENT_TIMESTAMP" | "FROM_UNIXTIME" => MysqlColumnType::DateTime,
+                    "NOW" | "CURRENT_TIMESTAMP" | "FROM_UNIXTIME" | "CONVERT_TZ" => {
+                        MysqlColumnType::DateTime
+                    }
                     "DATE_ADD" | "DATE_SUB" | "ADDDATE" | "SUBDATE" => {
                         let first_argument = function_arguments(function)
                             .ok()

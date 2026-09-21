@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "convert_tz_schedule_times",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "temporalio/temporal",
+      "commit": "41f478ae2614ff63797e623b88d71266e4450429",
+      "path": "schema/mysql/v8/visibility/schema.sql",
+      "url": "https://github.com/temporalio/temporal/blob/41f478ae2614ff63797e623b88d71266e4450429/schema/mysql/v8/visibility/schema.sql",
+      "sha256": "68b8fbe40bdd87d89c700b16d0b4a8915a35cbaec5b76185eb14066cadd145d7",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "schema/mysql/v8/visibility/schema.sql:37-42",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL generated datetime expression strips a trailing Z or numeric timezone suffix with REGEXP_REPLACE, extracts the source offset with SUBSTR and REPLACE, and converts the wall time to UTC with CONVERT_TZ.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored schedule audit over ordinary text timestamps. The projection normalizes Z, positive, and negative numeric offsets to UTC with the same scalar expression shape, while JSON extraction, generated columns, source tables, and workflow labels are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "convert-tz",
+    "regexp-replace",
+    "substr",
+    "replace",
+    "timezone-offset",
+    "null-propagation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Schedule 701 uses UTC Z, 702 uses a positive two-hour offset, 703 uses a negative four-hour offset, and 704 is NULL. The normalized UTC values must represent the same instant regardless of the source offset.",
+  "determinism_notes": "All timestamp strings and timezone offsets are fixed; rows are ordered by the unique schedule ID with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE schedule_inputs (schedule_id INT PRIMARY KEY, raw_start VARCHAR(64) NULL)",
+    "INSERT INTO schedule_inputs VALUES (701, '2026-05-01T09:30:00Z'), (702, '2026-05-01T11:30:00+02:00'), (703, '2026-05-01T05:30:00-04:00'), (704, NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT schedule_id, CONVERT_TZ(REGEXP_REPLACE(raw_start, 'Z|[+-][0-9]{2}:[0-9]{2}$', ''), SUBSTR(REPLACE(raw_start, 'Z', '+00:00'), -6, 6), '+00:00') AS utc_start FROM schedule_inputs ORDER BY schedule_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT schedule_id, raw_start FROM schedule_inputs ORDER BY schedule_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT schedule_id, CONVERT_TZ(REGEXP_REPLACE(raw_start, 'Z|[+-][0-9]{2}:[0-9]{2}$', ''), SUBSTR(REPLACE(raw_start, 'Z', '+00:00'), -6, 6), '+00:00') AS utc_start FROM schedule_inputs ORDER BY schedule_id",
+      "ordered": true
+    }
+  ]
+}
