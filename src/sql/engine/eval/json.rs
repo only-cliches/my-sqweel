@@ -606,9 +606,28 @@ pub(super) fn eval_json_pretty(
     if value == Value::Null {
         return Ok(Value::Null);
     }
-    Ok(Value::String(serde_json::to_string_pretty(
-        &public_json_value(&value),
-    )?))
+    let pretty = serde_json::to_string_pretty(&public_json_value(&value))?;
+    let mut formatted = String::with_capacity(pretty.len());
+    for (line_number, line) in pretty.split('\n').enumerate() {
+        if line_number > 0 {
+            formatted.push('\n');
+        }
+        let indent = line.len() - line.trim_start_matches(' ').len();
+        let content = &line[indent..];
+        formatted.extend(std::iter::repeat_n(' ', indent * 2));
+        if content.len() > 1
+            && (content.ends_with('{') || content.ends_with('['))
+            && content[..content.len() - 1].ends_with(": ")
+        {
+            formatted.push_str(&content[..content.len() - 1]);
+            formatted.push('\n');
+            formatted.extend(std::iter::repeat_n(' ', indent * 2));
+            formatted.push_str(&content[content.len() - 1..]);
+        } else {
+            formatted.push_str(content);
+        }
+    }
+    Ok(Value::String(formatted))
 }
 
 pub(super) fn eval_json_merge(
@@ -1357,11 +1376,11 @@ fn json_set_path(document: &mut Value, path: &str, value: Value) -> bool {
         match token {
             JsonPathToken::Key(key) => {
                 if !current.is_object() {
-                    *current = Value::Object(Map::new());
+                    return false;
                 }
                 current = current
                     .as_object_mut()
-                    .expect("object just inserted")
+                    .expect("object already verified")
                     .entry(key.clone())
                     .or_insert_with(|| Value::Object(Map::new()));
             }
@@ -1381,7 +1400,7 @@ fn json_set_path(document: &mut Value, path: &str, value: Value) -> bool {
     match tokens.last().expect("non-empty path") {
         JsonPathToken::Key(key) => {
             if !current.is_object() {
-                *current = Value::Object(Map::new());
+                return false;
             }
             current
                 .as_object_mut()

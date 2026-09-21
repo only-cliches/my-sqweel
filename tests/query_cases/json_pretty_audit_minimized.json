@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "id": "json_pretty_audit_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "antlr/grammars-v4",
+      "commit": "e356c2fb6dbd60ce4346841f6a2e5578014fadb4",
+      "path": "sql/mariadb/examples/fast/dml_select.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/e356c2fb6dbd60ce4346841f6a2e5578014fadb4/sql/mariadb/examples/fast/dml_select.sql",
+      "sha256": "b9128ffb5b50bea79c534bc24a127d9d626fd2d21be8cb0a45deafd8d6c84f79",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/mariadb/examples/fast/dml_select.sql:163",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB scalar JSON_PRETTY call renders nested JSON with four-space indentation and returns long text.",
+      "mysql_mariadb_translation": "Reduced to one independently authored nested JSON literal and one JSON_PRETTY projection. The table, JSON_SET mutation, array row, NULL row, and report labels are removed so formatting and result metadata are isolated."
+    },
+    "independently_authored": true,
+    "minimized_from": "json_pretty_audit"
+  },
+  "features": ["json-pretty", "four-space-indentation", "metadata-regression"],
+  "fixture_notes": "The fixed nested object requires four spaces for its child property; the scalar result must retain MariaDB's MYSQL_TYPE_LONG_BLOB metadata.",
+  "determinism_notes": "The JSON literal is fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT JSON_PRETTY('{\"outer\":{\"inner\":1}}') AS pretty_document",
+      "ordered": true
+    }
+  ]
+}

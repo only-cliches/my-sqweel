@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "json_pretty_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "antlr/grammars-v4",
+      "commit": "e356c2fb6dbd60ce4346841f6a2e5578014fadb4",
+      "path": "sql/mariadb/examples/fast/dml_select.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/e356c2fb6dbd60ce4346841f6a2e5578014fadb4/sql/mariadb/examples/fast/dml_select.sql",
+      "sha256": "b9128ffb5b50bea79c534bc24a127d9d626fd2d21be8cb0a45deafd8d6c84f79",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/mariadb/examples/fast/dml_select.sql:163",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB SELECT calls JSON_PRETTY to render a JSON value as indented human-readable text.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored review-payload audit over fixed JSON documents. The report pretty-prints nested objects and arrays, pretty-prints a JSON_SET mutation, and preserves NULL input without copying the source literal or query."
+    },
+    "independently_authored": true
+  },
+  "features": ["json-pretty", "nested-json", "json-mutation", "formatted-text", "null-propagation", "deterministic-order"],
+  "fixture_notes": "Payload 501 contains nested reviewer and tag data, payload 502 contains a numeric array, and payload 503 is SQL NULL. The second projection adds a fixed review status before formatting where the source document is non-NULL.",
+  "determinism_notes": "Payload IDs and JSON documents are fixed and ordered by the primary key; output formatting has no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE review_payloads (payload_id INT PRIMARY KEY, payload_label VARCHAR(24) NOT NULL, payload JSON NULL)",
+    "INSERT INTO review_payloads VALUES (501, 'nested object', '{\"reviewer\":{\"name\":\"Ada\",\"score\":9},\"tags\":[\"sql\",\"json\"]}'), (502, 'numeric array', '[3,1,4]'), (503, 'missing payload', NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT payload_id, payload_label, JSON_PRETTY(payload) AS pretty_payload, JSON_PRETTY(JSON_SET(payload, '$.review_status', 'queued')) AS queued_payload FROM review_payloads ORDER BY payload_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT payload_id, payload_label, payload FROM review_payloads ORDER BY payload_id",
+      "ordered": true
+    }
+  ]
+}
