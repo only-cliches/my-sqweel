@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "insert_select_dedupe_upsert",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "wikimedia/wikimedia-fundraising-tools",
+      "commit": "06bcea4c314a359e51a604924e9a6e24bef2b1dc",
+      "path": "silverpop_export/update_silverpop_staging.sql",
+      "url": "https://github.com/wikimedia/wikimedia-fundraising-tools/blob/06bcea4c314a359e51a604924e9a6e24bef2b1dc/silverpop_export/update_silverpop_staging.sql",
+      "sha256": "67e26c03d3818bd38affd46d6b8299bbe7a06e747e87a1a3d8c5b8e779d8c3bf",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "silverpop_export/update_silverpop_staging.sql:35-48",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "An INSERT ... SELECT loads a staging table from a joined source and uses ON DUPLICATE KEY UPDATE as a no-op to ignore already-seen unique keys while preserving the existing row.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored contact-capture deduplication flow. A source table feeds a unique-email staging table through a LEFT JOIN and deterministic source ordering; a duplicate email exercises the no-op upsert path while a new email is inserted. The original application schema and rows are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["insert-select", "left-join", "order-by", "on-duplicate-key-update", "unique-deduplication", "no-op-upsert", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "The existing staged email remains unchanged when the incoming source repeats its email, while the new email is inserted. Source rows are ordered by source_id so the duplicate decision is deterministic.",
+  "determinism_notes": "All IDs, emails, names, and source ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE staged_contacts (contact_id INT PRIMARY KEY, email VARCHAR(96) NOT NULL UNIQUE, display_name VARCHAR(48) NOT NULL, source_label VARCHAR(24) NOT NULL)",
+    "CREATE TABLE contact_import (source_id INT PRIMARY KEY, email VARCHAR(96) NOT NULL, display_name VARCHAR(48) NOT NULL, source_label VARCHAR(24) NOT NULL)",
+    "INSERT INTO staged_contacts VALUES (10, 'ada@example.test', 'Ada Existing', 'legacy')",
+    "INSERT INTO contact_import VALUES (101, 'ada@example.test', 'Ada Incoming', 'nightly'), (102, 'lin@example.test', 'Lin New', 'nightly'), (103, 'unused@example.test', 'Unused', 'ignored')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO staged_contacts (contact_id, email, display_name, source_label) SELECT i.source_id, i.email, i.display_name, i.source_label FROM contact_import i LEFT JOIN staged_contacts s ON s.email = i.email WHERE i.source_id IN (101, 102) ORDER BY i.source_id DESC ON DUPLICATE KEY UPDATE contact_id = staged_contacts.contact_id, email = staged_contacts.email, display_name = staged_contacts.display_name, source_label = staged_contacts.source_label",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT contact_id, email, display_name, source_label FROM staged_contacts ORDER BY contact_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT COUNT(*) AS staged_count, COUNT(DISTINCT email) AS unique_emails FROM staged_contacts",
+      "ordered": true
+    }
+  ]
+}
