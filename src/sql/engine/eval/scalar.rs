@@ -812,10 +812,15 @@ pub(crate) fn mysql_soundex(value: &str) -> String {
     let mut previous = soundex_code(first);
     for character in letters {
         let code = soundex_code(character);
-        if code != '0' && code != previous {
-            output.push(code);
+        if code != '0' {
+            if code != previous {
+                output.push(code);
+            }
+            previous = code;
         }
-        previous = code;
+    }
+    while output.chars().count() < 4 {
+        output.push('0');
     }
     output
 }

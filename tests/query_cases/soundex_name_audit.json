@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "soundex_name_audit",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "NBISweden/theherdbook",
+      "commit": "f3cbdf4ae6b4e56a9df9d5e680d5a78718f6cf99",
+      "path": "scripts/soundex.sql",
+      "url": "https://github.com/NBISweden/theherdbook/blob/f3cbdf4ae6b4e56a9df9d5e680d5a78718f6cf99/scripts/soundex.sql",
+      "sha256": "d65e63885fd2f2c1ae619d3222f800e0f7f9efdf39aee1d6c24e47172025b8a0",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "scripts/soundex.sql:1-42",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A phonetic name-normalization routine maps consonant groups to Soundex digits, removes adjacent duplicate codes, pads short values, and preserves the initial letter.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored MariaDB name-audit query using built-in SOUNDEX. The fixture compares case variants, punctuation, short names, empty text, and SQL NULL while preserving deterministic person ordering; the PostgreSQL routine implementation and source data are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["soundex", "phonetic-normalization", "case-variation", "punctuation", "null-propagation", "deterministic-order"],
+  "fixture_notes": "Robert and Rupert exercise equivalent phonetic codes; Ashcraft and Tymczak cover repeated consonant groups; an apostrophe, empty string, and SQL NULL cover text edge behavior.",
+  "determinism_notes": "Person IDs and names are fixed, and output is ordered by the primary key with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE name_audit (person_id INT PRIMARY KEY, display_name VARCHAR(48) NULL)",
+    "INSERT INTO name_audit VALUES (101, 'Robert'), (102, 'Rupert'), (103, 'Ashcraft'), (104, 'Tymczak'), (105, 'O''Brien'), (106, ''), (107, NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT person_id, display_name, SOUNDEX(display_name) AS phonetic_code, LEFT(SOUNDEX(display_name), 1) AS initial_code FROM name_audit ORDER BY person_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT person_id, display_name FROM name_audit ORDER BY person_id",
+      "ordered": true
+    }
+  ]
+}

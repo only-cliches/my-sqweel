@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "id": "soundex_name_audit_minimized",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "NBISweden/theherdbook",
+      "commit": "f3cbdf4ae6b4e56a9df9d5e680d5a78718f6cf99",
+      "path": "scripts/soundex.sql",
+      "url": "https://github.com/NBISweden/theherdbook/blob/f3cbdf4ae6b4e56a9df9d5e680d5a78718f6cf99/scripts/soundex.sql",
+      "sha256": "d65e63885fd2f2c1ae619d3222f800e0f7f9efdf39aee1d6c24e47172025b8a0",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "scripts/soundex.sql:1-42",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A phonetic name-normalization routine keeps consonant groups distinct across ignored letters while collapsing adjacent repeated Soundex codes.",
+      "mysql_mariadb_translation": "Reduced to one independently authored MariaDB SOUNDEX scalar query for Ashcraft, whose h separates the initial s and c characters without resetting the prior consonant code; the source function and data are not copied."
+    },
+    "independently_authored": true,
+    "minimized_from": "soundex_name_audit"
+  },
+  "features": ["soundex", "ignored-letter-state", "scalar-expression"],
+  "fixture_notes": "Ashcraft isolates the state transition where an ignored h must not reset the preceding Soundex consonant code.",
+  "determinism_notes": "The query has no external state, clocks, randomness, sleeps, or concurrent connections.",
+  "steps": [
+    {
+      "sql": "SELECT SOUNDEX('Ashcraft') AS phonetic_code",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
