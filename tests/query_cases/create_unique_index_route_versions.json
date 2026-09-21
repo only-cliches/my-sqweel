@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "id": "create_unique_index_route_versions",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "RyjoxTechnologies/Octopoda-OS",
+      "commit": "583ddf190df809d7380afd6d07ee4095086773c2",
+      "path": "init.sql",
+      "url": "https://github.com/RyjoxTechnologies/Octopoda-OS/blob/583ddf190df809d7380afd6d07ee4095086773c2/init.sql",
+      "sha256": "240b34c8e924930cb284403aa53c050a2cfc1cf77ee156c5ddd38dae3e26d18c",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "init.sql:81-83",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL schema creates a named composite unique index conditionally so each tenant can retain only one version row for a given logical key.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored route-version registry. A repeated CREATE UNIQUE INDEX IF NOT EXISTS covers idempotent DDL, information_schema.statistics verifies composite column order and uniqueness, and a duplicate insert confirms enforcement; the source schema, names, values, and node-version purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "create-unique-index-if-not-exists",
+    "composite-unique-index",
+    "unique-index-metadata",
+    "duplicate-key-enforcement",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Tenant 21 has two route versions and tenant 22 has one. The composite index is unique across tenant, route name, and version number; repeating the DDL is harmless and the duplicate tenant-21 route version must be rejected without changing the rows.",
+  "determinism_notes": "Tenant IDs, route names, version numbers, and output ordering are fixed; metadata is ordered by sequence position and rows by the primary key. There are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE route_versions (version_id INT PRIMARY KEY, tenant_id INT NOT NULL, route_name VARCHAR(24) NOT NULL, version_no INT NOT NULL, route_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO route_versions VALUES (801, 21, 'dispatch', 1, 'active'), (802, 21, 'dispatch', 2, 'staged'), (803, 22, 'dispatch', 1, 'active')"
+  ],
+  "steps": [
+    {
+      "sql": "CREATE UNIQUE INDEX IF NOT EXISTS tenant_route_version_idx ON route_versions (tenant_id, route_name, version_no)"
+    },
+    {
+      "sql": "CREATE UNIQUE INDEX IF NOT EXISTS tenant_route_version_idx ON route_versions (tenant_id, route_name, version_no)"
+    },
+    {
+      "sql": "SELECT index_name, non_unique, seq_in_index, column_name FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = 'route_versions' AND index_name = 'tenant_route_version_idx' ORDER BY seq_in_index",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO route_versions VALUES (804, 21, 'dispatch', 2, 'duplicate')",
+      "expect_error": true
+    },
+    {
+      "sql": "SELECT version_id, tenant_id, route_name, version_no, route_state FROM route_versions ORDER BY version_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT index_name, non_unique, seq_in_index, column_name FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = 'route_versions' AND index_name = 'tenant_route_version_idx' ORDER BY seq_in_index",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT version_id, tenant_id, route_name, version_no, route_state FROM route_versions ORDER BY version_id",
+      "ordered": true
+    }
+  ]
+}
