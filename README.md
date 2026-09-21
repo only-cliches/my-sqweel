@@ -422,6 +422,16 @@ plus [additional admitted cases](tests/query_coverage_mtr/).
 strict gates, known failures, discovery candidates, and derived scenarios.
 Passing percentages apply only to their recorded test scope.
 
+The differential suite also generates reproducible, schema-aware stateful
+programs across transactions, DML, joins, grouping, and subqueries. It runs
+each generated program against both engines and checks both observations and
+canonical table state after mutation. The default 64 seeds cover every current
+mutation/query interaction; set `STATEFUL_DIFFERENTIAL_SEEDS` to increase the
+deterministic range locally or in the nightly job. Set
+`STATEFUL_DIFFERENTIAL_SEED` to replay one failing program. A failing seed
+prints its complete SQL program for reduction into a committed regression
+fixture.
+
 See [compatibility limits](docs/compatibility.md), [CHANGELOG.md](CHANGELOG.md),
 and the [query coverage tooling](tools/query_coverage/README.md) for details.
 

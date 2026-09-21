@@ -30,7 +30,9 @@
   "steps": [
     {
       "sql": "UPDATE network_endpoints SET address_bytes = INET6_ATON(INET_NTOA(address_number)) WHERE endpoint_state = 'ready'"
-    },
+    }
+  ],
+  "checks": [
     {
       "sql": "SELECT endpoint_id, address_number, HEX(address_bytes) AS address_hex FROM network_endpoints ORDER BY endpoint_id",
       "ordered": true

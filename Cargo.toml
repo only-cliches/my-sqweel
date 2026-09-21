@@ -94,6 +94,10 @@ name = "mysql_compatibility_corpus"
 path = "tests/mysql_compatibility_corpus.rs"
 
 [[test]]
+name = "stateful_differential"
+path = "tests/stateful_differential.rs"
+
+[[test]]
 name = "query_coverage"
 path = "tests/query_coverage.rs"
 

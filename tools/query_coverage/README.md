@@ -173,6 +173,20 @@ pending reuse review; they never substitute for the complete upstream file.
 Raw query counts are not a guarantee across the entire SQL language. Public
 coverage expands after manual integration and CI qualification of the pinned scope.
 
+## Generated stateful differential programs
+
+`tests/stateful_differential.rs` is the systematic complement to discovery:
+it generates deterministic, typed-schema programs from the documented supported
+subset, applies a transaction or DML mutation, then compares generated query
+results and canonical table state with MariaDB. It does not accept arbitrary
+raw SQL, so every generated case remains interpretable and in scope. The test
+uses 64 stable seeds by default and verifies that every mutation/query variant
+and every mutation/query interaction is represented. Increase the range with
+`STATEFUL_DIFFERENTIAL_SEEDS`, or replay a single reported case with
+`STATEFUL_DIFFERENTIAL_SEED`; a mismatch reports the seed and complete SQL
+program, which should be minimized and retained as a JSON regression fixture
+when it exposes a defect.
+
 ## Developer verification
 
 ```sh

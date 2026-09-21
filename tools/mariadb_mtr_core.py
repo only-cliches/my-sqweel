@@ -837,7 +837,7 @@ def start_mysqweel(binary: Path, report_dir: Path, timezone: str = "+00:00") -> 
     log = report_dir / "mysqweel.log"
     stream = log.open("w")
     process = subprocess.Popen(
-        [str(binary), "--bind", f"{host}:{port}", "--mysql-strict", "--default-time-zone", timezone, "serve"],
+        [str(binary), "--bind", f"{host}:{port}", "--default-time-zone", timezone, "serve"],
         stdout=stream,
         stderr=subprocess.STDOUT,
         text=True,

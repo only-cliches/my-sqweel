@@ -91,6 +91,7 @@ class ManifestTests(unittest.TestCase):
             start_mysqweel(Path("sqwl"), Path(directory), timezone="-10:00")
             command = popen.call_args.args[0]
             self.assertEqual(command[command.index("--default-time-zone") + 1], "-10:00")
+            self.assertNotIn("--mysql-strict", command)
             popen.call_args.kwargs["stdout"].close()
 
     def test_mysqweel_timezone_must_match_the_upstream_requirement(self):
