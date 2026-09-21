@@ -211,6 +211,7 @@ All notable changes to MySqweel will be documented in this file.
 - Parked the GitHub-attributed `JSON_STORAGE_SIZE` candidate from [zufuliu/notepad4](https://github.com/zufuliu/notepad4/blob/b7357c8dbd39e2e125c9a464e3f2752bf5c636ee/tools/lang/MySQL.sql#L1322) because MariaDB 10.11.7 returned error 1305 (`42000`, function unavailable); the independently authored fixture was not retained.
 - Added GitHub-attributed `JSON_VALUE` coverage from [gravitational/teleport](https://github.com/gravitational/teleport/blob/1283425b60ec5f60d509ba4c791183d452923ff7/lib/srv/db/mysql/sql/mariadb_activate_user.sql#L8) for an independently authored profile-document audit combining nested scalar extraction, boolean and numeric values, explicit JSON null, missing paths, and non-scalar paths; fixed MariaDB-compatible `1`/`0` boolean rendering and argument-sensitive `LONG_BLOB` metadata for JSON-column inputs.
 - Added the minimized GitHub-attributed `JSON_VALUE` boolean/metadata regression; MariaDB 10.11.7 and MySqweel now agree on `0` and result metadata across repeated fresh differential runs.
+- Parked the GitHub-attributed `CONVERT_TZ` candidate from [kestra-io/kestra](https://github.com/kestra-io/kestra/blob/082f93cf396106ffdc67012ff8d4e14f5ddb4b20/jdbc-mysql/src/main/resources/migrations/baseline-mysql.sql#L13-L25) after MariaDB 10.11.7 passed repeated baselines but MySqweel returned error 1235 (`42000`, unsupported function); the independently authored fixed-offset schedule fixture was not retained.
 
 ### Upstream corpus coverage
 
