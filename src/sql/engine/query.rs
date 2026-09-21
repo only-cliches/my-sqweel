@@ -1517,6 +1517,7 @@ impl RawEngine {
                     "GROUP_CONCAT" => MysqlColumnType::Blob,
                     "REGEXP_REPLACE" => MysqlColumnType::LongBlob,
                     "REGEXP_SUBSTR" => MysqlColumnType::VarChar,
+                    "REGEXP_INSTR" => MysqlColumnType::Integer,
                     "INET_ATON" => {
                         metadata.unsigned = true;
                         MysqlColumnType::BigInt

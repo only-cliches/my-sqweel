@@ -705,6 +705,26 @@ pub(super) fn eval_regexp_substr_values(values: &[Value]) -> Result<Value> {
         .map(|matched| Value::String(matched.as_str().to_string()))
         .unwrap_or(Value::Null))
 }
+pub(super) fn eval_regexp_instr_values(values: &[Value]) -> Result<Value> {
+    let [subject, pattern] = values else {
+        return Err(anyhow!("REGEXP_INSTR requires two arguments"));
+    };
+    if subject == &Value::Null || pattern == &Value::Null {
+        return Ok(Value::Null);
+    }
+    let subject = json_scalar_to_string(subject);
+    let pattern = json_scalar_to_string(pattern);
+    let regex =
+        Regex::new(&pattern).map_err(|error| anyhow!("invalid regular expression: {error}"))?;
+    Ok(regex
+        .find(&subject)
+        .map(|matched| {
+            Value::Number(Number::from(
+                subject[..matched.start()].chars().count() as u64 + 1,
+            ))
+        })
+        .unwrap_or_else(|| Value::Number(Number::from(0))))
+}
 
 pub(super) fn eval_regexp_values(target: Value, pattern: Value, negated: bool) -> Result<Value> {
     if target == Value::Null || pattern == Value::Null {

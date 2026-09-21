@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "id": "regexp_position_search_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "OpenTenBase/OpenTenBase",
+      "commit": "b612d77cbfd4d762f20c54c35f7caf09d57ef098",
+      "path": "contrib/opentenbase_ora_package_function/sql/regexp_instr.sql",
+      "url": "https://github.com/OpenTenBase/OpenTenBase/blob/b612d77cbfd4d762f20c54c35f7caf09d57ef098/contrib/opentenbase_ora_package_function/sql/regexp_instr.sql",
+      "sha256": "d386413fdee4bd426734ca1fee1c88455ac7bef656aa668edea39b3534c075c4",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "contrib/opentenbase_ora_package_function/sql/regexp_instr.sql:5-8",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A scalar REGEXP_INSTR call returns the one-based start position of a matching regular expression.",
+      "mysql_mariadb_translation": "Reduced to one independently authored two-argument MariaDB-compatible scalar query so unsupported function recognition is isolated from table setup, ordering, multiple rows, and NULL handling."
+    },
+    "independently_authored": true,
+    "minimized_from": "regexp_position_search"
+  },
+  "features": ["regexp-instr", "minimized-regression"],
+  "fixture_notes": "The fixed sentence contains INC-482 beginning at position 8; one scalar call isolates REGEXP_INSTR support.",
+  "determinism_notes": "The scalar string and pattern are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT REGEXP_INSTR('Queued INC-482 for review', 'INC-[0-9]+') AS code_position",
+      "ordered": true
+    }
+  ]
+}

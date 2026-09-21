@@ -3478,6 +3478,10 @@ where
             let values = args.iter().map(eval_arg).collect::<Result<Vec<_>>>()?;
             eval_regexp_substr_values(&values)
         })()),
+        "REGEXP_INSTR" => Some((|| {
+            let values = args.iter().map(eval_arg).collect::<Result<Vec<_>>>()?;
+            eval_regexp_instr_values(&values)
+        })()),
         "INET_ATON" => Some((|| {
             let value = args
                 .first()

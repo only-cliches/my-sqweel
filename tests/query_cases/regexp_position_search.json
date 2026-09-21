@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "regexp_position_search",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "OpenTenBase/OpenTenBase",
+      "commit": "b612d77cbfd4d762f20c54c35f7caf09d57ef098",
+      "path": "contrib/opentenbase_ora_package_function/sql/regexp_instr.sql",
+      "url": "https://github.com/OpenTenBase/OpenTenBase/blob/b612d77cbfd4d762f20c54c35f7caf09d57ef098/contrib/opentenbase_ora_package_function/sql/regexp_instr.sql",
+      "sha256": "d386413fdee4bd426734ca1fee1c88455ac7bef656aa668edea39b3534c075c4",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "contrib/opentenbase_ora_package_function/sql/regexp_instr.sql:5-8",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A SQL regression query uses REGEXP_INSTR to return the position of a selected regular-expression occurrence in a string.",
+      "mysql_mariadb_translation": "Retained the scalar position-search contract in MariaDB's two-argument-compatible form, but authored a new event-code registry, fixed text values, labels, and ordered report. Occurrence controls, source setup, and source literals are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["regexp-instr", "match-position", "no-match-zero", "null-propagation", "deterministic-order"],
+  "fixture_notes": "Each registry row searches for an uppercase incident code. The first two rows match at different one-based positions, the third has no match and returns zero, and the fourth preserves NULL input.",
+  "determinism_notes": "Event IDs, text, patterns, and ordering are fixed; the report contains no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE event_code_registry (event_id INT PRIMARY KEY, label VARCHAR(16) NOT NULL, event_text VARCHAR(96) NULL, code_pattern VARCHAR(32) NOT NULL)",
+    "INSERT INTO event_code_registry VALUES (11, 'early', 'Queued INC-482 for review', 'INC-[0-9]+'), (12, 'late', 'Escalated after INC-719', 'INC-[0-9]+'), (13, 'absent', 'No incident assigned', 'INC-[0-9]+'), (14, 'missing', NULL, 'INC-[0-9]+')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT event_id, label, REGEXP_INSTR(event_text, code_pattern) AS code_position FROM event_code_registry ORDER BY event_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT event_id, label, event_text FROM event_code_registry ORDER BY event_id",
+      "ordered": true
+    }
+  ]
+}
