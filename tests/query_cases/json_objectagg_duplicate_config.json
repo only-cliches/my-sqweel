@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "json_objectagg_duplicate_config",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "antlr/grammars-v4",
+      "commit": "e356c2fb6dbd60ce4346841f6a2e5578014fadb4",
+      "path": "sql/mariadb/examples/fast/dml_select.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/e356c2fb6dbd60ce4346841f6a2e5578014fadb4/sql/mariadb/examples/fast/dml_select.sql",
+      "sha256": "b9128ffb5b50bea79c534bc24a127d9d626fd2d21be8cb0a45deafd8d6c84f79",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/mariadb/examples/fast/dml_select.sql:173",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB grouped query folds attribute rows into one JSON object per owning identifier with JSON_OBJECTAGG.",
+      "mysql_mariadb_translation": "Reauthored as a service configuration history report over new rows. Duplicate property names test whether JSON_OBJECTAGG preserves repeated object members, while a NULL value and ordered service output exercise JSON aggregation edge semantics without copying source schema, values, or query text."
+    },
+    "independently_authored": true
+  },
+  "features": ["json-objectagg", "duplicate-object-keys", "null-value", "grouped-aggregate", "deterministic-order"],
+  "fixture_notes": "Service 501 has two timeout history rows and one region row; service 502 has one NULL-valued enabled property. The complete JSON objects are selected so duplicate-member preservation, NULL encoding, and result metadata remain observable.",
+  "determinism_notes": "Configuration IDs are fixed primary keys and services are ordered by their unique ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE service_config_values (config_id INT PRIMARY KEY, service_id INT NOT NULL, property_name VARCHAR(32) NOT NULL, property_value VARCHAR(64) NULL)",
+    "INSERT INTO service_config_values VALUES (1, 501, 'timeout', '30'), (2, 501, 'timeout', '45'), (3, 501, 'region', 'eu'), (4, 502, 'enabled', NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT service_id, JSON_OBJECTAGG(property_name, property_value) AS settings FROM service_config_values GROUP BY service_id ORDER BY service_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT service_id, config_id FROM service_config_values ORDER BY service_id, config_id",
+      "ordered": true
+    }
+  ]
+}
