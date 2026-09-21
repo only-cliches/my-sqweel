@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "id": "delete_returning_session_cleanup",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "dml/delete/mariadb.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/dml/delete/mariadb.sql",
+      "sha256": "aa7830557327e39d0dc82e81530db58ba8560018bc303bc63cd790b863bbbdb0",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "dml/delete/mariadb.sql:21-24",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "MariaDB DELETE supports a RETURNING projection that exposes selected columns from rows removed by a conditional delete.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored session-token cleanup. One revoked token is deleted and returned with its nullable revocation note, while retained active and revoked rows are verified afterward. The schema, identifiers, labels, and cleanup purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "delete-returning",
+    "conditional-delete",
+    "nullable-returning-column",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Token 902 is the only selected revoked token and has a NULL revocation note; tokens 901 and 903 remain in the table. The RETURNING projection makes the deleted row observable before the final-state read.",
+  "determinism_notes": "Token IDs, account IDs, labels, and revocation timestamps are fixed; the delete predicate selects one primary-key row and final state is ordered by token ID. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE session_tokens (token_id INT PRIMARY KEY, account_id INT NOT NULL, token_label VARCHAR(32) NOT NULL, revoked TINYINT NOT NULL, revoked_at DATE NULL, revocation_note VARCHAR(64) NULL)",
+    "INSERT INTO session_tokens VALUES (901, 41, 'browser-a', 0, NULL, NULL), (902, 41, 'browser-b', 1, '2025-03-02', NULL), (903, 42, 'mobile-a', 1, '2025-03-03', 'manual logout')"
+  ],
+  "steps": [
+    {
+      "sql": "DELETE FROM session_tokens WHERE token_id = 902 RETURNING token_id, account_id, token_label, revoked_at, revocation_note",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT token_id, account_id, token_label, revoked, revoked_at, revocation_note FROM session_tokens ORDER BY token_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT token_id, account_id, token_label, revoked, revoked_at, revocation_note FROM session_tokens ORDER BY token_id",
+      "ordered": true
+    }
+  ]
+}
