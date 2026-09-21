@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "id": "view_dispatch_priority_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "view_dispatch_priority",
+    "source": {
+      "kind": "github",
+      "repository": "SpiderOak/nimbus.io",
+      "commit": "3ce4feef219d1d50e6257a3948a678cba28b42c0",
+      "path": "sql/gc.sql",
+      "url": "https://github.com/SpiderOak/nimbus.io/blob/3ce4feef219d1d50e6257a3948a678cba28b42c0/sql/gc.sql",
+      "sha256": "84904c22c34fc519326323f9e461f742b925ec90a404909645526b6245793208",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/gc.sql:25-62,124-132",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A second view reads from a first derived view and adds a partitioned window calculation.",
+      "mysql_mariadb_translation": "Minimized independently authored chained-view regression with one filtered base view and one ROW_NUMBER projection over that view; extra CASE columns, depot rows, and report fields are removed while the view-to-view dependency remains."
+    },
+    "independently_authored": true,
+    "minimized_from": "view_dispatch_priority"
+  },
+  "features": [
+    "chained-views",
+    "row-number",
+    "partitioned-window",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The first view keeps two ready work items and the second view ranks them within one depot. The final read must expose both rows and their ranks.",
+  "determinism_notes": "Work-item IDs and priorities are fixed; the window and final projection have explicit ordering with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE work_items (work_id INT PRIMARY KEY, depot_code VARCHAR(8) NOT NULL, state VARCHAR(12) NOT NULL, priority INT NOT NULL)",
+    "INSERT INTO work_items VALUES (810, 'EAST', 'ready', 40), (811, 'EAST', 'ready', 30), (812, 'EAST', 'held', 99)"
+  ],
+  "steps": [
+    {
+      "sql": "CREATE OR REPLACE VIEW ready_items AS SELECT work_id, depot_code, priority FROM work_items WHERE state = 'ready'"
+    },
+    {
+      "sql": "CREATE OR REPLACE VIEW ranked_items AS SELECT work_id, depot_code, priority, ROW_NUMBER() OVER (PARTITION BY depot_code ORDER BY priority DESC, work_id ASC) AS depot_rank FROM ready_items"
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT work_id, depot_code, priority, depot_rank FROM ranked_items ORDER BY work_id",
+      "ordered": true
+    }
+  ]
+}

@@ -1272,44 +1272,52 @@ impl RawEngine {
 
     fn expand_views(&self, sql: &str) -> String {
         let mut expanded = sql.to_string();
-        for view in self.views.iter() {
-            let name = view.key();
-            let upper = expanded.to_ascii_uppercase();
-            let name_upper = name.to_ascii_uppercase();
-            for keyword in ["FROM", "JOIN"] {
-                let marker = format!("{keyword} {name_upper}");
-                let Some(start) = upper.find(&marker) else {
-                    continue;
-                };
-                let end = start + marker.len();
-                let next_token = expanded[end..]
-                    .split_whitespace()
-                    .next()
-                    .unwrap_or_default()
-                    .trim_matches([',', ';']);
-                let has_explicit_alias = !next_token.is_empty()
-                    && !next_token.starts_with(')')
-                    && !matches!(
-                        next_token.to_ascii_uppercase().as_str(),
-                        "JOIN"
-                            | "LEFT"
-                            | "RIGHT"
-                            | "INNER"
-                            | "OUTER"
-                            | "WHERE"
-                            | "GROUP"
-                            | "ORDER"
-                            | "LIMIT"
-                            | "ON"
-                            | "HAVING"
-                    );
-                let alias = if has_explicit_alias {
-                    String::new()
-                } else {
-                    format!(" AS `{name}`")
-                };
-                let replacement = format!("{keyword} ({}){alias}", view.value().trim(),);
-                expanded.replace_range(start..end, &replacement);
+        let max_passes = self.views.len().saturating_mul(2).saturating_add(1);
+        for _ in 0..max_passes {
+            let mut changed = false;
+            for view in self.views.iter() {
+                let name = view.key();
+                let upper = expanded.to_ascii_uppercase();
+                let name_upper = name.to_ascii_uppercase();
+                for keyword in ["FROM", "JOIN"] {
+                    let marker = format!("{keyword} {name_upper}");
+                    let Some(start) = upper.find(&marker) else {
+                        continue;
+                    };
+                    let end = start + marker.len();
+                    let next_token = expanded[end..]
+                        .split_whitespace()
+                        .next()
+                        .unwrap_or_default()
+                        .trim_matches([',', ';']);
+                    let has_explicit_alias = !next_token.is_empty()
+                        && !next_token.starts_with(')')
+                        && !matches!(
+                            next_token.to_ascii_uppercase().as_str(),
+                            "JOIN"
+                                | "LEFT"
+                                | "RIGHT"
+                                | "INNER"
+                                | "OUTER"
+                                | "WHERE"
+                                | "GROUP"
+                                | "ORDER"
+                                | "LIMIT"
+                                | "ON"
+                                | "HAVING"
+                        );
+                    let alias = if has_explicit_alias {
+                        String::new()
+                    } else {
+                        format!(" AS `{name}`")
+                    };
+                    let replacement = format!("{keyword} ({}){alias}", view.value().trim(),);
+                    expanded.replace_range(start..end, &replacement);
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
             }
         }
         expanded

@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "id": "view_dispatch_priority",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "SpiderOak/nimbus.io",
+      "commit": "3ce4feef219d1d50e6257a3948a678cba28b42c0",
+      "path": "sql/gc.sql",
+      "url": "https://github.com/SpiderOak/nimbus.io/blob/3ce4feef219d1d50e6257a3948a678cba28b42c0/sql/gc.sql",
+      "sha256": "84904c22c34fc519326323f9e461f742b925ec90a404909645526b6245793208",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/gc.sql:25-62,124-132",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A multi-stage SQL report materializes a filtered, derived view and then layers a second view with window calculations over the first view.",
+      "mysql_mariadb_translation": "Reauthored as an independent dispatch-priority report. One view filters ready items and derives a CASE-based urgency band; a second view ranks each depot's ready items with ROW_NUMBER over deterministic priority and ID ordering. The source schema, names, rows, and garbage-collection purpose are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "create-or-replace-view",
+    "chained-views",
+    "case-expression",
+    "row-number",
+    "partitioned-window",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Only ready dispatches enter the first view. The second view assigns per-depot ranks: equal priorities use dispatch_id as the stable tie-breaker, while held and cancelled rows remain excluded.",
+  "determinism_notes": "Depot codes, priorities, IDs, and states are fixed; every window and final projection has explicit deterministic ordering. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE dispatch_items (dispatch_id INT PRIMARY KEY, depot_code VARCHAR(8) NOT NULL, state VARCHAR(12) NOT NULL, priority INT NOT NULL, item_label VARCHAR(32) NOT NULL)",
+    "INSERT INTO dispatch_items VALUES (610, 'NORTH', 'ready', 90, 'cold-chain'), (611, 'NORTH', 'ready', 90, 'priority-mail'), (612, 'NORTH', 'held', 99, 'inspection'), (720, 'SOUTH', 'ready', 75, 'standard-box'), (721, 'SOUTH', 'ready', 55, 'small-box'), (722, 'SOUTH', 'cancelled', 100, 'voided')"
+  ],
+  "steps": [
+    {
+      "sql": "CREATE OR REPLACE VIEW dispatch_ready AS SELECT dispatch_id, depot_code, priority, item_label, CASE WHEN priority >= 90 THEN 'critical' ELSE 'standard' END AS urgency_band FROM dispatch_items WHERE state = 'ready'"
+    },
+    {
+      "sql": "CREATE OR REPLACE VIEW dispatch_ranked AS SELECT dispatch_id, depot_code, priority, item_label, urgency_band, ROW_NUMBER() OVER (PARTITION BY depot_code ORDER BY priority DESC, dispatch_id ASC) AS depot_rank FROM dispatch_ready"
+    },
+    {
+      "sql": "SELECT dispatch_id, depot_code, priority, urgency_band, depot_rank FROM dispatch_ranked ORDER BY depot_code, depot_rank",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT dispatch_id, depot_code, priority, urgency_band, depot_rank FROM dispatch_ranked ORDER BY depot_code, depot_rank",
+      "ordered": true
+    }
+  ]
+}
