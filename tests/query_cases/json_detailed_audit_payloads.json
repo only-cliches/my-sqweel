@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "json_detailed_audit_payloads",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "hihipy/sql-x-ray",
+      "commit": "0fc6faaa91c0e1a70603779deafa5daa17eca14e",
+      "path": "scripts/mariadb-xray.sql",
+      "url": "https://github.com/hihipy/sql-x-ray/blob/0fc6faaa91c0e1a70603779deafa5daa17eca14e/scripts/mariadb-xray.sql",
+      "sha256": "464f8a2e69e97b4303becf3967bd5bab859ae5daf31e20390ad210b4ffe6ef1e",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "scripts/mariadb-xray.sql:536",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB schema-report query applies JSON_DETAILED to a generated JSON document to render a readable structural dump.",
+      "mysql_mariadb_translation": "Reauthored as an application audit-payload report over new JSON-column rows. JSON_DETAILED renders nested objects and arrays for a deterministic payload projection without using information_schema, generated schema metadata, or source identifiers."
+    },
+    "independently_authored": true
+  },
+  "features": ["json-detailed", "json-column", "nested-object", "nested-array", "deterministic-order"],
+  "fixture_notes": "Audit 901 stores a nested service payload with an object, numeric limits, and an ordered flag array. The detailed JSON text is selected directly so formatting and result metadata are observable.",
+  "determinism_notes": "The audit ID and JSON document are fixed, and output is ordered by the unique audit ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE audit_payloads (audit_id INT PRIMARY KEY, payload JSON NOT NULL)",
+    "INSERT INTO audit_payloads VALUES (901, '{\"service\":\"edge\",\"limits\":{\"soft\":128,\"hard\":256},\"flags\":[\"cold\",\"signed\"]}')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT audit_id, JSON_DETAILED(payload) AS detailed_payload FROM audit_payloads ORDER BY audit_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT audit_id FROM audit_payloads ORDER BY audit_id",
+      "ordered": true
+    }
+  ]
+}

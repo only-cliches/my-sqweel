@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "id": "json_detailed_audit_payloads_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "hihipy/sql-x-ray",
+      "commit": "0fc6faaa91c0e1a70603779deafa5daa17eca14e",
+      "path": "scripts/mariadb-xray.sql",
+      "url": "https://github.com/hihipy/sql-x-ray/blob/0fc6faaa91c0e1a70603779deafa5daa17eca14e/scripts/mariadb-xray.sql",
+      "sha256": "464f8a2e69e97b4303becf3967bd5bab859ae5daf31e20390ad210b4ffe6ef1e",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "scripts/mariadb-xray.sql:536",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB report applies JSON_DETAILED to a JSON document to produce readable structured text.",
+      "mysql_mariadb_translation": "Reduced to one fixed nested JSON literal and one JSON_DETAILED projection so function recognition, formatting, and result metadata are isolated from table setup and report logic."
+    },
+    "independently_authored": true,
+    "parent_case": "json_detailed_audit_payloads"
+  },
+  "features": ["json-detailed", "minimized-regression", "nested-json"],
+  "fixture_notes": "One nested JSON literal isolates JSON_DETAILED output and metadata without rows, joins, or schema state.",
+  "determinism_notes": "The JSON literal is fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT JSON_DETAILED('{\"limits\":{\"soft\":128},\"flags\":[\"cold\",\"signed\"]}') AS detailed_payload",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}

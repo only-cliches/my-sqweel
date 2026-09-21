@@ -4412,7 +4412,7 @@ pub(super) fn eval_function_text(
         "JSON_LENGTH" => eval_json_length(args.as_slice(), data, last_insert_id),
         "JSON_KEYS" => eval_json_keys(args.as_slice(), data, last_insert_id),
         "JSON_OVERLAPS" => eval_json_overlaps(args.first(), args.get(1), data, last_insert_id),
-        "JSON_PRETTY" => eval_json_pretty(args.first(), data, last_insert_id),
+        "JSON_DETAILED" | "JSON_PRETTY" => eval_json_pretty(args.first(), data, last_insert_id),
         "JSON_QUOTE" => eval_json_quote(args.first(), data, last_insert_id),
         "JSON_SEARCH" => eval_json_search(args.as_slice(), data, last_insert_id),
         "JSON_VALUE" => eval_json_value(args.as_slice(), data, last_insert_id),

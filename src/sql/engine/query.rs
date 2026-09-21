@@ -1848,7 +1848,7 @@ impl RawEngine {
                             None => MysqlColumnType::VarChar,
                         }
                     }
-                    "JSON_PRETTY" | "JSON_QUERY" => {
+                    "JSON_DETAILED" | "JSON_PRETTY" | "JSON_QUERY" => {
                         let argument = function_arguments(function)
                             .ok()
                             .and_then(|arguments| arguments.into_iter().next().flatten())
