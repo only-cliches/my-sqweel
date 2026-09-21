@@ -171,6 +171,7 @@ All notable changes to MySqweel will be documented in this file.
 - Added the minimized GitHub-attributed `SOUNDEX` ignored-letter regression; MariaDB 10.11.7 and MySqweel now both return `A2613` for `Ashcraft` across repeated fresh differential runs.
 - Added GitHub-attributed `TIMESTAMPADD` coverage from [DataLinkDC/dinky](https://github.com/DataLinkDC/dinky/blob/63b5a5aa2438a4c30efd1067da8aedf844951143/script/sql/dinky-mysql.sql) for an independently authored billing-window report covering month-end clamping, leap-day year rollover, negative day intervals, and NULL propagation; matched MariaDB's datetime result metadata for temporal columns and string metadata for literal inputs.
 - Added the minimized GitHub-attributed `TIMESTAMPADD` metadata regression; fixed result-type inference to preserve MariaDB's `DATETIME` output for temporal arguments and `MYSQL_TYPE_STRING` output for literal timestamp arguments.
+- Parked the GitHub-attributed `JSON_SCHEMA_VALID`/`JSON_SCHEMA_VALIDATION_REPORT` candidate from [antlr/grammars-v4](https://github.com/antlr/grammars-v4/blob/e356c2fb6dbd60ce4346841f6a2e5578014fadb4/sql/mariadb/examples/fast/dml_select.sql) because MariaDB 10.11.7 returned error 1305 (`42000`, `JSON_SCHEMA_VALIDATION_REPORT` unavailable); the independently authored schema-audit fixture was not retained.
 
 ### Upstream corpus coverage
 
