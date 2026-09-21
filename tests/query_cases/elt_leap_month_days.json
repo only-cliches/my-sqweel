@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "elt_leap_month_days",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "svetasmirnova/mysqlcookbook",
+      "commit": "77a51ec49062d4853106ec0c242d44f965422501",
+      "path": "recipes/dates/leap.sql",
+      "url": "https://github.com/svetasmirnova/mysqlcookbook/blob/77a51ec49062d4853106ec0c242d44f965422501/recipes/dates/leap.sql",
+      "sha256": "29dfe2a14e6dff9e752fa7064d1fe39a16f40065da1a019ad981c8e4c3df5916",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "recipes/dates/leap.sql:16-27",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A calendar query uses ELT indexed by MONTH together with a leap-year IF expression to derive the number of days in each month.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored billing-calendar report with fixed DATE rows. ELT selects month lengths, YEAR and MONTH derive the date parts, IF distinguishes leap February, and a NULL date verifies scalar NULL propagation without copying the source table or literals."
+    },
+    "independently_authored": true
+  },
+  "features": ["elt", "date-components", "leap-year-case", "null-propagation", "deterministic-order"],
+  "fixture_notes": "The report includes leap-year February, ordinary February, a 30-day month, and a NULL date. Leap-year logic follows the Gregorian divisible-by-400 rule; ELT returns the selected month length or NULL for the missing date.",
+  "determinism_notes": "Calendar IDs and dates are fixed and ordered by the primary key; there are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE billing_calendar (calendar_id INT PRIMARY KEY, period_start DATE NULL, period_label VARCHAR(24) NOT NULL)",
+    "INSERT INTO billing_calendar VALUES (301, '2024-02-01', 'leap February'), (302, '2023-02-01', 'ordinary February'), (303, '2024-04-01', 'April'), (304, NULL, 'unscheduled')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT calendar_id, period_label, ELT(MONTH(period_start), 31, IF((YEAR(period_start) % 4 = 0) AND ((YEAR(period_start) % 100 <> 0) OR (YEAR(period_start) % 400 = 0)), 29, 28), 31, 30, 31, 30, 31, 31, 30, 31, 30, 31) AS days_in_month FROM billing_calendar ORDER BY calendar_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT calendar_id, period_start, period_label FROM billing_calendar ORDER BY calendar_id",
+      "ordered": true
+    }
+  ]
+}
