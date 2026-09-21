@@ -191,18 +191,26 @@ mod tests {
         let (_, p) = pr.next().unwrap().unwrap();
         let (_, handshake) = client_handshake(&p, false).unwrap();
         println!("{:?}", handshake);
-        assert!(handshake
-            .capabilities
-            .contains(CapabilityFlags::CLIENT_LONG_PASSWORD));
-        assert!(handshake
-            .capabilities
-            .contains(CapabilityFlags::CLIENT_MULTI_RESULTS));
-        assert!(!handshake
-            .capabilities
-            .contains(CapabilityFlags::CLIENT_CONNECT_WITH_DB));
-        assert!(!handshake
-            .capabilities
-            .contains(CapabilityFlags::CLIENT_DEPRECATE_EOF));
+        assert!(
+            handshake
+                .capabilities
+                .contains(CapabilityFlags::CLIENT_LONG_PASSWORD)
+        );
+        assert!(
+            handshake
+                .capabilities
+                .contains(CapabilityFlags::CLIENT_MULTI_RESULTS)
+        );
+        assert!(
+            !handshake
+                .capabilities
+                .contains(CapabilityFlags::CLIENT_CONNECT_WITH_DB)
+        );
+        assert!(
+            !handshake
+                .capabilities
+                .contains(CapabilityFlags::CLIENT_DEPRECATE_EOF)
+        );
         assert_eq!(handshake.collation, UTF8_GENERAL_CI);
         assert_eq!(handshake.username.unwrap(), &b"jon"[..]);
         assert_eq!(handshake.maxps, 16777216);
@@ -221,18 +229,26 @@ mod tests {
         let (_, p) = pr.next().unwrap().unwrap();
         let (_, handshake) = client_handshake(&p, false).unwrap();
         println!("{:?}", handshake);
-        assert!(handshake
-            .capabilities
-            .contains(CapabilityFlags::CLIENT_LONG_PASSWORD));
-        assert!(handshake
-            .capabilities
-            .contains(CapabilityFlags::CLIENT_MULTI_RESULTS));
-        assert!(!handshake
-            .capabilities
-            .contains(CapabilityFlags::CLIENT_CONNECT_WITH_DB));
-        assert!(!handshake
-            .capabilities
-            .contains(CapabilityFlags::CLIENT_DEPRECATE_EOF));
+        assert!(
+            handshake
+                .capabilities
+                .contains(CapabilityFlags::CLIENT_LONG_PASSWORD)
+        );
+        assert!(
+            handshake
+                .capabilities
+                .contains(CapabilityFlags::CLIENT_MULTI_RESULTS)
+        );
+        assert!(
+            !handshake
+                .capabilities
+                .contains(CapabilityFlags::CLIENT_CONNECT_WITH_DB)
+        );
+        assert!(
+            !handshake
+                .capabilities
+                .contains(CapabilityFlags::CLIENT_DEPRECATE_EOF)
+        );
         assert!(handshake.capabilities.contains(CapabilityFlags::CLIENT_SSL));
         assert_eq!(handshake.collation, UTF8_GENERAL_CI);
         assert_eq!(handshake.username, None);
@@ -252,18 +268,26 @@ mod tests {
         let (_, p) = pr.next().unwrap().unwrap();
         let (_, handshake) = client_handshake(&p, true).unwrap();
         println!("{:?}", handshake);
-        assert!(handshake
-            .capabilities
-            .contains(CapabilityFlags::CLIENT_LONG_PASSWORD));
-        assert!(handshake
-            .capabilities
-            .contains(CapabilityFlags::CLIENT_MULTI_RESULTS));
-        assert!(!handshake
-            .capabilities
-            .contains(CapabilityFlags::CLIENT_CONNECT_WITH_DB));
-        assert!(!handshake
-            .capabilities
-            .contains(CapabilityFlags::CLIENT_DEPRECATE_EOF));
+        assert!(
+            handshake
+                .capabilities
+                .contains(CapabilityFlags::CLIENT_LONG_PASSWORD)
+        );
+        assert!(
+            handshake
+                .capabilities
+                .contains(CapabilityFlags::CLIENT_MULTI_RESULTS)
+        );
+        assert!(
+            !handshake
+                .capabilities
+                .contains(CapabilityFlags::CLIENT_CONNECT_WITH_DB)
+        );
+        assert!(
+            !handshake
+                .capabilities
+                .contains(CapabilityFlags::CLIENT_DEPRECATE_EOF)
+        );
         assert!(handshake.capabilities.contains(CapabilityFlags::CLIENT_SSL));
         assert_eq!(handshake.collation, UTF8_GENERAL_CI);
         assert_eq!(handshake.username.unwrap(), &b"jon"[..]);

@@ -10,14 +10,13 @@ pub(crate) fn get_row(
     schema: &[FieldDef],
     pk_str: &str,
     now: Instant,
-) -> Option<Vec<(String, String)>> {
+    decrypt_authorized: bool,
+) -> Result<Option<Vec<(String, String)>>, String> {
     // Build a lookup map on the fly - only called from paths that don't have a pre-built map.
     // Hot paths (table_select) use get_row_with_map directly.
-    let type_map: hashbrown::HashMap<&str, &FieldType> = schema
-        .iter()
-        .map(|f| (f.name.as_str(), &f.field_type))
-        .collect();
-    get_row_with_map(store, table, &type_map, pk_str, now)
+    let field_map: hashbrown::HashMap<&str, &FieldDef> =
+        schema.iter().map(|f| (f.name.as_str(), f)).collect();
+    get_row_with_map(store, table, &field_map, pk_str, now, decrypt_authorized)
 }
 
 /// Like `get_row`, but returns the row even when its TTL has expired. The
@@ -29,39 +28,50 @@ pub(crate) fn get_row_including_expired(
     schema: &[FieldDef],
     pk_str: &str,
     now: Instant,
-) -> Option<Vec<(String, String)>> {
-    let type_map: hashbrown::HashMap<&str, &FieldType> = schema
-        .iter()
-        .map(|f| (f.name.as_str(), &f.field_type))
-        .collect();
-    get_row_with_map_impl(store, table, &type_map, pk_str, now, true)
+) -> Result<Option<Vec<(String, String)>>, String> {
+    let field_map: hashbrown::HashMap<&str, &FieldDef> =
+        schema.iter().map(|f| (f.name.as_str(), f)).collect();
+    // Expired-row reads are for internal index cleanup on the delete path, which
+    // always needs plaintext.
+    get_row_with_map_impl(store, table, &field_map, pk_str, now, true, true)
 }
 
 /// Hot-path row fetch: takes a pre-built field-type map to avoid O(N) schema scan per field.
+/// `decrypt_authorized` false omits ENCRYPTED columns from the result (anonymous principals).
 #[inline]
 pub(crate) fn get_row_with_map(
     store: &Store,
     table: &str,
-    type_map: &hashbrown::HashMap<&str, &FieldType>,
+    field_map: &hashbrown::HashMap<&str, &FieldDef>,
     pk_str: &str,
     now: Instant,
-) -> Option<Vec<(String, String)>> {
-    get_row_with_map_impl(store, table, type_map, pk_str, now, false)
+    decrypt_authorized: bool,
+) -> Result<Option<Vec<(String, String)>>, String> {
+    get_row_with_map_impl(
+        store,
+        table,
+        field_map,
+        pk_str,
+        now,
+        false,
+        decrypt_authorized,
+    )
 }
 
 #[inline]
 fn get_row_with_map_impl(
     store: &Store,
     table: &str,
-    type_map: &hashbrown::HashMap<&str, &FieldType>,
+    field_map: &hashbrown::HashMap<&str, &FieldDef>,
     pk_str: &str,
     now: Instant,
     include_expired: bool,
-) -> Option<Vec<(String, String)>> {
+    decrypt_authorized: bool,
+) -> Result<Option<Vec<(String, String)>>, String> {
     let rk = row_key_for_pk(table, pk_str);
-    let pairs = store.hgetall(rk.as_bytes(), now).unwrap_or_default();
+    let pairs = store.hgetall(rk.as_bytes(), now)?;
     if pairs.is_empty() {
-        return None;
+        return Ok(None);
     }
     // Single pass: decode columns, and when we hit the hidden `\0ttl` field check
     // the deadline. The clock is only read for rows that actually carry a TTL, so
@@ -76,19 +86,22 @@ fn get_row_with_map_impl(
                     .and_then(|s| s.parse::<u64>().ok())
                 {
                     if current_epoch_ms() >= deadline {
-                        return None; // expired -> treated as already gone
+                        return Ok(None); // expired -> treated as already gone
                     }
                 }
             }
             continue; // never expose the hidden TTL field
         }
-        let decoded = match type_map.get(k.as_str()) {
-            Some(ft) => ft.decode_value(&v),
+        let decoded = match field_map.get(k.as_str()) {
+            // Grant-gated decryption: an unauthorized (anonymous) principal never
+            // sees an encrypted column's value — omit it from the row entirely.
+            Some(field) if field.encrypted && !decrypt_authorized => continue,
+            Some(field) => decode_stored_value(store, table, field, pk_str, &v)?,
             None => String::from_utf8_lossy(&v).to_string(),
         };
         out.push((k, decoded));
     }
-    Some(out)
+    Ok(Some(out))
 }
 
 /// Type-aware equality between a stored value and a candidate, mirroring the
@@ -158,9 +171,16 @@ pub(crate) fn eval_json_path_condition(
     path: &str,
     cond: &WhereClause,
 ) -> bool {
-    let raw = match row.iter().find(|(k, _)| k == root) {
-        Some((_, v)) => v.as_str(),
-        None => return cond.op == CmpOp::IsNotValid,
+    let raw = row
+        .iter()
+        .find(|(k, _)| k == root)
+        .map(|(_, value)| value.as_str());
+    eval_json_path_text(raw, path, cond)
+}
+
+fn eval_json_path_text(raw: Option<&str>, path: &str, cond: &WhereClause) -> bool {
+    let Some(raw) = raw else {
+        return cond.op == CmpOp::IsNotValid;
     };
     let parsed: serde_json::Value = match serde_json::from_str(raw) {
         Ok(v) => v,
@@ -293,27 +313,68 @@ pub(crate) fn row_passes_conditions(
     pk: &str,
     conditions: &[WhereClause],
     now: Instant,
-) -> bool {
+) -> Result<bool, String> {
     let rk = row_key_for_pk(table, pk);
-    conditions.iter().all(|cond| {
+    for cond in conditions {
+        if cond.op == CmpOp::Or {
+            let mut matched = false;
+            for clause in &cond.or_clauses {
+                if row_passes_conditions(
+                    store,
+                    table,
+                    schema,
+                    implicit_id,
+                    pk,
+                    std::slice::from_ref(clause),
+                    now,
+                )? {
+                    matched = true;
+                    break;
+                }
+            }
+            if !matched {
+                return Ok(false);
+            }
+            continue;
+        }
         // JSON/ARRAY dot-path => walk the stored binary.
         if let Some((root, rest)) = cond.field.split_once('.') {
             if schema.iter().any(|f| {
                 f.name == root && matches!(f.field_type, FieldType::Json | FieldType::Array)
             }) {
-                let raw = store.hget(rk.as_bytes(), root.as_bytes(), now);
-                return eval_json_path_binary(raw.as_deref(), rest, cond);
+                let raw = store.hget_checked(rk.as_bytes(), root.as_bytes(), now)?;
+                let decoded = match raw {
+                    Some(bytes) => {
+                        let field = schema
+                            .iter()
+                            .find(|f| f.name == root)
+                            .ok_or_else(|| format!("ERR unknown field '{root}'"))?;
+                        Some(stored_plain_bytes(store, table, field, pk, &bytes)?)
+                    }
+                    None => None,
+                };
+                if !eval_json_path_binary(decoded.as_deref(), rest, cond) {
+                    return Ok(false);
+                }
+                continue;
             }
         }
         let bare = bare_col(&cond.field);
         if let Some(fd) = schema.iter().find(|f| f.name == bare) {
             if matches!(fd.field_type, FieldType::Json | FieldType::Array) {
-                let raw = store.hget(rk.as_bytes(), bare.as_bytes(), now);
-                return eval_json_whole_binary(raw.as_deref(), cond);
+                let raw = store.hget_checked(rk.as_bytes(), bare.as_bytes(), now)?;
+                let decoded = match raw {
+                    Some(bytes) => Some(stored_plain_bytes(store, table, fd, pk, &bytes)?),
+                    None => None,
+                };
+                if !eval_json_whole_binary(decoded.as_deref(), cond) {
+                    return Ok(false);
+                }
+                continue;
             }
-            return match store.hget(rk.as_bytes(), bare.as_bytes(), now) {
+            let matched = match store.hget_checked(rk.as_bytes(), bare.as_bytes(), now)? {
                 Some(b) => {
-                    let val = fd.field_type.decode_value(&b);
+                    let val = decode_stored_value(store, table, fd, pk, &b)?;
                     let row = [(bare.to_string(), val)];
                     matches_condition(
                         &row,
@@ -322,16 +383,21 @@ pub(crate) fn row_passes_conditions(
                             op: cond.op.clone(),
                             value: cond.value.clone(),
                             values: cond.values.clone(),
+                            or_clauses: Vec::new(),
                         },
                         fd,
                     )
                 }
                 None => matches!(cond.op, CmpOp::Ne | CmpOp::IsNull),
             };
+            if !matched {
+                return Ok(false);
+            }
+            continue;
         }
         if bare == "id" {
             if let Some(fd) = implicit_id {
-                return match store.hget(rk.as_bytes(), b"id", now) {
+                let matched = match store.hget_checked(rk.as_bytes(), b"id", now)? {
                     Some(b) => {
                         let val = fd.field_type.decode_value(&b);
                         let row = [("id".to_string(), val)];
@@ -342,18 +408,22 @@ pub(crate) fn row_passes_conditions(
                                 op: cond.op.clone(),
                                 value: cond.value.clone(),
                                 values: cond.values.clone(),
+                                or_clauses: Vec::new(),
                             },
                             fd,
                         )
                     }
                     None => matches!(cond.op, CmpOp::Ne | CmpOp::IsNull),
                 };
+                if !matched {
+                    return Ok(false);
+                }
             }
-            return true;
+            continue;
         }
         // Unknown column (e.g. a join column) - not filtered at this stage.
-        true
-    })
+    }
+    Ok(true)
 }
 
 pub(crate) fn matches_condition(
@@ -361,6 +431,12 @@ pub(crate) fn matches_condition(
     cond: &WhereClause,
     field_def: &FieldDef,
 ) -> bool {
+    if cond.op == CmpOp::Or {
+        return cond
+            .or_clauses
+            .iter()
+            .any(|clause| matches_condition(row, clause, field_def));
+    }
     let val = match row.iter().find(|(k, _)| k == &cond.field) {
         Some((_, v)) => v.as_str(),
         // Column absent from the row: it is NULL. `!=` and `IS NULL` match;
@@ -445,6 +521,8 @@ pub(crate) fn matches_condition(
             CmpOp::Lt => val < cond.value.as_str(),
             CmpOp::Ge => val >= cond.value.as_str(),
             CmpOp::Le => val <= cond.value.as_str(),
+            CmpOp::Like => sql_like_matches(val, &cond.value, false),
+            CmpOp::ILike => sql_like_matches(val, &cond.value, true),
             _ => false,
         },
     }
@@ -457,23 +535,41 @@ pub(crate) fn candidates_from_index(
     field_def: &FieldDef,
     limit: Option<usize>,
     now: Instant,
-) -> Option<Vec<String>> {
+) -> Result<Option<Vec<String>>, String> {
+    if field_def.encrypted {
+        if !field_def.searchable || cond.op != CmpOp::Eq {
+            return Ok(None);
+        }
+        let index_values = searchable_index_values(store, table, field_def, &cond.value)?;
+        let mut members = Vec::new();
+        for index_value in index_values {
+            let skey = idx_str_key(table, &cond.field, &index_value);
+            members.extend(store.smembers(skey.as_bytes(), now)?);
+        }
+        members.sort();
+        members.dedup();
+        let members = match limit {
+            Some(n) => members.into_iter().take(n).collect(),
+            None => members,
+        };
+        return Ok(Some(members));
+    }
     match &field_def.field_type {
         FieldType::Str | FieldType::Uuid => {
             if cond.op == CmpOp::Eq {
                 let skey = idx_str_key(table, &cond.field, &cond.value);
-                let members = store.smembers(skey.as_bytes(), now).unwrap_or_default();
+                let members = store.smembers(skey.as_bytes(), now)?;
                 // Apply limit if set - STR equality index returns exact matches only
                 let members = match limit {
                     Some(n) => members.into_iter().take(n).collect(),
                     None => members,
                 };
-                return Some(members);
+                return Ok(Some(members));
             }
-            None
+            Ok(None)
         }
         // JSON/ARRAY columns carry only declared path indexes, handled separately.
-        FieldType::Vector(_) | FieldType::Json | FieldType::Array => None,
+        FieldType::Vector(_) | FieldType::Json | FieldType::Array => Ok(None),
         FieldType::Int
         | FieldType::Float
         | FieldType::Bool
@@ -481,7 +577,7 @@ pub(crate) fn candidates_from_index(
         | FieldType::Ref(_) => {
             let score: f64 = match cond.value.parse() {
                 Ok(v) => v,
-                Err(_) => return None,
+                Err(_) => return Ok(None),
             };
             let zkey = idx_sorted_key(table, &cond.field);
             let (min, max, min_excl, max_excl) = match cond.op {
@@ -497,26 +593,27 @@ pub(crate) fn candidates_from_index(
                 | CmpOp::IsNotValid
                 | CmpOp::IsNull
                 | CmpOp::IsNotNull
-                | CmpOp::Contains => return None,
+                | CmpOp::Contains
+                | CmpOp::Like
+                | CmpOp::ILike
+                | CmpOp::Or => return Ok(None),
             };
             // Pass limit directly to zrangebyscore - avoids fetching all matching IDs
             // when we only need the first N (e.g. WHERE age > 40 LIMIT 100)
-            let results = store
-                .zrangebyscore(
-                    zkey.as_bytes(),
-                    min,
-                    max,
-                    min_excl,
-                    max_excl,
-                    false,
-                    Some(0),
-                    limit,
-                    false,
-                    now,
-                )
-                .unwrap_or_default();
+            let results = store.zrangebyscore(
+                zkey.as_bytes(),
+                min,
+                max,
+                min_excl,
+                max_excl,
+                false,
+                Some(0),
+                limit,
+                false,
+                now,
+            )?;
             let ids: Vec<String> = results.into_iter().map(|(s, _)| s).collect();
-            Some(ids)
+            Ok(Some(ids))
         }
     }
 }
@@ -527,10 +624,10 @@ pub(crate) fn candidates_from_implicit_id(
     cond: &WhereClause,
     limit: Option<usize>,
     now: Instant,
-) -> Option<Vec<String>> {
+) -> Result<Option<Vec<String>>, String> {
     let score: f64 = match cond.value.parse() {
         Ok(v) => v,
-        Err(_) => return None,
+        Err(_) => return Ok(None),
     };
     let (min, max, min_excl, max_excl) = match cond.op {
         CmpOp::Eq => (score, score, false, false),
@@ -545,24 +642,25 @@ pub(crate) fn candidates_from_implicit_id(
         | CmpOp::IsNotValid
         | CmpOp::IsNull
         | CmpOp::IsNotNull
-        | CmpOp::Contains => return None,
+        | CmpOp::Contains
+        | CmpOp::Like
+        | CmpOp::ILike
+        | CmpOp::Or => return Ok(None),
     };
 
-    let results = store
-        .zrangebyscore(
-            ids_key(table).as_bytes(),
-            min,
-            max,
-            min_excl,
-            max_excl,
-            false,
-            Some(0),
-            limit,
-            false,
-            now,
-        )
-        .unwrap_or_default();
-    Some(results.into_iter().map(|(s, _)| s).collect())
+    let results = store.zrangebyscore(
+        ids_key(table).as_bytes(),
+        min,
+        max,
+        min_excl,
+        max_excl,
+        false,
+        Some(0),
+        limit,
+        false,
+        now,
+    )?;
+    Ok(Some(results.into_iter().map(|(s, _)| s).collect()))
 }
 
 // ---------------------------------------------------------------------------
@@ -676,7 +774,7 @@ pub fn parse_select(args: &[&str]) -> Result<SelectPlan, String> {
             "WHERE" => {
                 i += 1;
                 loop {
-                    conditions.push(parse_where_condition(rest, &mut i)?);
+                    conditions.push(parse_where_or_group(rest, &mut i)?);
                     if i < rest.len() && rest[i].eq_ignore_ascii_case("AND") {
                         i += 1;
                     } else {
@@ -854,6 +952,9 @@ pub fn parse_select(args: &[&str]) -> Result<SelectPlan, String> {
         order_by,
         limit,
         offset,
+        // Default: full decryption. The HTTP auth boundary lowers this to false
+        // for anonymous principals after parsing; RESP/internal callers stay true.
+        decrypt_authorized: true,
     })
 }
 
@@ -872,6 +973,8 @@ pub(crate) fn parse_cmp_op(s: &str) -> Result<CmpOp, String> {
         "<" => Ok(CmpOp::Lt),
         ">=" => Ok(CmpOp::Ge),
         "<=" => Ok(CmpOp::Le),
+        op if op.eq_ignore_ascii_case("LIKE") => Ok(CmpOp::Like),
+        op if op.eq_ignore_ascii_case("ILIKE") => Ok(CmpOp::ILike),
         other => Err(format!("ERR unknown operator '{}'", other)),
     }
 }
@@ -1044,31 +1147,69 @@ pub fn table_select(
     plan: &SelectPlan,
     now: Instant,
 ) -> Result<SelectResult, String> {
+    let _execution_guard = store
+        .execution_read_guard()
+        .map_err(|error| format!("ERR database unavailable: {error}"))?;
+    let version = store.stable_table_read_version();
+    let result = table_select_once(store, cache, plan, now);
+    if store.table_read_version_is_current(version) {
+        return result;
+    }
+    store.with_consistent_table_read(|| table_select_once(store, cache, plan, now))
+}
+
+fn table_select_once(
+    store: &Store,
+    cache: &SharedSchemaCache,
+    plan: &SelectPlan,
+    now: Instant,
+) -> Result<SelectResult, String> {
     let schema = load_schema(store, cache, &plan.table, now)?;
     let table_alias = plan.alias.as_deref().unwrap_or(&plan.table);
 
     // Resolve the WHERE conditions - strip table alias prefix if present
-    let conditions: Vec<WhereClause> = plan
-        .conditions
-        .iter()
-        .map(|c| {
-            let field = strip_alias(&c.field, table_alias);
-            WhereClause {
-                field,
-                op: c.op.clone(),
-                value: c.value.clone(),
-                values: c.values.clone(),
-            }
-        })
-        .collect();
+    // A joined WHERE is evaluated only after every row has been qualified and
+    // joined. Applying it to the base scan first can bind `joined.owner` to a
+    // same-named base column and incorrectly discard or admit rows.
+    let conditions: Vec<WhereClause> = if plan.joins.is_empty() {
+        plan.conditions
+            .iter()
+            .map(|c| {
+                let field = strip_alias(&c.field, table_alias);
+                WhereClause {
+                    field,
+                    op: c.op.clone(),
+                    value: c.value.clone(),
+                    values: c.values.clone(),
+                    or_clauses: c.or_clauses.clone(),
+                }
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
 
     // Validate WHERE columns
     for cond in &conditions {
-        let bare = bare_col(&cond.field);
-        if !schema.iter().any(|f| f.name == bare) {
-            // Might be a join column - validate later
+        validate_encrypted_condition(cond, &schema)?;
+    }
+    if let Some((order_col, _)) = &plan.order_by {
+        let order_col = strip_alias(order_col, table_alias);
+        if let Some(root) = encrypted_path_root(&order_col, &schema) {
+            return Err(format!(
+                "ERR encrypted column '{}' does not support ORDER BY",
+                root.name
+            ));
+        }
+        let bare = bare_col(&order_col);
+        if schema.iter().any(|f| f.name == bare && f.encrypted) {
+            return Err(format!(
+                "ERR encrypted column '{}' does not support ORDER BY",
+                bare
+            ));
         }
     }
+    validate_encrypted_joins(store, cache, plan, &schema, table_alias, now)?;
 
     // ---- Fast-path aggregates (no row fetches needed) ----
     // We handle the common aggregate-only queries directly against the indexes,
@@ -1085,17 +1226,15 @@ pub fn table_select(
             &conditions,
             &plan.aggregates,
             now,
-        ) {
+        )? {
             return Ok(SelectResult::Aggregate(agg_row));
         }
     }
 
     // ---- Scan primary table ----
-    // Build a field-type lookup map ONCE per query so get_row doesn't O(N) scan per field.
-    let type_map: hashbrown::HashMap<&str, &FieldType> = schema
-        .iter()
-        .map(|f| (f.name.as_str(), &f.field_type))
-        .collect();
+    // Build a field lookup map ONCE per query so get_row doesn't O(N) scan per field.
+    let field_map: hashbrown::HashMap<&str, &FieldDef> =
+        schema.iter().map(|f| (f.name.as_str(), f)).collect();
     let implicit_id_field = if schema.iter().any(|f| f.primary_key) {
         None
     } else {
@@ -1106,7 +1245,10 @@ pub fn table_select(
             unique: true,
             nullable: false,
             default_value: None,
+            sequence_partition: None,
             references: None,
+            encrypted: false,
+            searchable: false,
         })
     };
 
@@ -1132,12 +1274,15 @@ pub fn table_select(
             early_limit,
         },
         now,
-    );
+    )?;
 
     let near_candidate_pks = if plan.near.is_some() && !conditions.is_empty() {
         let mut candidates = HashSet::new();
         for pk_str in &scan.row_ids {
-            let Some(row) = get_row_with_map(store, &plan.table, &type_map, pk_str, now) else {
+            // Candidate pre-filter for NEAR: decode fully so WHERE evaluation is
+            // correct; the gated projection happens at the row-emit site below.
+            let Some(row) = get_row_with_map(store, &plan.table, &field_map, pk_str, now, true)?
+            else {
                 continue;
             };
             if row_matches_base_conditions(&row, &schema, implicit_id_field.as_ref(), &conditions) {
@@ -1185,7 +1330,7 @@ pub fn table_select(
     // Per-candidate work: filter (per-field reads + zero-alloc JSON binary
     // walk), hydrate survivors, then project. Read-only over `store` (shard read
     // locks), so it's `Sync` and safe to fan out across cores.
-    let process = |pk_str: String| -> Option<Vec<(String, String)>> {
+    let process = |pk_str: String| -> Result<Option<Vec<(String, String)>>, String> {
         if !row_passes_conditions(
             store,
             &plan.table,
@@ -1194,10 +1339,20 @@ pub fn table_select(
             &pk_str,
             &conditions,
             now,
-        ) {
-            return None;
+        )? {
+            return Ok(None);
         }
-        let mut row = get_row_with_map(store, &plan.table, &type_map, &pk_str, now)?;
+        let Some(mut row) = get_row_with_map(
+            store,
+            &plan.table,
+            &field_map,
+            &pk_str,
+            now,
+            plan.decrypt_authorized,
+        )?
+        else {
+            return Ok(None);
+        };
         if let Some(similarity) = vector_similarity
             .as_ref()
             .and_then(|scores| scores.get(&pk_str))
@@ -1230,14 +1385,14 @@ pub fn table_select(
                 }
             }
         }
-        Some(if plan.alias.is_some() || !plan.joins.is_empty() {
+        Ok(Some(if plan.alias.is_some() || !plan.joins.is_empty() {
             projected
                 .into_iter()
                 .map(|(k, v)| (format!("{}.{}", table_alias, k), v))
                 .collect()
         } else {
             projected
-        })
+        }))
     };
 
     // A big full scan (no early LIMIT to exploit) is embarrassingly parallel —
@@ -1246,50 +1401,57 @@ pub fn table_select(
     let mut rows: Vec<Vec<(String, String)>> =
         if early_limit.is_none() && scan.row_ids.len() >= PARALLEL_SCAN_MIN {
             use rayon::prelude::*;
-            scan.row_ids.into_par_iter().filter_map(&process).collect()
-        } else {
             scan.row_ids
+                .into_par_iter()
+                .map(&process)
+                .collect::<Result<Vec<_>, _>>()?
                 .into_iter()
-                .filter_map(&process)
-                .take(early_limit.unwrap_or(usize::MAX))
+                .flatten()
                 .collect()
+        } else {
+            let limit = early_limit.unwrap_or(usize::MAX);
+            let mut rows = Vec::new();
+            for pk in scan.row_ids {
+                if let Some(row) = process(pk)? {
+                    rows.push(row);
+                    #[cfg(any())]
+                    if rows.len() == 1 {
+                        store.run_table_read_after_first_row_hook();
+                    }
+                    if rows.len() == limit {
+                        break;
+                    }
+                }
+            }
+            rows
         };
 
     // ---- Hash Joins ----
+    // A join may stop at LIMIT only when it is the sole join and no post-join
+    // filter can discard an early row. Otherwise truncating here can return too
+    // few rows even though later matching rows exist.
+    let join_limit = (plan.joins.len() == 1 && plan.conditions.is_empty())
+        .then_some(plan.limit)
+        .flatten();
     for join in &plan.joins {
-        // Pass the limit so the join can stop early once satisfied
-        rows = hash_join(store, cache, rows, join, plan.limit, plan.offset, now)?;
+        rows = hash_join(
+            store,
+            cache,
+            rows,
+            join,
+            join_limit,
+            plan.offset,
+            now,
+            plan.decrypt_authorized,
+        )?;
     }
 
     // ---- Post-join WHERE filter (for conditions referencing join columns) ----
     if !plan.joins.is_empty() {
         rows.retain(|row| {
-            plan.conditions.iter().all(|cond| {
-                let val = row
-                    .iter()
-                    .find(|(k, _)| {
-                        k == &cond.field || k.ends_with(&format!(".{}", bare_col(&cond.field)))
-                    })
-                    .map(|(_, v)| v.as_str());
-                match val {
-                    None => matches!(cond.op, CmpOp::Ne | CmpOp::IsNull),
-                    // IN / NOT IN carry their operands in `values`, not `value`;
-                    // compare_condition_value only knows scalar ops and would
-                    // return false for them, dropping every joined row (e.g. a
-                    // grant predicate `col IN (subquery)` on a joined query).
-                    Some(v) => match cond.op {
-                        CmpOp::In => cond
-                            .values
-                            .iter()
-                            .any(|x| compare_condition_value(v, &CmpOp::Eq, x)),
-                        CmpOp::NotIn => !cond
-                            .values
-                            .iter()
-                            .any(|x| compare_condition_value(v, &CmpOp::Eq, x)),
-                        _ => compare_condition_value(v, &cond.op, &cond.value),
-                    },
-                }
-            })
+            plan.conditions
+                .iter()
+                .all(|cond| joined_row_matches_condition(row, cond))
         });
     }
 
@@ -1370,13 +1532,97 @@ pub fn table_select(
     Ok(SelectResult::Rows(rows))
 }
 
+fn validate_encrypted_condition(cond: &WhereClause, schema: &[FieldDef]) -> Result<(), String> {
+    if cond.op == CmpOp::Or {
+        for clause in &cond.or_clauses {
+            validate_encrypted_condition(clause, schema)?;
+        }
+        return Ok(());
+    }
+    if let Some(root) = encrypted_path_root(&cond.field, schema) {
+        return Err(format!(
+            "ERR encrypted column '{}' does not support JSON path filters",
+            root.name
+        ));
+    }
+    let bare = bare_col(&cond.field);
+    let Some(field) = schema.iter().find(|f| f.name == bare) else {
+        return Ok(()); // Might be a join column - validate later.
+    };
+    if !field.encrypted {
+        return Ok(());
+    }
+    match cond.op {
+        CmpOp::Eq if field.searchable => Ok(()),
+        CmpOp::IsNull | CmpOp::IsNotNull => Ok(()),
+        CmpOp::Eq => Err(format!(
+            "ERR encrypted column '{}' must be SEARCHABLE for equality filters",
+            field.name
+        )),
+        _ => Err(format!(
+            "ERR encrypted column '{}' only supports equality filters when SEARCHABLE",
+            field.name
+        )),
+    }
+}
+
+fn encrypted_path_root<'a>(field: &str, schema: &'a [FieldDef]) -> Option<&'a FieldDef> {
+    let (root, rest) = field.split_once('.')?;
+    if rest.is_empty() {
+        return None;
+    }
+    schema.iter().find(|f| f.name == root && f.encrypted)
+}
+
+fn validate_encrypted_joins(
+    store: &Store,
+    cache: &SharedSchemaCache,
+    plan: &SelectPlan,
+    left_schema: &[FieldDef],
+    left_alias: &str,
+    now: Instant,
+) -> Result<(), String> {
+    for join in &plan.joins {
+        let right_schema = load_schema(store, cache, &join.table, now)?;
+        for col in [&join.left_col, &join.right_col] {
+            if let Some(field) =
+                join_column_field(col, left_schema, left_alias, &right_schema, &join.alias)
+            {
+                if field.encrypted {
+                    return Err(format!(
+                        "ERR encrypted column '{}' does not support JOIN",
+                        field.name
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn join_column_field<'a>(
+    col: &str,
+    left_schema: &'a [FieldDef],
+    left_alias: &str,
+    right_schema: &'a [FieldDef],
+    right_alias: &str,
+) -> Option<&'a FieldDef> {
+    let bare = bare_col(col);
+    match col.split_once('.').map(|(alias, _)| alias) {
+        Some(alias) if alias == right_alias => right_schema.iter().find(|f| f.name == bare),
+        Some(alias) if alias == left_alias => left_schema.iter().find(|f| f.name == bare),
+        Some(_) => None,
+        None => left_schema.iter().find(|f| f.name == bare),
+    }
+}
+
 pub(crate) fn plan_table_scan(
     store: &Store,
     table: &str,
     schema: &[FieldDef],
     plan: TableScanPlan<'_>,
     now: Instant,
-) -> TableScan {
+) -> Result<TableScan, String> {
     if plan.allow_order_pushdown {
         if let Some((order_col, ascending)) = plan.order_by {
             let order_col = bare_col(order_col);
@@ -1399,19 +1645,19 @@ pub(crate) fn plan_table_scan(
                         limit: pushed_limit,
                     },
                     now,
-                ) {
-                    return TableScan {
+                )? {
+                    return Ok(TableScan {
                         row_ids,
                         order_satisfied: true,
                         pagination_satisfied: plan.limit.is_some() || plan.offset.is_some(),
-                    };
+                    });
                 }
             }
         }
     }
 
     let candidate_set =
-        build_candidate_set(store, table, schema, plan.conditions, plan.early_limit, now);
+        build_candidate_set(store, table, schema, plan.conditions, plan.early_limit, now)?;
 
     if plan.allow_order_pushdown {
         if let Some((order_col, ascending)) = plan.order_by {
@@ -1434,32 +1680,32 @@ pub(crate) fn plan_table_scan(
                     limit: pushed_limit,
                 },
                 now,
-            ) {
+            )? {
                 if let Some(set) = candidate_set.as_ref() {
                     row_ids.retain(|pk| set.contains(pk));
                 }
-                return TableScan {
+                return Ok(TableScan {
                     row_ids,
                     order_satisfied: true,
                     pagination_satisfied: can_push_pagination
                         && (plan.limit.is_some() || plan.offset.is_some()),
-                };
+                });
             }
         }
     }
 
     let mut row_ids = match candidate_set {
         Some(pks) => pks.into_iter().collect(),
-        None => get_all_row_ids(store, table, now),
+        None => get_all_row_ids(store, table, now)?,
     };
     if let Some(lim) = plan.early_limit {
         row_ids.truncate(lim);
     }
-    TableScan {
+    Ok(TableScan {
         row_ids,
         order_satisfied: false,
         pagination_satisfied: false,
-    }
+    })
 }
 
 pub(crate) fn table_vector_candidates(
@@ -1521,6 +1767,16 @@ pub(crate) fn row_matches_base_conditions(
     conditions: &[WhereClause],
 ) -> bool {
     conditions.iter().all(|cond| {
+        if cond.op == CmpOp::Or {
+            return cond.or_clauses.iter().any(|clause| {
+                row_matches_base_conditions(
+                    row,
+                    schema,
+                    implicit_id_field,
+                    std::slice::from_ref(clause),
+                )
+            });
+        }
         // JSON dot-path: `jsoncol.a.b` where the leading segment is a JSON
         // column. Must run BEFORE bare_col, which would collapse the path to
         // its leaf and silently match every row.
@@ -1540,6 +1796,7 @@ pub(crate) fn row_matches_base_conditions(
                     op: cond.op.clone(),
                     value: cond.value.clone(),
                     values: cond.values.clone(),
+                    or_clauses: Vec::new(),
                 },
                 fd,
             )
@@ -1552,6 +1809,7 @@ pub(crate) fn row_matches_base_conditions(
                         op: cond.op.clone(),
                         value: cond.value.clone(),
                         values: cond.values.clone(),
+                        or_clauses: Vec::new(),
                     },
                     fd,
                 )
@@ -1618,7 +1876,10 @@ pub(crate) fn score_range_from_conditions(
             | CmpOp::IsNotValid
             | CmpOp::IsNull
             | CmpOp::IsNotNull
-            | CmpOp::Contains => return None,
+            | CmpOp::Contains
+            | CmpOp::Like
+            | CmpOp::ILike
+            | CmpOp::Or => return None,
         }
     }
 
@@ -1633,11 +1894,13 @@ pub(crate) fn build_candidates(
     conditions: &[WhereClause],
     limit: Option<usize>,
     now: Instant,
-) -> Vec<String> {
-    match build_candidate_set(store, table, schema, conditions, limit, now) {
-        Some(pks) => pks.into_iter().collect(),
-        None => get_all_row_ids(store, table, now),
-    }
+) -> Result<Vec<String>, String> {
+    Ok(
+        match build_candidate_set(store, table, schema, conditions, limit, now)? {
+            Some(pks) => pks.into_iter().collect(),
+            None => get_all_row_ids(store, table, now)?,
+        },
+    )
 }
 
 /// True when range-scanning or ordering `col` should use the table's `ids`
@@ -1667,7 +1930,7 @@ pub(crate) fn build_candidate_set(
     conditions: &[WhereClause],
     limit: Option<usize>,
     now: Instant,
-) -> Option<HashSet<String>> {
+) -> Result<Option<HashSet<String>>, String> {
     let mut candidate_set: Option<HashSet<String>> = None;
 
     // Only push limit down to index when there's a single condition - with multiple
@@ -1679,7 +1942,7 @@ pub(crate) fn build_candidate_set(
         // scan), otherwise leave the candidate set unnarrowed (the row-level
         // filter applies the predicate on a full scan).
         if is_json_path_field(&cond.field, schema) {
-            if let Some(ft) = read_path_index_type(store, table, &cond.field, now) {
+            if let Some(ft) = read_path_index_type(store, table, &cond.field, now)? {
                 let synthetic = FieldDef {
                     name: cond.field.clone(),
                     field_type: ft,
@@ -1687,10 +1950,13 @@ pub(crate) fn build_candidate_set(
                     unique: false,
                     nullable: true,
                     default_value: None,
+                    sequence_partition: None,
                     references: None,
+                    encrypted: false,
+                    searchable: false,
                 };
                 if let Some(pks) =
-                    candidates_from_index(store, table, cond, &synthetic, index_limit, now)
+                    candidates_from_index(store, table, cond, &synthetic, index_limit, now)?
                 {
                     let pk_set: HashSet<String> = pks.into_iter().collect();
                     candidate_set = Some(match candidate_set {
@@ -1708,8 +1974,7 @@ pub(crate) fn build_candidate_set(
             .filter(|pk| cond.op == CmpOp::Eq && validate_value(pk, &cond.value).is_ok());
         if primary_key_candidate.is_some() {
             let row_exists = !store
-                .hgetall(row_key_for_pk(table, &cond.value).as_bytes(), now)
-                .unwrap_or_default()
+                .hgetall(row_key_for_pk(table, &cond.value).as_bytes(), now)?
                 .is_empty();
             let pk_set: HashSet<String> =
                 row_exists.then(|| cond.value.clone()).into_iter().collect();
@@ -1726,10 +1991,11 @@ pub(crate) fn build_candidate_set(
                     op: cond.op.clone(),
                     value: cond.value.clone(),
                     values: cond.values.clone(),
+                    or_clauses: Vec::new(),
                 },
                 index_limit,
                 now,
-            ) {
+            )? {
                 let pk_set: HashSet<String> = pks.into_iter().collect();
                 candidate_set = Some(match candidate_set {
                     Some(existing) => existing.intersection(&pk_set).cloned().collect(),
@@ -1745,11 +2011,12 @@ pub(crate) fn build_candidate_set(
                     op: cond.op.clone(),
                     value: cond.value.clone(),
                     values: cond.values.clone(),
+                    or_clauses: Vec::new(),
                 },
                 fd,
                 index_limit,
                 now,
-            ) {
+            )? {
                 let pk_set: HashSet<String> = pks.into_iter().collect();
                 candidate_set = Some(match candidate_set {
                     Some(existing) => existing.intersection(&pk_set).cloned().collect(),
@@ -1759,7 +2026,7 @@ pub(crate) fn build_candidate_set(
         }
     }
 
-    candidate_set
+    Ok(candidate_set)
 }
 
 pub(crate) fn candidates_from_order_index(
@@ -1768,11 +2035,16 @@ pub(crate) fn candidates_from_order_index(
     schema: &[FieldDef],
     scan: OrderScan<'_>,
     now: Instant,
-) -> Option<Vec<String>> {
+) -> Result<Option<Vec<String>>, String> {
     let zkey = if pk_served_by_ids_set(schema, scan.column) {
         ids_key(table)
     } else {
-        let field = schema.iter().find(|f| f.name == scan.column)?;
+        let Some(field) = schema.iter().find(|f| f.name == scan.column) else {
+            return Ok(None);
+        };
+        if field.encrypted {
+            return Ok(None);
+        }
         match &field.field_type {
             FieldType::Int
             | FieldType::Float
@@ -1783,31 +2055,30 @@ pub(crate) fn candidates_from_order_index(
             | FieldType::Uuid
             | FieldType::Vector(_)
             | FieldType::Json
-            | FieldType::Array => return None,
+            | FieldType::Array => return Ok(None),
         }
     };
 
-    let rows = store
-        .zrangebyscore(
-            zkey.as_bytes(),
-            scan.min,
-            scan.max,
-            scan.min_exclusive,
-            scan.max_exclusive,
-            !scan.ascending,
-            scan.offset,
-            scan.limit,
-            false,
-            now,
-        )
-        .unwrap_or_default();
-    Some(rows.into_iter().map(|(pk, _)| pk).collect())
+    let rows = store.zrangebyscore(
+        zkey.as_bytes(),
+        scan.min,
+        scan.max,
+        scan.min_exclusive,
+        scan.max_exclusive,
+        !scan.ascending,
+        scan.offset,
+        scan.limit,
+        false,
+        now,
+    )?;
+    Ok(Some(rows.into_iter().map(|(pk, _)| pk).collect()))
 }
 
 /// Hash Join implementation.
 ///
 /// Builds an in-memory HashMap of the right table keyed on the join column,
 /// then iterates the left rows performing O(1) lookups.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn hash_join(
     store: &Store,
     cache: &SharedSchemaCache,
@@ -1816,6 +2087,7 @@ pub(crate) fn hash_join(
     limit: Option<usize>,
     offset: Option<usize>,
     now: Instant,
+    decrypt_authorized: bool,
 ) -> Result<Vec<Vec<(String, String)>>, String> {
     let right_schema = load_schema(store, cache, &join.table, now)?;
     let right_alias = &join.alias;
@@ -1824,12 +2096,19 @@ pub(crate) fn hash_join(
 
     // ---- Build phase ----
     // Key: right join column value -> list of right rows
-    let right_ids = get_all_row_ids(store, &join.table, now);
+    let right_ids = get_all_row_ids(store, &join.table, now)?;
     let mut hash_map: hashbrown::HashMap<String, Vec<Vec<(String, String)>>> =
         hashbrown::HashMap::with_capacity(right_ids.len());
 
     for pk_str in right_ids {
-        if let Some(row) = get_row(store, &join.table, &right_schema, &pk_str, now) {
+        if let Some(row) = get_row(
+            store,
+            &join.table,
+            &right_schema,
+            &pk_str,
+            now,
+            decrypt_authorized,
+        )? {
             let key_val = row
                 .iter()
                 .find(|(k, _)| k == &right_key)
@@ -1953,7 +2232,7 @@ pub(crate) fn project_columns(
         .map(|row| {
             projections
                 .iter()
-                .filter_map(|proj| {
+                .map(|proj| {
                     let target = &proj.expr;
                     let qualified = format!("{}.{}", table_alias, bare_col(target));
                     let val = row
@@ -1977,7 +2256,7 @@ pub(crate) fn project_columns(
                         .clone()
                         .unwrap_or_else(|| bare_col(target).to_string());
 
-                    val.map(|v| (out_name, v))
+                    (out_name, val.unwrap_or_default())
                 })
                 .collect()
         })
@@ -2041,12 +2320,12 @@ pub(crate) fn count_is_exact_via_index(
     schema: &[FieldDef],
     conditions: &[WhereClause],
     now: Instant,
-) -> bool {
-    conditions.iter().all(|c| {
+) -> Result<bool, String> {
+    for c in conditions {
         if is_json_path_field(&c.field, schema) {
             // A declared path index makes the candidate set exact for the ops
             // the index can serve: numeric ranges/eq (sorted set) or str eq (set).
-            return match read_path_index_type(store, table, &c.field, now) {
+            let exact = match read_path_index_type(store, table, &c.field, now)? {
                 Some(FieldType::Str) => c.op == CmpOp::Eq,
                 Some(_) => matches!(
                     c.op,
@@ -2054,15 +2333,22 @@ pub(crate) fn count_is_exact_via_index(
                 ),
                 None => false,
             };
+            if !exact {
+                return Ok(false);
+            }
+            continue;
         }
         let bare = bare_col(&c.field);
         if bare == "id" && !schema.iter().any(|f| f.primary_key) {
-            return matches!(
+            if !matches!(
                 c.op,
                 CmpOp::Eq | CmpOp::Gt | CmpOp::Ge | CmpOp::Lt | CmpOp::Le
-            );
+            ) {
+                return Ok(false);
+            }
+            continue;
         }
-        match schema.iter().find(|f| f.name == bare) {
+        let exact = match schema.iter().find(|f| f.name == bare) {
             // Bool is intentionally excluded: its sorted index stores every row
             // at score 0.0 (`"true"`/`"false"` don't parse as f64), so the
             // candidate set is never narrowed and its cardinality can't be
@@ -2075,8 +2361,12 @@ pub(crate) fn count_is_exact_via_index(
                 ) | (FieldType::Str | FieldType::Uuid, CmpOp::Eq)
             ),
             None => false,
+        };
+        if !exact {
+            return Ok(false);
         }
-    })
+    }
+    Ok(true)
 }
 
 /// Count candidate rows that satisfy the predicate. Filters via per-field
@@ -2087,19 +2377,29 @@ pub(crate) fn count_matching_rows(
     schema: &[FieldDef],
     conditions: &[WhereClause],
     now: Instant,
-) -> i64 {
+) -> Result<i64, String> {
     let implicit = implicit_id_field_for(schema);
-    let candidates = build_candidates(store, table, schema, conditions, None, now);
-    let passes = |pk: &String| {
-        row_passes_conditions(store, table, schema, implicit.as_ref(), pk, conditions, now)
-    };
+    let candidates = build_candidates(store, table, schema, conditions, None, now)?;
     // A big filtered count is the canonical bulk-scan query — fan the per-row
     // predicate check across cores (read-only over `store`).
     if candidates.len() >= PARALLEL_SCAN_MIN {
         use rayon::prelude::*;
-        candidates.par_iter().filter(|pk| passes(pk)).count() as i64
+        let results: Result<Vec<bool>, String> = candidates
+            .par_iter()
+            .map(|pk| {
+                row_passes_conditions(store, table, schema, implicit.as_ref(), pk, conditions, now)
+            })
+            .collect();
+        Ok(results?.into_iter().filter(|passes| *passes).count() as i64)
     } else {
-        candidates.iter().filter(|pk| passes(pk)).count() as i64
+        let mut count = 0_i64;
+        for pk in &candidates {
+            if row_passes_conditions(store, table, schema, implicit.as_ref(), pk, conditions, now)?
+            {
+                count += 1;
+            }
+        }
+        Ok(count)
     }
 }
 
@@ -2110,7 +2410,7 @@ pub(crate) fn try_fast_aggregate(
     conditions: &[WhereClause],
     aggregates: &[AggExpr],
     now: Instant,
-) -> Option<Vec<(String, String)>> {
+) -> Result<Option<Vec<(String, String)>>, String> {
     // Only handle pure aggregate queries with no complex conditions on non-indexed cols
     // All aggregates must be handleable via fast path
     let mut result = Vec::new();
@@ -2120,23 +2420,25 @@ pub(crate) fn try_fast_aggregate(
             AggFunc::Count => {
                 let count = if conditions.is_empty() {
                     // COUNT(*) with no WHERE - just read the sorted set cardinality
-                    store.zcard(ids_key(table).as_bytes(), now).unwrap_or(0)
-                } else if count_is_exact_via_index(store, table, schema, conditions, now) {
+                    store.zcard(ids_key(table).as_bytes(), now)?
+                } else if count_is_exact_via_index(store, table, schema, conditions, now)? {
                     // Candidate set is an exact match set - cardinality is the answer.
-                    build_candidates(store, table, schema, conditions, None, now).len() as i64
+                    build_candidates(store, table, schema, conditions, None, now)?.len() as i64
                 } else {
                     // Predicate isn't index-exact (JSON path, !=, IN, ...) - the
                     // candidate set may be a superset, so re-check each row.
-                    count_matching_rows(store, table, schema, conditions, now)
+                    count_matching_rows(store, table, schema, conditions, now)?
                 };
                 result.push((agg.alias.clone(), count.to_string()));
             }
             AggFunc::Sum | AggFunc::Avg | AggFunc::Min | AggFunc::Max => {
-                let col = match &agg.col {
-                    Some(c) => c.as_str(),
-                    None => return None, // SUM(*) doesn't make sense
+                // SUM(*) etc. have no column; bail out.
+                let Some(col) = agg.col.as_deref() else {
+                    return Ok(None);
                 };
-                let field_def = schema.iter().find(|f| f.name == col)?;
+                let Some(field_def) = schema.iter().find(|f| f.name == col) else {
+                    return Ok(None);
+                };
 
                 // Only works for numeric types that have a sorted index
                 let is_numeric = matches!(
@@ -2144,7 +2446,7 @@ pub(crate) fn try_fast_aggregate(
                     FieldType::Int | FieldType::Float | FieldType::Timestamp
                 );
                 if !is_numeric {
-                    return None;
+                    return Ok(None);
                 }
 
                 // Read scores directly from the sorted index - scores ARE the values
@@ -2156,7 +2458,9 @@ pub(crate) fn try_fast_aggregate(
                     let col_cond = conditions.iter().find(|c| bare_col(&c.field) == col);
                     match col_cond {
                         Some(cond) => {
-                            let score: f64 = cond.value.parse().ok()?;
+                            let Ok(score) = cond.value.parse::<f64>() else {
+                                return Ok(None);
+                            };
                             match cond.op {
                                 CmpOp::Eq => (score, score, false, false),
                                 CmpOp::Gt => (score, f64::INFINITY, true, false),
@@ -2170,29 +2474,30 @@ pub(crate) fn try_fast_aggregate(
                                 | CmpOp::IsNotValid
                                 | CmpOp::IsNull
                                 | CmpOp::IsNotNull
-                                | CmpOp::Contains => return None,
+                                | CmpOp::Contains
+                                | CmpOp::Like
+                                | CmpOp::ILike
+                                | CmpOp::Or => return Ok(None),
                             }
                         }
                         // Conditions on other columns - fall through to slow path
-                        None if !conditions.is_empty() => return None,
+                        None if !conditions.is_empty() => return Ok(None),
                         None => (f64::NEG_INFINITY, f64::INFINITY, false, false),
                     }
                 };
 
-                let entries = store
-                    .zrangebyscore(
-                        zkey.as_bytes(),
-                        min_score,
-                        max_score,
-                        min_excl,
-                        max_excl,
-                        false,
-                        None,
-                        None,
-                        false,
-                        now,
-                    )
-                    .unwrap_or_default();
+                let entries = store.zrangebyscore(
+                    zkey.as_bytes(),
+                    min_score,
+                    max_score,
+                    min_excl,
+                    max_excl,
+                    false,
+                    None,
+                    None,
+                    false,
+                    now,
+                )?;
 
                 let scores: Vec<f64> = entries.iter().map(|(_, s)| *s).collect();
 
@@ -2248,7 +2553,7 @@ pub(crate) fn try_fast_aggregate(
         }
     }
 
-    Some(result)
+    Ok(Some(result))
 }
 
 pub(crate) fn compute_aggregates(
@@ -2506,6 +2811,56 @@ pub(crate) fn matches_all_having(row: &[(String, String)], having: &[WhereClause
     })
 }
 
+fn joined_row_matches_condition(row: &[(String, String)], cond: &WhereClause) -> bool {
+    if cond.op == CmpOp::Or {
+        return cond
+            .or_clauses
+            .iter()
+            .any(|clause| joined_row_matches_condition(row, clause));
+    }
+    let val = if cond.field.contains('.') {
+        // Qualified fields must match exactly. If there are additional path
+        // segments, resolve them inside the longest matching qualified JSON
+        // column (`alias.metadata.team`). Never fall back to another table's
+        // same-named column.
+        if let Some((_, value)) = row.iter().find(|(key, _)| key == &cond.field) {
+            Some(value.as_str())
+        } else {
+            let mut matched_json = None;
+            for (index, _) in cond.field.match_indices('.').rev() {
+                let root = &cond.field[..index];
+                let path = &cond.field[index + 1..];
+                if let Some((_, value)) = row.iter().find(|(key, _)| key == root) {
+                    matched_json = Some((value.as_str(), path));
+                    break;
+                }
+            }
+            if let Some((raw, path)) = matched_json {
+                return eval_json_path_text(Some(raw), path, cond);
+            }
+            None
+        }
+    } else {
+        row.iter()
+            .find(|(key, _)| key == &cond.field || key.ends_with(&format!(".{}", cond.field)))
+            .map(|(_, value)| value.as_str())
+    };
+    match val {
+        None => matches!(cond.op, CmpOp::Ne | CmpOp::IsNull),
+        Some(v) => match cond.op {
+            CmpOp::In => cond
+                .values
+                .iter()
+                .any(|x| compare_condition_value(v, &CmpOp::Eq, x)),
+            CmpOp::NotIn => !cond
+                .values
+                .iter()
+                .any(|x| compare_condition_value(v, &CmpOp::Eq, x)),
+            _ => compare_condition_value(v, &cond.op, &cond.value),
+        },
+    }
+}
+
 pub(crate) fn compare_condition_value(actual: &str, op: &CmpOp, expected: &str) -> bool {
     // The caller only reaches here with a present value, which is never NULL.
     match op {
@@ -2531,8 +2886,37 @@ pub(crate) fn compare_condition_value(actual: &str, op: &CmpOp, expected: &str) 
         CmpOp::Lt => actual < expected,
         CmpOp::Ge => actual >= expected,
         CmpOp::Le => actual <= expected,
+        CmpOp::Like => sql_like_matches(actual, expected, false),
+        CmpOp::ILike => sql_like_matches(actual, expected, true),
         _ => false,
     }
+}
+
+fn sql_like_matches(actual: &str, pattern: &str, case_insensitive: bool) -> bool {
+    let (actual, pattern) = if case_insensitive {
+        (actual.to_lowercase(), pattern.to_lowercase())
+    } else {
+        (actual.to_string(), pattern.to_string())
+    };
+    let text: Vec<char> = actual.chars().collect();
+    let pat: Vec<char> = pattern.chars().collect();
+    let mut dp = vec![vec![false; text.len() + 1]; pat.len() + 1];
+    dp[0][0] = true;
+    for i in 1..=pat.len() {
+        if pat[i - 1] == '%' {
+            dp[i][0] = dp[i - 1][0];
+        }
+    }
+    for i in 1..=pat.len() {
+        for j in 1..=text.len() {
+            dp[i][j] = match pat[i - 1] {
+                '%' => dp[i - 1][j] || dp[i][j - 1],
+                '_' => dp[i - 1][j - 1],
+                ch => dp[i - 1][j - 1] && ch == text[j - 1],
+            };
+        }
+    }
+    dp[pat.len()][text.len()]
 }
 
 pub(crate) fn scan_matching_pks(
@@ -2547,13 +2931,8 @@ pub(crate) fn scan_matching_pks(
     // Validate WHERE fields (allow "id" for implicit-PK tables and JSON dot-paths).
     let has_implicit_pk = !schema.iter().any(|f| f.primary_key);
     for cond in conditions {
-        let is_implicit_id = has_implicit_pk && cond.field == "id";
-        if !is_implicit_id && !is_json_path_field(&cond.field, &schema) {
-            schema
-                .iter()
-                .find(|f| f.name == cond.field)
-                .ok_or_else(|| format!("ERR unknown field '{}' in WHERE clause", cond.field))?;
-        }
+        validate_encrypted_condition(cond, &schema)?;
+        validate_where_field(cond, &schema, has_implicit_pk)?;
     }
     let implicit_id = implicit_id_field_for(&schema);
 
@@ -2570,12 +2949,30 @@ pub(crate) fn scan_matching_pks(
             early_limit: None,
         },
         now,
-    )
+    )?
     .row_ids;
 
+    // Index intersections use hash sets internally. Mutation RETURNING order
+    // must not inherit their randomized iteration order, so restore the table's
+    // canonical ids-set order (score, then primary key) before evaluating rows.
+    let ids = ids_key(table);
+    let mut ordered_ids = Vec::with_capacity(row_ids.len());
+    for pk in row_ids {
+        let score = store
+            .zscore(ids.as_bytes(), pk.as_bytes(), now)?
+            .unwrap_or(f64::INFINITY);
+        ordered_ids.push((pk, score));
+    }
+    ordered_ids.sort_by(|(left_pk, left_score), (right_pk, right_score)| {
+        left_score
+            .total_cmp(right_score)
+            .then_with(|| left_pk.cmp(right_pk))
+    });
+
     let mut matched = Vec::new();
-    for pk_str in row_ids {
-        let Some(row) = get_row(store, table, &schema, &pk_str, now) else {
+    for (pk_str, _) in ordered_ids {
+        // Internal WHERE re-check: needs plaintext regardless of caller.
+        let Some(row) = get_row(store, table, &schema, &pk_str, now, true)? else {
             continue;
         };
         if row_matches_base_conditions(&row, &schema, implicit_id.as_ref(), conditions) {
@@ -2585,6 +2982,27 @@ pub(crate) fn scan_matching_pks(
     Ok((schema, matched))
 }
 
+fn validate_where_field(
+    cond: &WhereClause,
+    schema: &[FieldDef],
+    has_implicit_pk: bool,
+) -> Result<(), String> {
+    if cond.op == CmpOp::Or {
+        for clause in &cond.or_clauses {
+            validate_where_field(clause, schema, has_implicit_pk)?;
+        }
+        return Ok(());
+    }
+    let is_implicit_id = has_implicit_pk && cond.field == "id";
+    if !is_implicit_id && !is_json_path_field(&cond.field, schema) {
+        schema
+            .iter()
+            .find(|f| f.name == cond.field)
+            .ok_or_else(|| format!("ERR unknown field '{}' in WHERE clause", cond.field))?;
+    }
+    Ok(())
+}
+
 /// Fetch and column-sort the rows for a set of primary keys.
 pub(crate) fn rows_for_pks(
     store: &Store,
@@ -2592,15 +3010,16 @@ pub(crate) fn rows_for_pks(
     schema: &[FieldDef],
     pks: &[String],
     now: Instant,
-) -> Vec<Vec<(String, String)>> {
-    pks.iter()
-        .filter_map(|pk| {
-            get_row(store, table, schema, pk, now).map(|mut r| {
-                r.sort_by(|a, b| a.0.cmp(&b.0));
-                r
-            })
-        })
-        .collect()
+    decrypt_authorized: bool,
+) -> Result<Vec<Vec<(String, String)>>, String> {
+    let mut rows = Vec::with_capacity(pks.len());
+    for pk in pks {
+        if let Some(mut row) = get_row(store, table, schema, pk, now, decrypt_authorized)? {
+            row.sort_by(|a, b| a.0.cmp(&b.0));
+            rows.push(row);
+        }
+    }
+    Ok(rows)
 }
 
 /// True if `v` is safe to emit as a single bare WHERE token (no whitespace and
@@ -2644,7 +3063,8 @@ pub(crate) fn scan_projected_column(
             // The pk *is* the projected value (it may not be a stored field).
             Some(pk.clone())
         } else {
-            get_row(store, table, &schema, pk, now).and_then(|row| {
+            // Internal grant-subquery membership resolution: needs plaintext.
+            get_row(store, table, &schema, pk, now, true)?.and_then(|row| {
                 row.into_iter()
                     .find(|(k, _)| k == projected)
                     .map(|(_, v)| v)

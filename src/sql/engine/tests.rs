@@ -1,4 +1,4 @@
-use super::{Engine, EngineConfig, JSON_AGGREGATE_TEXT_SENTINEL, QueryEvent, QueryEventOptions, UniqueMode};
+use super::{Engine, EngineConfig, JSON_AGGREGATE_TEXT_SENTINEL, QueryEvent, QueryEventOptions};
 use chrono::{Duration, NaiveDateTime, Utc};
 use serde_json::json;
 use std::time::Duration as StdDuration;
@@ -72,10 +72,7 @@ fn exposes_mtr_metadata_and_ignores_mtr_suppression_calls() {
         .unwrap()
         .remove(0);
     assert_eq!(variables.rows[0]["Variable_name"], "version");
-    assert_eq!(
-        variables.rows[0]["Value"],
-        "8.0.0-my-sqweel"
-    );
+    assert_eq!(variables.rows[0]["Value"], "8.0.0-my-sqweel");
 
     assert!(
         engine
@@ -85,11 +82,8 @@ fn exposes_mtr_metadata_and_ignores_mtr_suppression_calls() {
 }
 
 #[test]
-fn unique_enforce_mode() {
-    let engine = Engine::new(EngineConfig {
-        unique_mode: UniqueMode::Enforce,
-        ..EngineConfig::default()
-    });
+fn default_engine_enforces_unique_constraints() {
+    let engine = Engine::default();
     engine
         .execute_sql("CREATE TABLE users (id BIGINT PRIMARY KEY AUTO_INCREMENT, email VARCHAR(255), UNIQUE(email));")
         .unwrap();
@@ -430,7 +424,9 @@ fn evaluates_extended_json_functions() {
     );
     assert_eq!(
         row["score_map"],
-        json!(format!("{JSON_AGGREGATE_TEXT_SENTINEL}{{\"Ada\":10, \"Bob\":20}}"))
+        json!(format!(
+            "{JSON_AGGREGATE_TEXT_SENTINEL}{{\"Ada\":10, \"Bob\":20}}"
+        ))
     );
 
     let result = engine

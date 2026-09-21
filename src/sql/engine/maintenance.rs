@@ -447,6 +447,21 @@ impl RawEngine {
             return Err(anyhow!("seed table name must not be empty"));
         }
 
+        let schema = self
+            .schemas
+            .get(table)
+            .ok_or_else(|| anyhow!("unknown table: {table}"))?;
+        for column in seed_row_columns(&rows) {
+            if !schema
+                .columns
+                .keys()
+                .any(|known| known.eq_ignore_ascii_case(&column))
+            {
+                return Err(anyhow!("unknown column: {column}"));
+            }
+        }
+        drop(schema);
+
         let rows_seeded = rows.len() as u64;
         if mode == SeedMode::Replace && self.schemas.contains_key(table) {
             self.reset_table_rows(table)?;
@@ -462,7 +477,6 @@ impl RawEngine {
             });
         }
 
-        self.ensure_schema_for_seed(table, &rows)?;
         let result = self.insert_prepared_rows(
             table,
             rows,

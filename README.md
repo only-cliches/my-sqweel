@@ -5,234 +5,295 @@
 # MySqweel
 
 <p align="center">
-  <strong>Streamlined, embeddable MySQL/MariaDB for applications, testing, and QA.</strong>
+  <strong>Embeddable SQL for Rust applications, integration tests, and local development.</strong>
 </p>
 
 <p align="center">
   <a href="https://github.com/only-cliches/my-sqweel/actions/workflows/ci.yml"><img src="https://github.com/only-cliches/my-sqweel/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
 </p>
 
-MySqweel is a lightweight reimplementation of core MariaDB behavior. Embed the engine directly in a
-Rust application like SQLite, or expose it through a MariaDB-compatible wire protocol for existing clients,
-ORMs, and migration tools. State stays easy to infer, inspect, seed, snapshot, reset, and
-deliberately break.
+MySqweel implements a subset of MySQL/MariaDB SQL in Rust. Run it in process,
+connect existing clients through its MySQL wire server, or supply custom
+storage through the async embedded API. It includes strict SQL schemas,
+sessions and transactions, optional Lux persistence, and local maintenance
+and search tools.
 
-Choose the default drift-tolerant profile for rapid iteration, or enable the strict profile when
-compatibility matters more than convenience. The server process can also expose a debug API and a
-Meilisearch-shaped search surface.
+The project is intended for embedded development datasets, fixtures, ORM and
+migration testing, and application integration. It does not provide full
+MariaDB compatibility or production database durability and concurrency.
 
-## At a glance
+[Library guide](docs/README.md) · [Custom storage](docs/async-storage.md) ·
+[Filters](docs/filters.md) · [Authentication](docs/server.md#wire-authentication-and-scopes) ·
+[Compatibility](#mariadb-compatibility)
 
-| Surface | Default | Purpose |
+## Choose an API
+
+| Entry point | What it provides | Current boundary |
 | --- | --- | --- |
-| Embedded Rust engine | In process | SQLite-like SQL execution without network or HTTP listeners |
-| MariaDB-compatible wire protocol | `127.0.0.1:3307` | Application, ORM, migration, and MariaDB-client connections |
-| Debug and search HTTP | `127.0.0.1:3407` | Drift inspection, seeding, snapshots, and local search |
-| Storage | In memory | Disposable state; optional locked incremental Lux persistence |
-| Compatibility profiles | Drift tolerant / strict | Choose convenience or fail-fast schema behavior |
-| MariaDB differential verification | MariaDB 10.11.7 | Differential corpus and exact parity suites |
+| `Engine` / `EngineSession` | Synchronous embedded SQL, sessions, transactions, snapshots, and query events | In-memory execution; optional directory-backed Lux persistence |
+| `AsyncEngine<S>` / `AsyncEngineSession<S>` | Async storage integration and query/result filters | One `AsyncStorage` backend per instance; SQL evaluation is still synchronous |
+| `server::run` / `spawn_with_engine` | MySQL wire connections plus debug/search HTTP | Uses `Arc<Engine>`; does not invoke async execution filters or custom async storage |
+| `sqwl` | Server, SQL/maintenance REPL, and SQL inspection | Wraps the synchronous engine |
 
-## Where it fits
+Lux is the only bundled storage backend. JSON and CSV implementations are
+provided as [examples](#json-and-csv-examples). Multiple logical SQL databases
+are supported, but a registry of multiple storage backends and filter-driven
+backend routing are **not implemented**.
 
-MySqweel is useful for:
+## Embed SQL in Rust
 
-- embedding streamlined SQL storage directly in Rust applications
-- early application development while the schema is changing
-- local integration tests that need a disposable MariaDB-compatible endpoint
-- test harnesses, QA environments, and deterministic fixtures
-- ORM, query-builder, migration, and seed-script development
-- realistic UI flows without a full production-shaped stack
-- schema-drift inspection and fixture management
-- retry, loading, idempotency, and error-path testing
-- local text, facet, and vector-search development
-- demos, teaching, and experiments
+From an application alongside a checkout, add:
 
-Use real MariaDB when your workload depends on fine-grained locking, full permissions, replication,
-optimizer fidelity, security boundaries, high-concurrency durability, scale, or compliance guarantees.
+```toml
+[dependencies]
+my-sqweel = { path = "../my-sqweel" }
+anyhow = "1"
+serde_json = "1"
+```
 
-## Embed it
-
-The engine can run entirely in process. This starts no TCP or HTTP listener:
+An embedded engine starts no network listeners:
 
 ```rust
 use my_sqweel::sql::engine::Engine;
+use serde_json::json;
 
 fn main() -> anyhow::Result<()> {
     let engine = Engine::default();
     let mut db = engine.session();
-    db.execute_sql("CREATE TABLE users (id INT PRIMARY KEY, name TEXT)")?;
-    db.execute_sql("BEGIN")?;
-    db.execute_sql("INSERT INTO users VALUES (1, 'Ada')")?;
-    db.execute_sql("COMMIT")?;
 
-    let results = db.execute_sql("SELECT id, name FROM users")?;
-    println!("{:?}", results[0].rows);
+    db.execute_sql(
+        "CREATE TABLE tasks (id INT PRIMARY KEY, title TEXT NOT NULL, done BOOLEAN DEFAULT false)"
+    )?;
+    db.execute_sql_with_params(
+        "INSERT INTO tasks (id, title) VALUES (?, ?)",
+        &[json!(1), json!("Write a storage backend")],
+    )?;
+    db.execute_sql("UPDATE tasks SET done = true WHERE id = 1")?;
+
+    let results = db.execute_sql("SELECT id, title, done FROM tasks ORDER BY id")?;
+    assert_eq!(results[0].rows[0]["done"], json!(true));
+
+    db.execute_sql("DELETE FROM tasks WHERE id = 1")?;
     Ok(())
 }
 ```
 
-Use `Engine::default()` for drift-tolerant in-memory storage, or
-`Engine::open_with_data_dir(...)` for directory-backed persistence. Create an `Engine::session()`
-for each independent caller. Calls directly on `Engine::execute_sql()` share its default session.
+Create one session per independent caller. Direct calls on `Engine` share its
+default session. Query methods return a `Vec<QueryResult>`, with one entry per
+SQL statement. Each result includes rows as JSON objects, column metadata,
+affected-row counts, the last insert ID, and warnings.
 
-## Quick start
+SQL schemas are always strict. Declare tables and columns before writing;
+duplicate keys, undeclared columns, and invalid values produce errors.
+`EngineConfig::mysql_strict()` remains an alias for `EngineConfig::default()`.
+The former `CompatibilityProfile`, `UniqueMode`, configuration fields, and
+`--mysql-strict` / `--unique-mode` flags have been removed.
 
-### 1. Install from a checkout
+### Sessions and transactions
 
-You need a recent stable Rust toolchain and Cargo. A MariaDB CLI is optional but useful for the
-examples below.
+Sessions support `BEGIN` / `START TRANSACTION`, `COMMIT`, `ROLLBACK`,
+savepoints, and `SET autocommit`. A failed statement rolls back its own
+changes while preserving earlier successful work in the transaction.
+Dropping a session discards its uncommitted writes.
+
+The implemented isolation level is `REPEATABLE READ`. A read snapshot begins
+at the first read. Writers serialize per logical database, and a conflicting
+snapshot-to-writer upgrade can return retryable MySQL error 1213. Writer
+acquisition has a five-second timeout. Plain `SELECT ... FOR UPDATE` takes
+the database-wide writer lease.
+
+DDL and catalog administration are rejected inside active transactions.
+Cross-database SQL is unsupported, and a session cannot switch databases
+during a transaction. Connection-owned `GET_LOCK()` and `RELEASE_LOCK()`
+advisory locks survive transaction completion and are released on disconnect.
+
+See [embedding and transactions](docs/embedding.md) for more examples.
+
+## Async storage and filters
+
+Add `tokio = { version = "1", features = ["full"] }` to the application
+dependencies to run the async examples.
+
+```rust
+use my_sqweel::{AsyncEngine, QueryFilter, QueryFilterAction, QueryRequest};
+use my_sqweel::sql::engine::EngineConfig;
+
+struct CurrentTenant;
+
+impl QueryFilter for CurrentTenant {
+    async fn filter(
+        &self,
+        request: &mut QueryRequest,
+    ) -> anyhow::Result<QueryFilterAction> {
+        if request.sql == "SELECT current_tenant" {
+            request.sql = "SELECT 'acme' AS tenant".into();
+        }
+        Ok(QueryFilterAction::Continue)
+    }
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let db = AsyncEngine::open_lux(EngineConfig::default(), None).await?;
+    db.query_filters().push(CurrentTenant);
+
+    let results = db.execute_sql("SELECT current_tenant").await?;
+    assert_eq!(results[0].rows[0]["tenant"], "acme");
+    Ok(())
+}
+```
+
+`QueryFilter` and `ResultFilter` are native async traits. Their mutable,
+ordered pipelines can be changed using `push` and `clear`.
+
+| Hook | Available actions |
+| --- | --- |
+| Query filter | Modify SQL and continue, reject execution, or return synthetic results |
+| Result filter | Modify results, replace them, or reject delivery to the caller |
+
+Parameters are bound before query filters run. Synthetic results also pass
+through result filters. Result filtering occurs after SQL execution;
+rejecting a result does **not** undo the statement's writes. These hooks
+apply to `AsyncEngine` and its sessions. See [execution filters](docs/filters.md).
+
+### Implement a custom backend
+
+Implement `my_sqweel::storage::AsyncStorage`, then pass your implementation to
+`AsyncEngine::open(config, storage).await`.
+
+| Method | Responsibility |
+| --- | --- |
+| `load_catalog` | Load database/account metadata, or return `None` for new storage |
+| `list_tables` | List table names within a logical database |
+| `load_table` | Load a table schema and its auto-increment counter |
+| `scan_rows` | Return a bounded `RowPage` and optional continuation cursor |
+| `commit` | Apply a `StorageBatch` of metadata and row puts/deletes |
+
+Preserve the opaque catalog metadata. A backend must apply each batch
+atomically, with metadata mutations before row mutations. Explicit SQL
+transactions emit their committed changes together at `COMMIT`.
+
+The API accepts pages and incremental mutations, but the current executor
+loads every table's rows into memory when the async engine opens. It also
+exports before/after state images to calculate changes. It does not stream
+SQL scans from the backend or push predicates into CSV/HTTP services.
+Execution is serialized through the async engine's commit gate.
+
+A backend commit failure currently occurs after the in-memory SQL state has
+changed; the async wrapper does not restore that state automatically. Backend
+atomicity and recovery therefore need explicit handling in an application.
+See [custom async storage](docs/async-storage.md) for the full contract.
+
+### JSON and CSV examples
 
 ```sh
-git clone https://github.com/only-cliches/my-sqweel.git
-cd my-sqweel
+cargo run --example json_storage -- target/tasks.json
+cargo run --example csv_storage -- target/tasks-csv
+```
+
+Both examples create a strict table, insert/upsert rows, update a row, delete
+a row, and reopen storage to read the saved result.
+
+- [JSON](examples/json_storage.rs) stores catalog, schemas, and rows in one
+  JSON file, replacing it after applying a batch.
+- [CSV](examples/csv_storage.rs) writes per-table `key,row_json` records and a
+  JSON metadata manifest. Each commit creates a generation and replaces a
+  `CURRENT` pointer. The JSON field preserves the complete `StoredRow`,
+  including typed values and row metadata.
+
+These are small, application-owned reference implementations. They load all
+data into memory and rewrite the full file or generation on a commit.
+Their filesystem work is blocking, they do not coordinate independent
+processes or call `fsync`, and the CSV example retains older generations.
+The CSV format is a storage format; importing arbitrary existing CSV columns
+requires an application-specific mapping.
+
+## Run the server
+
+From a checkout, using a recent stable Rust toolchain:
+
+```sh
 cargo install --path .
-```
-
-The installed binary is `sqwl`. You can also run it from the checkout with:
-
-```sh
-cargo run --bin sqwl -- serve
-```
-
-### 2. Start the server
-
-```sh
 sqwl serve
 ```
 
-The SQL and HTTP listeners bind to loopback by default:
+Or run directly with `cargo run --bin sqwl -- serve`.
 
-```text
-SQL wire:     127.0.0.1:3307
-Debug/search: 127.0.0.1:3407
-```
+| Setting | Default |
+| --- | --- |
+| MySQL wire listener | `127.0.0.1:3307` |
+| Debug/search HTTP listener | `127.0.0.1:3407` |
+| Selected database | `app` |
+| Storage | In memory |
+| Wire authentication | `Authentication::AllowAll` |
 
-### 3. Connect
+Connect using a MySQL/MariaDB client:
 
 ```sh
 mariadb --protocol=TCP -h 127.0.0.1 -P 3307 -u root app
 ```
 
-Fresh engines bootstrap the `root` administrator with an empty password and select the `app`
-database. Embedders can call `engine.set_admin_credentials()` before accepting connections.
-Try a normal schema and query flow:
+The wire server supports text queries, prepared statements, positional
+parameters, typed results, session settings, and transaction status in
+responses. It advertises `8.0.0-my-sqweel` for compatibility; this is not a
+claim of complete MySQL 8 support.
 
-```sql
-CREATE TABLE users (
-  id BIGINT PRIMARY KEY AUTO_INCREMENT,
-  email VARCHAR(255) NOT NULL UNIQUE,
-  display_name VARCHAR(100)
-);
+### Authentication and accounts
 
-INSERT INTO users (email, display_name)
-VALUES
-  ('ada@example.test', 'Ada'),
-  ('grace@example.test', 'Grace');
+Authentication is configurable through the Rust server API:
 
-SELECT id, email, display_name
-FROM users
-ORDER BY id;
-```
+| Policy | Behavior |
+| --- | --- |
+| `Authentication::AllowAll` | Default: accepts usernames/passwords with full scope |
+| `Authentication::EngineAccounts` | Authenticates against the SQL account catalog |
+| `Authentication::static_users(...)` | Uses configured usernames/passwords and scopes |
+| `Authentication::callback(...)` | Delegates to an `AsyncAuthenticator` |
 
-Configure your application’s MariaDB driver with host `127.0.0.1`, port `3307`, database `app`,
-user `root`, and an empty password. For fail-fast compatibility work, enable the strict profile;
-`sqwl help` lists its command-line option.
+For example, run a server with a read-only user for `app`:
 
-### Transactions and sessions
+```rust,no_run
+use my_sqweel::server::{self, Authentication, ServerConfig, StaticUser};
+use my_sqweel::sql::engine::{AuthPrivilege, AuthScope};
 
-```sql
-START TRANSACTION;
-INSERT INTO users (email, display_name) VALUES ('linus@example.test', 'Linus');
-SAVEPOINT before_edit;
-UPDATE users SET display_name = 'Temporary' WHERE email = 'linus@example.test';
-ROLLBACK TO SAVEPOINT before_edit;
-RELEASE SAVEPOINT before_edit;
-COMMIT;
-```
-
-Statements are atomic, and a failed statement preserves earlier successful work in its transaction.
-`ROLLBACK` discards the transaction; disconnecting also rolls it back. `SET autocommit = 0` enables
-implicit transactions, and switching back to `1` commits pending work. These are in-memory SQL
-guarantees; see [persistent local state](#persistent-local-state) for persistence limits.
-
-The supported isolation level is `REPEATABLE READ`. Snapshots begin at the first read; conflicts
-when upgrading an observed snapshot to a writer can return retryable error 1213. Each database
-allows one writer at a time, with a five-second acquisition timeout. Plain `SELECT ... FOR UPDATE`
-uses that database-wide writer lease. DDL, catalog administration, cross-database SQL, and changing
-databases inside a transaction are rejected.
-
-Statement working copies share table rows, indexes, and schema metadata until a write modifies
-them. Reads avoid copying every table’s contents, and writes detach the affected data while other
-sessions and savepoints retain their snapshots. Parsed query syntax is reused across statements;
-query results and session values are not cached. Foreign-key checks try an exact primary-key
-lookup first, with a scan fallback for SQL equality and coercion rules.
-
-Bulk inserts avoid repeated parsing by unrelated command handlers and unnecessary copies of
-parsed values. INSERT and upsert collect result rows only when `RETURNING` is requested;
-transaction persistence remains coordinated at commit.
-
-### Databases and accounts
-
-Logical databases have independent data. The provisioning subset supports `CREATE/DROP DATABASE`,
-`CREATE/DROP USER`, database-wide `SELECT`, `INSERT`, `UPDATE`, and `DELETE` grants, and
-`REVOKE ALL PRIVILEGES`. Accounts support the `%` host form only. Revocation affects existing
-sessions; replacing an account requires fresh authentication. SQL cannot grant administrator status.
-
-`GET_LOCK()` and `RELEASE_LOCK()` provide connection-owned recursive advisory locks. They survive
-transaction completion and are released on disconnect.
-
-### Embed the engine and observe query metrics
-
-Library users can subscribe to query lifecycle events. Completion events include logical rows and
-cells read, including rows examined but rejected by a predicate, plus physical row and cell writes:
-
-```rust
-use my_sqweel::sql::engine::{Engine, QueryEvent, QueryEventOptions};
-
-let engine = Engine::default();
-let events = engine.subscribe_query_events(QueryEventOptions::metadata_only());
-engine.execute_sql("SELECT id FROM users WHERE email LIKE '%example.test'")?;
-
-let _received = events.recv()?;
-if let QueryEvent::Completed(event) = events.recv()? {
-    println!("rows read: {}", event.metrics.rows_read);
-    println!("cells read: {}", event.metrics.cells_read);
+fn main() -> anyhow::Result<()> {
+    server::run(ServerConfig {
+        authentication: Authentication::static_users([StaticUser::new(
+            "reporter",
+            "example-password",
+            [AuthScope::database("app", [AuthPrivilege::Select])],
+        )]),
+        ..ServerConfig::default()
+    })
 }
 ```
 
-These are logical execution metrics, not storage-I/O counters. Repeated join or subquery
-examinations count repeatedly, and multi-statement API calls report aggregate totals. These events
-are diagnostics, not commit notifications: a completed statement can still be rolled back.
+Database scopes cover `Select`, `Insert`, `Update`, and `Delete`;
+`AuthScope::All` includes administrative access. External authenticators
+receive the username, requested database, and native-password
+challenge/response, not a plaintext client password. They return an
+`AuthenticatedUser` with scopes, or `None` to deny access.
 
-## Choose a compatibility profile
+An authenticator can optionally implement `account_operation` to handle
+`CREATE USER`, `ALTER USER`, `DROP USER`, `RENAME USER`, `SET PASSWORD`,
+`GRANT`, and `REVOKE`. The callback receives the operation kind and SQL.
+`Handled` acknowledges an operation completed externally; `Continue`
+uses the built-in catalog. These callbacks require an administrator and run
+only with callback authentication on the wire server.
 
-MySqweel has two intentionally different compatibility profiles.
+The built-in catalog supports `CREATE/DROP DATABASE`, `CREATE/DROP USER`,
+database-wide DML grants, and `REVOKE ALL PRIVILEGES`, with `%` as the
+supported user host. It does not implement the full account-management
+syntax accepted by an external callback. Fresh engines bootstrap `root`
+with an empty password. `set_admin_credentials` changes catalog credentials;
+wire connections use them only when `EngineAccounts` is selected.
 
-| Behavior | Drift tolerant (default) | Strict |
-| --- | --- | --- |
-| Missing tables or columns during writes | Infer and extend schema hints | Return an error |
-| Repeated `CREATE TABLE` | Merge new hints into known metadata | Use MariaDB-style exists behavior |
-| Declared types, ranges, lengths, nulls, and defaults | Best-effort coercion | Validate and reject invalid values |
-| Unique conflicts | Overwrite by default; configurable | Enforce uniqueness |
-| Foreign keys | Enforce declared relationships and actions | Enforce relationships with MariaDB-style errors |
-| Best use | Embedded apps, prototypes, fixtures, changing DTOs | Application integration, ORMs, migrations, and compatibility tests |
+Use `server::spawn_with_engine` to serve an existing `Arc<Engine>`;
+dropping its `ServerHandle` stops the listeners. The CLI has no
+authentication-policy flags. See [server and authentication](docs/server.md).
 
-Strict mode also returns common MariaDB wire error numbers for missing tables and columns, duplicate
-entries, null/default violations, invalid values, length/range errors, and foreign-key failures.
-
-Strict mode narrows accidental differences; it does not turn MySqweel into MariaDB. Both profiles use
-the same supported SQL and transaction surface.
-
-### Unique conflicts without full strict mode
-
-The drift profile can enforce unique keys while retaining schema inference:
-
-```sh
-sqwl --unique-mode enforce serve
-```
-
-The default is `--unique-mode overwrite`, which is convenient for repeatable seeds. The strict
-profile always enforces unique keys.
+SQL authentication and grants do not protect the debug/search HTTP routes.
+Those routes provide unauthenticated administrative access to `app`.
+Listeners default to loopback; `--allow-remote` permits non-loopback bindings.
 
 ## CLI reference
 
@@ -243,551 +304,207 @@ sqwl explain <sql>
 sqwl help
 ```
 
-Global options in the table below must appear before the subcommand. Use `sqwl help` for the full
-option list, including the strict compatibility profile.
+Place global options before the subcommand.
 
 | Option | Purpose |
 | --- | --- |
-| `--bind <addr>` | SQL bind address; default `127.0.0.1:3307` |
-| `--debug-bind <addr>` | Debug/search HTTP bind; default is the SQL port plus 100 |
-| `--default-time-zone <offset>` | Initial timezone for new SQL sessions, such as `-10:00`; default `+00:00` |
-| `--data-dir <dir>` | Enable locked incremental Lux persistence |
-| `--allow-remote` | Permit non-loopback SQL and HTTP bindings |
-| `--unique-mode <mode>` | Choose `overwrite` or `enforce`; default `overwrite` |
-| `--query-delay-ms <n>` | Add fixed latency to each SQL statement |
+| `--bind <addr>` | MySQL bind address; default `127.0.0.1:3307` |
+| `--debug-bind <addr>` | HTTP bind address; default SQL address with port + 100 |
+| `--data-dir <dir>` | Enable locked Lux persistence |
+| `--default-time-zone <offset>` | Initial session timezone; default UTC |
+| `--allow-remote` | Permit non-loopback listeners |
+| `--query-delay-ms <n>` | Add latency per SQL statement |
 | `--fail-read-every <n>` | Fail every Nth read statement |
 | `--fail-write-every <n>` | Fail every Nth write statement |
-| `--snapshot-dir <path>` | REPL snapshot directory; default `.my-sqweel/snapshots` |
+| `--snapshot-dir <path>` | Named snapshot directory; default `.my-sqweel/snapshots` |
 | `--log-filter <filter>` | Tracing filter; default `my_sqweel=info` |
 
-The debug/search API is always enabled for `sqwl serve`. `--allow-remote` can expose unauthenticated,
-state-mutating HTTP endpoints; never bind MySqweel to an untrusted network.
-
-### Explain SQL without executing it
-
-```sh
-sqwl explain "SELECT id, email FROM users WHERE email = 'ada@example.test'"
-```
-
-Example output:
-
-```json
-{
-  "count": 1,
-  "statements": [
-    {
-      "kind": "query",
-      "tables": ["users"],
-      "normalized": "SELECT id, email FROM users WHERE email = 'ada@example.test'"
-    }
-  ]
-}
-```
+`sqwl explain` reports parsed statement kinds, tables, and normalized SQL
+without executing it; it is not an optimizer execution plan.
 
 ## Local-data workflows
 
 ### Persistent local state
 
-Without `--data-dir`, state lives in memory and disappears with the process. To reuse a local
-database between runs:
-
 ```sh
-sqwl --data-dir .my-sqweel/data serve
+sqwl --data-dir .my-sqweel/data serve --repl
 ```
 
-The directory is locked against concurrent opens. The embedded Lux store persists all logical
-databases and the account catalog. A successful SQL operation writes changed rows, schemas,
-auto-increment counters, views, and index comments, then publishes the new in-memory SQL state.
-Unchanged databases and shared, unmodified tables are skipped; a commit no longer serializes
-the entire server into one image.
+Embedded callers use
+`Engine::open_with_data_dir(EngineConfig::default(), Some(path))`.
+The data directory is locked against concurrent opens. Lux persists logical
+databases, accounts, schemas, rows, counters, views, and index comments.
 
-Statement atomicity and session isolation apply to the running engine. Persistence does **not**
-promise crash-atomic multi-key commits or synchronous durability. A storage batch can partially
-apply before a command or I/O error. On failure, the engine retains the previous visible SQL state
-and refuses further operations until reopen; reopening does not guarantee an all-or-nothing
-transaction recovery.
+The synchronous engine writes incremental changes before publishing the
+new SQL state. Its version-2 format rejects legacy unversioned stores and
+`transaction-image.json`; there is no automatic migration for old
+development data. The async Lux adapter uses a separate storage layout;
+its directory is not interchangeable with the synchronous engine's directory.
 
-The version-2 storage layout rejects legacy `transaction-image.json` files, nonempty unversioned
-Lux stores, and unsupported storage versions with reset guidance. There is no migration path for
-old development data. On Unix, the data directory is restricted to its owner.
+The current Lux adapter uses command pipelines, so persistence does not
+guarantee crash-atomic multi-key commits or synchronous durability. The
+synchronous engine stops accepting operations after a persistence error and
+requires reopening; a partial storage write may remain. Writes can also copy
+an affected table and compare its rows linearly.
 
-Writes can still copy an entire affected table, and persistence compares rows within changed
-tables linearly. Large single-table write workloads therefore remain costly; this is intended for
-development datasets. Embedded users can open, use, and close persistent engines inside an
-existing Tokio runtime.
+### Maintenance, seeding, and snapshots
 
-### Maintenance REPL
-
-Run the server and maintenance shell together:
-
-```sh
-sqwl serve --repl
-```
-
-Or open only the REPL, optionally against an existing data directory:
-
-```sh
-sqwl --data-dir .my-sqweel/data repl
-```
-
-Common commands:
+Run `sqwl repl` for a standalone shell or `sqwl serve --repl` to combine
+the shell with network listeners.
 
 ```text
 status
-drift check
 drift report
-snapshot save <name>
-snapshot restore <name>
+drift check
+snapshot save before-edit
+snapshot restore before-edit
 snapshot list
-index rebuild [--all|<table>]
-reset [table]
-explain <sql>
-sql <sql>
-help
+index rebuild --all
+reset tasks
+sql SELECT * FROM tasks
 quit
 ```
 
-### Inspect schema drift
+`seed_json_rows` and `POST /_drift/tables/{table}/seed` require declared
+tables and columns. Append/replace seeding, row resets, index rebuilds,
+table swaps, and snapshot restoration operate on the default `app` database.
 
-The drift report compares declared schema hints with stored rows:
+A synchronous `Snapshot` covers `app`, including schemas, rows, counters,
+views, and index comments. It excludes other databases and the account
+catalog. `Engine::export_state()` / `import_state()` work with a complete
+`EngineState`; `AsyncEngine::snapshot()` also returns that full image.
 
-```sh
-curl http://127.0.0.1:3407/_drift/report
-```
+Drift reports remain useful for restored or externally modified rows and
+for stored row shapes retained across schema changes. They do not enable
+relaxed SQL schemas. See [persistence and maintenance](docs/operations.md).
 
-It reports known tables, row counts, declared columns, missing row fields, extra fields, and
-duplicate values for unique constraints.
+### Query events
 
-### Seed JSON directly
-
-```sh
-curl -X POST http://127.0.0.1:3407/_drift/tables/users/seed \
-  -H 'content-type: application/json' \
-  -d '{
-    "mode": "replace",
-    "rows": [
-      {
-        "email": "ada@example.test",
-        "display_name": "Ada Lovelace",
-        "role": "admin"
-      },
-      {
-        "email": "grace@example.test",
-        "display_name": "Grace Hopper",
-        "role": "engineer"
-      }
-    ]
-  }'
-```
-
-In the drift profile, the seed endpoint can infer a missing table and columns from the payload.
-
-### Save and restore snapshots
-
-The REPL stores named snapshots under `--snapshot-dir`:
-
-```text
-snapshot save before-auth-refactor
-reset users
-snapshot restore before-auth-refactor
-```
-
-Snapshots cover the default `app` database, excluding other databases and the account catalog.
-They are separate from the incremental Lux store, which also includes other databases and accounts. The HTTP API can also export and restore these snapshots:
-
-```sh
-curl -X POST http://127.0.0.1:3407/_drift/snapshot
-```
-
-### Inject failures
-
-Add latency or deterministic read/write failures:
-
-```sh
-sqwl \
-  --query-delay-ms 100 \
-  --fail-read-every 10 \
-  --fail-write-every 7 \
-  serve
-```
-
-This is useful for testing retries, loading states, error handling, idempotency, and unhappy-path
-user experiences.
+`Engine::subscribe_query_events(QueryEventOptions::metadata_only())` returns
+a blocking stream of received/completed events. Completion events include
+duration, result sizes, logical rows/cells read and written, and errors.
+Result payloads are optional. Events describe execution, not durable commits;
+completed statements can still be rolled back.
 
 ## MariaDB compatibility
 
-MySqweel implements a practical, tested MariaDB subset. Unsupported syntax returns an explicit error
-instead of being silently evaluated as `NULL`, `FALSE`, or a partial result.
+Compatibility tests target **MariaDB 10.11.7**. The supported subset includes:
 
-### Verification contract
+| Area | Implemented surface |
+| --- | --- |
+| Schema | Tables, temporary tables, views, common `ALTER TABLE` forms, defaults, generated columns, and column positioning |
+| Constraints and indexes | Primary/unique/secondary/prefix indexes; foreign keys with cascade, set-null, restrict, and no-action behavior |
+| Writes | Values/select inserts, `INSERT IGNORE`, `REPLACE`, upserts, updates, common joined writes/deletes, and `RETURNING` |
+| Queries | Projections, filtering, grouping, aggregates, ordering, limits, inner/left/right/full outer joins, derived tables, scalar and `IN`/`EXISTS` subqueries |
+| Set operations and CTEs | `UNION`, `INTERSECT`, `EXCEPT`, CTE aliases, and supported recursive `UNION` forms |
+| Windows | Ranking, offset/value functions, aggregate windows, and supported `ROWS`/`RANGE` frames |
+| Expressions | String, numeric, date/time, conversion, and JSON functions; JSON aggregation and basic `JSON_TABLE` |
+| Introspection | Common `SHOW` commands and `information_schema` views used by clients and ORMs |
+| Wire protocol | Prepared statements, typed column metadata/results, native-password authentication, warnings, and transaction status |
 
-Compatibility verification targets pinned **MariaDB 10.11.7**. Differential corpus, exact parity,
-error-code, prepared-statement, and ORM-shaped suites exercise the supported surface. Local
-upstream-corpus qualification reports separate passing gates from known compatibility gaps:
+Support for a syntax family does not imply support for every MariaDB option
+or edge case. Unsupported forms generally return errors, and known
+compatibility gaps remain in the audit suites.
 
-- The merged strict gate passes **35/35 complete files / 441 direct SQL statements** against both
-  MariaDB and MySqweel, with zero infrastructure failures. It merges
-  [`tests/mariadb-mtr-allowlist.txt`](tests/mariadb-mtr-allowlist.txt) with
-  [`tests/query_coverage_mtr/`](tests/query_coverage_mtr/); both CI MTR gates use that merged scope.
-- The focused audit contains **39 complete files / 693 direct statements**. All 39 pass MariaDB;
-  MySqweel passes **26**, with **9 SQL mismatches and 4 unsupported cases**, and no infrastructure
-  failures. All fourteen window files recovered from the false `PARTITION BY` exclusion remain in
-  [`tests/mariadb-mtr-scope.txt`](tests/mariadb-mtr-scope.txt), including the thirteen that fail.
-- The [discovery workflow](.github/workflows/mariadb-mtr-discovery.yml) enrolls all **7,903 files**:
-  **7,901 required for testing**, with only **2 explicitly reviewed, hash-pinned exemptions**.
-  The generated testing plan separates scope, testing intent, execution blockers, and observations:
-  **155 runnable complete-file candidates / 5,207 direct and sourced statements**, and
-  **7,746 blocked files**. Mixed files require derived coverage; uncertain files require scope review.
-  Harness limitations never imply out-of-scope. These are enrollment counts, not passing tests:
-  see the [scope policy and regeneration commands](tests/mariadb-mtr-exclusions.md#automated-discovery).
-- The separate [derived-scenario manifest](tests/mariadb-mtr-derived.json) selects one six-statement
-  contiguous block from upstream `func_math`. It passes repeated MariaDB baselines; MySqweel
-  consistently stops at unsupported `ACOS`. Derived results never count as complete-file passes.
+`FULL [OUTER] JOIN` is a MySqweel query extension and is omitted from the
+MariaDB differential corpus.
 
-The external MTR runner’s startup probe is adapted to run `SHOW VARIABLES` in the configured
-database. Both engines receive the same adaptation, with original and adapted runner hashes
-recorded in `mariadb-test-run.json`. Complete-file tests and expected results remain unchanged.
-Derived execution stages exact byte ranges with full-file hashes and immutable source provenance;
-it does not edit installed upstream files or weaken expected results. The test client is unchanged.
+Explicit limits include isolation levels other than `REPEATABLE READ`,
+fine-grained row locking, XA, cross-database queries,
+unrestricted recursive CTEs, stored routines, triggers, events, replication,
+and the full MariaDB permissions system. Optimizer behavior, collations,
+window semantics, and JSON functionality are not complete MariaDB replicas.
 
-MTR targets must be disposable: baseline setup replaces the `mtr` helper schema and timezone
-tables with the pinned upstream fixtures. CI enables native MTR's Performance Schema defaults
-and connects through a mounted Unix socket, preserving `root@localhost` view definers and the
-empty-password root connections used by upstream tests. Its published TCP port is loopback-only;
-the separate feature-parity job retains password authentication. External URLs accept
-`?socket=/absolute/path/to/mariadb.sock`; TCP remains the default when no socket is supplied.
+The repository has engine, wire, ORM, error-code, and differential suites.
+Upstream MTR gates use [pinned complete-file manifests](tests/mariadb-mtr-allowlist.txt)
+plus [additional admitted cases](tests/query_coverage_mtr/).
+[Scope and qualification rules](tests/mariadb-mtr-exclusions.md) distinguish
+strict gates, known failures, discovery candidates, and derived scenarios.
+Passing percentages apply only to their recorded test scope.
 
-Percentages describe only their versioned test scope, not the entire MariaDB grammar. Every
-reported edge case should become a regression case before its implementation is changed.
+See [compatibility limits](docs/compatibility.md), [CHANGELOG.md](CHANGELOG.md),
+and the [query coverage tooling](tools/query_coverage/README.md) for details.
 
-### Schema, DDL, and metadata
+## Local search and HTTP administration
 
-- `CREATE TABLE` and `CREATE TEMPORARY TABLE`
-- primary, unique, secondary, prefix, and foreign-key metadata
-- virtual and stored generated columns
-- `ALTER TABLE` add, drop, rename, change, and modify column forms
-- column defaults, types, nullability, `FIRST`, and `AFTER`
-- `CREATE INDEX`, `CREATE OR REPLACE INDEX`, prefix indexes, `DROP INDEX IF EXISTS`, and `ALTER TABLE ... DROP INDEX`
-- `DROP TABLE`, `TRUNCATE TABLE`, and `RENAME TABLE`
-- foreign-key validation and `CASCADE`, `SET NULL`, `RESTRICT`, and `NO ACTION`
-- `SHOW TABLES`, `SHOW COLUMNS`, `SHOW INDEX`, `SHOW CREATE TABLE`, and `DESCRIBE`
-- common `information_schema` views used by clients and ORMs
+The HTTP listener exposes a Meilisearch-shaped API over tables in `app`.
+Document ingestion can discover fields and performs explicit document
+upserts; it is separate from strict SQL and JSON seed validation.
+Document mutations rebuild the derived Tantivy search index.
 
-Column introspection with a literal `table_name = '...'` filter builds metadata only for that
-table, including when the condition is combined with `AND`. The full filter still runs; `OR`
-and row-dependent expressions retain ordinary evaluation.
+The API includes document/index CRUD, text search, filters, sorting, facets,
+multi-search, settings, stats, local task-shaped responses, dumps, webhooks,
+and key stubs. Vector search uses cosine similarity. Authentication and API
+keys are permissive/stubbed, and relevance and task behavior do not promise
+production Meilisearch parity.
 
-### Writes
+See [search examples](docs/search.md) for index creation, document ingestion,
+and text/vector queries.
 
-- `INSERT ... VALUES` and `INSERT ... SELECT`
-- `INSERT IGNORE`, `REPLACE`, and `ON DUPLICATE KEY UPDATE`
-- `UPDATE`, including common joined-update forms
-- single-table deletes with ordering/limits and MariaDB multi-table delete forms
-- `RETURNING` for inserts, updates, and deletes
-- auto-increment keys, defaults, generated values, type coercion, and affected-row counts
-
-### Queries
-
-- `SELECT`, `DISTINCT`, aliases, qualified wildcards, and expression projections
-- `WHERE`, `GROUP BY`, `HAVING`, `ORDER BY`, `LIMIT`, and `OFFSET`
-- aggregate, scalar, date/time, JSON, string, numeric, and conversion functions
-- broad JSON document functions, JSON aggregates, wildcard paths, arrow extraction, and basic `JSON_TABLE` projections
-- `INNER`, `LEFT`, `RIGHT`, `CROSS`, `NATURAL`, `ON`, and `USING` joins
-- derived tables and CTEs with column aliases, including supported recursive `UNION` forms
-- scalar and `EXISTS`/`IN` subqueries
-- `UNION`, `INTERSECT`, and `EXCEPT`, including `ALL`/`DISTINCT` variants
-- named/inline windows, common `ROWS` frames, and peer-aware `RANGE` behavior
-- `ROW_NUMBER`, `RANK`, `DENSE_RANK`, `PERCENT_RANK`, `CUME_DIST`, `NTILE`, `LAG`, `LEAD`,
-  `FIRST_VALUE`, `LAST_VALUE`, `NTH_VALUE`, and aggregate windows
-- MariaDB-style three-valued logic, numeric-prefix coercion, and byte/character length behavior
-
-See [CHANGELOG.md](CHANGELOG.md) for the detailed function and compatibility history.
-
-### Wire and client behavior
-
-New connections wake the SQL listener through socket readiness, avoiding the previous 50 ms
-accept-polling delay. `WireServer::serve_listener_until()` remains a blocking API; it can run from
-inside a Tokio runtime and releases its listener when stopped.
-
-`VERSION()` and version-variable defaults report `8.0.0-my-sqweel`.
-
-- prepared statements and positional parameters
-- declared/inferred result types and nullability
-- signed/unsigned numeric widths, decimal scale, and source-table metadata
-- typed `DATE`, `DATETIME`, `TIMESTAMP`, and signed fractional `TIME` values
-- JSON and binary result metadata
-- `LAST_INSERT_ID()`, `DATABASE()`, `SCHEMA()`, and common session variables
-- charset, collation, and compatibility system-metadata stubs
-- connection-owned settings, `SET NAMES`, and transaction status and warning counts in result packets
-- native-password authentication; unsupported connection-reset and change-user commands fail explicitly
-
-### Explicit limits
-
-The following are outside the supported compatibility surface:
-
-- isolation levels other than `REPEATABLE READ`, fine-grained row locks, and XA transactions
-- unrestricted recursive CTE support
-- `FULL JOIN`
-- stored procedures, stored functions, triggers, and events
-- replication, the full account/permissions system, and production security guarantees
-- exact optimizer, index-planning, collation, and locking behavior
-- the remainder of the MariaDB grammar not listed above
-- `JSON_VALUE` optional `RETURNING`/`ON EMPTY`/`ON ERROR` clauses (the pinned sqlparser version rejects those forms before execution)
-- nested `JSON_TABLE` column expansion and binary-JSON storage byte-for-byte accounting
-- the complete JSON Schema keyword vocabulary; the embedded validator currently covers the common structural/type constraints
-
-Use real MariaDB for tests that depend on any of these behaviors.
-
-## Meilisearch-shaped local search
-
-The debug HTTP listener also provides a local API shaped like Meilisearch. SQL tables remain the
-source of truth; document mutations update table rows and rebuild the derived Tantivy search index.
-HTTP maintenance and search operate on committed state in the default `app` database. They are
-trusted administrative surfaces: SQL account authentication and grants do not protect HTTP callers.
-
-Create an index and add documents:
-
-```sh
-curl -X POST http://127.0.0.1:3407/indexes \
-  -H 'content-type: application/json' \
-  -d '{ "uid": "books", "primaryKey": "id" }'
-
-curl -X POST http://127.0.0.1:3407/indexes/books/documents \
-  -H 'content-type: application/json' \
-  -d '{
-    "documents": [
-      {
-        "id": "1",
-        "title": "Dune",
-        "genre": "sci-fi",
-        "rating": 10,
-        "description": "Desert planet politics, spice, prophecy, and power."
-      },
-      {
-        "id": "2",
-        "title": "Foundation",
-        "genre": "sci-fi",
-        "rating": 8,
-        "description": "Mathematics, empire, and a long plan."
-      }
-    ]
-  }'
-```
-
-Search:
-
-```sh
-curl -X POST http://127.0.0.1:3407/indexes/books/search \
-  -H 'content-type: application/json' \
-  -d '{
-    "q": "desert spice",
-    "filter": "genre = \"sci-fi\"",
-    "sort": ["rating:desc"],
-    "attributesToRetrieve": ["id", "title", "rating"],
-    "showRankingScore": true
-  }'
-```
-
-The development compatibility surface includes document CRUD, filters, sorting, facets, facet
-search, multi-search, settings, task-shaped responses, stats, dumps, webhooks, and API-key stubs.
-Official Meilisearch JavaScript-client flows are covered by tests; Python client coverage is
-available when its optional dependency is installed.
-
-This is not a complete Meilisearch implementation. Authentication is permissive/stubbed, task
-execution is local, and relevance is not guaranteed to match a production Meilisearch server.
-
-### Vector search
-
-Declare a vector column:
-
-```sql
-CREATE TABLE books (
-  id TEXT PRIMARY KEY,
-  title TEXT,
-  embedding VECTOR(3)
-);
-```
-
-Add vectors through the document endpoint, then search with a query vector:
-
-```sh
-curl -X POST http://127.0.0.1:3407/indexes/books/search \
-  -H 'content-type: application/json' \
-  -d '{
-    "vector": [0.95, 0.05, 0.2],
-    "vectorField": "embedding",
-    "showRankingScore": true
-  }'
-```
-
-Local vector ranking uses cosine similarity.
-
-## HTTP endpoint map
+### HTTP endpoint map
 
 | Endpoint | Purpose |
 | --- | --- |
-| `GET /health` | Basic process health |
-| `GET /version` | Version payload |
-| `GET /_drift/health` | Drift API health |
-| `GET /_drift/report` | Schema-drift report |
-| `GET /_drift/tables` | Known tables |
-| `GET /_drift/tables/{table}/rows` | Inspect table rows |
-| `POST /_drift/tables/{table}/seed` | Seed JSON rows |
-| `POST /_drift/snapshot` | Export an engine snapshot |
-| `POST /_drift/restore` | Restore an engine snapshot |
-| `GET/POST /indexes` | List or create search indexes |
-| `POST /indexes/{uid}/documents` | Add or update documents |
-| `POST /indexes/{uid}/search` | Search an index |
-| `POST /indexes/{uid}/facet-search` | Search facet values |
-| `POST /multi-search` | Run multiple searches |
-| `GET /tasks` | List task-shaped responses |
-| `GET /stats` | Instance statistics |
+| `GET /health`, `GET /version` | Health and version |
+| `GET /_drift/health`, `GET /_drift/report` | Drift API health and report |
+| `GET /_drift/tables` | List tables |
+| `GET /_drift/tables/{table}/rows` | Inspect stored rows |
+| `POST /_drift/tables/{table}/seed` | Seed declared table rows |
+| `POST /_drift/snapshot`, `POST /_drift/restore` | Export/restore an app snapshot |
+| `GET/POST /indexes` | List/create search indexes |
+| `GET/POST/PUT/PATCH/DELETE /indexes/{uid}/documents` | Document operations |
+| `GET/POST /indexes/{uid}/search` | Search |
+| `POST /indexes/{uid}/facet-search`, `POST /multi-search` | Facet and multi-index search |
+| `GET /tasks`, `GET /stats` | Tasks and statistics |
 
-Additional Meilisearch-shaped routes cover per-index settings and stats, document fetch/delete,
-index swaps, dumps, webhooks, and keys.
+Additional routes cover individual documents, settings, index statistics,
+index swaps, dumps, and webhooks.
 
 ## Development
 
-Run the complete local suite:
+From the checkout:
 
 ```sh
 cargo test --all-targets --locked
+cargo check --examples --locked
+cargo fmt --all --check
+cargo clippy --all-targets --all-features
 ```
 
-Before pushing, run the same fail-closed entry point used by CI's MariaDB feature job:
+Differential tests can skip when MariaDB is unavailable. To require the
+comparison server and verify packaging, run the same entry point used by
+the CI feature job:
 
 ```sh
 tools/prepush.sh
 ```
 
-The pre-push check requires either `MARIADB_COMPARE_URL` or a working Docker daemon. When Docker is
-used, it pulls and provisions the pinned `mariadb:10.11.7` image, shares that server across the suite,
-and removes it afterward. Unlike the default local suite, this command fails instead of silently
-skipping differential tests when MariaDB is unavailable. It also runs `cargo package --locked --allow-dirty`
-to compile the unpacked publishable crate and catch packaging-only failures before a push.
-The patched wire-server implementation and its licenses are included directly in the crate, so
-registry builds use the same authentication and transaction protocol code as local builds.
+It uses `MARIADB_COMPARE_URL` when supplied; otherwise it provisions the
+pinned Docker image. It runs tooling tests, all Cargo targets with
+`MARIADB_PARITY_REQUIRED=1`, and `cargo package --locked --allow-dirty`.
+Use a disposable comparison database. Enable the optional Git hook with
+`git config core.hooksPath .githooks`.
 
-Enable the checked-in Git hook once per clone to run it automatically before every push:
-
-```sh
-git config core.hooksPath .githooks
-```
-
-When Docker and a local MariaDB image are available, compatibility tests provision and
-remove their own comparison server. To use an existing instance, set `MARIADB_COMPARE_URL` to its
-driver connection URL. Require comparison with:
-
-```sh
-MARIADB_PARITY_REQUIRED=1 \
-cargo test --all-targets --locked
-```
-
-On macOS or another Docker host, run the pinned MariaDB 10.11.7 MTR baseline in isolated ARM64
-containers with:
-
-```sh
-tools/run_mariadb_mtr_baseline_docker.sh
-```
-
-The script provisions and removes its own MariaDB container and Docker network. It caches the
-downloaded Ubuntu MTR packages under `.cache/mariadb-mtr` and writes the report to
-`artifacts/mariadb-mtr-baseline/mtr-report.md`. Intel Macs can use the same command through Docker's
-ARM64 emulation, although it will be slower than Apple Silicon.
-
-On an Ubuntu 24.04 ARM64 runner, reproduce the upstream MariaDB MTR comparison with the pinned
-Ubuntu MariaDB packages. Set `MARIADB_COMPARE_URL` to a reachable disposable MariaDB 10.11.7
-instance’s driver connection URL first; the runner resets test databases:
-
-```sh
-eval "$(tools/prepare_mariadb_mtr.sh .cache/mariadb-mtr --print-env)"
-export PATH="$MTR_BINDIR/bin:$PATH"
-cargo build --locked --bin sqwl
-python3 tools/mariadb_mtr_compat.py \
-  --target both \
-  --suite-root "$MARIADB_MTR_ROOT" \
-  --allowlist tests/mariadb-mtr-allowlist.txt \
-  --additional-allowlist-dir tests/query_coverage_mtr \
-  --baseline-url "$MARIADB_COMPARE_URL" \
-  --mtr-runner "$MTR_RUNNER" \
-  --safe-process-bin "$MTR_SAFE_PROCESS" \
-  --mtr-layout mariadb \
-  --baseline-label MariaDB \
-  --mysqweel-bin target/debug/sqwl \
-  --report-dir artifacts/mariadb-mtr \
-  --baseline-version 10.11.7 \
-  --source-revision 10.11.7-2ubuntu2 \
-  --minimum-percent 100
-```
-
-To reproduce the focused audit, replace the allowlist with `tests/mariadb-mtr-scope.txt`, omit
-`--additional-allowlist-dir`, and use `--report-dir artifacts/mariadb-mtr-focused`. The runner starts
-the local MySqweel binary automatically for `--target both`. Known SQL failures make this audit
-return nonzero; missing reports, invalid baselines, and infrastructure failures remain CI errors.
-
-To execute the separate derived scenarios against the same disposable baseline:
-
-```sh
-python3 tools/mariadb_mtr_derived.py \
-  --suite-root "$MARIADB_MTR_ROOT" \
-  --manifest tests/mariadb-mtr-derived.json \
-  --target both \
-  --baseline-url "$MARIADB_COMPARE_URL" \
-  --mtr-runner "$MTR_RUNNER" \
-  --safe-process-bin "$MTR_SAFE_PROCESS" \
-  --mysqweel-bin target/debug/sqwl \
-  --report-dir artifacts/mariadb-mtr-derived
-```
-
-See [upstream admission and exclusion rules](tests/mariadb-mtr-exclusions.md) for the distinction
-between complete-file qualification, static discovery, and reviewed derived scenarios.
-
-Formatting and linting:
-
-```sh
-cargo fmt --all --check
-cargo clippy --all-targets --all-features
-```
-
-Run from the checkout with debug logs:
-
-```sh
-cargo run --bin sqwl -- --log-filter my_sqweel=debug serve --repl
-```
-
-When fixing a compatibility mismatch, add the smallest reproducing query to the differential
-corpus or parity suite first. A useful report includes the schema, fixture rows, query, MariaDB
-version, expected result, and MySqweel result.
-
-For continuous discovery and local repair branches, see the
-[query coverage worker](tools/query_coverage/README.md). It combines GitHub application
-SQL with the existing upstream backlog, uses pinned MariaDB results, and adds offline
-regression fixtures. Discovery and reporting do not use a model; its `run` command
-explicitly starts bounded oh-my-pi sessions. Review-ready branches are not public
-coverage claims until integrated and qualified by CI.
-
-When working interactively in oh-my-pi, use `/skill:mysqweel-query-coverage`.
-The project-local skill makes the active model search public GitHub itself through
-the GitHub Code Search API; supply `GH_TOKEN` or `GITHUB_TOKEN`, not a repository list.
+For upstream MTR reproduction and discovery, start with
+[upstream test tooling](tests/mariadb-mtr-exclusions.md) and
+[the query coverage worker](tools/query_coverage/README.md). CI output and
+generated reports establish results for each revision; historical counts
+are not guarantees for the current checkout.
 
 ## Project layout
 
 ```text
-src/bin/sqwl.rs                    CLI entrypoint
-src/lib.rs                         CLI, REPL, snapshots, and SQL explain
-src/server/                        SQL wire protocol and administrative HTTP APIs
-src/sql/mod.rs                     SQL parsing
-src/sql/engine/                    SQL execution and compatibility validation
-src/sql/engine/transaction.rs      Sessions, transactions, and commit publication
-src/sql/engine/catalog.rs          Database catalog, accounts, and authorization
-src/schema/mod.rs                  Schema-hint model
-src/model.rs                       Stored-row model
-src/sql/engine/transaction/persistence.rs  Incremental committed-state persistence
-src/storage/mod.rs                 Embedded Lux storage, locking, and runtime lifecycle
-src/vendor/msql_srv/              Embedded wire-server implementation
-tests/                            Engine, transaction, wire, ORM, and parity suites
-tests/mariadb-mtr-scope.txt         Focused upstream audit manifest
-tests/mariadb-mtr-allowlist.txt     Strict upstream gate manifest
+src/sql/engine/          SQL evaluation, transactions, catalog, and authorization
+src/async_engine.rs      Async wrapper, storage coordination, and execution filters
+src/storage/            Lux integration and public AsyncStorage contract
+src/server/             MySQL wire protocol, authentication, debug/search HTTP
+src/lib.rs              Public exports, CLI, and REPL
+src/bin/sqwl.rs          Executable entry point
+src/vendor/             Vendored Lux and wire-server implementations
+examples/               JSON and CSV custom storage examples
+docs/                   Library guides
+tests/                  Engine, wire, ORM, and compatibility suites
+tools/                  CI checks, MariaDB comparison, and coverage tooling
 ```
 
 ## License

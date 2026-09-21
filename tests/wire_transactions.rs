@@ -1,12 +1,16 @@
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use my_sqweel::server::WireServer;
-use my_sqweel::sql::engine::{Engine, EngineConfig};
+use my_sqweel::server::{
+    AccountOperation, AccountOperationAction, AccountOperationKind, AsyncAuthenticator,
+    AuthenticatedUser, Authentication, AuthenticationRequest, StaticUser, WireServer,
+    verify_mysql_native_password,
+};
+use my_sqweel::sql::engine::{AuthPrivilege, AuthScope, Engine, EngineConfig};
 use mysql::prelude::Queryable;
 use mysql::{Conn, OptsBuilder};
 
@@ -18,12 +22,19 @@ struct Server {
 
 impl Server {
     fn start() -> Self {
+        Self::start_with_authentication(
+            Arc::new(Engine::new(EngineConfig::mysql_strict())),
+            Authentication::EngineAccounts,
+        )
+    }
+
+    fn start_with_authentication(engine: Arc<Engine>, authentication: Authentication) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = stop.clone();
         let thread = std::thread::spawn(move || {
-            WireServer::new(Arc::new(Engine::new(EngineConfig::mysql_strict())))
+            WireServer::with_authentication(engine, authentication)
                 .serve_listener_until(listener, worker_stop)
                 .unwrap();
         });
@@ -45,6 +56,65 @@ impl Server {
                 .read_timeout(Some(Duration::from_secs(10)))
                 .write_timeout(Some(Duration::from_secs(10))),
         )
+    }
+}
+
+struct DirectoryAuthenticator;
+
+impl AsyncAuthenticator for DirectoryAuthenticator {
+    async fn authenticate(
+        &self,
+        request: AuthenticationRequest,
+    ) -> anyhow::Result<Option<AuthenticatedUser>> {
+        if request.username == "directory_reader"
+            && verify_mysql_native_password(
+                "directory-secret",
+                &request.challenge,
+                &request.response,
+            )
+        {
+            return Ok(Some(AuthenticatedUser::new(
+                "directory_reader",
+                [AuthScope::database("app", [AuthPrivilege::Select])],
+            )));
+        }
+        Ok(None)
+    }
+}
+
+#[derive(Clone, Default)]
+struct AccountDirectory {
+    operations: Arc<AtomicUsize>,
+}
+
+impl AsyncAuthenticator for AccountDirectory {
+    async fn authenticate(
+        &self,
+        request: AuthenticationRequest,
+    ) -> anyhow::Result<Option<AuthenticatedUser>> {
+        if request.username == "directory_admin"
+            && verify_mysql_native_password(
+                "directory-secret",
+                &request.challenge,
+                &request.response,
+            )
+        {
+            return Ok(Some(AuthenticatedUser::new(
+                "directory_admin",
+                [AuthScope::All],
+            )));
+        }
+        Ok(None)
+    }
+
+    async fn account_operation(
+        &self,
+        operation: AccountOperation,
+    ) -> anyhow::Result<AccountOperationAction> {
+        assert_eq!(operation.kind, AccountOperationKind::AlterUser);
+        assert!(operation.sql.contains("external_user"));
+        self.operations.fetch_add(1, Ordering::Relaxed);
+        Ok(AccountOperationAction::Handled)
     }
 }
 
@@ -116,6 +186,96 @@ fn mysql_clients_authenticate_and_transactions_span_text_and_prepared_commands()
     tenant.query_drop("COMMIT").unwrap();
     let count: Option<u64> = admin.query_first("SELECT COUNT(*) FROM records").unwrap();
     assert_eq!(count, Some(1));
+}
+
+#[test]
+fn callback_authentication_assigns_scopes_without_catalog_accounts() {
+    let engine = Arc::new(Engine::new(EngineConfig::mysql_strict()));
+    engine
+        .execute_sql("CREATE TABLE directory_records (id INT PRIMARY KEY)")
+        .unwrap();
+    engine
+        .execute_sql("INSERT INTO directory_records VALUES (1)")
+        .unwrap();
+    let server =
+        Server::start_with_authentication(engine, Authentication::callback(DirectoryAuthenticator));
+
+    assert!(server.connect("directory_reader", "wrong", "app").is_err());
+    let mut reader = server
+        .connect("directory_reader", "directory-secret", "app")
+        .unwrap();
+    let count: Option<u64> = reader
+        .query_first("SELECT COUNT(*) FROM directory_records")
+        .unwrap();
+    assert_eq!(count, Some(1));
+    assert!(
+        reader
+            .query_drop("INSERT INTO directory_records VALUES (2)")
+            .is_err()
+    );
+}
+
+#[test]
+fn static_users_authenticate_and_enforce_scopes() {
+    let engine = Arc::new(Engine::new(EngineConfig::mysql_strict()));
+    engine
+        .execute_sql("CREATE TABLE static_records (id INT PRIMARY KEY)")
+        .unwrap();
+    engine
+        .execute_sql("INSERT INTO static_records VALUES (1)")
+        .unwrap();
+    let server = Server::start_with_authentication(
+        engine,
+        Authentication::static_users([StaticUser::new(
+            "static_reader",
+            "static-secret",
+            [AuthScope::database("app", [AuthPrivilege::Select])],
+        )]),
+    );
+
+    assert!(server.connect("static_reader", "wrong", "app").is_err());
+    let mut reader = server
+        .connect("static_reader", "static-secret", "app")
+        .unwrap();
+    let count: Option<u64> = reader
+        .query_first("SELECT COUNT(*) FROM static_records")
+        .unwrap();
+    assert_eq!(count, Some(1));
+    assert!(
+        reader
+            .query_drop("DELETE FROM static_records WHERE id = 1")
+            .is_err()
+    );
+}
+
+#[test]
+fn default_wire_authentication_is_permissive() {
+    let server = Server::start_with_authentication(
+        Arc::new(Engine::new(EngineConfig::mysql_strict())),
+        Authentication::default(),
+    );
+    let mut user = server
+        .connect("unconfigured", "any-password", "app")
+        .unwrap();
+    user.query_drop("CREATE TABLE permissive_records (id INT PRIMARY KEY)")
+        .unwrap();
+}
+
+#[test]
+fn callback_can_handle_account_operations_outside_the_local_catalog_subset() {
+    let directory = AccountDirectory::default();
+    let server = Server::start_with_authentication(
+        Arc::new(Engine::new(EngineConfig::mysql_strict())),
+        Authentication::callback(directory.clone()),
+    );
+    let mut admin = server
+        .connect("directory_admin", "directory-secret", "app")
+        .unwrap();
+
+    admin
+        .query_drop("ALTER USER 'external_user'@'%' IDENTIFIED BY 'rotated-secret'")
+        .unwrap();
+    assert_eq!(directory.operations.load(Ordering::Relaxed), 1);
 }
 
 fn read_packet(stream: &mut TcpStream) -> Vec<u8> {

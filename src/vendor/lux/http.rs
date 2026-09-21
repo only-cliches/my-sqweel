@@ -7,7 +7,8 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpSocket;
-use tokio::sync::{broadcast, oneshot};
+use tokio::sync::{broadcast, oneshot, watch};
+use tokio::task::JoinSet;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tokio_tungstenite::tungstenite::protocol::Role;
@@ -22,24 +23,29 @@ const WEBSOCKET_ACCEPT_GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
 enum HttpAuthContext {
     Anonymous,
+    /// Browser-safe project key with no end-user token behind it. Reaches
+    /// `/auth/v1/*` only; it identifies the project, not a person.
+    Publishable,
+    /// Server-side project key: full project access, same reach as the operator
+    /// password for data.
+    Secret,
     Operator,
     User(crate::vendor::lux::auth::AuthPrincipal),
 }
 
-/// Constant-time byte comparison to prevent timing attacks on auth tokens.
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        let mut _acc = 0u8;
-        for &byte in a {
-            _acc |= byte;
-        }
-        return false;
+type HttpRouteError = (u16, &'static str, String);
+
+/// Whether this caller may see decrypted values of ENCRYPTED columns. The
+/// operator and real authenticated users can; anonymous (signInAnonymously)
+/// principals cannot (encrypted columns are omitted from their reads).
+fn decrypt_authorized(ctx: &HttpAuthContext) -> bool {
+    match ctx {
+        // A secret key is a server-side credential with full project access, so
+        // it sees plaintext exactly as the operator does.
+        HttpAuthContext::Operator | HttpAuthContext::Secret => true,
+        HttpAuthContext::User(p) => !p.is_anonymous,
+        HttpAuthContext::Anonymous | HttpAuthContext::Publishable => false,
     }
-    let mut diff = 0u8;
-    for (x, y) in a.iter().zip(b.iter()) {
-        diff |= x ^ y;
-    }
-    diff == 0
 }
 
 /// Runtime options for the HTTP API listener.
@@ -55,6 +61,18 @@ pub struct HttpServerConfig {
     pub startup_ready: Option<oneshot::Sender<std::io::Result<std::net::SocketAddr>>>,
 }
 
+#[derive(Clone, Copy)]
+struct RequestLimits {
+    max_rows: Option<usize>,
+    max_body: usize,
+}
+
+struct LiveIdentity {
+    principal: Option<crate::vendor::lux::auth::AuthPrincipal>,
+    user_credential: Option<crate::vendor::lux::auth::UserCredential>,
+    secret_credential: Option<crate::vendor::lux::auth::SecretCredential>,
+}
+
 /// Start the HTTP API listener and serve requests forever.
 pub async fn start_http_server(
     config: HttpServerConfig,
@@ -62,6 +80,7 @@ pub async fn start_http_server(
     broker: Broker,
     cache: SharedSchemaCache,
     script_engine: Arc<lua::ScriptEngine>,
+    mut shutdown_rx: watch::Receiver<Option<std::time::Duration>>,
 ) -> std::io::Result<()> {
     let addr: std::net::SocketAddr = format!("{}:{}", config.bind_host, config.http_port)
         .parse()
@@ -84,31 +103,47 @@ pub async fn start_http_server(
     if let Some(on_ready) = config.on_ready {
         on_ready(local_addr);
     }
-    let max_rows = config.max_rows;
-    let max_body = config.max_body;
+    let limits = RequestLimits {
+        max_rows: config.max_rows,
+        max_body: config.max_body,
+    };
 
+    let mut connections = JoinSet::new();
     loop {
-        let (socket, _) = listener.accept().await?;
-        let store = store.clone();
-        let broker = broker.clone();
-        let cache = cache.clone();
-        let script_engine = script_engine.clone();
+        tokio::select! {
+            _ = shutdown_rx.changed() => break,
+            joined = connections.join_next(), if !connections.is_empty() => {
+                let _ = joined;
+            }
+            accepted = listener.accept() => {
+                let (socket, _) = accepted?;
+                let store = store.clone();
+                let broker = broker.clone();
+                let cache = cache.clone();
+                let script_engine = script_engine.clone();
+                let connection_shutdown = shutdown_rx.clone();
 
-        tokio::spawn(async move {
-            let mut stream = socket;
-            while let Ok(true) = handle_request(
-                &mut stream,
-                &store,
-                &broker,
-                &cache,
-                &script_engine,
-                max_rows,
-                max_body,
-            )
-            .await
-            {}
-        });
+                connections.spawn(async move {
+                    let mut stream = socket;
+                    let mut connection_shutdown = connection_shutdown;
+                    while let Ok(true) = handle_request(
+                        &mut stream,
+                        &store,
+                        &broker,
+                        &cache,
+                        &script_engine,
+                        limits,
+                        &mut connection_shutdown,
+                    )
+                    .await
+                    {}
+                });
+            }
+        }
     }
+
+    while connections.join_next().await.is_some() {}
+    Ok(())
 }
 
 fn bind_listener(addr: std::net::SocketAddr) -> std::io::Result<tokio::net::TcpListener> {
@@ -124,8 +159,8 @@ async fn handle_request(
     broker: &Broker,
     cache: &SharedSchemaCache,
     script_engine: &Arc<lua::ScriptEngine>,
-    max_rows: Option<usize>,
-    max_body: usize,
+    limits: RequestLimits,
+    shutdown_rx: &mut watch::Receiver<Option<std::time::Duration>>,
 ) -> std::io::Result<bool> {
     // Hard limits to prevent memory exhaustion DoS
     const MAX_HEADER_SIZE: usize = 64 * 1024; // 64 KB headers
@@ -133,8 +168,21 @@ async fn handle_request(
     let mut buf = vec![0u8; 65536];
     let mut data = Vec::new();
 
+    if shutdown_rx.borrow().is_some() {
+        return Ok(false);
+    }
+
     loop {
-        let n = socket.read(&mut buf).await?;
+        // Before the first byte this is an idle connection. Once any request
+        // bytes arrive, finish that request rather than cutting it off midway.
+        let n = if data.is_empty() {
+            tokio::select! {
+                _ = shutdown_rx.changed() => return Ok(false),
+                read = socket.read(&mut buf) => read?,
+            }
+        } else {
+            socket.read(&mut buf).await?
+        };
         if n == 0 {
             return Ok(false);
         }
@@ -159,13 +207,18 @@ async fn handle_request(
         .and_then(|l| l.split_once(':'))
         .and_then(|(_, v)| v.trim().parse().ok())
         .unwrap_or(0);
+    let (method, full_path, headers) = parse_http_head(&header_str);
+    drop(header_str);
 
-    if content_length > max_body {
+    if content_length > limits.max_body {
         let body = r#"{"error":"request body too large"}"#;
         return send_json(socket, 413, "Payload Too Large", body).await;
     }
 
-    let total_needed = header_end + content_length;
+    let Some(total_needed) = header_end.checked_add(content_length) else {
+        let body = r#"{"error":"request body size overflow"}"#;
+        return send_json(socket, 413, "Payload Too Large", body).await;
+    };
     while data.len() < total_needed {
         let n = socket.read(&mut buf).await?;
         if n == 0 {
@@ -173,16 +226,16 @@ async fn handle_request(
         }
         data.extend_from_slice(&buf[..n]);
     }
-
-    let request = String::from_utf8_lossy(&data);
-
-    let (method, full_path, headers, body) = parse_http_request(&request);
+    if data.len() < total_needed {
+        let body = r#"{"error":"request body is shorter than Content-Length"}"#;
+        return send_json(socket, 400, "Bad Request", body).await;
+    }
 
     if method == "OPTIONS" {
         let response = "HTTP/1.1 204 No Content\r\n\
              Access-Control-Allow-Origin: *\r\n\
              Access-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS\r\n\
-             Access-Control-Allow-Headers: Authorization, Content-Type, Prefer, apikey\r\n\
+             Access-Control-Allow-Headers: Authorization, Content-Type, Prefer, apikey, X-Lux-Snapshot-SHA256\r\n\
              Content-Length: 0\r\n\r\n"
             .to_string();
         socket.write_all(response.as_bytes()).await?;
@@ -194,6 +247,26 @@ async fn handle_request(
         None => (full_path.clone(), String::new()),
     };
     let params = parse_query_string(&query_string);
+    let is_restore = method == "POST" && matches!(path.as_str(), "/v1/restore" | "/restore");
+    // Restore is the only binary request surface. Do not lossy-decode and copy
+    // a potentially large snapshot merely to parse the HTTP head.
+    let body = if is_restore {
+        String::new()
+    } else {
+        String::from_utf8_lossy(&data[header_end..total_needed]).into_owned()
+    };
+
+    // These endpoints intentionally contain no project data and bypass normal
+    // credentials so container orchestrators do not need database secrets.
+    // The HTTP listener is created only after recovery completes, making a
+    // successful liveness response stronger than a bare process check.
+    if method == "GET" && path == "/health/live" {
+        return send_json(socket, 200, "OK", r#"{"status":"live"}"#).await;
+    }
+    if method == "GET" && path == "/health/ready" {
+        let (status, status_text, body) = health_readiness(store);
+        return send_json(socket, status, status_text, &body).await;
+    }
 
     if path.starts_with("/auth/v1") {
         let response = crate::vendor::lux::auth::route_http_response(
@@ -210,8 +283,15 @@ async fn handle_request(
         .map(|(_, v)| v.as_str())
         .and_then(|auth| auth.strip_prefix("Bearer "))
         .unwrap_or("");
+    // Browsers cannot set headers on a WebSocket handshake, so `/live` also takes
+    // the key as a query param. `apikey` is the name the SDK sends (and the
+    // Supabase-compatible one); `token` is accepted as the original alias. Only
+    // reading `token` here meant every keyed SDK client 401'd on the handshake
+    // unless it also had an end-user access token.
     let query_token = if path == "/live" {
-        get_param(&params, "token").unwrap_or("")
+        get_param(&params, "apikey")
+            .or_else(|| get_param(&params, "token"))
+            .unwrap_or("")
     } else {
         ""
     };
@@ -222,49 +302,114 @@ async fn handle_request(
     } else {
         ""
     };
-    let password_ok = !password.is_empty()
-        && (constant_time_eq(bearer.as_bytes(), password.as_bytes())
-            || constant_time_eq(query_token.as_bytes(), password.as_bytes()));
-    let user_token = if !bearer.is_empty() {
+    // The project credential: `apikey` header, then the /live query param, then
+    // the bearer. The bearer is overloaded -- it can be the operator password, a
+    // project key, or an end-user JWT -- so the resolver sorts it out.
+    let apikey_header = headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("apikey"))
+        .map(|(_, v)| v.as_str())
+        .unwrap_or("");
+    let presented = if !apikey_header.is_empty() {
+        apikey_header
+    } else if !query_token.is_empty() {
+        query_token
+    } else {
+        bearer
+    };
+    // An end-user token rides *alongside* a project key (the browser case:
+    // `apikey=lux_pub_...` + `Authorization: Bearer <jwt>`). When the bearer is
+    // itself the presented credential, the resolver falls back to trying it as a
+    // user token on its own.
+    let user_token = if !query_access_token.is_empty() {
+        query_access_token
+    } else if presented != bearer {
         bearer
     } else {
-        query_access_token
+        ""
     };
-    let auth_context = if password_ok {
-        HttpAuthContext::Operator
-    } else if store.config().auth.enabled && !user_token.is_empty() {
-        match crate::vendor::lux::auth::authenticate_access_token(user_token, store, cache) {
-            Ok(principal) => HttpAuthContext::User(principal),
-            Err(e) => {
-                let body = format!(r#"{{"error":"{}"}}"#, escape_json(&e));
-                return send_json(socket, 401, "Unauthorized", &body).await;
-            }
+
+    let credential = match crate::vendor::lux::auth::resolve_credential(
+        presented,
+        user_token,
+        crate::vendor::lux::auth::Surface::Http,
+        store,
+        cache,
+    ) {
+        Ok(credential) => credential,
+        Err(e) => {
+            let body = format!(r#"{{"error":"{}"}}"#, escape_json(&e));
+            return send_json(socket, 401, "Unauthorized", &body).await;
+        }
+    };
+    let live_user_credential = if path == "/live" {
+        match &credential {
+            crate::vendor::lux::auth::Credential::User(credential) => Some((**credential).clone()),
+            _ => None,
         }
     } else {
-        HttpAuthContext::Anonymous
+        None
     };
-    if !password.is_empty() {
-        if !password_ok && !matches!(auth_context, HttpAuthContext::User(_)) {
-            let body = r#"{"error":"unauthorized"}"#;
+    let live_secret_credential = if path == "/live" {
+        match &credential {
+            crate::vendor::lux::auth::Credential::Secret(credential) => Some(credential.clone()),
+            _ => None,
+        }
+    } else {
+        None
+    };
+    let auth_context = match credential {
+        crate::vendor::lux::auth::Credential::Operator => HttpAuthContext::Operator,
+        crate::vendor::lux::auth::Credential::Secret(_) => HttpAuthContext::Secret,
+        crate::vendor::lux::auth::Credential::Publishable => HttpAuthContext::Publishable,
+        crate::vendor::lux::auth::Credential::User(credential) => {
+            HttpAuthContext::User(credential.principal)
+        }
+        crate::vendor::lux::auth::Credential::Anonymous => HttpAuthContext::Anonymous,
+    };
+
+    // An engine is credential-gated once it has either a password or project
+    // keys. Before that (a bare local engine) it stays open, as it always has.
+    let project_keys_configured =
+        match crate::vendor::lux::auth::project_keys_configured(store, cache) {
+            Ok(configured) => configured,
+            Err(e) => {
+                let body = format!(r#"{{"error":"{}"}}"#, escape_json(&e));
+                return send_json(socket, 503, "Service Unavailable", &body).await;
+            }
+        };
+    if !password.is_empty() || project_keys_configured {
+        let permitted = match &auth_context {
+            HttpAuthContext::Operator | HttpAuthContext::Secret | HttpAuthContext::User(_) => true,
+            // A publishable key identifies the project, not a person. It reaches
+            // auth (that is how a person is obtained) and nothing else until an
+            // end-user token makes it a User.
+            HttpAuthContext::Publishable => path.starts_with("/auth/v1"),
+            HttpAuthContext::Anonymous => false,
+        };
+        if !permitted {
+            let body = if matches!(auth_context, HttpAuthContext::Publishable) {
+                r#"{"error":"publishable key cannot access this route without an end-user token"}"#
+            } else {
+                r#"{"error":"unauthorized"}"#
+            };
             return send_json(socket, 401, "Unauthorized", body).await;
         }
-    } else if path == "/live"
-        && store.config().auth.enabled
-        && !matches!(auth_context, HttpAuthContext::User(_))
-    {
-        let body = r#"{"error":"unauthorized"}"#;
-        return send_json(socket, 401, "Unauthorized", body).await;
     }
 
     if method == "GET" && path == "/live" {
         return handle_live_upgrade(
             socket,
             &headers,
-            &params,
             store.clone(),
             broker.clone(),
             cache.clone(),
-            live_auth_principal(&auth_context),
+            LiveIdentity {
+                principal: live_auth_principal(&auth_context),
+                user_credential: live_user_credential,
+                secret_credential: live_secret_credential,
+            },
+            shutdown_rx.clone(),
         )
         .await;
     }
@@ -273,28 +418,108 @@ async fn handle_request(
     // the full response string in memory first.
     let segments: Vec<&str> = path.trim_start_matches('/').split('/').collect();
 
-    // Full-instance restore. The raw request body is a lux.dat dump; read it
-    // straight from the buffer to avoid the lossy String conversion. Operator-
-    // only. On success the process exits so the container restart reloads from
-    // the restored dump via the standard startup path.
-    if method == "POST" && matches!(segments.as_slice(), ["v1", "restore"] | ["restore"]) {
-        let password_set = !store.config().password.is_empty();
-        if password_set && !matches!(auth_context, HttpAuthContext::Operator) {
-            let body = r#"{"error":"restore requires operator credentials"}"#;
+    if method == "GET" && matches!(segments.as_slice(), ["v1", "restore"] | ["restore"]) {
+        if !snapshot_management_authorized(store, cache, &auth_context) {
+            let body = r#"{"error":"restore status requires management credentials"}"#;
             return send_json(socket, 403, "Forbidden", body).await;
         }
-        let end = (header_end + content_length).min(data.len());
-        let dump = &data[header_end..end];
-        match crate::vendor::lux::snapshot::restore_to_disk(store, dump) {
-            Ok(()) => {
-                let _ = send_json(socket, 200, "OK", r#"{"restored":true}"#).await;
-                let _ = socket.flush().await;
-                tokio::time::sleep(std::time::Duration::from_millis(150)).await;
-                std::process::exit(0);
+        let restore_store = store.clone();
+        match tokio::task::spawn_blocking(move || {
+            crate::vendor::lux::restore::pending_restore_status(&restore_store)
+        })
+        .await
+        {
+            Ok(Ok(Some(pending))) => {
+                let body = json!({
+                    "pending": true,
+                    "restart_required": true,
+                    "restore_id": pending.id,
+                    "source_bytes": pending.source_len,
+                    "staged_bytes": pending.payload_len,
+                    "source_format": pending.source_format,
+                    "format": pending.format,
+                    "source_sha256": pending.source_sha256,
+                    "sha256": pending.sha256,
+                })
+                .to_string();
+                return send_json(socket, 200, "OK", &body).await;
+            }
+            Ok(Ok(None)) => {
+                return send_json(socket, 200, "OK", r#"{"pending":false}"#).await;
+            }
+            Ok(Err(error)) => {
+                let body = format!(
+                    r#"{{"error":"restore status failed: {}"}}"#,
+                    escape_json(&error.to_string())
+                );
+                return send_json(socket, 500, "Internal Server Error", &body).await;
+            }
+            Err(error) => {
+                let body = format!(
+                    r#"{{"error":"restore status task failed: {}"}}"#,
+                    escape_json(&error.to_string())
+                );
+                return send_json(socket, 500, "Internal Server Error", &body).await;
+            }
+        }
+    }
+
+    // Full-instance restore. Validation and staging do not mutate the running
+    // database. The host must gracefully restart the engine; startup then
+    // preserves the old state before atomically committing the replacement.
+    if is_restore {
+        if !snapshot_management_authorized(store, cache, &auth_context) {
+            let body = r#"{"error":"restore requires management credentials"}"#;
+            return send_json(socket, 403, "Forbidden", body).await;
+        }
+        let checksum = headers
+            .iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case("x-lux-snapshot-sha256"))
+            .map(|(_, value)| value.clone());
+        let restore_store = store.clone();
+        match tokio::task::spawn_blocking(move || {
+            crate::vendor::lux::restore::stage_restore(
+                &restore_store,
+                &data[header_end..total_needed],
+                checksum.as_deref(),
+            )
+        })
+        .await
+        {
+            Ok(Ok(staged)) => {
+                let body = json!({
+                    "staged": true,
+                    "restart_required": true,
+                    "restore_id": staged.id,
+                    "source_bytes": staged.source_len,
+                    "staged_bytes": staged.payload_len,
+                    "entries": staged.entries,
+                    "source_format": staged.source_format,
+                    "format": staged.format,
+                    "source_sha256": staged.source_sha256,
+                    "sha256": staged.sha256,
+                })
+                .to_string();
+                return send_json(socket, 202, "Accepted", &body).await;
+            }
+            Ok(Err(e)) => {
+                let (status, status_text) = match e.kind() {
+                    std::io::ErrorKind::InvalidInput | std::io::ErrorKind::InvalidData => {
+                        (400, "Bad Request")
+                    }
+                    std::io::ErrorKind::AlreadyExists => (409, "Conflict"),
+                    std::io::ErrorKind::StorageFull => (507, "Insufficient Storage"),
+                    _ => (500, "Internal Server Error"),
+                };
+                let body = format!(
+                    r#"{{"error":"restore failed: {}"}}"#,
+                    escape_json(&e.to_string())
+                );
+                return send_json(socket, status, status_text, &body).await;
             }
             Err(e) => {
                 let body = format!(
-                    r#"{{"error":"restore failed: {}"}}"#,
+                    r#"{{"error":"restore task failed: {}"}}"#,
                     escape_json(&e.to_string())
                 );
                 return send_json(socket, 500, "Internal Server Error", &body).await;
@@ -307,36 +532,45 @@ async fn handle_request(
             ["v1", "snapshot"] | ["snapshot"] => {
                 // Full-instance backup. Streams a consistent dump out over HTTP
                 // so the control plane never needs a shell in the container.
-                // Operator-only when a password is set (it exposes all data).
-                let password_set = !store.config().password.is_empty();
-                if password_set && !matches!(auth_context, HttpAuthContext::Operator) {
-                    let body = r#"{"error":"snapshot requires operator credentials"}"#;
+                // This exposes all data, so only the strongest configured
+                // management credential may use it.
+                if !snapshot_management_authorized(store, cache, &auth_context) {
+                    let body = r#"{"error":"snapshot requires management credentials"}"#;
                     return send_json(socket, 403, "Forbidden", body).await;
                 }
                 return stream_snapshot(socket, store).await;
             }
             ["v1", "tables", table] => {
-                let filter = match enforce_table_read(store, cache, &auth_context, table) {
-                    Ok(f) => f,
+                let scoped = match scope_table_query_read(
+                    store,
+                    cache,
+                    &auth_context,
+                    table,
+                    &params,
+                    limits.max_rows,
+                ) {
+                    Ok(params) => params,
                     Err((status, status_text, body)) => {
                         return send_json(socket, status, status_text, &body).await;
                     }
                 };
-                if let Some(err) = crate::vendor::lux::auth::reserved_table_access_error(table) {
-                    let body = format!(r#"{{"error":"{}"}}"#, escape_json(&err));
-                    return send_json(socket, 403, "Forbidden", &body).await;
-                }
                 let prefer = headers
                     .iter()
                     .find(|(k, _)| k.eq_ignore_ascii_case("prefer"))
                     .map(|(_, v)| v.as_str())
                     .unwrap_or("");
-                // Inject the grant filter (RLS USING) into the query's WHERE.
-                let where_clause = get_param(&params, "where").unwrap_or("");
-                let combined = combine_where(where_clause, filter.as_deref().unwrap_or(""));
-                let scoped = params_with_where(&params, &combined);
-                return stream_table_query(socket, table, &scoped, prefer, store, cache, max_rows)
-                    .await;
+                let da = decrypt_authorized(&auth_context);
+                return stream_table_query(
+                    socket,
+                    table,
+                    &scoped,
+                    prefer,
+                    store,
+                    cache,
+                    limits.max_rows,
+                    da,
+                )
+                .await;
             }
             ["v1", "tables", table, "count"] => {
                 let filter = match enforce_table_read(store, cache, &auth_context, table) {
@@ -351,11 +585,20 @@ async fn handle_request(
                 }
                 let now = std::time::Instant::now();
                 let scope = filter.as_deref().unwrap_or("");
-                let body = match crate::vendor::lux::tables::table_count_filtered(
-                    store, cache, table, scope, now,
-                ) {
-                    Ok(n) => format!(r#"{{"result":{n}}}"#),
-                    Err(e) => format!(r#"{{"error":"{}"}}"#, escape_json(&e)),
+                let body = match with_execution_read(store, || {
+                    crate::vendor::lux::tables::table_count_filtered(
+                        store, cache, table, scope, now,
+                    )
+                }) {
+                    Err(error) => {
+                        let body = format!(
+                            r#"{{"error":"database unavailable: {}"}}"#,
+                            escape_json(&error.to_string())
+                        );
+                        return send_json(socket, 503, "Service Unavailable", &body).await;
+                    }
+                    Ok(Ok(n)) => format!(r#"{{"result":{n}}}"#),
+                    Ok(Err(e)) => format!(r#"{{"error":"{}"}}"#, escape_json(&e)),
                 };
                 return send_json(socket, 200, "OK", &body).await;
             }
@@ -372,16 +615,26 @@ async fn handle_request(
                     return send_json(socket, 403, "Forbidden", &body).await;
                 }
                 let now = std::time::Instant::now();
-                let body = match crate::vendor::lux::tables::table_schema(store, cache, table, now)
-                {
-                    Ok(fields) => {
-                        let items: Vec<String> = fields
-                            .iter()
-                            .map(|f| format!(r#""{}""#, escape_json(f)))
-                            .collect();
-                        format!(r#"{{"result":[{}]}}"#, items.join(","))
+                let body = match with_execution_read(store, || {
+                    crate::vendor::lux::tables::table_schema(store, cache, table, now)
+                }) {
+                    Err(error) => {
+                        let body = format!(
+                            r#"{{"error":"database unavailable: {}"}}"#,
+                            escape_json(&error.to_string())
+                        );
+                        return send_json(socket, 503, "Service Unavailable", &body).await;
                     }
-                    Err(e) => format!(r#"{{"error":"{}"}}"#, escape_json(&e)),
+                    Ok(result) => match result {
+                        Ok(fields) => {
+                            let items: Vec<String> = fields
+                                .iter()
+                                .map(|f| format!(r#""{}""#, escape_json(f)))
+                                .collect();
+                            format!(r#"{{"result":[{}]}}"#, items.join(","))
+                        }
+                        Err(e) => format!(r#"{{"error":"{}"}}"#, escape_json(&e)),
+                    },
                 };
                 return send_json(socket, 200, "OK", &body).await;
             }
@@ -398,22 +651,35 @@ async fn handle_request(
                 }
                 let now = std::time::Instant::now();
                 let scope = filter.as_deref().unwrap_or("");
-                let body = match id.parse::<i64>() {
-                    Ok(id_i64) => {
-                        match crate::vendor::lux::tables::table_get_filtered(
-                            store, cache, table, id_i64, scope, now,
-                        ) {
-                            // A row that exists but is out of grant scope reads as
-                            // not-found, so we don't leak that it exists.
-                            Ok(Some(row)) => row_to_json_object(
-                                &row,
-                                &render_columns(store, cache, table, Instant::now()),
-                            ),
-                            Ok(None) => r#"{"error":"row not found"}"#.to_string(),
-                            Err(e) => format!(r#"{{"error":"{}"}}"#, escape_json(&e)),
-                        }
+                // Keyed by the raw PK string, so int, UUID, and string PKs all work.
+                let body = match with_execution_read(store, || {
+                    crate::vendor::lux::tables::table_get_filtered_pk(
+                        store,
+                        cache,
+                        table,
+                        id,
+                        scope,
+                        now,
+                        decrypt_authorized(&auth_context),
+                    )
+                }) {
+                    Err(error) => {
+                        let body = format!(
+                            r#"{{"error":"database unavailable: {}"}}"#,
+                            escape_json(&error.to_string())
+                        );
+                        return send_json(socket, 503, "Service Unavailable", &body).await;
                     }
-                    Err(_) => r#"{"error":"invalid row id"}"#.to_string(),
+                    Ok(result) => match result {
+                        // A row that exists but is out of grant scope reads as
+                        // not-found, so we don't leak that it exists.
+                        Ok(Some(row)) => row_to_json_object(
+                            &row,
+                            &render_columns(store, cache, table, Instant::now()),
+                        ),
+                        Ok(None) => r#"{"error":"row not found"}"#.to_string(),
+                        Err(e) => format!(r#"{{"error":"{}"}}"#, escape_json(&e)),
+                    },
                 };
                 return send_json(socket, 200, "OK", &body).await;
             }
@@ -427,10 +693,35 @@ async fn handle_request(
         cache,
         script_engine,
     };
-    let (status, status_text, result) =
-        route_request_with_auth(&method, &path, &body, &params, deps, &auth_context);
+    let routed = match with_execution_read(store, || {
+        route_request_with_auth(&method, &path, &body, &params, deps, &auth_context)
+    }) {
+        Ok(routed) => routed,
+        Err(error) => {
+            let body = format!(
+                r#"{{"error":"database unavailable: {}"}}"#,
+                escape_json(&error.to_string())
+            );
+            return send_json(socket, 503, "Service Unavailable", &body).await;
+        }
+    };
+    let (status, status_text, result) = routed;
 
     send_json(socket, status, status_text, &result).await
+}
+
+fn snapshot_management_authorized(
+    store: &Store,
+    cache: &SharedSchemaCache,
+    context: &HttpAuthContext,
+) -> bool {
+    if !store.config().password.is_empty() {
+        matches!(context, HttpAuthContext::Operator)
+    } else if crate::vendor::lux::auth::project_keys_configured(store, cache).unwrap_or(true) {
+        matches!(context, HttpAuthContext::Secret)
+    } else {
+        true
+    }
 }
 
 /// Stream a table query response using chunked transfer encoding.
@@ -445,18 +736,23 @@ async fn stream_snapshot(
     store: &Arc<Store>,
 ) -> std::io::Result<bool> {
     let store = store.clone();
-    let path = match tokio::task::spawn_blocking(move || {
-        crate::vendor::lux::snapshot::snapshot_for_backup(&store)
+    let artifact = match tokio::task::spawn_blocking(move || {
+        crate::vendor::lux::snapshot::snapshot_for_backup_artifact(&store)
     })
     .await
     {
-        Ok(Ok(p)) => p,
+        Ok(Ok(artifact)) => artifact,
         Ok(Err(e)) => {
+            let (status, status_text) = if e.kind() == std::io::ErrorKind::PermissionDenied {
+                (409, "Conflict")
+            } else {
+                (500, "Internal Server Error")
+            };
             let body = format!(
                 r#"{{"error":"snapshot failed: {}"}}"#,
                 escape_json(&e.to_string())
             );
-            return send_json(socket, 500, "Internal Server Error", &body).await;
+            return send_json(socket, status, status_text, &body).await;
         }
         Err(e) => {
             let body = format!(
@@ -467,29 +763,37 @@ async fn stream_snapshot(
         }
     };
 
-    let mut file = match tokio::fs::File::open(&path).await {
-        Ok(f) => f,
-        Err(e) => {
-            let body = format!(
-                r#"{{"error":"snapshot open failed: {}"}}"#,
-                escape_json(&e.to_string())
-            );
-            return send_json(socket, 500, "Internal Server Error", &body).await;
-        }
-    };
+    let sha256 = artifact.sha256_hex();
+    let format = artifact.format.version();
+    let expected_len = artifact.len;
+    let mut file = tokio::fs::File::from_std(artifact.file);
     let len = file.metadata().await?.len();
+    if len != expected_len {
+        return send_json(
+            socket,
+            500,
+            "Internal Server Error",
+            r#"{"error":"snapshot changed before it could be streamed"}"#,
+        )
+        .await;
+    }
     let header = format!(
         "HTTP/1.1 200 OK\r\n\
          Content-Type: application/octet-stream\r\n\
          Content-Disposition: attachment; filename=\"lux.dat\"\r\n\
          Access-Control-Allow-Origin: *\r\n\
-         Content-Length: {len}\r\n\r\n"
+         Access-Control-Expose-Headers: X-Lux-Snapshot-SHA256, X-Lux-Snapshot-Format\r\n\
+         X-Lux-Snapshot-SHA256: {}\r\n\
+         X-Lux-Snapshot-Format: {}\r\n\
+         Content-Length: {len}\r\n\r\n",
+        sha256, format
     );
     socket.write_all(header.as_bytes()).await?;
     tokio::io::copy(&mut file, socket).await?;
     Ok(true)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn stream_table_query(
     socket: &mut tokio::net::TcpStream,
     table: &str,
@@ -498,22 +802,35 @@ async fn stream_table_query(
     store: &Arc<Store>,
     cache: &SharedSchemaCache,
     max_rows: Option<usize>,
+    decrypt_authorized: bool,
 ) -> std::io::Result<bool> {
     use tokio::io::AsyncWriteExt;
 
     let now = std::time::Instant::now();
 
-    let (parsed, plan) = match parse_http_table_query(params, table, max_rows) {
+    let (parsed, mut plan) = match parse_http_table_query(params, table, max_rows) {
         Ok(v) => v,
         Err(e) => {
             let body = format!(r#"{{"error":"{}"}}"#, escape_json(&e));
             return send_json(socket, 400, "Bad Request", &body).await;
         }
     };
+    plan.decrypt_authorized = decrypt_authorized;
     let has_where = parsed.has_where;
     let offset = parsed.offset;
     let count_exact = prefer.contains("count=exact");
-    let result = crate::vendor::lux::tables::table_select(store, cache, &plan, now);
+    let result = match with_execution_read(store, || {
+        crate::vendor::lux::tables::table_select(store, cache, &plan, now)
+    }) {
+        Ok(result) => result,
+        Err(error) => {
+            let body = format!(
+                r#"{{"error":"database unavailable: {}"}}"#,
+                escape_json(&error.to_string())
+            );
+            return send_json(socket, 503, "Service Unavailable", &body).await;
+        }
+    };
 
     match result {
         Err(e) => {
@@ -616,16 +933,9 @@ async fn stream_table_query(
                     buf.push(',');
                 }
                 first_row = false;
-                buf.push('{');
-                let mut first_col = true;
-                for (k, v) in row {
-                    if !first_col {
-                        buf.push(',');
-                    }
-                    first_col = false;
-                    push_field_value(&mut buf, k, v, &cols);
-                }
-                buf.push('}');
+                let materialize_missing =
+                    plan.projections.is_empty() && plan.alias.is_none() && plan.joins.is_empty();
+                push_row_object(&mut buf, row, &cols, materialize_missing);
 
                 if buf.len() >= CHUNK_SIZE {
                     write_chunk(socket, buf.as_bytes()).await?;
@@ -699,12 +1009,8 @@ async fn send_auth_response(
     Ok(true)
 }
 
-fn parse_http_request(raw: &str) -> (String, String, Vec<(String, String)>, String) {
-    let parts: Vec<&str> = raw.splitn(2, "\r\n\r\n").collect();
-    let header_section = parts[0];
-    let body = parts.get(1).unwrap_or(&"").to_string();
-
-    let mut lines = header_section.lines();
+fn parse_http_head(raw: &str) -> (String, String, Vec<(String, String)>) {
+    let mut lines = raw.lines();
     let request_line = lines.next().unwrap_or("");
     let mut tokens = request_line.split_whitespace();
     let method = tokens.next().unwrap_or("GET").to_string();
@@ -717,7 +1023,7 @@ fn parse_http_request(raw: &str) -> (String, String, Vec<(String, String)>, Stri
         }
     }
 
-    (method, path, headers, body)
+    (method, path, headers)
 }
 
 fn parse_query_string(qs: &str) -> Vec<(String, String)> {
@@ -768,7 +1074,12 @@ fn get_param<'a>(params: &'a [(String, String)], key: &str) -> Option<&'a str> {
 fn live_auth_principal(auth: &HttpAuthContext) -> Option<crate::vendor::lux::auth::AuthPrincipal> {
     match auth {
         HttpAuthContext::User(principal) => Some(principal.clone()),
-        HttpAuthContext::Anonymous | HttpAuthContext::Operator => None,
+        // No principal: Operator/Secret are unfiltered, and Publishable never
+        // reaches /live without an end-user token (rejected at the gate).
+        HttpAuthContext::Anonymous
+        | HttpAuthContext::Operator
+        | HttpAuthContext::Secret
+        | HttpAuthContext::Publishable => None,
     }
 }
 
@@ -787,8 +1098,11 @@ fn enforce_table_read(
         return Ok(None);
     }
     match auth {
-        HttpAuthContext::Operator => Ok(None),
-        HttpAuthContext::Anonymous => Err((
+        // Full project access: no row filter.
+        HttpAuthContext::Operator | HttpAuthContext::Secret => Ok(None),
+        // Publishable is refused at the gate; deny here too rather than trust
+        // that an upstream caller got it right.
+        HttpAuthContext::Anonymous | HttpAuthContext::Publishable => Err((
             401,
             "Unauthorized",
             r#"{"error":"unauthorized"}"#.to_string(),
@@ -807,6 +1121,110 @@ fn enforce_table_read(
     }
 }
 
+/// Scope a complete SELECT plan, including every joined table. Parsing once
+/// before injection gives us the exact aliases; parsing again in the query path
+/// applies the generated WHERE fragment through the normal typed query engine.
+fn scope_table_query_read(
+    store: &Arc<Store>,
+    cache: &SharedSchemaCache,
+    auth: &HttpAuthContext,
+    table: &str,
+    params: &[(String, String)],
+    max_rows: Option<usize>,
+) -> Result<Vec<(String, String)>, HttpRouteError> {
+    if let Some(error) = crate::vendor::lux::auth::reserved_table_access_error(table) {
+        return Err((
+            403,
+            "Forbidden",
+            format!(r#"{{"error":"{}"}}"#, escape_json(&error)),
+        ));
+    }
+    if !store.config().auth.enabled {
+        return Ok(params.to_vec());
+    }
+    let principal = match auth {
+        HttpAuthContext::Operator | HttpAuthContext::Secret => return Ok(params.to_vec()),
+        HttpAuthContext::Anonymous | HttpAuthContext::Publishable => {
+            return Err((
+                401,
+                "Unauthorized",
+                r#"{"error":"unauthorized"}"#.to_string(),
+            ));
+        }
+        HttpAuthContext::User(principal) => principal,
+    };
+    let (_, plan) = parse_http_table_query(params, table, max_rows).map_err(|error| {
+        let status = if error.contains("reserved") { 403 } else { 400 };
+        let status_text = if status == 403 {
+            "Forbidden"
+        } else {
+            "Bad Request"
+        };
+        (
+            status,
+            status_text,
+            format!(r#"{{"error":"{}"}}"#, escape_json(&error)),
+        )
+    })?;
+
+    let now = Instant::now();
+    let joined = !plan.joins.is_empty();
+    let base_qualifier = plan.alias.as_deref().unwrap_or(&plan.table);
+    let mut filters = Vec::with_capacity(plan.joins.len() + 1);
+    let base_filter = if joined {
+        crate::vendor::lux::auth::read_filter_qualified(
+            store,
+            cache,
+            principal,
+            &plan.table,
+            base_qualifier,
+            now,
+        )
+    } else {
+        crate::vendor::lux::auth::read_filter(store, cache, principal, &plan.table, now)
+    }
+    .map_err(|error| {
+        (
+            403,
+            "Forbidden",
+            format!(r#"{{"error":"{}"}}"#, escape_json(&error)),
+        )
+    })?;
+    if !base_filter.trim().is_empty() {
+        filters.push(base_filter);
+    }
+    for join in &plan.joins {
+        let filter = crate::vendor::lux::auth::read_filter_qualified(
+            store,
+            cache,
+            principal,
+            &join.table,
+            &join.alias,
+            now,
+        )
+        .map_err(|error| {
+            (
+                403,
+                "Forbidden",
+                format!(r#"{{"error":"{}"}}"#, escape_json(&error)),
+            )
+        })?;
+        if !filter.trim().is_empty() {
+            filters.push(filter);
+        }
+    }
+
+    if filters.is_empty() {
+        return Ok(params.to_vec());
+    }
+    let grant_filter = filters.join(" AND ");
+    let user_filter = get_param(params, "where").unwrap_or("");
+    Ok(params_with_where(
+        params,
+        &combine_where(user_filter, &grant_filter),
+    ))
+}
+
 /// Enforce a write grant on an INSERT: the row being written must satisfy the
 /// table's write grant (WITH CHECK). Operators bypass; anonymous is rejected;
 /// auth-disabled instances are open.
@@ -821,8 +1239,11 @@ fn enforce_table_insert(
         return Ok(());
     }
     match auth {
-        HttpAuthContext::Operator => Ok(()),
-        HttpAuthContext::Anonymous => Err((
+        // Full project access: no row filter.
+        HttpAuthContext::Operator | HttpAuthContext::Secret => Ok(()),
+        // Publishable is refused at the gate; deny here too rather than trust
+        // that an upstream caller got it right.
+        HttpAuthContext::Anonymous | HttpAuthContext::Publishable => Err((
             401,
             "Unauthorized",
             r#"{"error":"unauthorized"}"#.to_string(),
@@ -868,8 +1289,11 @@ fn enforce_table_write_where(
         return Ok(None);
     }
     match auth {
-        HttpAuthContext::Operator => Ok(None),
-        HttpAuthContext::Anonymous => Err((
+        // Full project access: no row filter.
+        HttpAuthContext::Operator | HttpAuthContext::Secret => Ok(None),
+        // Publishable is refused at the gate; deny here too rather than trust
+        // that an upstream caller got it right.
+        HttpAuthContext::Anonymous | HttpAuthContext::Publishable => Err((
             401,
             "Unauthorized",
             r#"{"error":"unauthorized"}"#.to_string(),
@@ -902,8 +1326,11 @@ fn enforce_table_update_check(
         return Ok(());
     }
     match auth {
-        HttpAuthContext::Operator => Ok(()),
-        HttpAuthContext::Anonymous => Err((
+        // Full project access: no row filter.
+        HttpAuthContext::Operator | HttpAuthContext::Secret => Ok(()),
+        // Publishable is refused at the gate; deny here too rather than trust
+        // that an upstream caller got it right.
+        HttpAuthContext::Anonymous | HttpAuthContext::Publishable => Err((
             401,
             "Unauthorized",
             r#"{"error":"unauthorized"}"#.to_string(),
@@ -954,7 +1381,7 @@ fn params_with_where(params: &[(String, String)], where_value: &str) -> Vec<(Str
 /// Gate an operator-only route. Under the grant model, token principals have no
 /// access to privileged routes (raw KV, exec, catalog, etc.); only an operator
 /// credential passes. Auth-disabled instances are open.
-fn require_operator(
+fn require_project_access(
     store: &Arc<Store>,
     auth: &HttpAuthContext,
 ) -> Result<(), (u16, &'static str, String)> {
@@ -962,8 +1389,11 @@ fn require_operator(
         return Ok(());
     }
     match auth {
-        HttpAuthContext::Operator => Ok(()),
-        HttpAuthContext::Anonymous => Err((
+        // A secret key is the project's server-side credential; these routes
+        // (exec, raw kv, tables, ts, vectors) are exactly what it exists to
+        // reach. The operator password remains valid as break-glass.
+        HttpAuthContext::Operator | HttpAuthContext::Secret => Ok(()),
+        HttpAuthContext::Anonymous | HttpAuthContext::Publishable => Err((
             401,
             "Unauthorized",
             r#"{"error":"unauthorized"}"#.to_string(),
@@ -971,7 +1401,7 @@ fn require_operator(
         HttpAuthContext::User(_) => Err((
             403,
             "Forbidden",
-            r#"{"error":"operator credentials required"}"#.to_string(),
+            r#"{"error":"a secret key is required for this route"}"#.to_string(),
         )),
     }
 }
@@ -1024,6 +1454,12 @@ struct LiveTableJoin {
     right_col: String,
 }
 
+fn valid_query_alias(alias: &str) -> bool {
+    let mut characters = alias.chars();
+    matches!(characters.next(), Some(first) if first == '_' || first.is_ascii_alphabetic())
+        && characters.all(|character| character == '_' || character.is_ascii_alphanumeric())
+}
+
 #[derive(Clone)]
 struct LiveTableNearSpec {
     field: String,
@@ -1066,6 +1502,11 @@ enum LiveSubscription {
         spec: Box<LiveTableSpec>,
         state: LiveQueryState,
         receivers: Vec<broadcast::Receiver<crate::vendor::lux::pubsub::Message>>,
+        /// When set, this query is maintained incrementally from typed row
+        /// deltas (single-table, no joins/near/limit/aggregate). `pk_col` is the
+        /// primary-key column used to re-evaluate a single changed row.
+        delta_rx: Option<broadcast::Receiver<crate::vendor::lux::pubsub::RowDelta>>,
+        pk_col: String,
     },
     VectorNear {
         spec: LiveVectorNearSpec,
@@ -1107,11 +1548,11 @@ fn live_broker_event_from_message(
 async fn handle_live_upgrade(
     socket: &mut tokio::net::TcpStream,
     headers: &[(String, String)],
-    _params: &[(String, String)],
     store: Arc<Store>,
     broker: Broker,
     cache: SharedSchemaCache,
-    principal: Option<crate::vendor::lux::auth::AuthPrincipal>,
+    identity: LiveIdentity,
+    shutdown_rx: watch::Receiver<Option<std::time::Duration>>,
 ) -> std::io::Result<bool> {
     let Some(key) = header_value(headers, "sec-websocket-key") else {
         return send_json(
@@ -1133,7 +1574,7 @@ async fn handle_live_upgrade(
     socket.write_all(response.as_bytes()).await?;
 
     let ws = WebSocketStream::from_raw_socket(socket, Role::Server, None).await;
-    run_live_socket(ws, store, broker, cache, principal).await?;
+    run_live_socket(ws, store, broker, cache, identity, shutdown_rx).await?;
     Ok(false)
 }
 
@@ -1142,7 +1583,8 @@ async fn run_live_socket<S>(
     store: Arc<Store>,
     broker: Broker,
     cache: SharedSchemaCache,
-    principal: Option<crate::vendor::lux::auth::AuthPrincipal>,
+    identity: LiveIdentity,
+    mut shutdown_rx: watch::Receiver<Option<std::time::Duration>>,
 ) -> std::io::Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -1150,9 +1592,17 @@ where
     let mut subscriptions: HashMap<String, LiveSubscription> = HashMap::new();
     let mut tick = tokio::time::interval(std::time::Duration::from_millis(1));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // Session revocation is bounded to one second. This remains separate from
+    // the 1 ms event-drain timer so expensive state checks never run per event.
+    let mut auth_tick = tokio::time::interval(std::time::Duration::from_secs(1));
+    auth_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     loop {
         tokio::select! {
+            _ = shutdown_rx.changed() => {
+                let _ = ws.send(WsMessage::Close(None)).await;
+                break;
+            }
             incoming = ws.next() => {
                 let Some(incoming) = incoming else { break; };
                 let incoming = match incoming {
@@ -1167,7 +1617,7 @@ where
                             &broker,
                             &store,
                             &cache,
-                            principal.as_ref(),
+                            identity.principal.as_ref(),
                             &text,
                         ).await?;
                     }
@@ -1180,8 +1630,29 @@ where
             }
             _ = tick.tick() => {
                 drain_live_subscription_events(&mut ws, &mut subscriptions, &store, &cache).await?;
+                drain_live_row_deltas(&mut ws, &mut subscriptions, &store, &cache).await?;
+            }
+            _ = auth_tick.tick(), if identity.user_credential.is_some() || identity.secret_credential.is_some() => {
+                let user_valid = identity.user_credential.as_ref().is_none_or(|credential| {
+                    crate::vendor::lux::auth::revalidate_user_credential(credential, &store, &cache).is_ok()
+                });
+                let secret_valid = identity.secret_credential.as_ref().is_none_or(|credential| {
+                    crate::vendor::lux::auth::revalidate_secret_credential(credential, &store, &cache).is_ok()
+                });
+                if !user_valid || !secret_valid {
+                    send_live_json(&mut ws, json!({"type":"live.error","error":{"code":"AUTH_REVOKED","message":"live authorization is no longer valid"}})).await?;
+                    let _ = ws.send(WsMessage::Close(None)).await;
+                    break;
+                }
             }
         }
+    }
+
+    // Tear down every subscription on disconnect so broker bookkeeping (row-delta
+    // subscriber count, per-table channels) doesn't leak past the socket.
+    let ids: Vec<String> = subscriptions.keys().cloned().collect();
+    for id in ids {
+        stop_live_subscription(&broker, &mut subscriptions, &id);
     }
 
     Ok(())
@@ -1217,7 +1688,16 @@ where
 
     if msg_type == "live.unsubscribe" {
         if !id.is_empty() {
-            stop_live_subscription(broker, subscriptions, &id);
+            if let Err(error) =
+                with_execution_read(store, || stop_live_subscription(broker, subscriptions, &id))
+            {
+                send_live_json(
+                    ws,
+                    json!({"type":"live.error","id":id,"error":{"code":"UNAVAILABLE","message":error.to_string()}}),
+                )
+                .await?;
+                return Ok(());
+            }
             send_live_json(ws, json!({"type":"live.unsubscribed","id":id})).await?;
         }
         return Ok(());
@@ -1233,13 +1713,19 @@ where
         return Ok(());
     }
 
-    stop_live_subscription(broker, subscriptions, &id);
     let Some(spec) = parsed.get("spec").or_else(|| parsed.get("query")) else {
         send_live_json(ws, json!({"type":"live.error","id":id,"error":{"code":"MISSING_SPEC","message":"live.subscribe requires spec"}})).await?;
         return Ok(());
     };
 
-    match build_live_subscription(spec, broker, store, cache, principal).await {
+    let subscription = match with_execution_read(store, || {
+        stop_live_subscription(broker, subscriptions, &id);
+        build_live_subscription(spec, broker, store, cache, principal)
+    }) {
+        Ok(subscription) => subscription,
+        Err(error) => Err(live_error("UNAVAILABLE", &error.to_string())),
+    };
+    match subscription {
         Ok((subscription, initial_events)) => {
             subscriptions.insert(id.clone(), subscription);
             send_live_json(ws, json!({"type":"live.subscribed","id":id})).await?;
@@ -1255,7 +1741,7 @@ where
     Ok(())
 }
 
-async fn build_live_subscription(
+fn build_live_subscription(
     spec: &Value,
     broker: &Broker,
     store: &Arc<Store>,
@@ -1325,6 +1811,11 @@ async fn build_live_subscription(
         {
             return Err(live_error("FORBIDDEN", &err));
         }
+        for join in &table_spec.joins {
+            if let Some(err) = crate::vendor::lux::auth::reserved_table_access_error(&join.table) {
+                return Err(live_error("FORBIDDEN", &err));
+            }
+        }
         // Enforce the READ grant as RLS USING: resolve the grant filter and AND
         // its conditions into the subscription's own WHERE. Because both the
         // initial snapshot and every streamed diff re-run `fetch_live_table_rows`
@@ -1335,7 +1826,7 @@ async fn build_live_subscription(
                 // Validate access at subscribe time, but do not freeze the
                 // resolved conditions here: membership subqueries can change
                 // while the socket remains open.
-                crate::vendor::lux::auth::read_filter_conds(
+                crate::vendor::lux::auth::read_filter(
                     store,
                     cache,
                     p,
@@ -1343,7 +1834,7 @@ async fn build_live_subscription(
                     Instant::now(),
                 )
                 .map_err(|e| live_error("FORBIDDEN", &e))?;
-                table_spec.auth_dependencies = crate::vendor::lux::auth::read_filter_dependencies(
+                let mut auth_dependencies = crate::vendor::lux::auth::read_filter_dependencies(
                     store,
                     cache,
                     p,
@@ -1351,20 +1842,70 @@ async fn build_live_subscription(
                     Instant::now(),
                 )
                 .map_err(|e| live_error("FORBIDDEN", &e))?;
+                for join in &table_spec.joins {
+                    crate::vendor::lux::auth::read_filter(
+                        store,
+                        cache,
+                        p,
+                        &join.table,
+                        Instant::now(),
+                    )
+                    .map_err(|e| live_error("FORBIDDEN", &e))?;
+                    for dependency in crate::vendor::lux::auth::read_filter_dependencies(
+                        store,
+                        cache,
+                        p,
+                        &join.table,
+                        Instant::now(),
+                    )
+                    .map_err(|e| live_error("FORBIDDEN", &e))?
+                    {
+                        if !auth_dependencies.iter().any(|table| table == &dependency) {
+                            auth_dependencies.push(dependency);
+                        }
+                    }
+                }
+                table_spec.auth_dependencies = auth_dependencies;
                 table_spec.principal = Some(p.clone());
             }
         }
-        let receivers = live_table_dependencies(&table_spec)
-            .into_iter()
+        let pk_field = live_table_pk_field(store, cache, &table_spec.table);
+        let pk_col = pk_field.clone().unwrap_or_else(|| "id".to_string());
+        // A single-table query (no joins/near/limit/offset/aggregate) whose
+        // projection includes the pk is maintained incrementally from typed row
+        // deltas; anything else keeps the re-query-and-diff path. The pk must be
+        // projected so `state.rows` keys line up with the delta's pk. IVM subs
+        // still watch auth-dependency tables via key-events so a grant-membership
+        // change triggers a full resync.
+        let ivm = ivm_eligible(&table_spec) && select_projects_pk(&table_spec.select, &pk_col);
+        let key_tables: Vec<String> = if ivm {
+            table_spec.auth_dependencies.clone()
+        } else {
+            live_table_dependencies(&table_spec)
+        };
+        let receivers = key_tables
+            .iter()
             .flat_map(|table| {
                 [
-                    broker.ksubscribe(&table),
+                    broker.ksubscribe(table),
                     broker.ksubscribe(&format!("_t:{table}:row:*")),
                 ]
             })
             .collect();
-        let rows = fetch_live_table_rows(store, cache, &table_spec)?;
-        let pk_field = live_table_pk_field(store, cache, &table_spec.table);
+        let delta_rx = ivm.then(|| broker.subscribe_row_deltas(&table_spec.table));
+        let rows = match fetch_live_table_rows(store, cache, &table_spec) {
+            Ok(rows) => rows,
+            Err(error) => {
+                rollback_live_table_receivers(
+                    broker,
+                    receivers,
+                    delta_rx,
+                    &key_tables,
+                    &table_spec.table,
+                );
+                return Err(error);
+            }
+        };
         let query = json!({"type":"table","table":table_spec.table});
         let state = LiveQueryState {
             query: query.clone(),
@@ -1376,6 +1917,8 @@ async fn build_live_subscription(
                 spec: Box::new(table_spec),
                 state,
                 receivers,
+                delta_rx,
+                pk_col,
             },
             vec![json!({"kind":"snapshot","scope":"query","query":query,"rows":rows})],
         ));
@@ -1547,13 +2090,42 @@ fn stop_live_subscription(
         LiveSubscription::Key { pattern, .. } => broker.kunsub(&pattern),
         LiveSubscription::Channel { channel, .. } => broker.unsubscribe_channel(&channel),
         LiveSubscription::PubSubPattern { pattern, .. } => broker.punsubscribe_pattern(&pattern),
-        LiveSubscription::Table { spec, .. } => {
-            for table in live_table_dependencies(&spec) {
-                broker.kunsub(&table);
-                broker.kunsub(&format!("_t:{table}:row:*"));
-            }
+        LiveSubscription::Table {
+            spec,
+            receivers,
+            delta_rx,
+            ..
+        } => {
+            // Mirror the subscribe set: IVM subs watch only auth-dependency tables
+            // via key-events (plus their own row-delta channel); others watch all.
+            let key_tables = if delta_rx.is_some() {
+                spec.auth_dependencies.clone()
+            } else {
+                live_table_dependencies(&spec)
+            };
+            rollback_live_table_receivers(broker, receivers, delta_rx, &key_tables, &spec.table);
         }
         LiveSubscription::VectorNear { .. } => broker.kunsub("*"),
+    }
+}
+
+fn rollback_live_table_receivers(
+    broker: &Broker,
+    receivers: Vec<broadcast::Receiver<crate::vendor::lux::pubsub::Message>>,
+    delta_rx: Option<broadcast::Receiver<crate::vendor::lux::pubsub::RowDelta>>,
+    key_tables: &[String],
+    table: &str,
+) {
+    // Broker bookkeeping relies on receiver_count, so release each receiver first.
+    drop(receivers);
+    for key_table in key_tables {
+        broker.kunsub(key_table);
+        broker.kunsub(&format!("_t:{key_table}:row:*"));
+    }
+    let has_row_deltas = delta_rx.is_some();
+    drop(delta_rx);
+    if has_row_deltas {
+        broker.unsubscribe_row_deltas(table);
     }
 }
 
@@ -1592,6 +2164,162 @@ fn diff_live_query(
 
     state.rows = next;
     events
+}
+
+/// A single-table query with no joins/near/limit/offset/aggregate can be
+/// maintained incrementally from typed row deltas. Everything else keeps the
+/// re-query-and-diff path.
+fn ivm_eligible(spec: &LiveTableSpec) -> bool {
+    spec.joins.is_empty()
+        && spec.near.is_none()
+        && spec.limit.is_none()
+        && spec.offset.is_none()
+        && !select_has_aggregate(&spec.select)
+}
+
+fn select_has_aggregate(select: &str) -> bool {
+    let s = select.to_ascii_lowercase();
+    s.contains("count(")
+        || s.contains("sum(")
+        || s.contains("avg(")
+        || s.contains("min(")
+        || s.contains("max(")
+        || s.contains("group by")
+}
+
+/// True if the projection surfaces `pk_col`, so incrementally-maintained rows
+/// key on the same value the snapshot indexed on. `*` projects everything;
+/// otherwise the column must appear as a selected term (bare or aliased).
+fn select_projects_pk(select: &str, pk_col: &str) -> bool {
+    let s = select.trim();
+    if s == "*" {
+        return true;
+    }
+    let pk = pk_col.to_ascii_lowercase();
+    s.split(',').any(|term| {
+        // Drop any `AS alias`, then take the column past a `table.` qualifier.
+        let base = term.split_whitespace().next().unwrap_or("");
+        let col = base.rsplit('.').next().unwrap_or(base).trim();
+        col == "*" || col.eq_ignore_ascii_case(&pk)
+    })
+}
+
+/// Re-evaluate one row (by pk) against the live query + RLS, reusing the normal
+/// fetch so projection/typing/grants match the snapshot exactly. Returns the
+/// projected JSON row if that pk currently belongs in the result, else None.
+fn fetch_live_table_row_for_pk(
+    store: &Arc<Store>,
+    cache: &SharedSchemaCache,
+    spec: &LiveTableSpec,
+    pk_col: &str,
+    pk: &str,
+) -> Option<Value> {
+    let mut s = spec.clone();
+    s.where_conditions.push((
+        pk_col.to_string(),
+        "=".to_string(),
+        Value::String(pk.to_string()),
+    ));
+    s.order_by = None;
+    s.offset = None;
+    s.limit = Some(1);
+    fetch_live_table_rows(store, cache, &s)
+        .ok()?
+        .into_iter()
+        .next()
+}
+
+/// Incremental view maintenance: drain typed row deltas for IVM table
+/// subscriptions and emit per-row insert/update/delete by re-evaluating only the
+/// changed pk, instead of re-running the whole query.
+async fn drain_live_row_deltas<S>(
+    ws: &mut WebSocketStream<S>,
+    subscriptions: &mut HashMap<String, LiveSubscription>,
+    store: &Arc<Store>,
+    cache: &SharedSchemaCache,
+) -> std::io::Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let mut outgoing: Vec<(String, Value)> = Vec::new();
+    for (id, subscription) in subscriptions.iter_mut() {
+        let LiveSubscription::Table {
+            spec,
+            state,
+            delta_rx: Some(rx),
+            pk_col,
+            ..
+        } = subscription
+        else {
+            continue;
+        };
+        // Distinct changed pks since the last tick (one re-eval each).
+        let mut changed: Vec<String> = Vec::new();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut lagged = false;
+        loop {
+            match rx.try_recv() {
+                Ok(delta) => {
+                    if seen.insert(delta.pk.clone()) {
+                        changed.push(delta.pk);
+                    }
+                }
+                Err(broadcast::error::TryRecvError::Lagged(_)) => {
+                    lagged = true;
+                    continue;
+                }
+                Err(_) => break,
+            }
+        }
+        if lagged {
+            // Fell behind the delta stream: resync from a fresh query (safe truth).
+            let rows = fetch_live_table_rows(store, cache, spec).unwrap_or_default();
+            outgoing.extend(diff_live_query(
+                id,
+                state,
+                rows,
+                Some(json!({"kind":"resync","scope":"query"})),
+            ));
+            continue;
+        }
+        for pk in changed {
+            let now_row = fetch_live_table_row_for_pk(store, cache, spec, pk_col, &pk);
+            let prev = state.rows.get(&pk).cloned();
+            // The cause reflects the row's transition in this query's result set
+            // (which is what the client observes); table names the source table.
+            let table = spec.table.as_str();
+            match (prev, now_row) {
+                (None, Some(row)) => {
+                    state.rows.insert(pk.clone(), row.clone());
+                    outgoing.push((
+                        id.clone(),
+                        json!({"kind":"insert","scope":"query","query":state.query,"pk":pk,"row":row,"previous":null,"cause":{"kind":"table.insert","table":table,"operation":"tinsert"}}),
+                    ));
+                }
+                (Some(before), None) => {
+                    state.rows.remove(&pk);
+                    outgoing.push((
+                        id.clone(),
+                        json!({"kind":"delete","scope":"query","query":state.query,"pk":pk,"row":null,"previous":before,"cause":{"kind":"table.delete","table":table,"operation":"tdelete"}}),
+                    ));
+                }
+                (Some(before), Some(row)) => {
+                    if row_fingerprint(&before) != row_fingerprint(&row) {
+                        state.rows.insert(pk.clone(), row.clone());
+                        outgoing.push((
+                            id.clone(),
+                            json!({"kind":"update","scope":"query","query":state.query,"pk":pk,"row":row,"previous":before,"changed":changed_json_fields(&before,&row),"cause":{"kind":"table.update","table":table,"operation":"tupdate"}}),
+                        ));
+                    }
+                }
+                (None, None) => {}
+            }
+        }
+    }
+    for (id, event) in outgoing {
+        send_live_json(ws, json!({"type":"live.event","id":id,"event":event})).await?;
+    }
+    Ok(())
 }
 
 fn parse_live_table_spec(spec: &Value) -> Result<LiveTableSpec, Value> {
@@ -1637,10 +2365,17 @@ fn parse_live_table_spec(spec: &Value) -> Result<LiveTableSpec, Value> {
                     ));
                 }
             };
+            let alias = required_str(join, "alias")?;
+            if !valid_query_alias(alias) {
+                return Err(live_error(
+                    "INVALID_SPEC",
+                    "table join alias must be an identifier",
+                ));
+            }
             joins.push(LiveTableJoin {
                 join_type,
                 table: required_str(join, "table")?.to_string(),
-                alias: required_str(join, "alias")?.to_string(),
+                alias: alias.to_string(),
                 left_col: required_str(join, "onLeft")?.to_string(),
                 right_col: required_str(join, "onRight")?.to_string(),
             });
@@ -1715,7 +2450,7 @@ fn fetch_live_table_rows(
     if spec.deny_all {
         return Ok(Vec::new());
     }
-    let Some(where_conditions) = live_table_where_conditions(store, cache, spec)? else {
+    let Some(where_tokens) = live_table_where_tokens(store, cache, spec)? else {
         return Ok(Vec::new());
     };
     let mut tokens = vec![spec.select.clone(), "FROM".to_string(), spec.table.clone()];
@@ -1737,40 +2472,9 @@ fn fetch_live_table_rows(
             },
         ]);
     }
-    if !where_conditions.is_empty() {
+    if !where_tokens.is_empty() {
         tokens.push("WHERE".to_string());
-        for (index, (field, op, value)) in where_conditions.iter().enumerate() {
-            if index > 0 {
-                tokens.push("AND".to_string());
-            }
-            tokens.push(field.clone());
-            let op_upper = op.to_ascii_uppercase();
-            if op_upper == "IN" || op_upper == "NOT IN" {
-                if op_upper == "NOT IN" {
-                    tokens.push("NOT".to_string());
-                }
-                tokens.push("IN".to_string());
-                tokens.push("(".to_string());
-                match value.as_array() {
-                    Some(arr) => {
-                        for v in arr {
-                            tokens.push(live_value_to_token(v));
-                        }
-                    }
-                    None => tokens.push(live_value_to_token(value)),
-                }
-                tokens.push(")".to_string());
-            } else if op_upper == "IS VALID" || op_upper == "IS NOT VALID" {
-                tokens.push("IS".to_string());
-                if op_upper == "IS NOT VALID" {
-                    tokens.push("NOT".to_string());
-                }
-                tokens.push("VALID".to_string());
-            } else {
-                tokens.push(op.clone());
-                tokens.push(live_value_to_token(value));
-            }
-        }
+        tokens.extend(where_tokens);
     }
     if let Some(near) = &spec.near {
         tokens.push("NEAR".to_string());
@@ -1805,8 +2509,11 @@ fn fetch_live_table_rows(
         tokens.push(offset.to_string());
     }
     let refs: Vec<&str> = tokens.iter().map(String::as_str).collect();
-    let plan = crate::vendor::lux::tables::parse_select(&refs)
+    let mut plan = crate::vendor::lux::tables::parse_select(&refs)
         .map_err(|e| live_error("TSELECT_ERROR", &e))?;
+    // Anonymous subscribers get encrypted columns omitted; operator (no principal)
+    // and real users see plaintext. Covers both the initial fetch and change refetch.
+    plan.decrypt_authorized = spec.principal.as_ref().is_none_or(|p| !p.is_anonymous);
     if let Some(err) = crate::vendor::lux::auth::reserved_plan_access_error(&plan) {
         return Err(live_error("FORBIDDEN", &err));
     }
@@ -1822,48 +2529,93 @@ fn fetch_live_table_rows(
     }
 }
 
-fn live_table_where_conditions(
+fn live_table_where_tokens(
     store: &Arc<Store>,
     cache: &SharedSchemaCache,
     spec: &LiveTableSpec,
-) -> Result<Option<LiveTableWhereConditions>, Value> {
-    let mut conditions = spec.where_conditions.clone();
-    let Some(principal) = &spec.principal else {
-        return Ok(Some(conditions));
-    };
-    let grant_conds = crate::vendor::lux::auth::read_filter_conds(
-        store,
-        cache,
-        principal,
-        &spec.table,
-        Instant::now(),
-    )
-    .map_err(|e| live_error("FORBIDDEN", &e))?;
-    for condition in grant_conds {
-        match condition {
-            crate::vendor::lux::grants::EnforcedCondition::Cmp(rc) => {
-                conditions.push((rc.column, rc.op, Value::String(rc.value)));
-            }
-            crate::vendor::lux::grants::EnforcedCondition::InSet {
-                column,
-                negated,
-                values,
-            } => {
-                if values.is_empty() {
-                    if !negated {
-                        return Ok(None);
-                    }
-                } else {
-                    conditions.push((
-                        column,
-                        if negated { "NOT IN" } else { "IN" }.to_string(),
-                        Value::Array(values.into_iter().map(Value::String).collect()),
-                    ));
-                }
+) -> Result<Option<Vec<String>>, Value> {
+    let mut tokens = live_where_conditions_to_tokens(&spec.where_conditions);
+    if let Some(principal) = &spec.principal {
+        let now = Instant::now();
+        let joined = !spec.joins.is_empty();
+        let mut grants = Vec::with_capacity(spec.joins.len() + 1);
+        let base = if joined {
+            crate::vendor::lux::auth::read_filter_qualified(
+                store,
+                cache,
+                principal,
+                &spec.table,
+                &spec.table,
+                now,
+            )
+        } else {
+            crate::vendor::lux::auth::read_filter(store, cache, principal, &spec.table, now)
+        }
+        .map_err(|e| live_error("FORBIDDEN", &e))?;
+        if !base.trim().is_empty() {
+            grants.push(base);
+        }
+        for join in &spec.joins {
+            let grant = crate::vendor::lux::auth::read_filter_qualified(
+                store,
+                cache,
+                principal,
+                &join.table,
+                &join.alias,
+                now,
+            )
+            .map_err(|e| live_error("FORBIDDEN", &e))?;
+            if !grant.trim().is_empty() {
+                grants.push(grant);
             }
         }
+        if !grants.is_empty() {
+            if !tokens.is_empty() {
+                tokens.push("AND".to_string());
+            }
+            tokens.extend(
+                tokenize_where(&grants.join(" AND ")).map_err(|e| live_error("FORBIDDEN", &e))?,
+            );
+        }
     }
-    Ok(Some(conditions))
+    Ok(Some(tokens))
+}
+
+fn live_where_conditions_to_tokens(conditions: &LiveTableWhereConditions) -> Vec<String> {
+    let mut tokens = Vec::new();
+    for (index, (field, op, value)) in conditions.iter().enumerate() {
+        if index > 0 {
+            tokens.push("AND".to_string());
+        }
+        tokens.push(field.clone());
+        let op_upper = op.to_ascii_uppercase();
+        if op_upper == "IN" || op_upper == "NOT IN" {
+            if op_upper == "NOT IN" {
+                tokens.push("NOT".to_string());
+            }
+            tokens.push("IN".to_string());
+            tokens.push("(".to_string());
+            match value.as_array() {
+                Some(arr) => {
+                    for v in arr {
+                        tokens.push(live_value_to_token(v));
+                    }
+                }
+                None => tokens.push(live_value_to_token(value)),
+            }
+            tokens.push(")".to_string());
+        } else if op_upper == "IS VALID" || op_upper == "IS NOT VALID" {
+            tokens.push("IS".to_string());
+            if op_upper == "IS NOT VALID" {
+                tokens.push("NOT".to_string());
+            }
+            tokens.push("VALID".to_string());
+        } else {
+            tokens.push(op.clone());
+            tokens.push(live_value_to_token(value));
+        }
+    }
+    tokens
 }
 
 fn live_table_dependencies(spec: &LiveTableSpec) -> Vec<String> {
@@ -2140,66 +2892,7 @@ fn parse_http_where_tokens(where_clause: &str) -> Result<Vec<String>, String> {
 /// literal backslash. (A value that must contain a raw operator char should be
 /// single-quoted, the same rule as values with spaces.)
 fn tokenize_where(s: &str) -> Result<Vec<String>, String> {
-    let mut tokens = Vec::new();
-    let mut cur = String::new();
-    let mut building = false;
-    let mut in_quote = false;
-    let mut chars = s.chars().peekable();
-    while let Some(c) = chars.next() {
-        if in_quote {
-            match c {
-                '\\' => match chars.next() {
-                    Some('\'') => cur.push('\''),
-                    Some('\\') => cur.push('\\'),
-                    Some(other) => {
-                        cur.push('\\');
-                        cur.push(other);
-                    }
-                    None => return Err("unterminated escape in where value".to_string()),
-                },
-                '\'' => in_quote = false,
-                _ => cur.push(c),
-            }
-        } else if c == '\'' && !building {
-            // A quote only opens at a token boundary, so a mid-token apostrophe
-            // stays literal (`O'Brien` is one token). This keeps unquoted values
-            // that worked before working; only whitespace values need quoting.
-            in_quote = true;
-            building = true;
-        } else if matches!(c, '=' | '<' | '>') || (c == '!' && chars.peek() == Some(&'=')) {
-            // A comparison operator at any position ends the current token (the
-            // field/value) and becomes its own token, so `col=value`,
-            // `col>=value`, `col != value` all tokenize uniformly.
-            if building {
-                tokens.push(std::mem::take(&mut cur));
-                building = false;
-            }
-            let mut op = String::from(c);
-            if c == '!' {
-                chars.next(); // consume '=' (peeked above)
-                op.push('=');
-            } else if (c == '<' || c == '>') && chars.peek() == Some(&'=') {
-                chars.next();
-                op.push('=');
-            }
-            tokens.push(op);
-        } else if c.is_whitespace() {
-            if building {
-                tokens.push(std::mem::take(&mut cur));
-                building = false;
-            }
-        } else {
-            cur.push(c);
-            building = true;
-        }
-    }
-    if in_quote {
-        return Err("unterminated quote in where value".to_string());
-    }
-    if building {
-        tokens.push(cur);
-    }
-    Ok(tokens)
+    crate::vendor::lux::tables::tokenize_where(s)
 }
 
 fn parse_http_join_tokens(join_clause: &str) -> Result<Vec<String>, String> {
@@ -2235,6 +2928,9 @@ fn parse_http_join_tokens(join_clause: &str) -> Result<Vec<String>, String> {
         return Err(
             "invalid join parameter, table, alias, and join columns are required".to_string(),
         );
+    }
+    if !valid_query_alias(alias) {
+        return Err("invalid join parameter, alias must be an identifier".to_string());
     }
 
     let right_col = if right.contains('.') {
@@ -2411,6 +3107,11 @@ struct RouteDeps<'a> {
     script_engine: &'a Arc<lua::ScriptEngine>,
 }
 
+fn with_execution_read<T>(store: &Store, operation: impl FnOnce() -> T) -> std::io::Result<T> {
+    let _guard = store.execution_read_guard()?;
+    Ok(operation())
+}
+
 fn route_request_with_auth(
     method: &str,
     path: &str,
@@ -2429,11 +3130,7 @@ fn route_request_with_auth(
     let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
 
     if segments.is_empty() || (segments.len() == 1 && segments[0] == "v1") {
-        return (
-            200,
-            "OK",
-            r#"{"lux":"ok","version":""#.to_string() + env!("CARGO_PKG_VERSION") + r#""}"#,
-        );
+        return engine_root(store);
     }
 
     let base = if segments[0] == "v1" {
@@ -2442,15 +3139,43 @@ fn route_request_with_auth(
         &segments[..]
     };
 
-    if route_requires_operator(method, base) {
-        if let Err(response) = require_operator(store, auth) {
+    if route_requires_project_access(method, base) {
+        if let Err(response) = require_project_access(store, auth) {
             return response;
         }
     }
 
     match (method, base) {
+        // ── engine management contract ──
+        ("GET", ["version"]) => engine_version(store),
+        ("GET", ["migrations"]) => migration_list(params, store, cache),
+        ("POST", ["migrations", "plan"]) => migration_plan(body, store, cache),
+        ("POST", ["migrations", "apply"]) => {
+            migration_apply(body, store, broker, cache, script_engine)
+        }
+        ("POST", ["migrations", "repair"]) => {
+            migration_repair(body, store, broker, cache, script_engine)
+        }
+
         // ── exec (escape hatch) ──
         ("POST", ["exec"]) => ok(handle_exec(body, store, broker, cache, script_engine)),
+
+        // ── push routes (lux push) ──
+        ("POST", ["push", "devices"]) => push_register(body, store, cache, auth),
+        ("GET", ["push", "devices"]) => push_list_devices(params, store, cache, auth),
+        ("DELETE", ["push", "devices", id]) => push_delete_device(id, store, cache, auth),
+        ("DELETE", ["push", "devices"]) => push_delete_device_by_token(body, store, cache, auth),
+        ("POST", ["push", "send"]) => push_send(body, store, cache),
+        ("POST", ["push", "credentials"]) => push_set_credentials(body, store, cache),
+        ("GET", ["push", "config"]) => push_config(params, store, cache),
+        ("PUT", ["push", "config", "apns"]) => push_update_apns(body, store, cache),
+        ("DELETE", ["push", "config", "apns"]) => push_clear_apns(params, store, cache),
+        ("POST", ["push", "config", "vapid"]) => push_enable_vapid(body, store, cache),
+        ("DELETE", ["push", "config", "vapid"]) => push_disable_vapid(params, store, cache),
+        ("GET", ["push", "admin", "devices"]) => push_admin_devices(store, cache),
+        ("GET", ["push", "admin", "outbox"]) => push_admin_outbox(store, cache),
+        ("GET", ["push", "admin", "stats"]) => push_admin_stats(),
+        ("GET", ["push", "vapid"]) => push_vapid_public(params, store, cache),
 
         // ── KV routes ──
         ("GET", ["kv", key]) => ok(exec_json(
@@ -2555,14 +3280,18 @@ fn route_request_with_auth(
         ("GET", ["tables"]) => ok(exec_json(store, broker, cache, script_engine, &["TLIST"])),
         ("POST", ["tables"]) => route_table_create(body, store, broker, cache, script_engine),
         ("GET", ["tables", table]) => {
-            let filter = match enforce_table_read(store, cache, auth, table) {
-                Ok(f) => f,
+            let scoped = match scope_table_query_read(store, cache, auth, table, params, None) {
+                Ok(params) => params,
                 Err(resp) => return resp,
             };
-            let where_clause = get_param(params, "where").unwrap_or("");
-            let combined = combine_where(where_clause, filter.as_deref().unwrap_or(""));
-            let scoped = params_with_where(params, &combined);
-            route_table_query(table, &scoped, store, broker, cache)
+            route_table_query(
+                table,
+                &scoped,
+                store,
+                broker,
+                cache,
+                decrypt_authorized(auth),
+            )
         }
         ("GET", ["tables", table, "schema"]) => {
             if let Err(resp) = enforce_table_read(store, cache, auth, table) {
@@ -2629,6 +3358,32 @@ fn route_request_with_auth(
             script_engine,
             auth,
         ),
+        // Point update by primary key: PATCH /tables/<t>/<id> with a {field: value}
+        // body. Synthesizes `where <pk> = <id>` and routes through the same
+        // grant-enforced update path (RLS USING + WITH CHECK + .live() event), so
+        // it is a convenience over the bulk path, not a new authorization surface.
+        // Works for any PK type (the id path segment is used verbatim).
+        ("PATCH", ["tables", table, id]) => {
+            // Implicit-id tables don't flag the column primary_key; fall back to
+            // "id" exactly like the engine's pk_column_name does.
+            let pk = live_table_pk_field(store, cache, table).unwrap_or_else(|| "id".to_string());
+            let mut point_params: Vec<(String, String)> = params
+                .iter()
+                .filter(|(k, _)| k != "where")
+                .cloned()
+                .collect();
+            point_params.push(("where".to_string(), format!("{pk} = {id}")));
+            route_table_update(
+                table,
+                &point_params,
+                body,
+                store,
+                broker,
+                cache,
+                script_engine,
+                auth,
+            )
+        }
         // Bulk delete via DELETE with where parameter (TDROP is separate)
         ("DELETE", ["tables", table]) => {
             route_table_delete(table, params, store, broker, cache, script_engine, auth)
@@ -2770,35 +3525,699 @@ fn route_request_with_auth(
 /// exec, time-series, vectors, table catalog) is off-limits to them. Per-table
 /// data routes (`/tables/{table}` GET/POST/PATCH/DELETE) deliberately return
 /// `false` here so the generic gate defers to the inline grant check.
-fn route_requires_operator(method: &str, base: &[&str]) -> bool {
-    matches!(
+fn route_requires_project_access(method: &str, base: &[&str]) -> bool {
+    // This is an allowlist of the only routes a user principal may reach. The
+    // default is project-private, so adding a new route without classifying it
+    // cannot expose it to an end-user token.
+    !matches!(
         (method, base),
-        ("POST", ["exec"])
-            | ("GET", ["dbsize"])
-            | ("GET", ["keys"])
-            | ("GET", ["keys", _])
-            | ("GET", ["kv", ..])
-            | ("GET", ["get", _])
-            | ("GET", ["hgetall", _])
-            | ("PUT", ["kv", _])
-            | ("DELETE", ["kv", _])
-            | ("POST", ["kv", ..])
-            | ("POST", ["set", _])
-            | ("POST", ["del", _])
-            | ("POST", ["incr", _])
-            | ("POST", ["decr", _])
-            | ("GET", ["tables"])
-            | ("POST", ["tables"])
-            | ("GET", ["ts", ..])
-            | ("POST", ["ts", _])
-            | ("GET", ["vectors", ..])
-            | ("POST", ["vectors", ..])
-            | ("DELETE", ["vectors", _])
+        ("GET", ["version"])
+            | ("GET", ["ping"])
+            | ("GET", ["tables", _])
+            | ("GET", ["tables", _, _])
+            | ("POST", ["tables", _])
+            | ("PATCH", ["tables", _])
+            | ("PATCH", ["tables", _, _])
+            | ("DELETE", ["tables", _])
+            | ("POST", ["push", "devices"])
+            | ("GET", ["push", "devices"])
+            | ("DELETE", ["push", "devices"])
+            | ("DELETE", ["push", "devices", _])
+            | ("GET", ["push", "vapid"])
     )
+}
+
+fn persistence_json(store: &Store) -> Value {
+    json!({
+        "storage_layout": store.config().storage.mode.as_str(),
+        "durability": store.config().durability.policy.as_str(),
+        "journal_enabled": store.wal_enabled(),
+        "sync_interval_ms": (store.config().durability.policy == crate::vendor::lux::DurabilityPolicy::EverySecond)
+            .then(|| store.config().durability.sync_interval.as_millis() as u64)
+    })
+}
+
+fn health_readiness(store: &Store) -> (u16, &'static str, String) {
+    if store.ready_for_traffic() {
+        (200, "OK", r#"{"status":"ready"}"#.to_string())
+    } else {
+        (
+            503,
+            "Service Unavailable",
+            r#"{"status":"not_ready"}"#.to_string(),
+        )
+    }
+}
+
+fn engine_version(store: &Store) -> (u16, &'static str, String) {
+    let build_sha = option_env!("LUX_BUILD_SHA").unwrap_or("unknown");
+    ok(json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "build_sha": build_sha,
+        "api_version": crate::vendor::lux::migrations::API_VERSION,
+        "studio_api": crate::vendor::lux::migrations::STUDIO_API_VERSION,
+        "capabilities": crate::vendor::lux::migrations::CAPABILITIES,
+        "persistence": persistence_json(store),
+        "auth": crate::vendor::lux::auth::health_json(store)
+    })
+    .to_string())
+}
+
+fn engine_root(store: &Store) -> (u16, &'static str, String) {
+    ok(json!({
+        "lux": "ok",
+        "version": env!("CARGO_PKG_VERSION"),
+        "studio_api": crate::vendor::lux::migrations::STUDIO_API_VERSION,
+        "capabilities": crate::vendor::lux::migrations::CAPABILITIES,
+        "persistence": persistence_json(store),
+        "auth": crate::vendor::lux::auth::health_json(store)
+    })
+    .to_string())
+}
+
+fn migration_list(
+    params: &[(String, String)],
+    store: &Arc<Store>,
+    cache: &SharedSchemaCache,
+) -> (u16, &'static str, String) {
+    let limit = get_param(params, "limit")
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(100);
+    let offset = get_param(params, "offset")
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(0);
+    match crate::vendor::lux::migrations::list(store, cache, limit, offset, Instant::now()) {
+        Ok(migrations) => ok(json!({
+            "migrations": migrations,
+            "limit": limit.clamp(1, 1000),
+            "offset": offset
+        })
+        .to_string()),
+        Err(error) => migration_json_error(&error),
+    }
+}
+
+fn parse_migration_request(body: &str) -> Result<(String, String), (u16, &'static str, String)> {
+    let parsed: Value = serde_json::from_str(body)
+        .map_err(|_| push_json_error(400, "Bad Request", "invalid json"))?;
+    let filename = crate::vendor::lux::migrations::resolve_filename(
+        parsed.get("filename").and_then(Value::as_str),
+        parsed.get("name").and_then(Value::as_str),
+    )
+    .map_err(|error| migration_json_error(&error))?;
+    let migration_body = parsed
+        .get("body")
+        .and_then(Value::as_str)
+        .ok_or_else(|| push_json_error(400, "Bad Request", "body is required"))?
+        .to_string();
+    Ok((filename, migration_body))
+}
+
+fn migration_plan(
+    body: &str,
+    store: &Arc<Store>,
+    cache: &SharedSchemaCache,
+) -> (u16, &'static str, String) {
+    let (filename, migration_body) = match parse_migration_request(body) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    match crate::vendor::lux::migrations::plan(
+        store,
+        cache,
+        &filename,
+        &migration_body,
+        Instant::now(),
+    ) {
+        Ok(plan) => ok(json!({ "plan": plan }).to_string()),
+        Err(error) => migration_json_error(&error),
+    }
+}
+
+fn execute_migration_command(
+    command: &[String],
+    store: &Arc<Store>,
+    broker: &Broker,
+    cache: &SharedSchemaCache,
+    script_engine: &Arc<lua::ScriptEngine>,
+) -> Result<(), String> {
+    let args: Vec<&str> = command.iter().map(String::as_str).collect();
+    let response =
+        exec_resp(store, broker, cache, script_engine, &args).map_err(|error| error.to_string())?;
+    if response.first() == Some(&b'-') {
+        let message = std::str::from_utf8(&response[1..])
+            .unwrap_or("engine command failed")
+            .trim_end_matches("\r\n");
+        Err(message.to_string())
+    } else {
+        Ok(())
+    }
+}
+
+fn migration_apply(
+    body: &str,
+    store: &Arc<Store>,
+    broker: &Broker,
+    cache: &SharedSchemaCache,
+    script_engine: &Arc<lua::ScriptEngine>,
+) -> (u16, &'static str, String) {
+    let (filename, migration_body) = match parse_migration_request(body) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    match crate::vendor::lux::migrations::apply(
+        store,
+        cache,
+        &filename,
+        &migration_body,
+        Instant::now(),
+        |command| execute_migration_command(command, store, broker, cache, script_engine),
+    ) {
+        Ok(result) => ok(json!({
+            "migration": result.migration,
+            "already_applied": result.already_applied
+        })
+        .to_string()),
+        Err(error) => migration_json_error(&error),
+    }
+}
+
+fn migration_repair(
+    body: &str,
+    store: &Arc<Store>,
+    broker: &Broker,
+    cache: &SharedSchemaCache,
+    script_engine: &Arc<lua::ScriptEngine>,
+) -> (u16, &'static str, String) {
+    let parsed: Value = match serde_json::from_str(body) {
+        Ok(value) => value,
+        Err(_) => return push_json_error(400, "Bad Request", "invalid json"),
+    };
+    let filename = match parsed.get("filename").and_then(Value::as_str) {
+        Some(value) => value,
+        None => return push_json_error(400, "Bad Request", "filename is required"),
+    };
+    let action = match parsed.get("action").and_then(Value::as_str) {
+        Some("resume") => {
+            let Some(from_command) = parsed.get("from_command").and_then(Value::as_u64) else {
+                return push_json_error(
+                    400,
+                    "Bad Request",
+                    "resume requires an explicit zero-based from_command",
+                );
+            };
+            crate::vendor::lux::migrations::RepairAction::Resume {
+                from_command: from_command as usize,
+            }
+        }
+        Some("mark_applied") => crate::vendor::lux::migrations::RepairAction::MarkApplied,
+        Some("abandon") => crate::vendor::lux::migrations::RepairAction::Abandon,
+        _ => {
+            return push_json_error(
+                400,
+                "Bad Request",
+                "action must be resume, mark_applied, or abandon",
+            );
+        }
+    };
+    match crate::vendor::lux::migrations::repair(
+        store,
+        cache,
+        filename,
+        action,
+        Instant::now(),
+        |command| execute_migration_command(command, store, broker, cache, script_engine),
+    ) {
+        Ok(migration) => ok(json!({ "migration": migration }).to_string()),
+        Err(error) => migration_json_error(&error),
+    }
+}
+
+fn migration_json_error(message: &str) -> (u16, &'static str, String) {
+    let message = message.strip_prefix("ERR ").unwrap_or(message);
+    push_json_error(400, "Bad Request", message)
 }
 
 fn ok(result: String) -> (u16, &'static str, String) {
     (200, "OK", result)
+}
+
+// ── Push handlers (lux push) ──
+
+fn push_json_error(
+    status: u16,
+    status_text: &'static str,
+    msg: &str,
+) -> (u16, &'static str, String) {
+    (
+        status,
+        status_text,
+        format!(
+            r#"{{"error":{}}}"#,
+            serde_json::Value::String(msg.to_string())
+        ),
+    )
+}
+
+/// `POST /v1/push/devices` — register a device token under a subject id.
+/// A **secret key / operator** caller supplies `subject_id` explicitly (this is
+/// the Supabase-auth-style path: your server registers on the user's behalf).
+/// A **user JWT** caller omits it; the subject is taken from `auth.uid()`.
+fn push_register(
+    body: &str,
+    store: &Arc<Store>,
+    cache: &SharedSchemaCache,
+    auth: &HttpAuthContext,
+) -> (u16, &'static str, String) {
+    let parsed: serde_json::Value = match serde_json::from_str(body) {
+        Ok(v) => v,
+        Err(_) => return push_json_error(400, "Bad Request", "invalid json"),
+    };
+    let token = parsed["token"].as_str().unwrap_or("");
+    if token.is_empty() {
+        return push_json_error(400, "Bad Request", "token is required");
+    }
+    let subject_id = match auth {
+        HttpAuthContext::User(principal) => principal.user_id.clone(),
+        HttpAuthContext::Operator | HttpAuthContext::Secret => {
+            let s = parsed["subject_id"].as_str().unwrap_or("");
+            if s.is_empty() {
+                return push_json_error(
+                    400,
+                    "Bad Request",
+                    "subject_id is required for secret-key registration",
+                );
+            }
+            s.to_string()
+        }
+        HttpAuthContext::Anonymous | HttpAuthContext::Publishable => {
+            return push_json_error(401, "Unauthorized", "authentication required");
+        }
+    };
+    let platform = parsed["platform"].as_str().unwrap_or("ios");
+    let app_id = parsed["app_id"].as_str().unwrap_or("default");
+    // "sandbox" or "production". Optional: an app that omits it keeps the old
+    // behaviour of routing by the project's credential.
+    let environment = parsed["environment"].as_str().unwrap_or("");
+    // A self-registering end user is not trusted to name the delivery host, and
+    // this route accepts a user's own JWT. See `normalize_environment`.
+    let environment_source = match auth {
+        HttpAuthContext::Operator | HttpAuthContext::Secret => {
+            crate::vendor::lux::push::EnvironmentSource::Trusted
+        }
+        _ => crate::vendor::lux::push::EnvironmentSource::User,
+    };
+    match crate::vendor::lux::push::register_device(
+        store,
+        cache,
+        crate::vendor::lux::push::DeviceRegistration {
+            subject_id: &subject_id,
+            token,
+            platform,
+            app_id,
+            environment,
+            environment_source,
+        },
+        Instant::now(),
+    ) {
+        Ok(id) => ok(format!(r#"{{"id":{}}}"#, serde_json::Value::String(id))),
+        Err(e) => push_json_error(400, "Bad Request", &e),
+    }
+}
+
+/// `GET /v1/push/devices` — list devices. A user JWT lists its own; an operator
+/// lists a given `?subject_id=`.
+fn push_list_devices(
+    params: &[(String, String)],
+    store: &Arc<Store>,
+    cache: &SharedSchemaCache,
+    auth: &HttpAuthContext,
+) -> (u16, &'static str, String) {
+    let subject_id = match auth {
+        HttpAuthContext::User(principal) => principal.user_id.clone(),
+        HttpAuthContext::Operator | HttpAuthContext::Secret => {
+            let s = get_param(params, "subject_id").unwrap_or("");
+            if s.is_empty() {
+                return push_json_error(400, "Bad Request", "subject_id query param is required");
+            }
+            s.to_string()
+        }
+        HttpAuthContext::Anonymous | HttpAuthContext::Publishable => {
+            return push_json_error(401, "Unauthorized", "authentication required");
+        }
+    };
+    match crate::vendor::lux::push::list_devices(store, cache, &subject_id, Instant::now()) {
+        Ok(devices) => ok(json!({ "devices": devices }).to_string()),
+        Err(e) => push_json_error(400, "Bad Request", &e),
+    }
+}
+
+/// `DELETE /v1/push/devices/:id` — remove a device. A user JWT removes its own;
+/// an operator removes by id regardless of subject.
+fn push_delete_device(
+    id: &str,
+    store: &Arc<Store>,
+    cache: &SharedSchemaCache,
+    auth: &HttpAuthContext,
+) -> (u16, &'static str, String) {
+    let result = match auth {
+        HttpAuthContext::User(principal) => crate::vendor::lux::push::delete_device(
+            store,
+            cache,
+            &principal.user_id,
+            id,
+            Instant::now(),
+        ),
+        HttpAuthContext::Operator | HttpAuthContext::Secret => {
+            crate::vendor::lux::push::delete_device_by_id(store, cache, id, Instant::now())
+        }
+        HttpAuthContext::Anonymous | HttpAuthContext::Publishable => {
+            return push_json_error(401, "Unauthorized", "authentication required");
+        }
+    };
+    match result {
+        Ok(deleted) => ok(json!({ "deleted": deleted }).to_string()),
+        Err(e) => push_json_error(400, "Bad Request", &e),
+    }
+}
+
+/// `POST /v1/push/send` (operator) — fan a notification out to a subject's
+/// devices, or to many subjects at once via `subject_ids`.
+fn push_send(
+    body: &str,
+    store: &Arc<Store>,
+    cache: &SharedSchemaCache,
+) -> (u16, &'static str, String) {
+    let parsed: serde_json::Value = match serde_json::from_str(body) {
+        Ok(v) => v,
+        Err(_) => return push_json_error(400, "Bad Request", "invalid json"),
+    };
+    let notification = parsed
+        .get("notification")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let now = Instant::now();
+    let result = if let Some(arr) = parsed.get("subject_ids").and_then(|v| v.as_array()) {
+        let ids: Vec<&str> = arr.iter().filter_map(|v| v.as_str()).collect();
+        crate::vendor::lux::push::enqueue_send_many(store, cache, &ids, &notification, now)
+    } else if let Some(subject_id) = parsed["subject_id"].as_str().filter(|s| !s.is_empty()) {
+        crate::vendor::lux::push::enqueue_send(store, cache, subject_id, &notification, now)
+    } else {
+        return push_json_error(400, "Bad Request", "subject_id or subject_ids is required");
+    };
+    match result {
+        Ok(n) => ok(json!({ "enqueued": n }).to_string()),
+        Err(e) => push_json_error(400, "Bad Request", &e),
+    }
+}
+
+/// `GET /v1/push/admin/devices` (operator) — every device in the project.
+fn push_admin_devices(
+    store: &Arc<Store>,
+    cache: &SharedSchemaCache,
+) -> (u16, &'static str, String) {
+    match crate::vendor::lux::push::list_all_devices(store, cache, Instant::now()) {
+        Ok(devices) => ok(json!({ "devices": devices }).to_string()),
+        Err(e) => push_json_error(400, "Bad Request", &e),
+    }
+}
+
+/// `GET /v1/push/admin/outbox` (operator) — dead-lettered deliveries.
+fn push_admin_outbox(store: &Arc<Store>, cache: &SharedSchemaCache) -> (u16, &'static str, String) {
+    match crate::vendor::lux::push::list_dead_letters(store, cache, Instant::now()) {
+        Ok(dead) => ok(json!({ "dead_letters": dead }).to_string()),
+        Err(e) => push_json_error(400, "Bad Request", &e),
+    }
+}
+
+/// `DELETE /v1/push/devices` — remove a device by its token. A user session can
+/// only remove its own row; an operator or secret key can remove any matching
+/// row. This gives logout-time cleanup a stable handle even when registration
+/// raced before the client received the internal device id.
+fn push_delete_device_by_token(
+    body: &str,
+    store: &Arc<Store>,
+    cache: &SharedSchemaCache,
+    auth: &HttpAuthContext,
+) -> (u16, &'static str, String) {
+    let parsed: serde_json::Value = match serde_json::from_str(body) {
+        Ok(v) => v,
+        Err(_) => return push_json_error(400, "Bad Request", "invalid json"),
+    };
+    let Some(token) = parsed["token"].as_str().filter(|s| !s.is_empty()) else {
+        return push_json_error(400, "Bad Request", "token is required");
+    };
+    let result = match auth {
+        HttpAuthContext::User(principal) => {
+            crate::vendor::lux::push::delete_device_by_token_for_subject(
+                store,
+                cache,
+                &principal.user_id,
+                token,
+                Instant::now(),
+            )
+        }
+        HttpAuthContext::Operator | HttpAuthContext::Secret => {
+            crate::vendor::lux::push::delete_device_by_token(store, cache, token, Instant::now())
+        }
+        HttpAuthContext::Anonymous | HttpAuthContext::Publishable => {
+            return push_json_error(401, "Unauthorized", "authentication required");
+        }
+    };
+    match result {
+        Ok(deleted) => ok(json!({ "deleted": deleted }).to_string()),
+        Err(e) => push_json_error(400, "Bad Request", &e),
+    }
+}
+
+/// `GET /v1/push/admin/stats` (operator) — process-level delivery counters
+/// (reset on engine restart): sends, delivered, failed, and live device count.
+fn push_admin_stats() -> (u16, &'static str, String) {
+    use std::sync::atomic::Ordering;
+    let m = crate::vendor::lux::push::metrics();
+    ok(json!({
+        "sends": m.sends.load(Ordering::Relaxed),
+        "delivered": m.delivered.load(Ordering::Relaxed),
+        "failed": m.failed.load(Ordering::Relaxed),
+        "devices": m.devices.load(Ordering::Relaxed),
+    })
+    .to_string())
+}
+
+/// `GET /v1/push/config?app_id=...` — secret-free configuration and health.
+fn push_config(
+    params: &[(String, String)],
+    store: &Arc<Store>,
+    cache: &SharedSchemaCache,
+) -> (u16, &'static str, String) {
+    let app_id = get_param(params, "app_id").unwrap_or("default");
+    match crate::vendor::lux::push::credential_config(store, cache, app_id, Instant::now()) {
+        Ok(config) => ok(json!({ "config": config }).to_string()),
+        Err(error) => push_json_error(400, "Bad Request", &error),
+    }
+}
+
+/// `PUT /v1/push/config/apns` — update APNs metadata. Omitting `p8_pem`
+/// preserves the existing encrypted key; first-time setup requires it.
+fn push_update_apns(
+    body: &str,
+    store: &Arc<Store>,
+    cache: &SharedSchemaCache,
+) -> (u16, &'static str, String) {
+    let parsed: Value = match serde_json::from_str(body) {
+        Ok(value) => value,
+        Err(_) => return push_json_error(400, "Bad Request", "invalid json"),
+    };
+    let app_id = parsed["app_id"].as_str().unwrap_or("default");
+    let team_id = parsed["team_id"].as_str().unwrap_or("");
+    let key_id = parsed["key_id"].as_str().unwrap_or("");
+    let topic = parsed["topic"].as_str().unwrap_or("");
+    let environment = parsed["environment"].as_str().unwrap_or("sandbox");
+    let p8_pem = parsed.get("p8_pem").and_then(Value::as_str);
+    if team_id.is_empty() || key_id.is_empty() || topic.is_empty() {
+        return push_json_error(
+            400,
+            "Bad Request",
+            "team_id, key_id, and topic are required",
+        );
+    }
+    match crate::vendor::lux::push::update_apns_credentials(
+        store,
+        cache,
+        app_id,
+        team_id,
+        key_id,
+        p8_pem,
+        topic,
+        environment,
+        Instant::now(),
+    ) {
+        Ok(()) => {
+            match crate::vendor::lux::push::credential_config(store, cache, app_id, Instant::now())
+            {
+                Ok(config) => ok(json!({ "config": config }).to_string()),
+                Err(error) => push_json_error(400, "Bad Request", &error),
+            }
+        }
+        Err(error) => push_json_error(400, "Bad Request", &error),
+    }
+}
+
+fn push_clear_apns(
+    params: &[(String, String)],
+    store: &Arc<Store>,
+    cache: &SharedSchemaCache,
+) -> (u16, &'static str, String) {
+    let app_id = get_param(params, "app_id").unwrap_or("default");
+    match crate::vendor::lux::push::clear_apns_credentials(store, cache, app_id, Instant::now()) {
+        Ok(()) => ok(json!({ "ok": true, "app_id": app_id }).to_string()),
+        Err(error) => push_json_error(400, "Bad Request", &error),
+    }
+}
+
+/// `POST /v1/push/config/vapid` with `action=enable|rotate`. Enable is
+/// idempotent; rotate intentionally replaces the browser-facing public key.
+fn push_enable_vapid(
+    body: &str,
+    store: &Arc<Store>,
+    cache: &SharedSchemaCache,
+) -> (u16, &'static str, String) {
+    let parsed: Value = match serde_json::from_str(body) {
+        Ok(value) => value,
+        Err(_) => return push_json_error(400, "Bad Request", "invalid json"),
+    };
+    let app_id = parsed["app_id"].as_str().unwrap_or("default");
+    let action = parsed["action"].as_str().unwrap_or("enable");
+    let subject = parsed["subject"]
+        .as_str()
+        .unwrap_or("mailto:push@luxdb.dev");
+    if let Err(error) =
+        crate::vendor::lux::push::credential_config(store, cache, app_id, Instant::now())
+    {
+        return push_json_error(400, "Bad Request", &error);
+    }
+    if action == "enable" {
+        match crate::vendor::lux::push::vapid_public_key(store, cache, app_id, Instant::now()) {
+            Ok(Some(public_key)) => {
+                return ok(json!({
+                    "ok": true,
+                    "rotated": false,
+                    "public_key": public_key
+                })
+                .to_string());
+            }
+            Ok(None) => {}
+            Err(error) => return push_json_error(400, "Bad Request", &error),
+        }
+    } else if action != "rotate" {
+        return push_json_error(400, "Bad Request", "action must be enable or rotate");
+    }
+    match crate::vendor::lux::push::rotate_vapid_credentials(
+        store,
+        cache,
+        app_id,
+        subject,
+        Instant::now(),
+    ) {
+        Ok(public_key) => ok(json!({
+            "ok": true,
+            "rotated": action == "rotate",
+            "public_key": public_key
+        })
+        .to_string()),
+        Err(error) => push_json_error(400, "Bad Request", &error),
+    }
+}
+
+fn push_disable_vapid(
+    params: &[(String, String)],
+    store: &Arc<Store>,
+    cache: &SharedSchemaCache,
+) -> (u16, &'static str, String) {
+    let app_id = get_param(params, "app_id").unwrap_or("default");
+    match crate::vendor::lux::push::disable_vapid_credentials(store, cache, app_id, Instant::now())
+    {
+        Ok(()) => ok(json!({ "ok": true, "app_id": app_id }).to_string()),
+        Err(error) => push_json_error(400, "Bad Request", &error),
+    }
+}
+
+/// `POST /v1/push/credentials` (operator) — set an app's APNs credentials.
+fn push_set_credentials(
+    body: &str,
+    store: &Arc<Store>,
+    cache: &SharedSchemaCache,
+) -> (u16, &'static str, String) {
+    let parsed: serde_json::Value = match serde_json::from_str(body) {
+        Ok(v) => v,
+        Err(_) => return push_json_error(400, "Bad Request", "invalid json"),
+    };
+    let app_id = parsed["app_id"].as_str().unwrap_or("default");
+    let now = Instant::now();
+
+    // VAPID (Web Push) credentials, distinguished by the presence of the key.
+    if let Some(vapid_private) = parsed["vapid_private"].as_str().filter(|s| !s.is_empty()) {
+        let vapid_public = parsed["vapid_public"].as_str().unwrap_or("");
+        let subject = parsed["vapid_subject"].as_str().unwrap_or("");
+        if vapid_public.is_empty() {
+            return push_json_error(400, "Bad Request", "vapid_public is required");
+        }
+        return match crate::vendor::lux::push::set_vapid_credentials(
+            store,
+            cache,
+            app_id,
+            vapid_public,
+            vapid_private,
+            subject,
+            now,
+        ) {
+            Ok(()) => ok(json!({ "ok": true }).to_string()),
+            Err(e) => push_json_error(400, "Bad Request", &e),
+        };
+    }
+
+    // APNs credentials.
+    let team_id = parsed["team_id"].as_str().unwrap_or("");
+    let key_id = parsed["key_id"].as_str().unwrap_or("");
+    let p8_pem = parsed.get("p8_pem").and_then(Value::as_str);
+    let topic = parsed["topic"].as_str().unwrap_or("");
+    let environment = parsed["environment"].as_str().unwrap_or("sandbox");
+    if team_id.is_empty() || key_id.is_empty() || topic.is_empty() {
+        return push_json_error(
+            400,
+            "Bad Request",
+            "team_id, key_id, and topic are required; p8_pem is required only for first-time setup",
+        );
+    }
+    match crate::vendor::lux::push::update_apns_credentials(
+        store,
+        cache,
+        app_id,
+        team_id,
+        key_id,
+        p8_pem,
+        topic,
+        environment,
+        now,
+    ) {
+        Ok(()) => ok(json!({ "ok": true }).to_string()),
+        Err(e) => push_json_error(400, "Bad Request", &e),
+    }
+}
+
+/// `GET /v1/push/vapid` (public) — the VAPID public key a browser needs to
+/// subscribe. Safe to expose; it's a public key.
+fn push_vapid_public(
+    params: &[(String, String)],
+    store: &Arc<Store>,
+    cache: &SharedSchemaCache,
+) -> (u16, &'static str, String) {
+    let app_id = get_param(params, "app_id").unwrap_or("default");
+    match crate::vendor::lux::push::vapid_public_key(store, cache, app_id, Instant::now()) {
+        Ok(Some(key)) => ok(json!({ "public_key": key }).to_string()),
+        Ok(None) => push_json_error(404, "Not Found", "web push is not configured"),
+        Err(e) => push_json_error(400, "Bad Request", &e),
+    }
 }
 
 // ── Table handlers ──
@@ -2847,7 +4266,7 @@ fn route_table_create(
     // Accepts two formats per element:
     //   - plain string: "id UUID PRIMARY KEY" (passed through as-is)
     //   - object: {"name":"email","type":"STR","primaryKey":true,"unique":true,"notNull":true,
-    //              "references":"users(id)","onDelete":"CASCADE"}
+    //              "encrypted":true,"searchable":true,"references":"users(id)","onDelete":"CASCADE"}
     let mut col_specs: Vec<String> = Vec::new();
     for col in columns {
         if let Some(s) = col.as_str() {
@@ -2871,6 +4290,20 @@ fn route_table_create(
                 .unwrap_or(false)
             {
                 spec.push_str(" NOT NULL");
+            }
+            if obj
+                .get("encrypted")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
+                spec.push_str(" ENCRYPTED");
+            }
+            if obj
+                .get("searchable")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
+                spec.push_str(" SEARCHABLE");
             }
             if let Some(refs) = obj.get("references").and_then(|v| v.as_str()) {
                 spec.push_str(&format!(" REFERENCES {}", refs));
@@ -2897,6 +4330,7 @@ fn route_table_query(
     store: &Arc<Store>,
     _broker: &Broker,
     cache: &SharedSchemaCache,
+    decrypt_authorized: bool,
 ) -> (u16, &'static str, String) {
     if let Some(err) = crate::vendor::lux::auth::reserved_table_access_error(table) {
         return (
@@ -2910,14 +4344,22 @@ fn route_table_query(
 
     let cols = render_columns(store, cache, table, now);
     match parse_http_table_query(params, table, None) {
-        Ok((_, plan)) => match crate::vendor::lux::tables::table_select(store, cache, &plan, now) {
-            Ok(result) => ok(select_result_to_json(result, &cols)),
-            Err(e) => (
-                400,
-                "Bad Request",
-                format!(r#"{{"error":"{}"}}"#, escape_json(&e)),
-            ),
-        },
+        Ok((_, mut plan)) => {
+            plan.decrypt_authorized = decrypt_authorized;
+            match crate::vendor::lux::tables::table_select(store, cache, &plan, now) {
+                Ok(result) => {
+                    let materialize_missing = plan.projections.is_empty()
+                        && plan.alias.is_none()
+                        && plan.joins.is_empty();
+                    ok(select_result_to_json(result, &cols, materialize_missing))
+                }
+                Err(e) => (
+                    400,
+                    "Bad Request",
+                    format!(r#"{{"error":"{}"}}"#, escape_json(&e)),
+                ),
+            }
+        }
         Err(e) => (
             400,
             "Bad Request",
@@ -3013,18 +4455,9 @@ fn route_table_insert(
             rows_in.push(json_obj_to_pairs(obj));
         }
         let result = if is_upsert {
-            rows_in
-                .iter()
-                .map(|pairs| {
-                    let fv: Vec<(&str, &str)> = pairs
-                        .iter()
-                        .map(|(k, v)| (k.as_str(), v.as_str()))
-                        .collect();
-                    crate::vendor::lux::tables::table_upsert_returning_ttl(
-                        store, cache, table, &fv, conflict, ttl, now,
-                    )
-                })
-                .collect::<Result<Vec<_>, _>>()
+            crate::vendor::lux::tables::table_upsert_many_returning_ttl(
+                store, cache, table, &rows_in, conflict, ttl, now,
+            )
         } else {
             crate::vendor::lux::tables::table_insert_many_returning_ttl(
                 store, cache, table, &rows_in, ttl, now,
@@ -3202,7 +4635,7 @@ fn route_table_delete(
     // is a schema operation, not row access: operator-only.
     if let Some(val) = get_param(params, "drop") {
         if val == "true" {
-            if let Err((status, status_text, body)) = require_operator(store, auth) {
+            if let Err((status, status_text, body)) = require_project_access(store, auth) {
                 return (status, status_text, body);
             }
             return ok(exec_json(
@@ -3484,6 +4917,9 @@ fn handle_exec(
     if command.is_empty() {
         return r#"{"error":"empty command"}"#.to_string();
     }
+    if let Some(err) = reserved_auth_table_exec_read_error(&command) {
+        return format!(r#"{{"error":"{}"}}"#, escape_json(&err));
+    }
 
     exec_json(
         store,
@@ -3492,6 +4928,22 @@ fn handle_exec(
         script_engine,
         &command.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
     )
+}
+
+fn reserved_auth_table_exec_read_error(command: &[String]) -> Option<String> {
+    let cmd = command.first()?.to_ascii_uppercase();
+    match cmd.as_str() {
+        "TCOUNT" | "TSCHEMA" => {
+            let table = command.get(1)?;
+            crate::vendor::lux::auth::reserved_table_access_error(table)
+        }
+        "TSELECT" => {
+            let refs: Vec<&str> = command.iter().skip(1).map(String::as_str).collect();
+            let plan = crate::vendor::lux::tables::parse_select(&refs).ok()?;
+            crate::vendor::lux::auth::reserved_plan_access_error(&plan)
+        }
+        _ => None,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -3504,7 +4956,10 @@ fn handle_exec(
 /// (`[1,2,3]`) to match the `number[]` type the SDK generates.
 #[derive(Default)]
 struct RenderCols {
+    fields: Vec<String>,
     json: std::collections::HashSet<String>,
+    number: std::collections::HashSet<String>,
+    bool_: std::collections::HashSet<String>,
     vector: std::collections::HashSet<String>,
 }
 
@@ -3517,10 +4972,20 @@ fn render_columns(
     let mut cols = RenderCols::default();
     if let Ok(fields) = crate::vendor::lux::tables::load_schema(store, cache, table, now) {
         for f in fields {
+            cols.fields.push(f.name.clone());
             match f.field_type {
                 crate::vendor::lux::tables::FieldType::Json
                 | crate::vendor::lux::tables::FieldType::Array => {
                     cols.json.insert(f.name);
+                }
+                crate::vendor::lux::tables::FieldType::Int
+                | crate::vendor::lux::tables::FieldType::Float
+                | crate::vendor::lux::tables::FieldType::Timestamp
+                | crate::vendor::lux::tables::FieldType::Ref(_) => {
+                    cols.number.insert(f.name);
+                }
+                crate::vendor::lux::tables::FieldType::Bool => {
+                    cols.bool_.insert(f.name);
                 }
                 crate::vendor::lux::tables::FieldType::Vector(_) => {
                     cols.vector.insert(f.name);
@@ -3532,10 +4997,10 @@ fn render_columns(
     cols
 }
 
-/// Append `"key":value` to a JSON object with type-correct encoding: VECTOR as a
-/// numeric array, JSON/ARRAY raw, numbers/bools bare, everything else a quoted
-/// string. The single source of truth for table-row JSON across the read,
-/// streaming, and write-RETURNING paths.
+/// Append `"key":value` to a JSON object with schema-correct encoding: VECTOR as
+/// a numeric array, JSON/ARRAY raw, declared numbers/bools bare, everything else
+/// a quoted string. The single source of truth for table-row JSON across the
+/// read, streaming, and write-RETURNING paths.
 fn push_field_value(out: &mut String, key: &str, v: &str, cols: &RenderCols) {
     out.push('"');
     push_escaped(out, key);
@@ -3555,7 +5020,9 @@ fn push_field_value(out: &mut String, key: &str, v: &str, cols: &RenderCols) {
         } else {
             out.push_str(v);
         }
-    } else if looks_numeric(v) || v == "true" || v == "false" {
+    } else if (cols.number.contains(key) && looks_numeric(v))
+        || (cols.bool_.contains(key) && (v == "true" || v == "false"))
+    {
         out.push_str(v);
     } else {
         out.push('"');
@@ -3564,9 +5031,16 @@ fn push_field_value(out: &mut String, key: &str, v: &str, cols: &RenderCols) {
     }
 }
 
+fn push_null_field(out: &mut String, key: &str) {
+    out.push('"');
+    push_escaped(out, key);
+    out.push_str("\":null");
+}
+
 fn select_result_to_json(
     result: crate::vendor::lux::tables::SelectResult,
     cols: &RenderCols,
+    materialize_missing: bool,
 ) -> String {
     match result {
         crate::vendor::lux::tables::SelectResult::Rows(rows) => {
@@ -3580,16 +5054,7 @@ fn select_result_to_json(
                     out.push(',');
                 }
                 first_row = false;
-                out.push('{');
-                let mut first_col = true;
-                for (k, v) in &row {
-                    if !first_col {
-                        out.push(',');
-                    }
-                    first_col = false;
-                    push_field_value(&mut out, k, v, cols);
-                }
-                out.push('}');
+                push_row_object(&mut out, &row, cols, materialize_missing);
             }
             out.push_str("]}");
             out
@@ -3622,7 +5087,12 @@ fn select_result_to_json(
 
 /// Serialize a single row (from table_get) as a JSON object.
 /// Append a single row as a bare JSON object `{...}` (no `result` wrapper).
-fn push_row_object(out: &mut String, row: &[(String, String)], cols: &RenderCols) {
+fn push_row_object(
+    out: &mut String,
+    row: &[(String, String)],
+    cols: &RenderCols,
+    materialize_missing: bool,
+) {
     out.push('{');
     let mut first = true;
     for (k, v) in row {
@@ -3632,13 +5102,25 @@ fn push_row_object(out: &mut String, row: &[(String, String)], cols: &RenderCols
         first = false;
         push_field_value(out, k, v, cols);
     }
+    if materialize_missing {
+        for field in &cols.fields {
+            if row.iter().any(|(k, _)| k == field) {
+                continue;
+            }
+            if !first {
+                out.push(',');
+            }
+            first = false;
+            push_null_field(out, field);
+        }
+    }
     out.push('}');
 }
 
 fn row_to_json_object(row: &[(String, String)], cols: &RenderCols) -> String {
     let mut out = String::with_capacity(row.len() * 32 + 12);
     out.push_str(r#"{"result":"#);
-    push_row_object(&mut out, row, cols);
+    push_row_object(&mut out, row, cols, true);
     out.push('}');
     out
 }
@@ -3651,7 +5133,7 @@ fn rows_to_json_array(rows: &[Vec<(String, String)>], cols: &RenderCols) -> Stri
         if i > 0 {
             out.push(',');
         }
-        push_row_object(&mut out, row, cols);
+        push_row_object(&mut out, row, cols, true);
     }
     out.push_str("]}");
     out
@@ -3678,9 +5160,12 @@ fn push_escaped(out: &mut String, s: &str) {
 /// Returns true if s looks like a JSON number (integer or float).
 #[inline]
 fn looks_numeric(s: &str) -> bool {
-    // Only emit as a bare JSON number if it actually parses as one.
-    // This prevents invalid JSON for strings like "-", "1.2.3", "1e", "1-2".
-    s.parse::<i64>().is_ok() || s.parse::<f64>().is_ok()
+    // Only emit as a bare JSON number if it is valid JSON number syntax.
+    // This prevents invalid JSON for strings like "0123", "-", "1e", "1-2".
+    matches!(
+        serde_json::from_str::<serde_json::Value>(s),
+        Ok(serde_json::Value::Number(_))
+    )
 }
 
 fn exec_json(
@@ -3898,6 +5383,77 @@ fn escape_json(s: &str) -> String {
 mod tests {
     use super::*;
     use crate::vendor::lux::tables::JoinType;
+    use sha2::{Digest, Sha256};
+
+    #[tokio::test]
+    async fn snapshot_stream_serves_the_securely_opened_installed_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Arc::new(crate::vendor::lux::ServerConfig {
+            data_dir: dir.path().to_string_lossy().into_owned(),
+            ..Default::default()
+        });
+        let store = Arc::new(Store::new_with_config(config));
+        store.set(b"backup", b"value", None, Instant::now());
+
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let client = tokio::spawn(async move {
+            let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
+            let mut response = Vec::new();
+            socket.read_to_end(&mut response).await.unwrap();
+            response
+        });
+        let (mut socket, _) = listener.accept().await.unwrap();
+
+        assert!(stream_snapshot(&mut socket, &store).await.unwrap());
+        drop(socket);
+        let response = client.await.unwrap();
+        let body_start = response
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+            .map(|index| index + 4)
+            .unwrap();
+
+        assert!(response.starts_with(b"HTTP/1.1 200 OK\r\n"));
+        let headers = String::from_utf8(response[..body_start].to_vec()).unwrap();
+        let checksum = headers
+            .lines()
+            .find_map(|line| line.strip_prefix("X-Lux-Snapshot-SHA256: ").map(str::trim))
+            .expect("snapshot checksum header");
+        assert_eq!(
+            checksum,
+            format!("{:x}", Sha256::digest(&response[body_start..]))
+        );
+        assert!(headers.contains("X-Lux-Snapshot-Format: 6\r\n"));
+        assert!(response[body_start..].starts_with(b"LUX\x06"));
+    }
+
+    #[tokio::test]
+    async fn failed_ivm_live_snapshot_reclaims_receivers() {
+        let (store, broker, cache) = membership_fixture();
+        let principal = match user_ctx("alice") {
+            HttpAuthContext::User(principal) => principal,
+            _ => unreachable!(),
+        };
+
+        let result = build_live_subscription(
+            // This is IVM-eligible and has an auth dependency, so setup allocates
+            // both key receivers for `members` and a typed delta receiver for
+            // `messages` before the malformed filter fails during the snapshot.
+            &json!({"kind":"table","table":"messages","select":"id","where":[{"field":"id","op":">>","value":1}]}),
+            &broker,
+            &store,
+            &cache,
+            Some(&principal),
+        );
+
+        assert!(result.is_err());
+        assert!(broker.key_event_loop_started());
+        assert!(!broker.has_key_subs());
+        assert!(!broker.has_any_row_delta_subs());
+    }
 
     #[test]
     fn json_columns_emit_raw_str_columns_quoted() {
@@ -3911,14 +5467,36 @@ mod tests {
         let mut cols = RenderCols::default();
         cols.json.insert("payload".to_string());
         cols.json.insert("tags".to_string());
-        let out =
-            select_result_to_json(crate::vendor::lux::tables::SelectResult::Rows(rows), &cols);
+        let out = select_result_to_json(
+            crate::vendor::lux::tables::SelectResult::Rows(rows),
+            &cols,
+            true,
+        );
         assert!(out.contains(r#""payload":{"a":1}"#), "json raw: {out}");
         assert!(out.contains(r#""tags":[1,2]"#), "array raw: {out}");
         assert!(
             out.contains(r#""note":"{\"x\":\"y\"}""#),
             "str quoted: {out}"
         );
+    }
+
+    #[test]
+    fn str_columns_that_look_numeric_stay_quoted_json() {
+        let rows = vec![vec![
+            ("code".to_string(), "0123".to_string()),
+            ("pin".to_string(), "1111".to_string()),
+            ("count".to_string(), "123".to_string()),
+            ("enabled".to_string(), "true".to_string()),
+        ]];
+        let mut cols = RenderCols::default();
+        cols.number.insert("count".to_string());
+        cols.bool_.insert("enabled".to_string());
+
+        let out = rows_to_json_array(&rows, &cols);
+        assert!(out.contains(r#""code":"0123""#), "str quoted: {out}");
+        assert!(out.contains(r#""pin":"1111""#), "str quoted: {out}");
+        assert!(out.contains(r#""count":123"#), "number bare: {out}");
+        assert!(out.contains(r#""enabled":true"#), "bool bare: {out}");
     }
 
     // The insert/update RETURNING echo must render JSON/ARRAY columns the same
@@ -3968,6 +5546,7 @@ mod tests {
         let out = select_result_to_json(
             crate::vendor::lux::tables::SelectResult::Rows(rows.clone()),
             &cols,
+            true,
         );
         assert!(
             out.contains(r#""embedding":[0.1,0.2,0.3]"#),
@@ -3987,6 +5566,246 @@ mod tests {
     }
 
     #[test]
+    fn missing_schema_columns_render_as_null_for_full_rows() {
+        let rows = vec![vec![
+            ("id".to_string(), "1".to_string()),
+            ("body".to_string(), "edited".to_string()),
+        ]];
+        let mut cols = RenderCols::default();
+        cols.fields.push("id".to_string());
+        cols.fields.push("body".to_string());
+        cols.fields.push("created_at".to_string());
+        cols.number.insert("id".to_string());
+        cols.number.insert("created_at".to_string());
+
+        let out = rows_to_json_array(&rows, &cols);
+        assert!(out.contains(r#""id":1"#), "id typed: {out}");
+        assert!(out.contains(r#""body":"edited""#), "body present: {out}");
+        assert!(
+            out.contains(r#""created_at":null"#),
+            "absent nullable column materialized as null: {out}"
+        );
+    }
+
+    #[test]
+    fn explicit_select_does_not_materialize_missing_schema_columns() {
+        let rows = vec![vec![("body".to_string(), "edited".to_string())]];
+        let mut cols = RenderCols::default();
+        cols.fields.push("id".to_string());
+        cols.fields.push("body".to_string());
+        cols.fields.push("created_at".to_string());
+
+        let out = select_result_to_json(
+            crate::vendor::lux::tables::SelectResult::Rows(rows),
+            &cols,
+            false,
+        );
+        assert_eq!(out, r#"{"result":[{"body":"edited"}]}"#);
+    }
+
+    #[test]
+    fn update_returning_materializes_absent_nullable_columns_as_null() {
+        let store = Arc::new(Store::new());
+        let cache: SharedSchemaCache = Arc::new(parking_lot::RwLock::new(
+            crate::vendor::lux::tables::SchemaCache::new(),
+        ));
+        let broker = Broker::new();
+        let script_engine = Arc::new(lua::ScriptEngine::new());
+        let now = Instant::now();
+
+        crate::vendor::lux::tables::table_create(
+            &store,
+            &cache,
+            "messages",
+            &["id INT PRIMARY KEY,", "body STR,", "created_at TIMESTAMP"],
+            now,
+        )
+        .unwrap();
+        crate::vendor::lux::tables::table_insert(
+            &store,
+            &cache,
+            "messages",
+            &[("body", "hi")],
+            now,
+        )
+        .unwrap();
+
+        let params = vec![("where".to_string(), "id = 1".to_string())];
+        let (status, _, body) = route_table_update(
+            "messages",
+            &params,
+            r#"{"body":"edited"}"#,
+            &store,
+            &broker,
+            &cache,
+            &script_engine,
+            &HttpAuthContext::Operator,
+        );
+
+        assert_eq!(status, 200, "{body}");
+        assert!(body.contains(r#""id":1"#), "{body}");
+        assert!(body.contains(r#""body":"edited""#), "{body}");
+        assert!(body.contains(r#""created_at":null"#), "{body}");
+    }
+
+    #[test]
+    fn bulk_upsert_route_rejects_the_whole_array_on_a_late_constraint_failure() {
+        let store = Arc::new(Store::new());
+        let cache: SharedSchemaCache = Arc::new(parking_lot::RwLock::new(
+            crate::vendor::lux::tables::SchemaCache::new(),
+        ));
+        let broker = Broker::new();
+        let now = Instant::now();
+        crate::vendor::lux::tables::table_create(
+            &store,
+            &cache,
+            "accounts",
+            &["id INT PRIMARY KEY,", "email STR UNIQUE"],
+            now,
+        )
+        .unwrap();
+        crate::vendor::lux::tables::table_insert(
+            &store,
+            &cache,
+            "accounts",
+            &[("id", "1"), ("email", "original@example.com")],
+            now,
+        )
+        .unwrap();
+
+        let params = vec![("upsert".to_string(), "true".to_string())];
+        let (status, _, body) = route_table_insert(
+            "accounts",
+            &params,
+            r#"[
+                {"id":1,"email":"shared@example.com"},
+                {"id":2,"email":"shared@example.com"}
+            ]"#,
+            &store,
+            &broker,
+            &cache,
+            &HttpAuthContext::Operator,
+        );
+        assert_eq!(status, 400, "{body}");
+        assert!(body.contains("unique constraint"), "{body}");
+        let first =
+            crate::vendor::lux::tables::table_get(&store, &cache, "accounts", 1, now).unwrap();
+        assert_eq!(
+            first
+                .iter()
+                .find(|(field, _)| field == "email")
+                .map(|(_, value)| value.as_str()),
+            Some("original@example.com")
+        );
+        assert!(crate::vendor::lux::tables::table_get(&store, &cache, "accounts", 2, now).is_err());
+    }
+
+    fn encrypted_http_fixture() -> (
+        Arc<Store>,
+        Broker,
+        SharedSchemaCache,
+        Arc<lua::ScriptEngine>,
+    ) {
+        let config = Arc::new(crate::vendor::lux::ServerConfig {
+            durability: crate::vendor::lux::DurabilityConfig {
+                policy: crate::vendor::lux::DurabilityPolicy::Ephemeral,
+                ..Default::default()
+            },
+            encryption: crate::vendor::lux::EncryptionConfig {
+                active_key_id: Some("k1".to_string()),
+                keys: vec![crate::vendor::lux::EncryptionKeyConfig {
+                    id: "k1".to_string(),
+                    secret: b"http-encryption-secret".to_vec(),
+                    decrypt_only: false,
+                }],
+                ..Default::default()
+            },
+            ..crate::vendor::lux::ServerConfig::default()
+        });
+        let store = Arc::new(Store::new_with_config(config));
+        let cache: SharedSchemaCache = Arc::new(parking_lot::RwLock::new(
+            crate::vendor::lux::tables::SchemaCache::new(),
+        ));
+        let broker = Broker::new();
+        let script_engine = Arc::new(lua::ScriptEngine::new());
+        (store, broker, cache, script_engine)
+    }
+
+    #[test]
+    fn http_table_routes_round_trip_encrypted_columns_without_raw_plaintext() {
+        let (store, broker, cache, se) = encrypted_http_fixture();
+        let body = r#"{
+            "name":"secrets",
+            "columns":[
+                {"name":"id","type":"STR","primaryKey":true},
+                {"name":"email","type":"STR","encrypted":true,"searchable":true,"unique":true},
+                {"name":"token","type":"STR","encrypted":true}
+            ]
+        }"#;
+        let (status, _, out) = route_table_create(body, &store, &broker, &cache, &se);
+        assert_eq!(status, 200, "{out}");
+        assert!(!out.contains("error"), "{out}");
+
+        let (status, _, inserted) = route_table_insert(
+            "secrets",
+            &[],
+            r#"{"id":"s1","email":"person@example.com","token":"plain-secret"}"#,
+            &store,
+            &broker,
+            &cache,
+            &HttpAuthContext::Operator,
+        );
+        assert_eq!(status, 200, "{inserted}");
+        assert!(
+            inserted.contains(r#""email":"person@example.com""#),
+            "{inserted}"
+        );
+        assert!(inserted.contains(r#""token":"plain-secret""#), "{inserted}");
+
+        let raw_email = store
+            .hget(b"_t:secrets:row:s1", b"email", Instant::now())
+            .unwrap();
+        let raw_token = store
+            .hget(b"_t:secrets:row:s1", b"token", Instant::now())
+            .unwrap();
+        assert!(
+            !raw_email
+                .windows(b"person@example.com".len())
+                .any(|w| w == b"person@example.com")
+        );
+        assert!(
+            !raw_token
+                .windows(b"plain-secret".len())
+                .any(|w| w == b"plain-secret")
+        );
+
+        let params = vec![(
+            "where".to_string(),
+            "email = person@example.com".to_string(),
+        )];
+        let (status, _, queried) =
+            route_table_query("secrets", &params, &store, &broker, &cache, true);
+        assert_eq!(status, 200, "{queried}");
+        assert!(
+            queried.contains(r#""email":"person@example.com""#),
+            "{queried}"
+        );
+        assert!(queried.contains(r#""token":"plain-secret""#), "{queried}");
+    }
+
+    #[test]
+    fn http_table_create_rejects_encrypted_default() {
+        let (store, broker, cache, se) = encrypted_http_fixture();
+        let body = r#"{
+            "name":"secrets",
+            "columns":["id STR PRIMARY KEY","token STR ENCRYPTED DEFAULT leaked"]
+        }"#;
+        let (status, _, out) = route_table_create(body, &store, &broker, &cache, &se);
+        assert_eq!(status, 200, "{out}");
+        assert!(out.contains("cannot use DEFAULT"), "{out}");
+    }
+
+    #[test]
     fn per_table_data_routes_are_not_operator_only() {
         // Token principals reach the DB only through these; they must defer to
         // the inline grant check, never the operator gate.
@@ -4000,7 +5819,7 @@ mod tests {
             ("DELETE", vec!["tables", "messages"]),
         ] {
             assert!(
-                !route_requires_operator(m, &base),
+                !route_requires_project_access(m, &base),
                 "{m} /{} should be grant-gated, not operator-only",
                 base.join("/")
             );
@@ -4008,10 +5827,22 @@ mod tests {
     }
 
     #[test]
+    fn user_push_cleanup_route_is_not_operator_only() {
+        assert!(
+            !route_requires_project_access("DELETE", &["push", "devices"]),
+            "a user JWT must reach the subject-scoped token cleanup handler"
+        );
+    }
+
+    #[test]
     fn privileged_routes_are_operator_only() {
         // A bug here hands token users raw KV / exec / catalog. Lock it down.
         for (m, base) in [
             ("POST", vec!["exec"]),
+            ("GET", vec!["migrations"]),
+            ("POST", vec!["migrations", "plan"]),
+            ("POST", vec!["migrations", "apply"]),
+            ("POST", vec!["migrations", "repair"]),
             ("GET", vec!["dbsize"]),
             ("GET", vec!["keys"]),
             ("GET", vec!["kv", "secret"]),
@@ -4025,11 +5856,140 @@ mod tests {
             ("GET", vec!["vectors", "idx"]),
             ("POST", vec!["vectors", "idx"]),
             ("DELETE", vec!["vectors", "idx"]),
+            ("GET", vec!["push", "config"]),
+            ("PUT", vec!["push", "config", "apns"]),
+            ("DELETE", vec!["push", "config", "apns"]),
+            ("POST", vec!["push", "config", "vapid"]),
+            ("DELETE", vec!["push", "config", "vapid"]),
         ] {
             assert!(
-                route_requires_operator(m, &base),
+                route_requires_project_access(m, &base),
                 "{m} /{} must be operator-only",
                 base.join("/")
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_http_routes_default_to_project_private() {
+        assert!(route_requires_project_access("GET", &["future-surface"]));
+        assert!(route_requires_project_access(
+            "POST",
+            &["future-surface", "action"]
+        ));
+    }
+
+    #[test]
+    fn migration_http_contract_executes_and_is_idempotent() {
+        let (store, broker, cache, script_engine) = encrypted_http_fixture();
+        let body = json!({
+            "filename": "001_messages.lux",
+            "body": "TCREATE messages id INT PRIMARY KEY, body STR;\nTINSERT messages id 1 body hello;"
+        })
+        .to_string();
+        let (status, _, response) = migration_apply(&body, &store, &broker, &cache, &script_engine);
+        assert_eq!(status, 200, "{response}");
+        let parsed: Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(parsed["migration"]["status"], "applied");
+        assert_eq!(parsed["migration"]["completed_commands"], 2);
+        assert_eq!(parsed["already_applied"], false);
+
+        let (status, _, response) = migration_apply(&body, &store, &broker, &cache, &script_engine);
+        assert_eq!(status, 200, "{response}");
+        let parsed: Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(parsed["already_applied"], true);
+    }
+
+    #[test]
+    fn migration_http_rejects_unsuitable_commands_before_any_statement_runs() {
+        let (store, broker, cache, script_engine) = encrypted_http_fixture();
+        let body = json!({
+            "filename": "002_rejected.lux",
+            "body": "SET denied value; SUBSCRIBE events;"
+        })
+        .to_string();
+
+        let (status, _, response) = migration_apply(&body, &store, &broker, &cache, &script_engine);
+        assert_eq!(status, 400, "{response}");
+        assert!(response.contains("SUBSCRIBE"), "{response}");
+        assert!(store.get(b"denied", Instant::now()).is_none());
+        assert!(
+            crate::vendor::lux::migrations::list(&store, &cache, 100, 0, Instant::now())
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn version_contract_advertises_management_capabilities() {
+        let (store, _, _, _) = encrypted_http_fixture();
+        let (status, _, response) = engine_version(&store);
+        assert_eq!(status, 200);
+        let parsed: Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(parsed["version"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(
+            parsed["api_version"],
+            crate::vendor::lux::migrations::API_VERSION
+        );
+        assert_eq!(
+            parsed["studio_api"],
+            crate::vendor::lux::migrations::STUDIO_API_VERSION
+        );
+        assert_eq!(parsed["persistence"]["storage_layout"], "memory");
+        assert_eq!(parsed["persistence"]["durability"], "ephemeral");
+        assert_eq!(parsed["persistence"]["journal_enabled"], false);
+        assert_eq!(parsed["auth"]["enabled"], false);
+        assert_eq!(parsed["auth"]["secret_storage"]["status"], "disabled");
+        assert!(
+            parsed["capabilities"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value == "migrations.apply")
+        );
+    }
+
+    #[test]
+    fn readiness_tracks_shutdown_state() {
+        let (store, _, _, _) = encrypted_http_fixture();
+        let (status, _, body) = health_readiness(&store);
+        assert_eq!(status, 200);
+        assert_eq!(body, r#"{"status":"ready"}"#);
+
+        store.begin_shutdown();
+        let (status, _, body) = health_readiness(&store);
+        assert_eq!(status, 503);
+        assert_eq!(body, r#"{"status":"not_ready"}"#);
+    }
+
+    #[test]
+    fn root_contract_advertises_studio_capabilities() {
+        let (store, _, _, _) = encrypted_http_fixture();
+        let (status, _, response) = engine_root(&store);
+        assert_eq!(status, 200);
+        let parsed: Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(parsed["lux"], "ok");
+        assert_eq!(parsed["version"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(
+            parsed["studio_api"],
+            crate::vendor::lux::migrations::STUDIO_API_VERSION
+        );
+        assert_eq!(parsed["persistence"]["storage_layout"], "memory");
+        assert_eq!(parsed["persistence"]["durability"], "ephemeral");
+        assert_eq!(parsed["persistence"]["journal_enabled"], false);
+        assert_eq!(parsed["auth"]["enabled"], false);
+        assert_eq!(parsed["auth"]["secret_storage"]["status"], "disabled");
+        let capabilities = parsed["capabilities"].as_array().unwrap();
+        for required in [
+            "engine.exec",
+            "engine.tables",
+            "engine.auth.providers.apple.web",
+            "engine.push.apns",
+            "engine.snapshots.restore",
+        ] {
+            assert!(
+                capabilities.iter().any(|value| value == required),
+                "missing {required}: {capabilities:?}"
             );
         }
     }
@@ -4053,6 +6013,34 @@ mod tests {
         assert_eq!(plan.joins[0].left_col, "user_id");
         assert_eq!(plan.joins[0].right_col, "u.id");
         assert_eq!(plan.limit, Some(25));
+    }
+
+    #[test]
+    fn query_parsers_reject_join_alias_syntax() {
+        let params = vec![(
+            "join".to_string(),
+            "users:u=attacker:on(user_id=id)".to_string(),
+        )];
+        assert!(
+            parse_http_table_query(&params, "orders", None)
+                .unwrap_err()
+                .contains("alias must be an identifier")
+        );
+
+        let spec = json!({
+            "table": "orders",
+            "joins": [{
+                "table": "users",
+                "alias": "u OR owner_id = attacker",
+                "onLeft": "user_id",
+                "onRight": "id"
+            }]
+        });
+        let error = match parse_live_table_spec(&spec) {
+            Ok(_) => panic!("live join alias syntax was accepted"),
+            Err(error) => error,
+        };
+        assert_eq!(error["code"], "INVALID_SPEC");
     }
 
     #[test]
@@ -4276,11 +6264,16 @@ mod tests {
     }
 
     fn user_ctx(uid: &str) -> HttpAuthContext {
+        user_ctx_kind(uid, false)
+    }
+
+    fn user_ctx_kind(uid: &str, is_anonymous: bool) -> HttpAuthContext {
         HttpAuthContext::User(crate::vendor::lux::auth::AuthPrincipal {
             user_id: uid.to_string(),
             email: format!("{uid}@x.dev"),
             session_id: "sess".to_string(),
             role: "authenticated".to_string(),
+            is_anonymous,
         })
     }
 
@@ -4310,7 +6303,8 @@ mod tests {
         let filter = enforce_table_read(&store, &cache, &alice, "messages").unwrap();
         let combined = combine_where("", filter.as_deref().unwrap_or(""));
         let scoped = params_with_where(&[], &combined);
-        let (status, _, body) = route_table_query("messages", &scoped, &store, &broker, &cache);
+        let (status, _, body) =
+            route_table_query("messages", &scoped, &store, &broker, &cache, true);
         assert_eq!(status, 200, "{body}");
         assert!(body.contains("\"a1\"") && body.contains("\"a2\""), "{body}");
         assert!(!body.contains("\"b1\""), "bob's row leaked: {body}");
@@ -4326,7 +6320,8 @@ mod tests {
         let filter = enforce_table_read(&store, &cache, &alice, "messages").unwrap();
         let combined = combine_where("body = a1", filter.as_deref().unwrap_or(""));
         let scoped = params_with_where(&[], &combined);
-        let (status, _, body) = route_table_query("messages", &scoped, &store, &broker, &cache);
+        let (status, _, body) =
+            route_table_query("messages", &scoped, &store, &broker, &cache, true);
         assert_eq!(status, 200, "{body}");
         assert!(body.contains("\"a1\""), "{body}");
         assert!(
@@ -4346,7 +6341,7 @@ mod tests {
         let filter =
             enforce_table_read(&store, &cache, &HttpAuthContext::Operator, "messages").unwrap();
         assert!(filter.is_none());
-        let (status, _, body) = route_table_query("messages", &[], &store, &broker, &cache);
+        let (status, _, body) = route_table_query("messages", &[], &store, &broker, &cache, true);
         assert_eq!(status, 200, "{body}");
         assert!(
             body.contains("\"b1\""),
@@ -4471,7 +6466,7 @@ mod tests {
         let filter = enforce_table_read(store, cache, ctx, "messages").unwrap();
         let combined = combine_where("", filter.as_deref().unwrap_or(""));
         let scoped = params_with_where(&[], &combined);
-        let (status, _, body) = route_table_query("messages", &scoped, store, broker, cache);
+        let (status, _, body) = route_table_query("messages", &scoped, store, broker, cache, true);
         (status, body)
     }
 
@@ -4629,6 +6624,130 @@ mod tests {
             Some("members"),
             "grant dependency changes must wake the live query"
         );
+    }
+
+    #[test]
+    fn live_table_allows_or_read_grants_on_different_columns() {
+        let config = std::sync::Arc::new(crate::vendor::lux::ServerConfig {
+            auth: crate::vendor::lux::AuthConfig {
+                enabled: true,
+                ..crate::vendor::lux::AuthConfig::default()
+            },
+            ..crate::vendor::lux::ServerConfig::default()
+        });
+        let store = Arc::new(Store::new_with_config(config));
+        let cache: SharedSchemaCache = Arc::new(parking_lot::RwLock::new(
+            crate::vendor::lux::tables::SchemaCache::new(),
+        ));
+        let now = Instant::now();
+        crate::vendor::lux::tables::table_create(
+            &store,
+            &cache,
+            "invites",
+            &[
+                "id", "STR", "PRIMARY", "KEY,", "team_id", "STR,", "email", "STR",
+            ],
+            now,
+        )
+        .unwrap();
+        crate::vendor::lux::tables::table_create(
+            &store,
+            &cache,
+            "members",
+            &[
+                "id", "STR", "PRIMARY", "KEY,", "user_id", "STR,", "team_id", "STR",
+            ],
+            now,
+        )
+        .unwrap();
+        crate::vendor::lux::tables::table_insert(
+            &store,
+            &cache,
+            "members",
+            &[("id", "m1"), ("user_id", "alice"), ("team_id", "team-a")],
+            now,
+        )
+        .unwrap();
+        for (id, team_id, email) in [
+            ("team", "team-a", "other@x.dev"),
+            ("email", "team-b", "alice@x.dev"),
+            ("hidden", "team-b", "other@x.dev"),
+        ] {
+            crate::vendor::lux::tables::table_insert(
+                &store,
+                &cache,
+                "invites",
+                &[("id", id), ("team_id", team_id), ("email", email)],
+                now,
+            )
+            .unwrap();
+        }
+        for grant in [
+            crate::vendor::lux::grants::parse_grant(&[
+                "read",
+                "ON",
+                "invites",
+                "WHERE",
+                "team_id",
+                "IN",
+                "(",
+                "SELECT",
+                "team_id",
+                "FROM",
+                "members",
+                "WHERE",
+                "user_id",
+                "=",
+                "auth.uid()",
+                ")",
+            ])
+            .unwrap(),
+            crate::vendor::lux::grants::parse_grant(&[
+                "read",
+                "ON",
+                "invites",
+                "WHERE",
+                "email",
+                "=",
+                "auth.email",
+            ])
+            .unwrap(),
+        ] {
+            crate::vendor::lux::auth::put_grant(&store, &cache, &grant, now).unwrap();
+        }
+        let principal = match user_ctx("alice") {
+            HttpAuthContext::User(principal) => principal,
+            _ => unreachable!(),
+        };
+        let spec = LiveTableSpec {
+            table: "invites".to_string(),
+            select: "*".to_string(),
+            where_conditions: vec![],
+            joins: vec![],
+            principal: Some(principal),
+            auth_dependencies: vec!["members".to_string()],
+            near: None,
+            order_by: None,
+            limit: None,
+            offset: None,
+            deny_all: false,
+        };
+
+        crate::vendor::lux::auth::read_filter(
+            &store,
+            &cache,
+            spec.principal.as_ref().unwrap(),
+            "invites",
+            now,
+        )
+        .unwrap();
+        let body =
+            serde_json::to_string(&fetch_live_table_rows(&store, &cache, &spec).unwrap()).unwrap();
+        assert!(
+            body.contains("\"team\"") && body.contains("\"email\""),
+            "{body}"
+        );
+        assert!(!body.contains("\"hidden\""), "{body}");
     }
 
     #[test]
@@ -4854,14 +6973,14 @@ mod tests {
         // id=1 is alice's -> visible; id=3 is bob's -> reads as not-found.
         assert!(
             crate::vendor::lux::tables::table_get_filtered(
-                &store, &cache, "messages", 1, scope, now
+                &store, &cache, "messages", 1, scope, now, true
             )
             .unwrap()
             .is_some()
         );
         assert!(
             crate::vendor::lux::tables::table_get_filtered(
-                &store, &cache, "messages", 3, scope, now
+                &store, &cache, "messages", 3, scope, now, true
             )
             .unwrap()
             .is_none()

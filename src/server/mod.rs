@@ -10,7 +10,11 @@ use anyhow::{Result, anyhow};
 
 use crate::sql::engine::{Engine, EngineConfig};
 
-pub use mysql_wire::WireServer;
+pub use mysql_wire::{
+    AccountOperation, AccountOperationAction, AccountOperationKind, AsyncAuthenticator,
+    AsyncAuthenticatorHandle, AuthenticatedUser, Authentication, AuthenticationRequest, StaticUser,
+    WireServer, verify_mysql_native_password,
+};
 
 pub struct ServerHandle {
     stop: Arc<AtomicBool>,
@@ -46,6 +50,10 @@ pub struct ServerConfig {
     pub allow_remote: bool,
     pub debug_addr: Option<SocketAddr>,
     pub engine: EngineConfig,
+    /// Authentication for MariaDB wire connections. The default allows all
+    /// local connections with full scope; select `EngineAccounts`, static
+    /// users, or a callback to restrict access.
+    pub authentication: Authentication,
 }
 
 impl Default for ServerConfig {
@@ -58,6 +66,7 @@ impl Default for ServerConfig {
             allow_remote: false,
             debug_addr: None,
             engine: EngineConfig::default(),
+            authentication: Authentication::default(),
         }
     }
 }
@@ -108,7 +117,7 @@ pub fn run_with_engine(cfg: ServerConfig, engine: Arc<Engine>) -> Result<()> {
     log_runtime(&cfg);
     let _debug = start_debug_http(&cfg, engine.clone());
 
-    let wire = WireServer::new(engine.clone());
+    let wire = WireServer::with_authentication(engine.clone(), cfg.authentication.clone());
     wire.serve(cfg.bind_addr)?;
     Ok(())
 }
@@ -118,7 +127,7 @@ pub fn spawn_with_engine(cfg: ServerConfig, engine: Arc<Engine>) -> Result<Serve
     let listener = std::net::TcpListener::bind(cfg.bind_addr)?;
     log_runtime(&cfg);
     let debug = start_debug_http(&cfg, engine.clone());
-    let wire = WireServer::new(engine);
+    let wire = WireServer::with_authentication(engine, cfg.authentication.clone());
     let stop = Arc::new(AtomicBool::new(false));
     let thread_stop = stop.clone();
     let join = thread::spawn(move || {
@@ -178,7 +187,7 @@ mod tests {
                 thread::sleep(Duration::from_millis(20));
                 worker_stop.store(true, Ordering::Relaxed);
             });
-            WireServer::new(Arc::new(Engine::new(EngineConfig::mysql_strict())))
+            WireServer::new(Arc::new(Engine::new(EngineConfig::default())))
                 .serve_listener_until(listener, stop)
                 .unwrap();
             stopper.join().unwrap();

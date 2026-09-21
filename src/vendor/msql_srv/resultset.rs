@@ -88,7 +88,9 @@ enum Finalizer {
         last_insert_id: u64,
         warnings: u16,
     },
-    Eof { warnings: u16 },
+    Eof {
+        warnings: u16,
+    },
 }
 
 /// Convenience type for providing query results to clients.
@@ -143,7 +145,13 @@ impl<'a, W: Read + Write> QueryResultWriter<'a, W> {
                 rows,
                 last_insert_id,
                 warnings,
-            }) => writers::write_ok_packet_with_warnings(self.writer, rows, last_insert_id, status, warnings),
+            }) => writers::write_ok_packet_with_warnings(
+                self.writer,
+                rows,
+                last_insert_id,
+                status,
+                warnings,
+            ),
             Some(Finalizer::Eof { warnings }) => {
                 writers::write_eof_packet_with_warnings(self.writer, status, warnings)
             }
@@ -489,7 +497,11 @@ mod transaction_warning_tests {
             coltype: crate::vendor::msql_srv::ColumnType::MYSQL_TYPE_LONG,
             colflags: ColumnFlags::empty(),
         }];
-        result.start_with_warnings(&columns, 9).unwrap().finish().unwrap();
+        result
+            .start_with_warnings(&columns, 9)
+            .unwrap()
+            .finish()
+            .unwrap();
         let bytes = output.into_inner();
         assert_eq!(&bytes[bytes.len() - 5..], &[0xfe, 9, 0, 1, 0]);
     }

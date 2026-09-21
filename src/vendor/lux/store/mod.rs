@@ -6,13 +6,16 @@ use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::hash::{BuildHasher, Hasher};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::sync::atomic::{AtomicU32, AtomicUsize};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize};
 use std::time::{Duration, Instant, SystemTime};
 mod hashes;
 mod sorted_sets;
 mod streams;
 mod timeseries;
+mod transactions;
 mod vectors;
+
+pub(crate) use transactions::ExecutionReadGuard;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct StreamId {
@@ -63,10 +66,144 @@ pub struct ConsumerGroup {
     pub pel: BTreeMap<StreamId, PendingEntry>,
 }
 
+/// BITFIELD overflow handling for SET/INCRBY (default WRAP).
+#[derive(Clone, Copy)]
+pub enum BitfieldOverflow {
+    Wrap,
+    Sat,
+    Fail,
+}
+
+/// A single BITFIELD/BITFIELD_RO sub-operation. `bits` is the field width,
+/// `signed` selects i<bits> vs u<bits>, `offset` is an absolute bit offset.
+pub enum BitfieldOp {
+    Get {
+        signed: bool,
+        bits: u32,
+        offset: u64,
+    },
+    Set {
+        signed: bool,
+        bits: u32,
+        offset: u64,
+        value: i64,
+        overflow: BitfieldOverflow,
+    },
+    IncrBy {
+        signed: bool,
+        bits: u32,
+        offset: u64,
+        incr: i64,
+        overflow: BitfieldOverflow,
+    },
+}
+
+/// Read `bits` bits at `offset` from the bitmap, MSB-first, interpreting the
+/// field as signed (two's complement, sign-extended) or unsigned. Bits past the
+/// end of `buf` read as zero.
+fn bf_read(buf: &[u8], offset: u64, bits: u32, signed: bool) -> i64 {
+    let mut val: u64 = 0;
+    for i in 0..bits as u64 {
+        let bit_index = offset + i;
+        let byte_index = (bit_index / 8) as usize;
+        let shift = 7 - (bit_index % 8);
+        let bit = if byte_index < buf.len() {
+            (buf[byte_index] >> shift) & 1
+        } else {
+            0
+        };
+        val = (val << 1) | bit as u64;
+    }
+    if signed && bits < 64 && (val >> (bits - 1)) & 1 == 1 {
+        (val | (!0u64 << bits)) as i64
+    } else {
+        val as i64
+    }
+}
+
+/// Write the low `bits` bits of `value` at `offset`, MSB-first, growing `buf` to
+/// fit the highest touched byte.
+fn bf_write(buf: &mut Vec<u8>, offset: u64, bits: u32, value: u64) {
+    let end_bit = offset + bits as u64;
+    let needed = end_bit.div_ceil(8) as usize;
+    if buf.len() < needed {
+        buf.resize(needed, 0);
+    }
+    for i in 0..bits as u64 {
+        let bit_index = offset + i;
+        let byte_index = (bit_index / 8) as usize;
+        let shift = 7 - (bit_index % 8);
+        let bit = ((value >> (bits as u64 - 1 - i)) & 1) as u8;
+        if bit == 1 {
+            buf[byte_index] |= 1 << shift;
+        } else {
+            buf[byte_index] &= !(1 << shift);
+        }
+    }
+}
+
+/// Apply BITFIELD overflow semantics to a candidate value for a signed/unsigned
+/// field of `bits` width. Returns None only for FAIL-on-overflow.
+fn bf_clamp(signed: bool, bits: u32, val: i128, mode: BitfieldOverflow) -> Option<i64> {
+    let (min, max): (i128, i128) = if signed {
+        (-(1i128 << (bits - 1)), (1i128 << (bits - 1)) - 1)
+    } else {
+        (0, (1i128 << bits) - 1)
+    };
+    if val >= min && val <= max {
+        return Some(val as i64);
+    }
+    match mode {
+        BitfieldOverflow::Fail => None,
+        BitfieldOverflow::Sat => Some(if val < min { min as i64 } else { max as i64 }),
+        BitfieldOverflow::Wrap => {
+            let range = 1i128 << bits;
+            let mut w = val.rem_euclid(range);
+            if signed && w > max {
+                w -= range;
+            }
+            Some(w as i64)
+        }
+    }
+}
+
 pub struct StreamData {
     pub entries: BTreeMap<StreamId, Vec<(String, Bytes)>>,
     pub last_id: StreamId,
     pub groups: std::collections::HashMap<String, ConsumerGroup>,
+}
+
+#[derive(Clone, Copy)]
+pub struct SetOptions<'a> {
+    pub ttl: Option<Duration>,
+    pub keep_ttl: bool,
+    pub nx: bool,
+    pub xx: bool,
+    pub ifeq: Option<&'a [u8]>,
+    pub get: bool,
+    pub encrypted: bool,
+}
+
+pub(crate) struct PreparedConditionalSet {
+    should_set: bool,
+    old: Option<Bytes>,
+    stored_value: Option<Vec<u8>>,
+    expires_at: Option<Instant>,
+}
+
+impl PreparedConditionalSet {
+    pub(crate) fn should_set(&self) -> bool {
+        self.should_set
+    }
+
+    pub(crate) fn stored_value(&self) -> Option<&[u8]> {
+        self.stored_value.as_deref()
+    }
+
+    pub(crate) fn expires_in(&self, now: Instant) -> Option<Duration> {
+        self.expires_at
+            .map(|deadline| deadline.saturating_duration_since(now))
+    }
 }
 
 #[derive(Clone, Default)]
@@ -101,12 +238,17 @@ impl Hasher for FxHasher {
 #[allow(dead_code)]
 pub const MAX_SHARDS: usize = 1024;
 const WRONGTYPE: &str = "WRONGTYPE Operation against a key holding the wrong kind of value";
+const RENAME_ENCRYPTED_ERR: &str = "ERR cannot relocate an encrypted key: its ciphertext is bound to the key name and would be unrecoverable at the destination; decrypt and re-set under the new key instead";
 
 pub struct VectorData {
     #[allow(dead_code)]
     pub dims: u32,
     pub data: Vec<f32>,
     pub metadata: Option<String>,
+    /// When true this vector is encrypted at rest: the in-memory `data` stays
+    /// plaintext (HNSW/search need it), but it is sealed when written to the
+    /// snapshot and represented as ciphertext in the mutation journal.
+    pub encrypted: bool,
 }
 
 pub struct TimeSeriesData {
@@ -180,16 +322,133 @@ impl SetData {
         self.members.is_empty()
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &String> {
+    pub fn iter(&self) -> std::slice::Iter<'_, String> {
         self.members.iter()
     }
+}
+
+/// Hash value with optional per-field TTLs (Redis 7.4 hash-field expiration).
+/// `fields` holds the data; `expiries` holds absolute unix-ms deadlines for the
+/// subset of fields that have a TTL. Derefs to `fields` so value-only access
+/// sites are unchanged; TTL-aware reads use the `*_live`/`purge_expired` helpers.
+#[derive(Default, Clone)]
+pub struct HashData {
+    pub fields: HashMap<String, Bytes>,
+    pub expiries: HashMap<String, i64>,
+}
+
+impl HashData {
+    pub fn from_fields(fields: HashMap<String, Bytes>) -> Self {
+        Self {
+            fields,
+            expiries: HashMap::new(),
+        }
+    }
+
+    /// True when `field` carries a TTL that is at or before `now_ms`.
+    pub fn field_expired(&self, field: &str, now_ms: i64) -> bool {
+        self.expiries.get(field).is_some_and(|&e| e <= now_ms)
+    }
+
+    pub fn get_live(&self, field: &str, now_ms: i64) -> Option<&Bytes> {
+        if self.field_expired(field, now_ms) {
+            None
+        } else {
+            self.fields.get(field)
+        }
+    }
+
+    pub fn contains_live(&self, field: &str, now_ms: i64) -> bool {
+        self.fields.contains_key(field) && !self.field_expired(field, now_ms)
+    }
+
+    pub fn live_iter(&self, now_ms: i64) -> impl Iterator<Item = (&String, &Bytes)> {
+        self.fields
+            .iter()
+            .filter(move |(k, _)| !self.field_expired(k, now_ms))
+    }
+
+    pub fn live_len(&self, now_ms: i64) -> usize {
+        self.fields
+            .keys()
+            .filter(|k| !self.field_expired(k, now_ms))
+            .count()
+    }
+
+    /// Drop fields whose TTL has passed. Returns (bytes freed, hash-now-empty).
+    pub fn purge_expired(&mut self, now_ms: i64) -> (usize, bool) {
+        if self.expiries.is_empty() {
+            return (0, self.fields.is_empty());
+        }
+        let expired: Vec<String> = self
+            .expiries
+            .iter()
+            .filter(|&(_, &e)| e <= now_ms)
+            .map(|(k, _)| k.clone())
+            .collect();
+        let mut freed = 0;
+        for f in &expired {
+            if let Some(v) = self.fields.remove(f) {
+                freed += f.len() + v.len() + 64;
+            }
+            self.expiries.remove(f);
+        }
+        (freed, self.fields.is_empty())
+    }
+}
+
+impl std::ops::Deref for HashData {
+    type Target = HashMap<String, Bytes>;
+    fn deref(&self) -> &Self::Target {
+        &self.fields
+    }
+}
+
+impl std::ops::DerefMut for HashData {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.fields
+    }
+}
+
+/// Condition flag for HEXPIRE-family commands (NX/XX/GT/LT).
+#[derive(Clone, Copy, PartialEq)]
+pub enum HExpireCond {
+    None,
+    Nx,
+    Xx,
+    Gt,
+    Lt,
+}
+
+/// Per-field result of an HTTL-family query.
+pub enum HFieldTtl {
+    Missing,
+    NoTtl,
+    ExpiresAtMs(i64),
+}
+
+/// TTL mutation requested by HGETEX for the fetched fields.
+#[derive(Clone, Copy)]
+pub enum HGetexTtl {
+    Keep,
+    Persist,
+    SetMs(i64),
+}
+
+/// Wall-clock now as unix-epoch milliseconds, used for absolute hash-field TTL
+/// deadlines (which must survive restarts, so they are stored as epoch-ms).
+pub(crate) fn epoch_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 pub enum StoreValue {
     Str(Bytes),
     StrBuf(Vec<u8>),
     List(VecDeque<Bytes>),
-    Hash(HashMap<String, Bytes>),
+    Hash(HashData),
     Set(SetData),
     SortedSet(
         BTreeMap<(OrderedFloat<f64>, String), ()>,
@@ -271,13 +530,6 @@ pub(crate) struct StoreMetrics {
     persistence_err_disk_write: AtomicUsize,
 }
 
-#[derive(Default)]
-pub(crate) struct StoreBatchStats {
-    mem_added: usize,
-    mem_removed: usize,
-    keys_added: usize,
-}
-
 impl StoreMetrics {
     fn new() -> Self {
         Self {
@@ -294,8 +546,91 @@ impl StoreMetrics {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BackgroundSavePhase {
+    Idle,
+    Queued,
+    Capturing,
+    Writing,
+    Committing,
+    Rotating,
+}
+
+impl BackgroundSavePhase {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Queued => "queued",
+            Self::Capturing => "capturing",
+            Self::Writing => "writing",
+            Self::Committing => "committing",
+            Self::Rotating => "rotating",
+        }
+    }
+
+    pub(crate) fn in_progress(self) -> bool {
+        self != Self::Idle
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct SnapshotStatus {
+    pub(crate) phase: BackgroundSavePhase,
+    started_at: Option<Instant>,
+    pub(crate) last_duration_ms: u64,
+    pub(crate) last_keys: usize,
+    pub(crate) last_status: &'static str,
+    pub(crate) last_error: Option<String>,
+}
+
+impl Default for SnapshotStatus {
+    fn default() -> Self {
+        Self {
+            phase: BackgroundSavePhase::Idle,
+            started_at: None,
+            last_duration_ms: 0,
+            last_keys: 0,
+            last_status: "none",
+            last_error: None,
+        }
+    }
+}
+
+impl SnapshotStatus {
+    pub(crate) fn current_duration_seconds(&self) -> u64 {
+        if self.phase.in_progress() {
+            self.started_at
+                .map_or(0, |started| started.elapsed().as_secs())
+        } else {
+            0
+        }
+    }
+}
+
+fn sanitize_info_value(value: &str) -> String {
+    value.replace(['\r', '\n'], " ")
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BackgroundSaveRequestError {
+    Busy,
+    Unavailable,
+}
+
+#[cfg(any())]
+type ExecAfterCommandHook = Arc<dyn Fn(usize) + Send + Sync + 'static>;
+
 pub struct Store {
     config: Arc<crate::vendor::lux::ServerConfig>,
+    encryption: crate::vendor::lux::encryption::EncryptionKeyring,
+    /// True when Auth bootstrapped without encryption under the explicit
+    /// ephemeral development exception. Initializing a key later does not make
+    /// existing plaintext rows safe; bootstrap migration must clear this flag.
+    auth_secret_storage_degraded: AtomicBool,
+    /// Short-lived API-key resolutions belong to this engine instance. Keeping
+    /// this on `Store` prevents one embedded server from authenticating against
+    /// another server's `auth.keys` table.
+    pub(crate) api_key_cache: crate::vendor::lux::auth::ApiKeyCache,
     shards: Box<[RwLock<Shard>]>,
     metrics: StoreMetrics,
     /// Serializes Lua script execution for this runtime without blocking other
@@ -306,8 +641,754 @@ pub struct Store {
     pub(crate) table_vector_indexes:
         RwLock<HashMap<(u32, String), crate::vendor::lux::hnsw::HnswIndex, FxBuildHasher>>,
     disk_shards: Option<Box<[parking_lot::Mutex<crate::vendor::lux::disk::DiskShard>]>>,
-    wal_shards: Option<Box<[parking_lot::Mutex<crate::vendor::lux::disk::Wal>]>>,
+    /// The one ordered journal used by every new durable mutation.
+    journal: Option<parking_lot::Mutex<crate::vendor::lux::disk::Wal>>,
+    /// Read-only compatibility inputs from the pre-1.0 per-shard WAL layout.
+    /// They are replayed before `journal` and truncated with the next snapshot.
+    legacy_wals: Box<[(usize, parking_lot::Mutex<crate::vendor::lux::disk::Wal>)]>,
+    /// Per-stream WAL positions already represented by the loaded snapshot.
+    recovery_wal_checkpoints:
+        parking_lot::Mutex<HashMap<String, crate::vendor::lux::disk::WalCheckpoint>>,
+    /// Readers and ordinary mutations share this gate. EXEC owns it exclusively
+    /// from its WATCH check through WAL commit, so no surface can observe a
+    /// prefix of the queued commands.
+    execution_gate: RwLock<()>,
+    /// Striped commit gates keep overlapping mutations in journal/apply order
+    /// without serializing independent shards behind one global writer lock.
+    journal_gates: Box<[parking_lot::ReentrantMutex<()>]>,
+    /// Serializes table mutation planning and excludes snapshot capture while a
+    /// table write is moving from its resolved journal record to one atomic
+    /// multi-shard publication.
+    table_mutation_gate: parking_lot::ReentrantMutex<()>,
+    /// Even while table state is stable and odd while one validated table
+    /// batch is being published. Multi-key readers retry when this changes,
+    /// preventing a scan from combining rows from opposite sides of a commit.
+    table_publication: AtomicU64,
+    /// Exact sentinel used only while replaying post-snapshot mutations. It
+    /// keeps snapshot entries whose wall-clock TTL elapsed during downtime
+    /// visible to TTL-preserving journal commands without reviving them after
+    /// recovery finishes.
+    recovery_expiry_sentinel: parking_lot::Mutex<Option<Instant>>,
     pub(crate) wal_suppress: std::sync::atomic::AtomicBool,
+    /// Narrower than `wal_suppress`: true only while persisted commands are
+    /// being re-executed. Bootstrap and snapshot loading also suppress writes,
+    /// but must not gain access to replay-only command behavior.
+    replaying_wal: std::sync::atomic::AtomicBool,
+    /// Once persistence enters an uncertain state, reject every later mutation
+    /// until restart rather than acknowledge writes through an unsafe journal.
+    journal_poisoned: std::sync::atomic::AtomicBool,
+    /// Cleared when runtime shutdown begins. Mutation preparation checks this
+    /// both before and after acquiring its journal domains, which turns the
+    /// final shutdown sync into a real fence rather than a best-effort flush.
+    accepting_mutations: std::sync::atomic::AtomicBool,
+    /// Serializes every operation that installs a snapshot or restore image.
+    snapshot_gate: parking_lot::Mutex<()>,
+    background_save_tx: std::sync::OnceLock<
+        std::sync::mpsc::SyncSender<crate::vendor::lux::snapshot::SnapshotWorkerMessage>,
+    >,
+    background_save_stopping: std::sync::atomic::AtomicBool,
+    snapshot_status: parking_lot::Mutex<SnapshotStatus>,
+    #[cfg(any())]
+    journal_failures_to_inject: AtomicUsize,
+    #[cfg(any())]
+    journal_fsync_failures_to_inject: AtomicUsize,
+    #[cfg(any())]
+    snapshot_failures_to_inject: AtomicUsize,
+    #[cfg(any())]
+    snapshot_after_capture_hook: parking_lot::Mutex<Option<Arc<dyn Fn() + Send + Sync + 'static>>>,
+    #[cfg(any())]
+    table_read_after_first_row_hook:
+        parking_lot::Mutex<Option<Arc<dyn Fn() + Send + Sync + 'static>>>,
+    #[cfg(any())]
+    exec_after_command_hook: parking_lot::Mutex<Option<ExecAfterCommandHook>>,
+    /// Set once at runtime startup; sink for typed row deltas feeding reactive
+    /// live queries. Absent for embedded/replay-only stores, so emission is a
+    /// cheap no-op there.
+    row_delta_broker: std::sync::OnceLock<crate::vendor::lux::pubsub::Broker>,
+}
+
+/// A fully resolved mutation ready to cross the journal boundary. The payload
+/// contains every value needed by the in-memory apply phase; `commands` is the
+/// exact deterministic representation recovery will execute.
+pub(crate) struct JournalPlan<T> {
+    commands: Vec<Vec<Vec<u8>>>,
+    prepared: T,
+}
+
+pub(crate) struct PreparedRestore {
+    value: DumpValue,
+    ttl: Option<Duration>,
+    delete_only: bool,
+}
+
+/// Keeps the affected mutation domains serialized until the caller finishes
+/// applying the journaled change.
+pub(crate) struct JournalCommitGuard<'a> {
+    store: &'a Store,
+    _execution_guard: ExecutionReadGuard<'a>,
+    _table_guard: Option<parking_lot::ReentrantMutexGuard<'a, ()>>,
+    _guards: Vec<parking_lot::ReentrantMutexGuard<'a, ()>>,
+    transaction_checkpoint: Option<usize>,
+    armed: bool,
+}
+
+impl JournalCommitGuard<'_> {
+    /// Mark the journaled live apply as complete. Dropping an armed guard
+    /// without reaching this point fences later mutations because recovery,
+    /// rather than current memory, owns the authoritative outcome.
+    pub(crate) fn complete(mut self) -> std::io::Result<()> {
+        self.store.ensure_journal_healthy()?;
+        self.armed = false;
+        Ok(())
+    }
+
+    /// Disarm after the exact journal frame was successfully removed. This is
+    /// only valid while the journal lock still excludes concurrent appenders.
+    fn rolled_back(mut self) {
+        if let Some(checkpoint) = self.transaction_checkpoint {
+            self.store.truncate_active_exec(checkpoint);
+        }
+        self.armed = false;
+    }
+}
+
+impl Drop for JournalCommitGuard<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            self.store.poison_journal();
+        }
+    }
+}
+
+/// A mutation domain locked for deterministic preparation but not yet durable.
+/// Consuming this guard through `commit` is the only way to reach the apply
+/// phase; dropping it after validation fails is intentionally a no-op.
+pub(crate) struct JournalPrepareGuard<'a> {
+    store: &'a Store,
+    _execution_guard: ExecutionReadGuard<'a>,
+    table_guard: Option<parking_lot::ReentrantMutexGuard<'a, ()>>,
+    guards: Vec<parking_lot::ReentrantMutexGuard<'a, ()>>,
+    bypassed: bool,
+}
+
+impl<'a> JournalPrepareGuard<'a> {
+    pub(crate) fn commit(self, args: &[&[u8]]) -> std::io::Result<JournalCommitGuard<'a>> {
+        self.commit_batch(&[args])
+    }
+
+    pub(crate) fn commit_batch(
+        self,
+        commands: &[&[&[u8]]],
+    ) -> std::io::Result<JournalCommitGuard<'a>> {
+        let armed = !self.bypassed && !commands.is_empty();
+        let transaction_checkpoint = if armed {
+            self.store.active_exec_command_len()
+        } else {
+            None
+        };
+        if armed {
+            self.store.append_journal_commands(commands)?;
+        }
+        Ok(JournalCommitGuard {
+            store: self.store,
+            _execution_guard: self._execution_guard,
+            _table_guard: self.table_guard,
+            _guards: self.guards,
+            transaction_checkpoint,
+            armed,
+        })
+    }
+}
+
+impl<T> JournalPlan<T> {
+    pub(crate) fn command(command: Vec<Vec<u8>>, prepared: T) -> Self {
+        Self {
+            commands: vec![command],
+            prepared,
+        }
+    }
+
+    pub(crate) fn batch(commands: Vec<Vec<Vec<u8>>>, prepared: T) -> Self {
+        Self { commands, prepared }
+    }
+
+    pub(crate) fn no_op(prepared: T) -> Self {
+        Self {
+            commands: Vec::new(),
+            prepared,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TableEntryKind {
+    String,
+    Hash,
+    Set,
+    SortedSet,
+    Vector,
+}
+
+impl TableEntryKind {
+    fn empty(self) -> StoreValue {
+        match self {
+            Self::String => StoreValue::Str(Bytes::new()),
+            Self::Hash => StoreValue::Hash(HashData::default()),
+            Self::Set => StoreValue::Set(SetData::new()),
+            Self::SortedSet => StoreValue::SortedSet(BTreeMap::new(), HashMap::new()),
+            Self::Vector => StoreValue::Vector(VectorData {
+                dims: 0,
+                data: Vec::new(),
+                metadata: None,
+                encrypted: false,
+            }),
+        }
+    }
+
+    fn matches(self, value: &StoreValue) -> bool {
+        matches!(
+            (self, value),
+            (Self::String, StoreValue::Str(_) | StoreValue::StrBuf(_))
+                | (Self::Hash, StoreValue::Hash(_))
+                | (Self::Set, StoreValue::Set(_))
+                | (Self::SortedSet, StoreValue::SortedSet(..))
+                | (Self::Vector, StoreValue::Vector(_))
+        )
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::String => "string",
+            Self::Hash => "hash",
+            Self::Set => "set",
+            Self::SortedSet => "zset",
+            Self::Vector => "vector",
+        }
+    }
+}
+
+enum TableBatchOp {
+    SetString(Vec<u8>, Vec<u8>),
+    HashSet(Vec<u8>, Vec<(String, Vec<u8>)>),
+    HashDelete(Vec<u8>, Vec<String>),
+    HashDeleteIfValue(Vec<u8>, String, Vec<u8>),
+    SetAdd(Vec<u8>, String),
+    SetRemove(Vec<u8>, String),
+    SortedSetAdd(Vec<u8>, String, f64),
+    SortedSetRemove(Vec<u8>, String),
+    VectorSet(Vec<u8>, Vec<f32>, Option<String>, bool),
+    Delete(Vec<u8>),
+}
+
+/// A validated, O(changes) table mutation plan. Publication applies every
+/// operation while every affected shard is write-locked, so readers can
+/// observe only the complete state before or after the mutation.
+pub(crate) struct AtomicTableBatch<'a> {
+    store: &'a Store,
+    now: Instant,
+    kinds: BTreeMap<Vec<u8>, TableEntryKind>,
+    operations: Vec<TableBatchOp>,
+}
+
+struct TablePublication<'a> {
+    store: &'a Store,
+}
+
+impl Drop for TablePublication<'_> {
+    fn drop(&mut self) {
+        let previous = self.store.table_publication.fetch_add(1, Ordering::Release);
+        debug_assert_eq!(previous & 1, 1);
+    }
+}
+
+impl<'a> AtomicTableBatch<'a> {
+    pub(crate) fn new(store: &'a Store, now: Instant) -> Self {
+        Self {
+            store,
+            now,
+            kinds: BTreeMap::new(),
+            operations: Vec::new(),
+        }
+    }
+
+    fn require_kind(&mut self, key: &[u8], kind: TableEntryKind) -> Result<(), String> {
+        if !Store::is_table_storage_key(key) {
+            return Err("ERR table mutation attempted to stage a non-table key".to_string());
+        }
+        if let Some(existing) = self.kinds.get(key) {
+            if *existing != kind {
+                return Err(format!(
+                    "ERR table storage invariant: '{}' requires both {} and {} state",
+                    key_string(key),
+                    existing.name(),
+                    kind.name()
+                ));
+            }
+            return Ok(());
+        }
+        self.store.try_promote(key, self.now)?;
+        let shard = self.store.shards[self.store.shard_index(key)].read();
+        if let Some(entry) = shard.data.get(key) {
+            if !entry.is_expired_at(self.now) && !kind.matches(&entry.value) {
+                return Err(format!(
+                    "ERR table storage invariant: '{}' expected {}, found {}",
+                    key_string(key),
+                    kind.name(),
+                    entry.value.type_name()
+                ));
+            }
+        }
+        drop(shard);
+        self.kinds.insert(key.to_vec(), kind);
+        Ok(())
+    }
+
+    pub(crate) fn set_string(&mut self, key: &str, value: Vec<u8>) -> Result<(), String> {
+        self.require_kind(key.as_bytes(), TableEntryKind::String)?;
+        self.operations
+            .push(TableBatchOp::SetString(key.as_bytes().to_vec(), value));
+        Ok(())
+    }
+
+    pub(crate) fn hash_set(
+        &mut self,
+        key: &str,
+        pairs: &[(String, Vec<u8>)],
+    ) -> Result<(), String> {
+        self.require_kind(key.as_bytes(), TableEntryKind::Hash)?;
+        self.operations.push(TableBatchOp::HashSet(
+            key.as_bytes().to_vec(),
+            pairs.to_vec(),
+        ));
+        Ok(())
+    }
+
+    pub(crate) fn hash_delete(
+        &mut self,
+        key: &str,
+        fields_to_delete: &[String],
+    ) -> Result<(), String> {
+        self.require_kind(key.as_bytes(), TableEntryKind::Hash)?;
+        self.operations.push(TableBatchOp::HashDelete(
+            key.as_bytes().to_vec(),
+            fields_to_delete.to_vec(),
+        ));
+        Ok(())
+    }
+
+    pub(crate) fn hash_delete_if_value(
+        &mut self,
+        key: &str,
+        field: &str,
+        expected: &[u8],
+    ) -> Result<(), String> {
+        self.require_kind(key.as_bytes(), TableEntryKind::Hash)?;
+        self.operations.push(TableBatchOp::HashDeleteIfValue(
+            key.as_bytes().to_vec(),
+            field.to_string(),
+            expected.to_vec(),
+        ));
+        Ok(())
+    }
+
+    pub(crate) fn set_add(&mut self, key: &str, member: &str) -> Result<(), String> {
+        self.require_kind(key.as_bytes(), TableEntryKind::Set)?;
+        self.operations.push(TableBatchOp::SetAdd(
+            key.as_bytes().to_vec(),
+            member.to_string(),
+        ));
+        Ok(())
+    }
+
+    pub(crate) fn set_remove(&mut self, key: &str, member: &str) -> Result<(), String> {
+        self.require_kind(key.as_bytes(), TableEntryKind::Set)?;
+        self.operations.push(TableBatchOp::SetRemove(
+            key.as_bytes().to_vec(),
+            member.to_string(),
+        ));
+        Ok(())
+    }
+
+    pub(crate) fn sorted_set_add(
+        &mut self,
+        key: &str,
+        member: &str,
+        score: f64,
+    ) -> Result<(), String> {
+        self.require_kind(key.as_bytes(), TableEntryKind::SortedSet)?;
+        self.operations.push(TableBatchOp::SortedSetAdd(
+            key.as_bytes().to_vec(),
+            member.to_string(),
+            score,
+        ));
+        Ok(())
+    }
+
+    pub(crate) fn sorted_set_remove(&mut self, key: &str, member: &str) -> Result<(), String> {
+        self.require_kind(key.as_bytes(), TableEntryKind::SortedSet)?;
+        self.operations.push(TableBatchOp::SortedSetRemove(
+            key.as_bytes().to_vec(),
+            member.to_string(),
+        ));
+        Ok(())
+    }
+
+    pub(crate) fn vector_set(
+        &mut self,
+        key: &str,
+        data: Vec<f32>,
+        metadata: Option<String>,
+        encrypted: bool,
+    ) -> Result<(), String> {
+        self.require_kind(key.as_bytes(), TableEntryKind::Vector)?;
+        self.operations.push(TableBatchOp::VectorSet(
+            key.as_bytes().to_vec(),
+            data,
+            metadata,
+            encrypted,
+        ));
+        Ok(())
+    }
+
+    fn delete_kind(&mut self, key: &str, kind: TableEntryKind) -> Result<(), String> {
+        self.require_kind(key.as_bytes(), kind)?;
+        self.operations
+            .push(TableBatchOp::Delete(key.as_bytes().to_vec()));
+        Ok(())
+    }
+
+    pub(crate) fn delete_hash(&mut self, key: &str) -> Result<(), String> {
+        self.delete_kind(key, TableEntryKind::Hash)
+    }
+
+    pub(crate) fn delete_vector(&mut self, key: &str) -> Result<(), String> {
+        self.delete_kind(key, TableEntryKind::Vector)
+    }
+
+    /// Publish the fully prepared batch. The caller must still own the table
+    /// mutation guard carried by its journal commit guard.
+    pub(crate) fn apply(self) {
+        let store = self.store;
+        let keys = self.kinds.into_keys().collect::<Vec<_>>();
+        let shard_indices = keys
+            .iter()
+            .map(|key| store.shard_index(key))
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let mut shard_positions = vec![usize::MAX; store.shards.len()];
+        let mut shards = Vec::with_capacity(shard_indices.len());
+        for shard_index in &shard_indices {
+            shard_positions[*shard_index] = shards.len();
+            shards.push(store.shards[*shard_index].write());
+        }
+        let _publication = store.begin_table_publication();
+        let mut memory_deltas = vec![0isize; store.shards.len()];
+        let mut key_delta = 0isize;
+        let mut vector_before = Vec::new();
+        for key in &keys {
+            let shard_index = store.shard_index(key);
+            let shard = &mut shards[shard_positions[shard_index]];
+            if let Some(StoreValue::Vector(vector)) = shard.data.get(key).map(|entry| &entry.value)
+            {
+                vector_before.push((key_string(key), vector.dims));
+            }
+            if shard
+                .data
+                .get(key)
+                .is_some_and(|entry| entry.is_expired_at(self.now))
+            {
+                let expired = shard
+                    .data
+                    .remove(key)
+                    .expect("the expired table entry was just observed");
+                memory_deltas[shard_index] -= estimate_entry_memory(key, &expired.value) as isize;
+                key_delta -= 1;
+            }
+        }
+        let lru_clock = store.lru_clock();
+
+        for operation in self.operations {
+            let key = match &operation {
+                TableBatchOp::SetString(key, _)
+                | TableBatchOp::HashSet(key, _)
+                | TableBatchOp::HashDelete(key, _)
+                | TableBatchOp::HashDeleteIfValue(key, _, _)
+                | TableBatchOp::SetAdd(key, _)
+                | TableBatchOp::SetRemove(key, _)
+                | TableBatchOp::SortedSetAdd(key, _, _)
+                | TableBatchOp::SortedSetRemove(key, _)
+                | TableBatchOp::VectorSet(key, _, _, _)
+                | TableBatchOp::Delete(key) => key,
+            };
+            let shard_index = store.shard_index(key);
+            let shard = &mut shards[shard_positions[shard_index]];
+            match operation {
+                TableBatchOp::SetString(key, value) => {
+                    let key_len = key.len();
+                    let value_len = value.len();
+                    let previous = shard.data.insert(
+                        key,
+                        Entry {
+                            value: StoreValue::Str(Bytes::from(value)),
+                            expires_at: None,
+                            lru_clock,
+                        },
+                    );
+                    if let Some(previous) = previous {
+                        let old_len = match previous.value {
+                            StoreValue::Str(value) => value.len(),
+                            StoreValue::StrBuf(value) => value.len(),
+                            _ => unreachable!(
+                                "table string type was validated before journal publication"
+                            ),
+                        };
+                        memory_deltas[shard_index] += value_len as isize - old_len as isize;
+                    } else {
+                        memory_deltas[shard_index] += (key_len + 64 + value_len) as isize;
+                        key_delta += 1;
+                    }
+                }
+                TableBatchOp::HashSet(key, pairs) => {
+                    if !shard.data.contains_key(&key) {
+                        memory_deltas[shard_index] += (key.len() + 64) as isize;
+                        key_delta += 1;
+                    }
+                    let entry = shard.data.entry(key).or_insert_with(|| Entry {
+                        value: TableEntryKind::Hash.empty(),
+                        expires_at: None,
+                        lru_clock,
+                    });
+                    let StoreValue::Hash(fields) = &mut entry.value else {
+                        unreachable!("table hash type was validated before journal publication")
+                    };
+                    for (field, value) in pairs {
+                        fields.expiries.remove(&field);
+                        let value_len = value.len();
+                        if let Some(previous) =
+                            fields.fields.insert(field.clone(), Bytes::from(value))
+                        {
+                            memory_deltas[shard_index] +=
+                                value_len as isize - previous.len() as isize;
+                        } else {
+                            memory_deltas[shard_index] += (field.len() + value_len + 64) as isize;
+                        }
+                    }
+                    entry.expires_at = None;
+                    entry.lru_clock = lru_clock;
+                }
+                TableBatchOp::HashDelete(key, fields_to_delete) => {
+                    let mut remove_key = false;
+                    if let Some(entry) = shard.data.get_mut(&key) {
+                        if !entry.is_expired_at(self.now) {
+                            let StoreValue::Hash(fields) = &mut entry.value else {
+                                unreachable!(
+                                    "table hash type was validated before journal publication"
+                                )
+                            };
+                            for field in fields_to_delete {
+                                if let Some(value) = fields.fields.remove(&field) {
+                                    memory_deltas[shard_index] -=
+                                        (field.len() + value.len() + 64) as isize;
+                                }
+                                fields.expiries.remove(&field);
+                            }
+                            remove_key = fields.fields.is_empty();
+                        }
+                    }
+                    if remove_key {
+                        shard.data.remove(&key);
+                        memory_deltas[shard_index] -= (key.len() + 64) as isize;
+                        key_delta -= 1;
+                    }
+                }
+                TableBatchOp::HashDeleteIfValue(key, field, expected) => {
+                    let mut remove_key = false;
+                    if let Some(entry) = shard.data.get_mut(&key) {
+                        if !entry.is_expired_at(self.now) {
+                            let StoreValue::Hash(fields) = &mut entry.value else {
+                                unreachable!(
+                                    "table hash type was validated before journal publication"
+                                )
+                            };
+                            if fields
+                                .fields
+                                .get(&field)
+                                .is_some_and(|value| value.as_ref() == expected.as_slice())
+                            {
+                                let value = fields
+                                    .fields
+                                    .remove(&field)
+                                    .expect("the conditional hash field was just observed");
+                                memory_deltas[shard_index] -=
+                                    (field.len() + value.len() + 64) as isize;
+                                fields.expiries.remove(&field);
+                                remove_key = fields.fields.is_empty();
+                            }
+                        }
+                    }
+                    if remove_key {
+                        shard.data.remove(&key);
+                        memory_deltas[shard_index] -= (key.len() + 64) as isize;
+                        key_delta -= 1;
+                    }
+                }
+                TableBatchOp::SetAdd(key, member) => {
+                    if !shard.data.contains_key(&key) {
+                        memory_deltas[shard_index] += (key.len() + 64) as isize;
+                        key_delta += 1;
+                    }
+                    let entry = shard.data.entry(key).or_insert_with(|| Entry {
+                        value: TableEntryKind::Set.empty(),
+                        expires_at: None,
+                        lru_clock,
+                    });
+                    let StoreValue::Set(members) = &mut entry.value else {
+                        unreachable!("table set type was validated before journal publication")
+                    };
+                    let member_len = member.len();
+                    if members.insert(member) {
+                        memory_deltas[shard_index] += (member_len + 32) as isize;
+                    }
+                    entry.expires_at = None;
+                    entry.lru_clock = lru_clock;
+                }
+                TableBatchOp::SetRemove(key, member) => {
+                    if let Some(entry) = shard.data.get_mut(&key) {
+                        if !entry.is_expired_at(self.now) {
+                            let StoreValue::Set(members) = &mut entry.value else {
+                                unreachable!(
+                                    "table set type was validated before journal publication"
+                                )
+                            };
+                            if members.remove(&member) {
+                                memory_deltas[shard_index] -= (member.len() + 32) as isize;
+                            }
+                        }
+                    }
+                }
+                TableBatchOp::SortedSetAdd(key, member, score) => {
+                    if !shard.data.contains_key(&key) {
+                        memory_deltas[shard_index] += (key.len() + 64) as isize;
+                        key_delta += 1;
+                    }
+                    let entry = shard.data.entry(key).or_insert_with(|| Entry {
+                        value: TableEntryKind::SortedSet.empty(),
+                        expires_at: None,
+                        lru_clock,
+                    });
+                    let StoreValue::SortedSet(tree, scores) = &mut entry.value else {
+                        unreachable!(
+                            "table sorted-set type was validated before journal publication"
+                        )
+                    };
+                    if let Some(previous) = scores.insert(member.clone(), score) {
+                        tree.remove(&(OrderedFloat(previous), member.clone()));
+                    } else {
+                        memory_deltas[shard_index] += (member.len() + 48) as isize;
+                    }
+                    tree.insert((OrderedFloat(score), member), ());
+                    entry.expires_at = None;
+                    entry.lru_clock = lru_clock;
+                }
+                TableBatchOp::SortedSetRemove(key, member) => {
+                    if let Some(entry) = shard.data.get_mut(&key) {
+                        if !entry.is_expired_at(self.now) {
+                            let StoreValue::SortedSet(tree, scores) = &mut entry.value else {
+                                unreachable!(
+                                    "table sorted-set type was validated before journal publication"
+                                )
+                            };
+                            if let Some(score) = scores.remove(&member) {
+                                let member_len = member.len();
+                                tree.remove(&(OrderedFloat(score), member));
+                                memory_deltas[shard_index] -= (member_len + 48) as isize;
+                            }
+                        }
+                    }
+                }
+                TableBatchOp::VectorSet(key, data, metadata, encrypted) => {
+                    let key_len = key.len();
+                    let value_size = 16 + data.len() * 4 + metadata.as_ref().map_or(0, String::len);
+                    let previous = shard.data.insert(
+                        key,
+                        Entry {
+                            value: StoreValue::Vector(VectorData {
+                                dims: data.len() as u32,
+                                data,
+                                metadata,
+                                encrypted,
+                            }),
+                            expires_at: None,
+                            lru_clock,
+                        },
+                    );
+                    if let Some(previous) = previous {
+                        let StoreValue::Vector(previous) = previous.value else {
+                            unreachable!(
+                                "table vector type was validated before journal publication"
+                            )
+                        };
+                        let old_size = 16
+                            + previous.data.len() * 4
+                            + previous.metadata.as_ref().map_or(0, String::len);
+                        memory_deltas[shard_index] += value_size as isize - old_size as isize;
+                    } else {
+                        memory_deltas[shard_index] += (key_len + 64 + value_size) as isize;
+                        key_delta += 1;
+                    }
+                }
+                TableBatchOp::Delete(key) => {
+                    if let Some(previous) = shard.data.remove(&key) {
+                        memory_deltas[shard_index] -=
+                            estimate_entry_memory(&key, &previous.value) as isize;
+                        key_delta -= 1;
+                    }
+                }
+            }
+        }
+
+        let mut inserted_vectors = Vec::new();
+        for key in keys {
+            let shard_index = store.shard_index(&key);
+            let shard = &shards[shard_positions[shard_index]];
+            if let Some(StoreValue::Vector(vector)) = shard.data.get(&key).map(|entry| &entry.value)
+            {
+                inserted_vectors.push((key_string(&key), vector.dims, vector.data.clone()));
+            }
+        }
+
+        for (shard_index, shard) in shard_indices.iter().copied().zip(shards.iter_mut()) {
+            let delta = memory_deltas[shard_index];
+            if delta >= 0 {
+                let added = delta as usize;
+                shard.used_memory += added;
+                store.mem_add(added);
+            } else {
+                let removed = (-delta) as usize;
+                shard.used_memory = shard.used_memory.saturating_sub(removed);
+                store.mem_sub(removed);
+            }
+        }
+        if key_delta >= 0 {
+            for _ in 0..key_delta as usize {
+                store.key_added();
+            }
+        } else {
+            for _ in 0..(-key_delta) as usize {
+                store.key_removed();
+            }
+        }
+        for shard in &mut shards {
+            shard.version += 1;
+        }
+        for (key, dims) in vector_before {
+            store.remove_vector_indexes(&key, dims);
+        }
+        for (key, dims, data) in inserted_vectors {
+            store.insert_vector_indexes(key, dims, data);
+        }
+    }
 }
 
 #[inline(always)]
@@ -351,12 +1432,29 @@ fn parse_table_vector_key(key: &str) -> Option<(&str, &str, &str)> {
     Some((table, field, pk))
 }
 
+fn parse_table_row_key(key: &str) -> Option<(&str, &str)> {
+    let rest = key.strip_prefix("_t:")?;
+    let (table, pk) = rest.split_once(":row:")?;
+    if table.is_empty() || pk.is_empty() {
+        return None;
+    }
+    Some((table, pk))
+}
+
 fn table_vector_index_name(table: &str, field: &str) -> String {
     format!("{}.{}", table, field)
 }
 
 fn table_vector_key_for_pk(table: &str, field: &str, pk: &str) -> String {
     format!("_t:{}:vec:{}:{}", table, field, pk)
+}
+
+fn encrypted_value_would_be_orphaned(value: &[u8], remaining_key_ids: &HashSet<String>) -> bool {
+    crate::vendor::lux::encryption::EncryptionKeyring::is_encrypted_value(value)
+        && !crate::vendor::lux::encryption::EncryptionKeyring::envelope_decryptable_by_any(
+            value,
+            remaining_key_ids,
+        )
 }
 
 pub(crate) struct TableVectorCandidateQuery<'a> {
@@ -406,11 +1504,6 @@ pub fn estimate_entry_memory<K: AsRef<[u8]>>(key: K, value: &StoreValue) -> usiz
 }
 
 impl Store {
-    /// Emit a warning from places that only have access to `self`.
-    fn emit_warn(&self, event: crate::vendor::lux::ServerWarnEvent) {
-        crate::vendor::lux::emit_warn(&self.config, event);
-    }
-
     /// Emit an error from places that only have access to `self`.
     fn emit_error(&self, event: crate::vendor::lux::ServerErrorEvent) {
         crate::vendor::lux::emit_error(&self.config, event);
@@ -455,10 +1548,39 @@ impl Store {
 
     #[cfg(any())]
     pub fn new() -> Self {
-        Self::new_with_config(Arc::new(crate::vendor::lux::ServerConfig::default()))
+        let mut config = crate::vendor::lux::ServerConfig::default();
+        config.durability.policy = crate::vendor::lux::DurabilityPolicy::Ephemeral;
+        config.save_interval = Duration::ZERO;
+        Self::new_with_config(Arc::new(config))
     }
 
-    pub fn new_with_config(config: Arc<crate::vendor::lux::ServerConfig>) -> Self {
+    #[cfg(any(test, feature = "fuzzing"))]
+    pub fn new_with_config(mut config: Arc<crate::vendor::lux::ServerConfig>) -> Self {
+        // Most unit-test fixtures override one unrelated setting on top of the
+        // public defaults. Do not let those fixtures create a journal in the
+        // source tree; persistence tests opt in with an isolated data_dir.
+        if config.data_dir == "."
+            && config.storage.mode == crate::vendor::lux::StorageMode::Memory
+            && config.durability == crate::vendor::lux::DurabilityConfig::default()
+        {
+            Arc::make_mut(&mut config).durability.policy =
+                crate::vendor::lux::DurabilityPolicy::Ephemeral;
+        }
+        Self::try_new_with_config(config)
+            .unwrap_or_else(|error| panic!("failed to initialize Store: {error}"))
+    }
+
+    pub(crate) fn try_new_with_config(
+        config: Arc<crate::vendor::lux::ServerConfig>,
+    ) -> std::io::Result<Self> {
+        let encryption = crate::vendor::lux::encryption::EncryptionKeyring::open(
+            &config.encryption,
+            &config.data_dir,
+        )
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
+        let auth_secret_storage_degraded = config.auth.enabled
+            && !config.durability.policy.is_persistent()
+            && !encryption.has_active_key();
         let n = config.shards;
         let shards: Vec<RwLock<Shard>> = (0..n)
             .map(|_| {
@@ -470,50 +1592,613 @@ impl Store {
             })
             .collect();
 
-        let disk_shard_count = n.min(64);
-        let (disk_shards, wal_shards) = if config.storage.mode
-            == crate::vendor::lux::disk::StorageMode::Tiered
-        {
+        let persistence_shard_count = n.min(64);
+        let disk_shards = if config.storage.mode == crate::vendor::lux::disk::StorageMode::Tiered {
             let dir = std::path::Path::new(&config.storage.dir);
             let ds: Vec<parking_lot::Mutex<crate::vendor::lux::disk::DiskShard>> = (0
-                ..disk_shard_count)
+                ..persistence_shard_count)
                 .map(|i| {
                     // DiskShard records rebuild corruption locally; surface it
                     // through the configured callback while startup is still synchronous.
-                    let mut shard = crate::vendor::lux::disk::DiskShard::open(dir, i)
-                        .unwrap_or_else(|e| panic!("failed to open disk shard {i}: {e}"));
+                    let mut shard = crate::vendor::lux::disk::DiskShard::open(dir, i)?;
                     Self::emit_disk_rebuild_report(&config, i, shard.take_rebuild_report());
-                    parking_lot::Mutex::new(shard)
+                    Ok(parking_lot::Mutex::new(shard))
                 })
-                .collect();
-            let ws: Vec<parking_lot::Mutex<crate::vendor::lux::disk::Wal>> = (0..disk_shard_count)
-                .map(|i| {
-                    parking_lot::Mutex::new(
-                        crate::vendor::lux::disk::Wal::open(dir, i)
-                            .unwrap_or_else(|e| panic!("failed to open WAL {i}: {e}")),
-                    )
-                })
-                .collect();
-            (Some(ds.into_boxed_slice()), Some(ws.into_boxed_slice()))
+                .collect::<std::io::Result<_>>()?;
+            Some(ds.into_boxed_slice())
         } else {
-            (None, None)
+            None
         };
+        let (journal, legacy_wals) = if config.durability.policy.is_persistent() {
+            let dir = config.journal_dir();
+            let required_journals =
+                crate::vendor::lux::snapshot::required_existing_journals(&config)?;
+            let mut legacy = Vec::new();
+            let mut opened_journals = HashSet::new();
+            for shard in 0..persistence_shard_count {
+                let name = format!("shard_{shard}");
+                let path = dir.join(&name).join("wal.lux");
+                if path.exists() {
+                    legacy.push((
+                        shard,
+                        parking_lot::Mutex::new(crate::vendor::lux::disk::Wal::open(&dir, shard)?),
+                    ));
+                    opened_journals.insert(name);
+                }
+            }
+            if let Some(missing) = required_journals
+                .iter()
+                .find(|name| name.as_str() != "global" && !opened_journals.contains(*name))
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "refusing to create or ignore the missing journal {missing} recorded by the snapshot"
+                    ),
+                ));
+            }
+            let global = if required_journals.contains("global") {
+                crate::vendor::lux::disk::Wal::open_named_existing(&dir, "global").map_err(|error| {
+                    if error.kind() == std::io::ErrorKind::NotFound {
+                        std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "refusing to create a missing journal beside an existing journal-aware snapshot",
+                        )
+                    } else {
+                        error
+                    }
+                })?
+            } else {
+                crate::vendor::lux::disk::Wal::open_named(&dir, "global")?
+            };
+            (
+                Some(parking_lot::Mutex::new(global)),
+                legacy.into_boxed_slice(),
+            )
+        } else {
+            (None, Vec::new().into_boxed_slice())
+        };
+        let journal_gates = (0..persistence_shard_count)
+            .map(|_| parking_lot::ReentrantMutex::new(()))
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
 
-        Self {
+        Ok(Self {
             config,
+            encryption,
+            auth_secret_storage_degraded: AtomicBool::new(auth_secret_storage_degraded),
+            api_key_cache: parking_lot::RwLock::new(std::collections::HashMap::new()),
             shards: shards.into_boxed_slice(),
             metrics: StoreMetrics::new(),
             script_gate: RwLock::new(()),
             vector_indexes: RwLock::new(HashMap::with_hasher(FxBuildHasher)),
             table_vector_indexes: RwLock::new(HashMap::with_hasher(FxBuildHasher)),
             disk_shards,
-            wal_shards,
+            journal,
+            legacy_wals,
+            recovery_wal_checkpoints: parking_lot::Mutex::new(HashMap::new()),
+            execution_gate: RwLock::new(()),
+            journal_gates,
+            table_mutation_gate: parking_lot::ReentrantMutex::new(()),
+            table_publication: AtomicU64::new(0),
+            recovery_expiry_sentinel: parking_lot::Mutex::new(None),
             wal_suppress: std::sync::atomic::AtomicBool::new(false),
-        }
+            replaying_wal: std::sync::atomic::AtomicBool::new(false),
+            journal_poisoned: std::sync::atomic::AtomicBool::new(false),
+            accepting_mutations: std::sync::atomic::AtomicBool::new(true),
+            snapshot_gate: parking_lot::Mutex::new(()),
+            background_save_tx: std::sync::OnceLock::new(),
+            background_save_stopping: std::sync::atomic::AtomicBool::new(false),
+            snapshot_status: parking_lot::Mutex::new(SnapshotStatus::default()),
+            #[cfg(any())]
+            journal_failures_to_inject: AtomicUsize::new(0),
+            #[cfg(any())]
+            journal_fsync_failures_to_inject: AtomicUsize::new(0),
+            #[cfg(any())]
+            snapshot_failures_to_inject: AtomicUsize::new(0),
+            #[cfg(any())]
+            snapshot_after_capture_hook: parking_lot::Mutex::new(None),
+            #[cfg(any())]
+            table_read_after_first_row_hook: parking_lot::Mutex::new(None),
+            #[cfg(any())]
+            exec_after_command_hook: parking_lot::Mutex::new(None),
+            row_delta_broker: std::sync::OnceLock::new(),
+        })
     }
 
     pub fn config(&self) -> &crate::vendor::lux::ServerConfig {
         &self.config
+    }
+
+    pub(crate) fn snapshot_guard(&self) -> parking_lot::MutexGuard<'_, ()> {
+        self.snapshot_gate.lock()
+    }
+
+    pub(crate) fn install_background_save_sender(
+        &self,
+        sender: std::sync::mpsc::SyncSender<crate::vendor::lux::snapshot::SnapshotWorkerMessage>,
+    ) -> std::io::Result<()> {
+        self.background_save_tx.set(sender).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "background snapshot worker is already installed",
+            )
+        })
+    }
+
+    pub(crate) fn request_background_save(&self) -> Result<(), BackgroundSaveRequestError> {
+        if self.background_save_stopping.load(Ordering::Acquire) {
+            return Err(BackgroundSaveRequestError::Unavailable);
+        }
+        let Some(sender) = self.background_save_tx.get() else {
+            return Err(BackgroundSaveRequestError::Unavailable);
+        };
+        let mut status = self.snapshot_status.lock();
+        if self.background_save_stopping.load(Ordering::Acquire) {
+            return Err(BackgroundSaveRequestError::Unavailable);
+        }
+        if status.phase.in_progress() {
+            return Err(BackgroundSaveRequestError::Busy);
+        }
+        status.phase = BackgroundSavePhase::Queued;
+        status.started_at = Some(Instant::now());
+        match sender.try_send(crate::vendor::lux::snapshot::SnapshotWorkerMessage::Save) {
+            Ok(()) => Ok(()),
+            Err(std::sync::mpsc::TrySendError::Full(_)) => {
+                status.phase = BackgroundSavePhase::Idle;
+                status.started_at = None;
+                Err(BackgroundSaveRequestError::Busy)
+            }
+            Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+                status.phase = BackgroundSavePhase::Idle;
+                status.started_at = None;
+                Err(BackgroundSaveRequestError::Unavailable)
+            }
+        }
+    }
+
+    pub(crate) fn begin_scheduled_background_save(&self) -> bool {
+        let mut status = self.snapshot_status.lock();
+        if self.background_save_stopping.load(Ordering::Acquire) || status.phase.in_progress() {
+            return false;
+        }
+        status.phase = BackgroundSavePhase::Queued;
+        status.started_at = Some(Instant::now());
+        true
+    }
+
+    pub(crate) fn set_background_save_phase(&self, phase: BackgroundSavePhase) {
+        let mut status = self.snapshot_status.lock();
+        status.phase = phase;
+        if phase == BackgroundSavePhase::Idle {
+            status.started_at = None;
+        }
+    }
+
+    pub(crate) fn finish_background_save(
+        &self,
+        result: &std::io::Result<usize>,
+        duration: Duration,
+    ) {
+        let mut status = self.snapshot_status.lock();
+        status.phase = BackgroundSavePhase::Idle;
+        status.started_at = None;
+        status.last_duration_ms = duration.as_millis().min(u64::MAX as u128) as u64;
+        match result {
+            Ok(keys) => {
+                status.last_keys = *keys;
+                status.last_status = "ok";
+                status.last_error = None;
+            }
+            Err(error) => {
+                status.last_status = "err";
+                status.last_error = Some(sanitize_info_value(&error.to_string()));
+            }
+        }
+    }
+
+    pub(crate) fn snapshot_status(&self) -> SnapshotStatus {
+        self.snapshot_status.lock().clone()
+    }
+
+    pub(crate) fn stop_background_saves(&self) {
+        let _status = self.snapshot_status.lock();
+        self.background_save_stopping.store(true, Ordering::Release);
+    }
+
+    #[cfg(any())]
+    pub(crate) fn set_snapshot_after_capture_hook(
+        &self,
+        hook: Arc<dyn Fn() + Send + Sync + 'static>,
+    ) {
+        *self.snapshot_after_capture_hook.lock() = Some(hook);
+    }
+
+    #[cfg(any())]
+    pub(crate) fn run_snapshot_after_capture_hook(&self) {
+        if let Some(hook) = self.snapshot_after_capture_hook.lock().clone() {
+            hook();
+        }
+    }
+
+    #[cfg(any())]
+    pub(crate) fn inject_snapshot_failures(&self, count: usize) {
+        self.snapshot_failures_to_inject
+            .store(count, Ordering::Release);
+    }
+
+    #[cfg(any())]
+    pub(crate) fn fail_snapshot_before_install_if_injected(&self) -> std::io::Result<()> {
+        if self
+            .snapshot_failures_to_inject
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
+                remaining.checked_sub(1)
+            })
+            .is_ok()
+        {
+            Err(std::io::Error::other(
+                "injected snapshot failure before install",
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    pub(crate) fn encryption(&self) -> &crate::vendor::lux::encryption::EncryptionKeyring {
+        &self.encryption
+    }
+
+    pub(crate) fn auth_secret_storage_degraded(&self) -> bool {
+        self.auth_secret_storage_degraded.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn set_auth_secret_storage_degraded(&self, degraded: bool) {
+        self.auth_secret_storage_degraded
+            .store(degraded, Ordering::Release);
+    }
+
+    pub(crate) fn begin_recovery(&self) {
+        // The sentinel only needs to outlive synchronous startup replay. Its
+        // exact value, rather than elapsed time, identifies staged entries.
+        let sentinel = Instant::now() + Duration::from_secs(365 * 24 * 60 * 60);
+        *self.recovery_expiry_sentinel.lock() = Some(sentinel);
+        self.recovery_wal_checkpoints.lock().clear();
+    }
+
+    pub(crate) fn set_recovery_wal_checkpoints(
+        &self,
+        checkpoints: HashMap<String, crate::vendor::lux::disk::WalCheckpoint>,
+    ) {
+        *self.recovery_wal_checkpoints.lock() = checkpoints;
+    }
+
+    pub(crate) fn stage_expired_recovery_entry(&self, key: String, value: DumpValue) {
+        let sentinel = self
+            .recovery_expiry_sentinel
+            .lock()
+            .expect("recovery must begin before expired entries are staged");
+        let key_bytes = key.as_bytes().to_vec();
+        self.load_entry(key, value, None);
+        let idx = self.shard_index(&key_bytes);
+        let mut shard = self.shards[idx].write();
+        if let Some(entry) = shard.data.get_mut(&key_bytes) {
+            entry.expires_at = Some(sentinel);
+        }
+    }
+
+    pub(crate) fn finish_recovery(&self) {
+        self.recovery_wal_checkpoints.lock().clear();
+        let Some(sentinel) = self.recovery_expiry_sentinel.lock().take() else {
+            return;
+        };
+        let staged: Vec<Vec<u8>> = self
+            .shards
+            .iter()
+            .flat_map(|shard| {
+                let shard = shard.read();
+                shard
+                    .data
+                    .iter()
+                    .filter(|(_, entry)| entry.expires_at == Some(sentinel))
+                    .map(|(key, _)| key.clone())
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        for key in staged {
+            self.del(&[key.as_slice()]);
+        }
+    }
+
+    /// Rewrap any encrypted values inside a cold-tier `DumpValue` under the
+    /// current keyset. Returns true if anything was re-encrypted. Mirrors the
+    /// in-memory rewrap AAD slots. Vectors never cold-tier (pinned hot).
+    fn reencrypt_cold_dump_value(&self, key: &str, value: &mut DumpValue) -> Result<bool, String> {
+        use crate::vendor::lux::encryption::EncryptionKeyring as E;
+        let mut changed = false;
+        match value {
+            DumpValue::Str(v) => {
+                if E::is_encrypted_value(v) {
+                    *v = self.encryption().reencrypt("__lux_kv", "value", key, v)?;
+                    changed = true;
+                }
+            }
+            DumpValue::Hash(pairs, _) => {
+                for (field, v) in pairs.iter_mut() {
+                    if E::is_encrypted_value(v) {
+                        *v = self.encryption().reencrypt("__lux_hash", field, key, v)?;
+                        changed = true;
+                    }
+                }
+            }
+            DumpValue::List(items) => {
+                for v in items.iter_mut() {
+                    if E::is_encrypted_value(v) {
+                        *v = self
+                            .encryption()
+                            .reencrypt("__lux_list", "element", "", v)?;
+                        changed = true;
+                    }
+                }
+            }
+            DumpValue::Stream(entries, _, _) => {
+                for (_id, fields) in entries.iter_mut() {
+                    for (field, v) in fields.iter_mut() {
+                        if E::is_encrypted_value(v) {
+                            *v = self.encryption().reencrypt("__lux_stream", field, key, v)?;
+                            changed = true;
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        Ok(changed)
+    }
+
+    /// True if any encrypted value in a cold-tier `DumpValue` would become
+    /// undecryptable without the retiring key.
+    fn dump_value_would_orphan(value: &DumpValue, remaining: &HashSet<String>) -> bool {
+        match value {
+            DumpValue::Str(v) => encrypted_value_would_be_orphaned(v, remaining),
+            DumpValue::Hash(pairs, _) => pairs
+                .iter()
+                .any(|(_, v)| encrypted_value_would_be_orphaned(v, remaining)),
+            DumpValue::List(items) => items
+                .iter()
+                .any(|v| encrypted_value_would_be_orphaned(v, remaining)),
+            DumpValue::Stream(entries, _, _) => entries.iter().any(|(_, fields)| {
+                fields
+                    .iter()
+                    .any(|(_, v)| encrypted_value_would_be_orphaned(v, remaining))
+            }),
+            _ => false,
+        }
+    }
+
+    pub(crate) fn enc_rewrap_all(&self) -> Result<usize, String> {
+        let mut count = 0usize;
+        for idx in 0..self.shards.len() {
+            let mut shard = self.shards[idx].write();
+            let mut shard_changed = false;
+            let mut mem_delta: isize = 0;
+            let mut disk_remove = Vec::new();
+            for (key, entry) in shard.data.iter_mut() {
+                if entry.is_expired_at(Instant::now()) {
+                    continue;
+                }
+                match &mut entry.value {
+                    StoreValue::Str(value) => {
+                        if crate::vendor::lux::encryption::EncryptionKeyring::is_encrypted_value(
+                            value,
+                        ) {
+                            let key_name = key_string(key);
+                            let new_value = self
+                                .encryption()
+                                .reencrypt("__lux_kv", "value", &key_name, value)?;
+                            mem_delta += new_value.len() as isize - value.len() as isize;
+                            *value = Bytes::from(new_value);
+                            count += 1;
+                            shard_changed = true;
+                            disk_remove.push(key.clone());
+                        }
+                    }
+                    StoreValue::StrBuf(value) => {
+                        if crate::vendor::lux::encryption::EncryptionKeyring::is_encrypted_value(
+                            value,
+                        ) {
+                            let key_name = key_string(key);
+                            let new_value = self
+                                .encryption()
+                                .reencrypt("__lux_kv", "value", &key_name, value)?;
+                            mem_delta += new_value.len() as isize - value.len() as isize;
+                            *value = new_value;
+                            count += 1;
+                            shard_changed = true;
+                            disk_remove.push(key.clone());
+                        }
+                    }
+                    StoreValue::Hash(map) => {
+                        let key_name = key_string(key);
+                        let table_row = parse_table_row_key(&key_name)
+                            .map(|(table, pk)| (table.to_string(), pk.to_string()));
+                        for (field, value) in map.iter_mut() {
+                            if !crate::vendor::lux::encryption::EncryptionKeyring::is_encrypted_value(value) {
+                                continue;
+                            }
+                            let new_value = if let Some((table, pk)) = &table_row {
+                                self.encryption().reencrypt(table, field, pk, value)?
+                            } else {
+                                self.encryption().reencrypt(
+                                    "__lux_hash",
+                                    field,
+                                    &key_name,
+                                    value,
+                                )?
+                            };
+                            mem_delta += new_value.len() as isize - value.len() as isize;
+                            *value = Bytes::from(new_value);
+                            count += 1;
+                            shard_changed = true;
+                            disk_remove.push(key.clone());
+                        }
+                    }
+                    StoreValue::List(list) => {
+                        for elem in list.iter_mut() {
+                            if !crate::vendor::lux::encryption::EncryptionKeyring::is_encrypted_value(elem) {
+                                continue;
+                            }
+                            let new_value =
+                                self.encryption()
+                                    .reencrypt("__lux_list", "element", "", elem)?;
+                            mem_delta += new_value.len() as isize - elem.len() as isize;
+                            *elem = Bytes::from(new_value);
+                            count += 1;
+                            shard_changed = true;
+                            disk_remove.push(key.clone());
+                        }
+                    }
+                    StoreValue::Stream(stream) => {
+                        let key_name = key_string(key);
+                        for fields in stream.entries.values_mut() {
+                            for (field, value) in fields.iter_mut() {
+                                if !crate::vendor::lux::encryption::EncryptionKeyring::is_encrypted_value(value)
+                                {
+                                    continue;
+                                }
+                                let new_value = self.encryption().reencrypt(
+                                    "__lux_stream",
+                                    field,
+                                    &key_name,
+                                    value,
+                                )?;
+                                mem_delta += new_value.len() as isize - value.len() as isize;
+                                *value = Bytes::from(new_value);
+                                count += 1;
+                                shard_changed = true;
+                                disk_remove.push(key.clone());
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if shard_changed {
+                shard.version += 1;
+                if mem_delta > 0 {
+                    shard.used_memory += mem_delta as usize;
+                    self.mem_add(mem_delta as usize);
+                } else if mem_delta < 0 {
+                    let freed = (-mem_delta) as usize;
+                    shard.used_memory = shard.used_memory.saturating_sub(freed);
+                    self.mem_sub(freed);
+                }
+            }
+            drop(shard);
+            for key in disk_remove {
+                self.remove_from_disk(&key);
+            }
+        }
+        // Cold-tiered encrypted values live on disk, invisible to the in-RAM
+        // pass above; rewrap them in place too so a later RETIRE can't orphan them.
+        if let Some(disk_shards) = &self.disk_shards {
+            for ds in disk_shards.iter() {
+                let mut disk = ds.lock();
+                let entries = disk
+                    .dump_all(Instant::now())
+                    .map_err(|e| format!("ERR rewrap cold read failed: {e}"))?;
+                for mut entry in entries {
+                    if self.reencrypt_cold_dump_value(&entry.key, &mut entry.value)? {
+                        disk.put(&entry.key, &entry)
+                            .map_err(|e| format!("ERR rewrap cold write failed: {e}"))?;
+                        count += 1;
+                    }
+                }
+            }
+        }
+        // Make the rewrap durable: persist re-wrapped in-memory values, re-seal
+        // encrypted vectors (plaintext in RAM) under the current keyset, and
+        // truncate the WAL so a restart can't replay pre-rewrap (old-key) bytes.
+        crate::vendor::lux::snapshot::save_and_truncate_wal_consistent(self)
+            .map_err(|e| format!("ERR rewrap persist failed: {e}"))?;
+        Ok(count)
+    }
+
+    pub(crate) fn enc_retire_key(&self, key_id: &str) -> Result<(), String> {
+        let remaining = self.encryption().remaining_key_ids_without(key_id);
+        if remaining.is_empty() {
+            return Err("ERR ENC cannot retire the last key".to_string());
+        }
+        for shard in self.shards.iter() {
+            let shard = shard.read();
+            for entry in shard.data.values() {
+                match &entry.value {
+                    StoreValue::Str(value) => {
+                        if encrypted_value_would_be_orphaned(value, &remaining) {
+                            return Err(
+                                "ERR ENC key is still required by encrypted data".to_string()
+                            );
+                        }
+                    }
+                    StoreValue::StrBuf(value) => {
+                        if encrypted_value_would_be_orphaned(value, &remaining) {
+                            return Err(
+                                "ERR ENC key is still required by encrypted data".to_string()
+                            );
+                        }
+                    }
+                    StoreValue::Hash(map) => {
+                        for value in map.values() {
+                            if encrypted_value_would_be_orphaned(value, &remaining) {
+                                return Err(
+                                    "ERR ENC key is still required by encrypted data".to_string()
+                                );
+                            }
+                        }
+                    }
+                    StoreValue::List(list) => {
+                        for elem in list.iter() {
+                            if encrypted_value_would_be_orphaned(elem, &remaining) {
+                                return Err(
+                                    "ERR ENC key is still required by encrypted data".to_string()
+                                );
+                            }
+                        }
+                    }
+                    StoreValue::Stream(stream) => {
+                        for fields in stream.entries.values() {
+                            for (_field, value) in fields {
+                                if encrypted_value_would_be_orphaned(value, &remaining) {
+                                    return Err("ERR ENC key is still required by encrypted data"
+                                        .to_string());
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        // Cold-tiered encrypted values are invisible to the in-RAM scan above;
+        // scan the disk tier too so we never retire a key they still need.
+        if let Some(disk_shards) = &self.disk_shards {
+            for ds in disk_shards.iter() {
+                let mut disk = ds.lock();
+                let entries = disk
+                    .dump_all(Instant::now())
+                    .map_err(|e| format!("ERR retire cold scan failed: {e}"))?;
+                for entry in &entries {
+                    if Self::dump_value_would_orphan(&entry.value, &remaining) {
+                        return Err("ERR ENC key is still required by encrypted data".to_string());
+                    }
+                }
+            }
+        }
+        // Re-seal all at-rest data (in-memory values + plaintext-in-RAM vectors)
+        // under the current keyset and truncate the WAL before removing the key,
+        // so nothing persisted still references it.
+        crate::vendor::lux::snapshot::save_and_truncate_wal_consistent(self)
+            .map_err(|e| format!("ERR retire persist failed: {e}"))?;
+        self.encryption().retire(key_id)
     }
 
     fn insert_vector_indexes(&self, key: String, dims: u32, data: Vec<f32>) {
@@ -609,21 +2294,6 @@ impl Store {
     }
 
     #[inline(always)]
-    pub(crate) fn apply_batch_stats(&self, stats: StoreBatchStats) {
-        if stats.mem_removed != 0 {
-            self.mem_sub(stats.mem_removed);
-        }
-        if stats.mem_added != 0 {
-            self.mem_add(stats.mem_added);
-        }
-        if stats.keys_added != 0 {
-            self.metrics
-                .key_count
-                .fetch_add(stats.keys_added, Ordering::Relaxed);
-        }
-    }
-
-    #[inline(always)]
     pub(crate) fn key_removed(&self) {
         self.metrics
             .key_count
@@ -696,6 +2366,11 @@ impl Store {
         }
     }
 
+    #[inline(always)]
+    fn journal_gate_index(&self, key: &[u8]) -> usize {
+        (fx_hash(key) % self.journal_gates.len() as u64) as usize
+    }
+
     pub fn shard_for_key(&self, key: &[u8]) -> usize {
         self.shard_index(key)
     }
@@ -709,7 +2384,110 @@ impl Store {
     }
 
     pub(crate) fn wal_enabled(&self) -> bool {
-        self.wal_shards.is_some() && !self.wal_suppress.load(Ordering::Relaxed)
+        self.journal.is_some()
+            && !self.wal_suppress.load(Ordering::Relaxed)
+            && !self.journal_poisoned.load(Ordering::Acquire)
+    }
+
+    /// Whether this instance can safely accept normal traffic.
+    pub(crate) fn ready_for_traffic(&self) -> bool {
+        self.accepting_mutations.load(Ordering::Acquire)
+            && !self.journal_poisoned.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn ensure_journal_healthy(&self) -> std::io::Result<()> {
+        if self.journal_poisoned.load(Ordering::Acquire) {
+            Err(std::io::Error::other(
+                "mutation journal is unavailable; restart required",
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    pub(crate) fn begin_shutdown(&self) {
+        self.accepting_mutations.store(false, Ordering::Release);
+    }
+
+    fn ensure_accepting_mutations(&self) -> std::io::Result<()> {
+        if self.accepting_mutations.load(Ordering::Acquire) {
+            Ok(())
+        } else {
+            Err(std::io::Error::other(
+                "database is shutting down; mutations are no longer accepted",
+            ))
+        }
+    }
+
+    /// Wait for every mutation domain to leave its journal/apply section, then
+    /// force the authoritative journal to stable storage. A mutation that was
+    /// still waiting for a domain when shutdown began fails its second
+    /// `ensure_accepting_mutations` check and cannot cross this barrier later.
+    pub(crate) fn finalize_shutdown(&self) -> std::io::Result<()> {
+        self.with_write_barrier(|_| self.fsync_wal_checked())
+    }
+
+    fn poison_journal(&self) {
+        self.journal_poisoned.store(true, Ordering::Release);
+    }
+
+    /// True while `replay_wal` is re-applying logged commands. Gates internal
+    /// replay-only commands (e.g. `LXRESTORE`) so clients can't invoke them.
+    pub(crate) fn wal_replaying(&self) -> bool {
+        self.replaying_wal.load(Ordering::Acquire)
+    }
+
+    /// Wire the row-delta sink (reactive live queries) at runtime startup.
+    pub fn set_row_delta_broker(&self, broker: crate::vendor::lux::pubsub::Broker) {
+        let _ = self.row_delta_broker.set(broker);
+    }
+
+    /// Cheap gate for table mutation sites: is anyone watching row deltas right
+    /// now? Lets callers skip building old/new row snapshots when idle.
+    pub(crate) fn wants_row_deltas(&self) -> bool {
+        !self.wal_suppress.load(Ordering::Relaxed)
+            && self
+                .row_delta_broker
+                .get()
+                .is_some_and(|b| b.has_any_row_delta_subs())
+    }
+
+    /// Emit a typed row delta for a table row change. Cheap no-op unless a
+    /// broker is wired AND some live query is watching AND we aren't replaying
+    /// the WAL. The delta carries only the changed pk; the live-query engine
+    /// re-evaluates that pk against each subscription.
+    pub(crate) fn emit_row_delta(&self, table: &str, pk: &str) {
+        if self.wal_suppress.load(Ordering::Relaxed) {
+            return;
+        }
+        let Some(broker) = self.row_delta_broker.get() else {
+            return;
+        };
+        if !broker.has_any_row_delta_subs() {
+            return;
+        }
+        if self.defer_exec_row_delta(table, pk) {
+            return;
+        }
+        self.publish_row_delta(table, pk);
+    }
+
+    fn publish_row_delta(&self, table: &str, pk: &str) {
+        let Some(broker) = self.row_delta_broker.get() else {
+            return;
+        };
+        broker.publish_row_delta(crate::vendor::lux::pubsub::RowDelta {
+            table: table.to_string(),
+            pk: pk.to_string(),
+        });
+    }
+
+    /// Decode and apply an `LXRESTORE` blob (COPY's resolved journal effect). Only
+    /// honored during WAL replay.
+    pub(crate) fn apply_lxrestore(&self, blob: &[u8]) -> Result<(), String> {
+        crate::vendor::lux::snapshot::decode_dump_blob(self, blob)
+            .map(|_| ())
+            .map_err(|e| format!("ERR LXRESTORE decode failed: {e}"))
     }
 
     pub(crate) fn lock_read_shard(&self, idx: usize) -> parking_lot::RwLockReadGuard<'_, Shard> {
@@ -720,11 +2498,57 @@ impl Store {
         self.shards[idx].write()
     }
 
+    fn begin_table_publication(&self) -> TablePublication<'_> {
+        let previous = self.table_publication.fetch_add(1, Ordering::AcqRel);
+        debug_assert_eq!(previous & 1, 0);
+        TablePublication { store: self }
+    }
+
+    pub(crate) fn stable_table_read_version(&self) -> u64 {
+        loop {
+            let version = self.table_publication.load(Ordering::Acquire);
+            if version & 1 == 0 {
+                return version;
+            }
+            std::thread::yield_now();
+        }
+    }
+
+    pub(crate) fn table_read_version_is_current(&self, version: u64) -> bool {
+        self.table_publication.load(Ordering::Acquire) == version
+    }
+
+    pub(crate) fn with_consistent_table_read<T>(&self, read: impl FnOnce() -> T) -> T {
+        let _guard = self.table_mutation_gate.lock();
+        read()
+    }
+
+    #[cfg(any())]
+    pub(crate) fn set_table_read_after_first_row_hook(
+        &self,
+        hook: Arc<dyn Fn() + Send + Sync + 'static>,
+    ) {
+        *self.table_read_after_first_row_hook.lock() = Some(hook);
+    }
+
+    #[cfg(any())]
+    pub(crate) fn run_table_read_after_first_row_hook(&self) {
+        let hook = self.table_read_after_first_row_hook.lock().take();
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
+
     /// Evict a key from memory. In tiered mode, the entry is serialized to
     /// the disk shard BEFORE being removed from memory. If the disk write
-    /// fails, the entry stays in memory (no silent data loss). The shard
-    /// write lock is dropped before disk I/O to avoid blocking other operations.
+    /// fails, the entry stays in memory (no silent data loss).
     pub fn evict_key(&self, shard_idx: usize, key: &[u8]) -> bool {
+        let _table_guard = Self::is_table_storage_key(key).then(|| self.table_mutation_gate.lock());
+        // Placement changes are not journal entries, but they must serialize
+        // with the logical mutation boundary. Otherwise a prepared write could
+        // inspect the in-memory value, journal its effect, and then find that an
+        // eviction moved the value before the apply phase.
+        let _placement_guard = self.journal_gates[self.journal_gate_index(key)].lock();
         if let Some(ref disk_shards) = self.disk_shards {
             // Hold the shard lock across the disk write AND the removal so the
             // entry we serialize to disk is exactly the one we remove. Dropping
@@ -813,34 +2637,57 @@ impl Store {
 
     /// Promote a cold key from disk back to memory. Called before every
     /// command (reads AND writes) to ensure the entry is hot before operating
-    /// on it. Returns true if the key was found on disk and promoted.
+    /// on it. Returns true if the key was found on disk and promoted. A cold
+    /// read failure is surfaced rather than being indistinguishable from a
+    /// missing key.
     /// For writes like HSET/LPUSH, this preserves existing data that would
     /// otherwise be lost if the command created a new empty entry.
-    pub fn try_promote(&self, key: &[u8], now: Instant) -> bool {
+    pub fn try_promote(&self, key: &[u8], now: Instant) -> Result<bool, String> {
+        let _table_guard = Self::is_table_storage_key(key).then(|| self.table_mutation_gate.lock());
+        // Keep the disk-to-memory move indivisible with respect to prepared
+        // writes. This is reentrant when a caller already owns the key domain.
+        let _placement_guard = self.journal_gates[self.journal_gate_index(key)].lock();
         let disk_shards = match &self.disk_shards {
             Some(ds) => ds,
-            None => return false,
+            None => return Ok(false),
         };
         let didx = self.disk_shard_index(key);
         let key_string = std::str::from_utf8(key).unwrap_or_default();
 
         let mut disk = disk_shards[didx].lock();
         if !disk.contains(key_string) {
-            return false;
+            return Ok(false);
         }
 
         let result = match disk.get(key_string, now) {
             Ok(Some((value, ttl))) => Some((value, ttl)),
-            _ => None,
+            Ok(None) => return Ok(false),
+            Err(error) => {
+                // The cold tier is part of the current live state. Once it
+                // cannot be read, any mutation that treats the key as absent
+                // could overwrite or omit existing data. Fence writes until
+                // restart/recovery reconstructs a trustworthy view.
+                self.poison_journal();
+                self.emit_error(
+                    crate::vendor::lux::ServerErrorEvent::DiskPromotionReadFailed {
+                        key: key_string.to_string(),
+                        error: error.to_string(),
+                    },
+                );
+                return Err(format!(
+                    "ERR cold storage read failed for key '{}': {error}",
+                    String::from_utf8_lossy(key)
+                ));
+            }
         };
         disk.remove(key_string);
         drop(disk);
 
         if let Some((value, ttl)) = result {
             self.load_entry(key_string.to_string(), value, ttl);
-            true
+            Ok(true)
         } else {
-            false
+            Ok(false)
         }
     }
 
@@ -892,164 +2739,591 @@ impl Store {
         }
     }
 
-    /// Append a command to the per-shard WAL. Uses the key (args[1]) to
-    /// determine which shard's WAL to write to. Suppressed during WAL replay
-    /// and snapshot loading to prevent re-logging replayed commands.
+    /// Commit one mutation at the authoritative journal boundary.
     ///
-    /// Global commands (FLUSHDB, FLUSHALL) are written to ALL WAL shards
-    /// since they affect the entire keyspace.
-    pub fn wal_log_command(&self, args: &[&[u8]]) -> std::io::Result<()> {
-        if self.wal_suppress.load(std::sync::atomic::Ordering::Relaxed) {
-            return Ok(());
-        }
-        if args.is_empty() {
-            return Ok(());
-        }
-        if let Some(ref ws) = self.wal_shards {
-            let cmd = args[0];
-            let is_global =
-                cmd.eq_ignore_ascii_case(b"FLUSHDB") || cmd.eq_ignore_ascii_case(b"FLUSHALL");
-
-            if is_global {
-                // Write to ALL shards so replay on any shard triggers the flush.
-                for w in ws.iter() {
-                    let mut wal = w.lock();
-                    if let Err(e) = wal.append_command(args) {
-                        self.record_wal_append_error();
-                        self.emit_error(crate::vendor::lux::ServerErrorEvent::WalAppendFailed {
-                            error: e.to_string(),
-                        });
-                        return Err(e);
-                    }
-                }
-            } else if args.len() >= 2 {
-                let idx = self.disk_shard_index(args[1]);
-                let mut wal = ws[idx].lock();
-                if let Err(e) = wal.append_command(args) {
-                    self.record_wal_append_error();
-                    self.emit_error(crate::vendor::lux::ServerErrorEvent::WalAppendFailed {
-                        error: e.to_string(),
-                    });
-                    return Err(e);
-                }
-            }
-        }
-        Ok(())
+    /// The journal append happens before `apply`, and an append/fsync failure
+    /// prevents `apply` from running. A striped gate remains held across both
+    /// phases, so overlapping mutations are applied in the same order they are
+    /// recovered while independent keys may still proceed concurrently.
+    pub(crate) fn commit_journaled<T, F>(&self, args: &[&[u8]], apply: F) -> std::io::Result<T>
+    where
+        F: FnOnce() -> T,
+    {
+        let commit = self.begin_journaled(args)?;
+        let result = apply();
+        commit.complete()?;
+        Ok(result)
     }
 
-    pub(crate) fn wal_log_command_batch<'a>(
+    /// Commit a raw command only when its apply phase succeeds.
+    ///
+    /// A generic command cannot prove success until it runs. Keep the WAL
+    /// locked from append through apply so a rejected command can remove its
+    /// own final frame without truncating a concurrent writer. The mutation
+    /// domain guards also keep snapshots outside this decision window.
+    pub(crate) fn commit_journaled_checked<T, F>(
+        &self,
+        args: &[&[u8]],
+        apply: F,
+    ) -> std::io::Result<T>
+    where
+        F: FnOnce() -> (T, bool),
+    {
+        let prepared = self.prepare_journaled(args)?;
+        if prepared.bypassed {
+            return Ok(apply().0);
+        }
+
+        if self.in_exec_transaction() {
+            let commit = prepared.commit(args)?;
+            let (result, committed) = apply();
+            if committed {
+                commit.complete()?;
+            } else {
+                commit.rolled_back();
+            }
+            return Ok(result);
+        }
+
+        let Some(journal) = &self.journal else {
+            return Ok(apply().0);
+        };
+        let JournalPrepareGuard {
+            store,
+            _execution_guard,
+            table_guard,
+            guards,
+            bypassed: _,
+        } = prepared;
+        let mut wal = journal.lock();
+        let append_offset = self.append_journal_commands_locked(&mut wal, &[args], true)?;
+        let commit = JournalCommitGuard {
+            store,
+            _execution_guard,
+            _table_guard: table_guard,
+            _guards: guards,
+            transaction_checkpoint: None,
+            armed: true,
+        };
+        let (result, committed) = apply();
+        if !committed {
+            if let Err(error) = wal.rollback_to(append_offset) {
+                self.poison_journal();
+                self.record_wal_append_error();
+                self.emit_error(crate::vendor::lux::ServerErrorEvent::WalAppendFailed {
+                    error: error.to_string(),
+                });
+                return Err(std::io::Error::other(format!(
+                    "failed to remove rejected WAL command: {error}"
+                )));
+            }
+            commit.rolled_back();
+        } else {
+            commit.complete()?;
+        }
+        Ok(result)
+    }
+
+    /// Commit a resolved multi-effect mutation as one atomic journal append.
+    pub(crate) fn commit_journaled_batch<'a, T, F>(
         &self,
         commands: &[&'a [&'a [u8]]],
-    ) -> std::io::Result<()> {
-        if self.wal_suppress.load(std::sync::atomic::Ordering::Relaxed) || commands.is_empty() {
+        apply: F,
+    ) -> std::io::Result<T>
+    where
+        F: FnOnce() -> T,
+    {
+        let commit = self.begin_journaled_batch(commands)?;
+        let result = apply();
+        commit.complete()?;
+        Ok(result)
+    }
+
+    pub(crate) fn begin_journaled<'a>(
+        &'a self,
+        args: &[&[u8]],
+    ) -> std::io::Result<JournalCommitGuard<'a>> {
+        self.begin_journaled_batch(&[args])
+    }
+
+    pub(crate) fn begin_journaled_batch<'a>(
+        &'a self,
+        commands: &[&[&[u8]]],
+    ) -> std::io::Result<JournalCommitGuard<'a>> {
+        let prepare = self.prepare_journaled_batch(commands)?;
+        prepare.commit_batch(commands)
+    }
+
+    /// Lock the mutation domains named by `route_args` while the caller resolves
+    /// a deterministic journal command. No state may be changed until the
+    /// returned guard is successfully consumed through `commit`.
+    pub(crate) fn prepare_journaled<'a>(
+        &'a self,
+        route_args: &[&[u8]],
+    ) -> std::io::Result<JournalPrepareGuard<'a>> {
+        self.prepare_journaled_batch(&[route_args])
+    }
+
+    fn prepare_journaled_batch<'a>(
+        &'a self,
+        commands: &[&[&[u8]]],
+    ) -> std::io::Result<JournalPrepareGuard<'a>> {
+        self.ensure_accepting_mutations()?;
+        self.ensure_journal_healthy()?;
+        let execution_guard = self.execution_read_guard()?;
+        let bypassed = self.wal_suppress.load(Ordering::Relaxed)
+            || self.journal.is_none()
+            || commands.is_empty();
+        // This lock is deliberately acquired before any journal domain. A
+        // snapshot takes the same order, so cold-key promotion during table
+        // planning cannot invert a per-key gate against snapshot capture.
+        let table_guard = commands
+            .iter()
+            .any(|args| Self::requires_table_mutation_gate(args))
+            .then(|| self.table_mutation_gate.lock());
+        let guards = if self.wal_suppress.load(Ordering::Relaxed) || commands.is_empty() {
+            Vec::new()
+        } else {
+            self.journal_gate_indices(commands)
+                .iter()
+                .map(|&index| self.journal_gates[index].lock())
+                .collect()
+        };
+        self.ensure_accepting_mutations()?;
+        self.ensure_journal_healthy()?;
+        Ok(JournalPrepareGuard {
+            store: self,
+            _execution_guard: execution_guard,
+            table_guard,
+            guards,
+            bypassed,
+        })
+    }
+
+    fn requires_table_mutation_gate(args: &[&[u8]]) -> bool {
+        let Some(command) = args.first() else {
+            return false;
+        };
+        let table_command = command.eq_ignore_ascii_case(b"TCREATE")
+            || command.eq_ignore_ascii_case(b"TROWSET")
+            || command.eq_ignore_ascii_case(b"TROWDEL")
+            || command.eq_ignore_ascii_case(b"TDELETE")
+            || command.eq_ignore_ascii_case(b"TDROP")
+            || command.eq_ignore_ascii_case(b"TALTER")
+            || command.eq_ignore_ascii_case(b"TINDEX")
+            || command.eq_ignore_ascii_case(b"TDROPINDEX");
+        table_command
+            || args
+                .iter()
+                .skip(1)
+                .any(|argument| Self::is_table_storage_key(argument))
+    }
+
+    /// Resolve a state-dependent mutation while its routing gates are held,
+    /// append the resolved recovery commands, and only then apply it.
+    ///
+    /// This is the boundary for generated IDs/timestamps, encrypted envelopes,
+    /// conditional writes, random pops, and other operations whose durable form
+    /// cannot be derived from the raw client argv alone.
+    pub(crate) fn commit_prepared<P, T, E, Prepare, Apply>(
+        &self,
+        route_args: &[&[u8]],
+        prepare: Prepare,
+        apply: Apply,
+    ) -> std::io::Result<Result<T, E>>
+    where
+        Prepare: FnOnce() -> Result<JournalPlan<P>, E>,
+        Apply: FnOnce(P) -> Result<T, E>,
+    {
+        let prepared_journal = self.prepare_journaled(route_args)?;
+        let plan = match prepare() {
+            Ok(plan) => plan,
+            Err(error) => return Ok(Err(error)),
+        };
+        let arg_refs: Vec<Vec<&[u8]>> = plan
+            .commands
+            .iter()
+            .map(|command| command.iter().map(Vec::as_slice).collect())
+            .collect();
+        let command_refs: Vec<&[&[u8]]> = arg_refs.iter().map(Vec::as_slice).collect();
+        let commit = prepared_journal.commit_batch(&command_refs)?;
+        let result = apply(plan.prepared);
+        if result.is_ok() {
+            commit.complete()?;
+        }
+        Ok(result)
+    }
+
+    fn journal_gate_indices(&self, commands: &[&[&[u8]]]) -> Vec<usize> {
+        let mut all = false;
+        let mut indices = Vec::new();
+        for args in commands {
+            let Some(key) = self.journal_route_key(args) else {
+                all = true;
+                break;
+            };
+            indices.push(self.journal_gate_index(key));
+        }
+        if all {
+            return (0..self.journal_gates.len()).collect();
+        }
+        indices.sort_unstable();
+        indices.dedup();
+        indices
+    }
+
+    /// Return the serialization key for commands with one unambiguous mutation
+    /// domain. `None` deliberately takes the full write barrier: correctness is
+    /// preferable to guessing for global, script, and unresolved multi-key work.
+    fn journal_route_key<'a>(&self, args: &'a [&'a [u8]]) -> Option<&'a [u8]> {
+        let cmd = *args.first()?;
+        if cmd.eq_ignore_ascii_case(b"FLUSHDB")
+            || cmd.eq_ignore_ascii_case(b"FLUSHALL")
+            || cmd.eq_ignore_ascii_case(b"EVAL")
+            || cmd.eq_ignore_ascii_case(b"EVALSHA")
+            || cmd.eq_ignore_ascii_case(b"FCALL")
+            || cmd.eq_ignore_ascii_case(b"MSET")
+            || cmd.eq_ignore_ascii_case(b"MSETNX")
+            || cmd.eq_ignore_ascii_case(b"RENAME")
+            || cmd.eq_ignore_ascii_case(b"RENAMENX")
+            || cmd.eq_ignore_ascii_case(b"COPY")
+            || cmd.eq_ignore_ascii_case(b"SMOVE")
+            || cmd.eq_ignore_ascii_case(b"LMOVE")
+            || cmd.eq_ignore_ascii_case(b"RPOPLPUSH")
+            || cmd.eq_ignore_ascii_case(b"BITOP")
+            || cmd.eq_ignore_ascii_case(b"PFMERGE")
+            || cmd.eq_ignore_ascii_case(b"SORT")
+            || cmd.eq_ignore_ascii_case(b"GEOSEARCHSTORE")
+            || cmd.eq_ignore_ascii_case(b"GEORADIUS")
+            || cmd.eq_ignore_ascii_case(b"GEORADIUSBYMEMBER")
+            || cmd.eq_ignore_ascii_case(b"SUNIONSTORE")
+            || cmd.eq_ignore_ascii_case(b"SINTERSTORE")
+            || cmd.eq_ignore_ascii_case(b"SDIFFSTORE")
+            || cmd.eq_ignore_ascii_case(b"ZUNIONSTORE")
+            || cmd.eq_ignore_ascii_case(b"ZINTERSTORE")
+            || cmd.eq_ignore_ascii_case(b"ZDIFFSTORE")
+            || cmd.eq_ignore_ascii_case(b"ZRANGESTORE")
+        {
+            return None;
+        }
+        if (cmd.eq_ignore_ascii_case(b"DEL") || cmd.eq_ignore_ascii_case(b"UNLINK"))
+            && args.len() > 2
+        {
+            return None;
+        }
+        if cmd.eq_ignore_ascii_case(b"TCREATE")
+            || cmd.eq_ignore_ascii_case(b"TROWSET")
+            || cmd.eq_ignore_ascii_case(b"TROWDEL")
+            || cmd.eq_ignore_ascii_case(b"TDELETE")
+            || cmd.eq_ignore_ascii_case(b"TDROP")
+            || cmd.eq_ignore_ascii_case(b"TALTER")
+            || cmd.eq_ignore_ascii_case(b"TINDEX")
+            || cmd.eq_ignore_ascii_case(b"TDROPINDEX")
+        {
+            // Table constraints, cascades, and secondary indexes can cross
+            // physical keys and tables. Keep them in one reentrant domain until
+            // a future transaction layer can expose finer-grained lock sets.
+            return Some(b"\0lux:tables");
+        }
+        if cmd.eq_ignore_ascii_case(b"ENC") {
+            let subcommand = *args.get(1)?;
+            if subcommand.eq_ignore_ascii_case(b"RAWSET")
+                || subcommand.eq_ignore_ascii_case(b"RAWHSET")
+                || subcommand.eq_ignore_ascii_case(b"RAWLPUSH")
+                || subcommand.eq_ignore_ascii_case(b"RAWRPUSH")
+                || subcommand.eq_ignore_ascii_case(b"RAWVSET")
+            {
+                return args.get(2).copied();
+            }
+            return None;
+        }
+        if cmd.eq_ignore_ascii_case(b"XGROUP") {
+            return args.get(2).copied();
+        }
+        args.get(1).copied()
+    }
+
+    fn append_journal_commands(&self, commands: &[&[&[u8]]]) -> std::io::Result<()> {
+        if self.buffer_exec_journal_commands(commands) {
             return Ok(());
         }
-        let Some(ref ws) = self.wal_shards else {
+        self.append_journal_commands_physical(commands)
+    }
+
+    fn append_journal_commands_physical(&self, commands: &[&[&[u8]]]) -> std::io::Result<()> {
+        let Some(journal) = &self.journal else {
             return Ok(());
         };
 
-        let first = commands[0];
-        if first.len() < 2 {
-            return Ok(());
-        }
-        if commands.len() == 1 {
-            return self.wal_log_command(first);
-        }
-        let idx = self.disk_shard_index(first[1]);
-        if commands
-            .iter()
-            .any(|args| args.len() < 2 || self.disk_shard_index(args[1]) != idx)
-        {
-            for args in commands {
-                self.wal_log_command(args)?;
-            }
-            return Ok(());
-        }
+        let mut wal = journal.lock();
+        self.append_journal_commands_locked(&mut wal, commands, false)
+            .map(|_| ())
+    }
 
-        let mut wal = ws[idx].lock();
-        if let Err(e) = wal.append_commands(commands.iter().copied()) {
+    fn append_journal_commands_locked(
+        &self,
+        wal: &mut crate::vendor::lux::disk::Wal,
+        commands: &[&[&[u8]]],
+        checked: bool,
+    ) -> std::io::Result<u64> {
+        #[cfg(any())]
+        if self
+            .journal_failures_to_inject
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |remaining| {
+                remaining.checked_sub(1)
+            })
+            .is_ok()
+        {
+            let error = std::io::Error::other("injected journal append failure");
             self.record_wal_append_error();
             self.emit_error(crate::vendor::lux::ServerErrorEvent::WalAppendFailed {
-                error: e.to_string(),
+                error: error.to_string(),
             });
-            return Err(e);
+            return Err(error);
         }
-        Ok(())
+
+        self.ensure_journal_healthy()?;
+        let append_offset = wal.end_offset()?;
+        let append_result = if checked {
+            let [command] = commands else {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "checked journal append requires exactly one command",
+                ));
+            };
+            wal.append_checked_command(command)
+        } else {
+            wal.append_commands(commands.iter().copied())
+        };
+        if let Err(error) = append_result {
+            let rollback_error = wal.rollback_to(append_offset).err();
+            if rollback_error.is_some() {
+                self.poison_journal();
+            }
+            self.record_wal_append_error();
+            self.emit_error(crate::vendor::lux::ServerErrorEvent::WalAppendFailed {
+                error: error.to_string(),
+            });
+            return Err(match rollback_error {
+                Some(rollback_error) => std::io::Error::other(format!(
+                    "WAL append failed ({error}); rollback also failed ({rollback_error})"
+                )),
+                None => error,
+            });
+        }
+        if self.config.durability.policy.syncs_each_append() {
+            if let Err(error) = self.sync_journal_locked(wal) {
+                let rollback_error = wal.rollback_to(append_offset).err();
+                if rollback_error.is_some() {
+                    self.poison_journal();
+                }
+                self.record_wal_fsync_error();
+                self.emit_error(crate::vendor::lux::ServerErrorEvent::WalFsyncFailed {
+                    error: error.to_string(),
+                });
+                return Err(match rollback_error {
+                    Some(rollback_error) => std::io::Error::other(format!(
+                        "WAL fsync failed ({error}); rollback also failed ({rollback_error})"
+                    )),
+                    None => error,
+                });
+            }
+        }
+        Ok(append_offset)
+    }
+
+    #[cfg(any())]
+    pub(crate) fn inject_journal_failures(&self, count: usize) {
+        self.journal_failures_to_inject
+            .store(count, Ordering::Relaxed);
+    }
+
+    #[cfg(any())]
+    pub(crate) fn inject_journal_fsync_failures(&self, count: usize) {
+        self.journal_fsync_failures_to_inject
+            .store(count, Ordering::Relaxed);
+    }
+
+    fn sync_journal_locked(&self, wal: &mut crate::vendor::lux::disk::Wal) -> std::io::Result<()> {
+        #[cfg(any())]
+        if self
+            .journal_fsync_failures_to_inject
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |remaining| {
+                remaining.checked_sub(1)
+            })
+            .is_ok()
+        {
+            return Err(std::io::Error::other("injected journal fsync failure"));
+        }
+        wal.fsync()
     }
 
     /// Replay WAL entries by re-executing each command through the normal
     /// command dispatch. Called on startup after snapshot load to recover
     /// writes that happened between the last snapshot and the crash.
     /// WAL logging is suppressed during replay to avoid re-logging.
-    pub fn replay_wal(&self, broker: &crate::vendor::lux::pubsub::Broker) {
-        let ws = match &self.wal_shards {
-            Some(ws) => ws,
-            None => return,
+    pub fn replay_wal(&self, broker: &crate::vendor::lux::pubsub::Broker) -> std::io::Result<()> {
+        let journal = match &self.journal {
+            Some(journal) => journal,
+            None => return Ok(()),
         };
+        let checkpoints = self.recovery_wal_checkpoints.lock().clone();
         self.wal_suppress
             .store(true, std::sync::atomic::Ordering::Relaxed);
+        self.replaying_wal.store(true, Ordering::Release);
         let mut total = 0usize;
-        for (i, w) in ws.iter().enumerate() {
-            let mut wal = w.lock();
-            match wal.replay() {
-                Ok(replay) => {
-                    let corrupted_count = replay.corrupted_frames.len();
-                    for frame in replay.corrupted_frames {
-                        self.emit_warn(
-                            crate::vendor::lux::ServerWarnEvent::WalCorruptedFrameSkipped {
-                                shard: i,
-                                stored_crc: frame.stored_crc,
-                                computed_crc: frame.computed_crc,
-                            },
-                        );
+        // Every frame observes one logical recovery instant. A PXAT deadline
+        // that elapsed during downtime is therefore still visible to later
+        // TTL-preserving frames at that same instant, but is expired before the
+        // server accepts its first post-recovery command.
+        let replay_now = Instant::now();
+        let wal_cache = std::sync::Arc::new(parking_lot::RwLock::new(
+            crate::vendor::lux::tables::SchemaCache::new(),
+        ));
+        let result = (|| -> std::io::Result<()> {
+            let mut replay_one = |name: &str,
+                                  source: usize,
+                                  w: &parking_lot::Mutex<crate::vendor::lux::disk::Wal>|
+             -> std::io::Result<()> {
+                let mut wal = w.lock();
+                match wal.replay_from(checkpoints.get(name).copied()) {
+                    Ok(replay) => {
+                        let command_count = replay.commands.len();
+                        for (index, cmd_args) in replay.commands.into_iter().enumerate() {
+                            let refs: Vec<&[u8]> = cmd_args.iter().map(|a| a.as_slice()).collect();
+                            let mut out = bytes::BytesMut::new();
+                            let result = crate::vendor::lux::cmd::execute(
+                                self, &wal_cache, broker, &refs, &mut out, replay_now,
+                            );
+                            if !matches!(result, crate::vendor::lux::cmd::CmdResult::Written)
+                                || out.first() == Some(&b'-')
+                            {
+                                if index + 1 == command_count {
+                                    if let Some(offset) = replay.checked_tail_offset {
+                                        // The process stopped after writing a
+                                        // checked command but before its rejected
+                                        // apply could roll the frame back. It is
+                                        // necessarily unacknowledged and safe to
+                                        // remove only because no frame follows it.
+                                        wal.rollback_to(offset)?;
+                                        return Ok(());
+                                    }
+                                }
+                                return Err(std::io::Error::new(
+                                    std::io::ErrorKind::InvalidData,
+                                    format!(
+                                        "WAL command {} failed during recovery: {}",
+                                        cmd_args
+                                            .first()
+                                            .map(|name| String::from_utf8_lossy(name))
+                                            .unwrap_or_else(|| "<empty>".into()),
+                                        String::from_utf8_lossy(&out)
+                                    ),
+                                ));
+                            }
+                            total += 1;
+                        }
+                        Ok(())
                     }
-                    if corrupted_count > 0 {
-                        self.emit_warn(
-                            crate::vendor::lux::ServerWarnEvent::WalCorruptedFramesSkipped {
-                                shard: i,
-                                frames: corrupted_count,
-                            },
-                        );
-                    }
-                    for cmd_args in replay.commands {
-                        let refs: Vec<&[u8]> = cmd_args.iter().map(|a| a.as_slice()).collect();
-                        let mut out = bytes::BytesMut::new();
-                        let now = Instant::now();
-                        let wal_cache = std::sync::Arc::new(parking_lot::RwLock::new(
-                            crate::vendor::lux::tables::SchemaCache::new(),
-                        ));
-                        crate::vendor::lux::cmd::execute(
-                            self, &wal_cache, broker, &refs, &mut out, now,
-                        );
-                        total += 1;
+                    Err(e) => {
+                        self.emit_error(crate::vendor::lux::ServerErrorEvent::WalReplayFailed {
+                            shard: source,
+                            error: e.to_string(),
+                        });
+                        Err(e)
                     }
                 }
-                Err(e) => self.emit_error(crate::vendor::lux::ServerErrorEvent::WalReplayFailed {
-                    shard: i,
-                    error: e.to_string(),
-                }),
+            };
+
+            // Upgrade path: everything in the old per-shard files predates every
+            // frame in the global journal opened for this process.
+            for (source, wal) in &self.legacy_wals {
+                replay_one(&format!("shard_{source}"), *source, wal)?;
             }
-        }
-        if total > 0 {
-            crate::vendor::lux::emit_info(
-                &self.config,
-                crate::vendor::lux::ServerInfoEvent::WalReplayed { commands: total },
-            );
-        }
+            replay_one("global", 0, journal)?;
+            if total > 0 {
+                crate::vendor::lux::emit_info(
+                    &self.config,
+                    crate::vendor::lux::ServerInfoEvent::WalReplayed { commands: total },
+                );
+            }
+            Ok(())
+        })();
+        self.replaying_wal.store(false, Ordering::Release);
         self.wal_suppress
             .store(false, std::sync::atomic::Ordering::Relaxed);
+        result
     }
 
-    pub fn truncate_wal(&self) {
-        if let Some(ref ws) = self.wal_shards {
-            for w in ws.iter() {
-                let mut wal = w.lock();
-                if let Err(e) = wal.truncate() {
-                    self.emit_error(crate::vendor::lux::ServerErrorEvent::WalTruncateFailed {
-                        error: e.to_string(),
-                    });
+    /// Capture every journal position represented by a snapshot. The caller
+    /// must hold the write barrier so no mutation can cross these offsets.
+    pub(crate) fn wal_checkpoints(
+        &self,
+    ) -> std::io::Result<Vec<(String, crate::vendor::lux::disk::WalCheckpoint)>> {
+        let mut checkpoints = Vec::with_capacity(self.legacy_wals.len() + 1);
+        for (source, wal) in &self.legacy_wals {
+            checkpoints.push((format!("shard_{source}"), wal.lock().checkpoint()?));
+        }
+        if let Some(journal) = &self.journal {
+            checkpoints.push(("global".to_string(), journal.lock().checkpoint()?));
+        }
+        Ok(checkpoints)
+    }
+
+    pub(crate) fn truncate_wal(
+        &self,
+        checkpoints: &[(String, crate::vendor::lux::disk::WalCheckpoint)],
+    ) -> std::io::Result<()> {
+        let mut first_error = None;
+        for (source, w) in &self.legacy_wals {
+            let mut wal = w.lock();
+            let name = format!("shard_{source}");
+            let result = checkpoints
+                .iter()
+                .find(|(checkpoint_name, _)| checkpoint_name == &name)
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("snapshot is missing the {name} WAL checkpoint"),
+                    )
+                })
+                .and_then(|(_, checkpoint)| wal.rotate_after(*checkpoint));
+            if let Err(e) = result {
+                self.emit_error(crate::vendor::lux::ServerErrorEvent::WalTruncateFailed {
+                    error: e.to_string(),
+                });
+                if first_error.is_none() {
+                    first_error = Some(e);
                 }
             }
+        }
+        if let Some(journal) = &self.journal {
+            let mut wal = journal.lock();
+            let result = checkpoints
+                .iter()
+                .find(|(name, _)| name == "global")
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "snapshot is missing the global WAL checkpoint",
+                    )
+                })
+                .and_then(|(_, checkpoint)| wal.rotate_after(*checkpoint));
+            if let Err(e) = result {
+                self.emit_error(crate::vendor::lux::ServerErrorEvent::WalTruncateFailed {
+                    error: e.to_string(),
+                });
+                if first_error.is_none() {
+                    first_error = Some(e);
+                }
+            }
+        }
+        match first_error {
+            Some(error) => {
+                self.poison_journal();
+                Err(error)
+            }
+            None => Ok(()),
         }
     }
 
@@ -1061,7 +3335,7 @@ impl Store {
         }
     }
 
-    pub fn dump_disk_entries(&self, now: Instant) -> Vec<DumpEntry> {
+    pub fn dump_disk_entries(&self, now: Instant) -> std::io::Result<Vec<DumpEntry>> {
         match &self.disk_shards {
             Some(ds) => {
                 let mut entries = Vec::new();
@@ -1069,34 +3343,45 @@ impl Store {
                     let mut disk = d.lock();
                     match disk.dump_all(now) {
                         Ok(mut de) => entries.append(&mut de),
-                        Err(e) => self.emit_error(
-                            crate::vendor::lux::ServerErrorEvent::SnapshotDiskDumpFailed {
-                                error: e.to_string(),
-                            },
-                        ),
+                        Err(e) => {
+                            self.emit_error(
+                                crate::vendor::lux::ServerErrorEvent::SnapshotDiskDumpFailed {
+                                    error: e.to_string(),
+                                },
+                            );
+                            return Err(e);
+                        }
                     }
                 }
-                entries
+                Ok(entries)
             }
-            None => Vec::new(),
+            None => Ok(Vec::new()),
         }
     }
 
-    /// Flush WAL data to disk. Called by a background task every 1 second
-    /// (matching Redis appendfsync everysec). Trades up to 1s of data loss
-    /// on power failure for significantly higher write throughput vs per-write fsync.
+    /// Flush WAL data to disk. `every_second` calls this on its configured
+    /// interval; `always_sync` calls the same primitive after each append.
     pub fn fsync_wal(&self) {
-        if let Some(ref ws) = self.wal_shards {
-            for w in ws.iter() {
-                let mut wal = w.lock();
-                if let Err(e) = wal.fsync() {
-                    self.record_wal_fsync_error();
-                    self.emit_error(crate::vendor::lux::ServerErrorEvent::WalFsyncFailed {
-                        error: e.to_string(),
-                    });
-                }
+        let _ = self.fsync_wal_checked();
+    }
+
+    pub(crate) fn fsync_wal_checked(&self) -> std::io::Result<()> {
+        if let Some(journal) = &self.journal {
+            let mut wal = journal.lock();
+            if let Err(e) = self.sync_journal_locked(&mut wal) {
+                // A periodic sync failure means the configured durability
+                // window can no longer be bounded. Fence subsequent writes
+                // until restart rather than continuing to acknowledge them
+                // through an unhealthy persistence path.
+                self.poison_journal();
+                self.record_wal_fsync_error();
+                self.emit_error(crate::vendor::lux::ServerErrorEvent::WalFsyncFailed {
+                    error: e.to_string(),
+                });
+                return Err(e);
             }
         }
+        Ok(())
     }
 
     #[inline(always)]
@@ -1107,6 +3392,207 @@ impl Store {
             }
             entry.value.string_to_bytes()
         })
+    }
+
+    #[inline(always)]
+    fn user_kv_key(key: &[u8]) -> String {
+        key_string(key)
+    }
+
+    #[inline(always)]
+    fn user_hash_field(field: &[u8]) -> String {
+        key_string(field)
+    }
+
+    #[inline(always)]
+    fn is_table_storage_key(key: &[u8]) -> bool {
+        key.starts_with(b"_t:")
+    }
+
+    pub(crate) fn decrypt_kv_string_value(
+        &self,
+        key: &[u8],
+        value: Bytes,
+    ) -> Result<Bytes, String> {
+        if !crate::vendor::lux::encryption::EncryptionKeyring::is_encrypted_value(&value) {
+            return Ok(value);
+        }
+        let key_name = Self::user_kv_key(key);
+        self.encryption()
+            .decrypt("__lux_kv", "value", &key_name, &value)
+            .map(Bytes::from)
+    }
+
+    fn encrypt_kv_string_value(&self, key: &[u8], value: &[u8]) -> Result<Vec<u8>, String> {
+        let key_name = Self::user_kv_key(key);
+        self.encryption()
+            .encrypt("__lux_kv", "value", &key_name, value)
+    }
+
+    /// Encrypt a list element. AAD is intentionally key-independent so an
+    /// envelope stays decryptable after LMOVE/RPOPLPUSH move it to another list
+    /// (no re-keying). Per-value random DEK + nonce still protects each element.
+    pub(crate) fn encrypt_list_element(&self, value: &[u8]) -> Result<Vec<u8>, String> {
+        self.encryption()
+            .encrypt("__lux_list", "element", "", value)
+    }
+
+    /// Decrypt a list element if it is an encryption envelope; pass plaintext
+    /// through untouched so encrypted and plaintext elements can coexist.
+    pub(crate) fn decrypt_list_element(&self, value: Bytes) -> Result<Bytes, String> {
+        if !crate::vendor::lux::encryption::EncryptionKeyring::is_encrypted_value(&value) {
+            return Ok(value);
+        }
+        self.encryption()
+            .decrypt("__lux_list", "element", "", &value)
+            .map(Bytes::from)
+    }
+
+    /// Encrypt a stream entry field value. AAD binds the stream key + field.
+    pub(crate) fn encrypt_stream_value(
+        &self,
+        key: &[u8],
+        field: &[u8],
+        value: &[u8],
+    ) -> Result<Vec<u8>, String> {
+        let key_name = Self::user_kv_key(key);
+        let field_name = Self::user_hash_field(field);
+        self.encryption()
+            .encrypt("__lux_stream", &field_name, &key_name, value)
+    }
+
+    /// Decrypt a stream entry field value if it is an envelope.
+    pub(crate) fn decrypt_stream_value(
+        &self,
+        key: &[u8],
+        field: &[u8],
+        value: Bytes,
+    ) -> Result<Bytes, String> {
+        if !crate::vendor::lux::encryption::EncryptionKeyring::is_encrypted_value(&value) {
+            return Ok(value);
+        }
+        let key_name = Self::user_kv_key(key);
+        let field_name = Self::user_hash_field(field);
+        self.encryption()
+            .decrypt("__lux_stream", &field_name, &key_name, &value)
+            .map(Bytes::from)
+    }
+
+    /// Decrypt all field values of one stream entry for output. Plaintext (and,
+    /// defensively, undecryptable) values pass through unchanged.
+    pub(crate) fn decrypt_stream_fields(
+        &self,
+        key: &[u8],
+        fields: &[(String, Bytes)],
+    ) -> Vec<(String, Bytes)> {
+        fields
+            .iter()
+            .map(|(f, v)| {
+                let dv = self
+                    .decrypt_stream_value(key, f.as_bytes(), v.clone())
+                    .unwrap_or_else(|_| v.clone());
+                (f.clone(), dv)
+            })
+            .collect()
+    }
+
+    /// True if relocating this value to a different key would orphan encrypted
+    /// data, because its AEAD AAD is bound to the key name. Lists use a
+    /// key-independent AAD and vectors stay plaintext in RAM (re-sealed on the
+    /// next write), so both self-heal on a move and are not blocked.
+    pub(crate) fn value_has_key_bound_encryption(value: &StoreValue) -> bool {
+        use crate::vendor::lux::encryption::EncryptionKeyring as E;
+        match value {
+            StoreValue::Str(v) => E::is_encrypted_value(v),
+            StoreValue::StrBuf(v) => E::is_encrypted_value(v),
+            StoreValue::Hash(map) => map.values().any(|v| E::is_encrypted_value(v)),
+            StoreValue::Stream(s) => s
+                .entries
+                .values()
+                .any(|fields| fields.iter().any(|(_, v)| E::is_encrypted_value(v))),
+            _ => false,
+        }
+    }
+
+    /// Seal a vector (as little-endian f32 bytes) for at-rest storage. AAD binds
+    /// the vector's storage key so envelopes can't be swapped between slots.
+    pub(crate) fn encrypt_vector(&self, key: &[u8], data: &[f32]) -> Result<Vec<u8>, String> {
+        let key_name = Self::user_kv_key(key);
+        let mut bytes = Vec::with_capacity(data.len() * 4);
+        for f in data {
+            bytes.extend_from_slice(&f.to_le_bytes());
+        }
+        self.encryption()
+            .encrypt("__lux_vec", "data", &key_name, &bytes)
+    }
+
+    /// Decrypt a sealed vector back into f32 values.
+    pub(crate) fn decrypt_vector(&self, key: &[u8], envelope: &[u8]) -> Result<Vec<f32>, String> {
+        let key_name = Self::user_kv_key(key);
+        let bytes = self
+            .encryption()
+            .decrypt("__lux_vec", "data", &key_name, envelope)?;
+        if !bytes.len().is_multiple_of(4) {
+            return Err("ERR corrupt encrypted vector payload".to_string());
+        }
+        Ok(bytes
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect())
+    }
+
+    pub(crate) fn decrypt_hash_field_value(
+        &self,
+        key: &[u8],
+        field: &[u8],
+        value: Bytes,
+    ) -> Result<Bytes, String> {
+        if Self::is_table_storage_key(key)
+            || !crate::vendor::lux::encryption::EncryptionKeyring::is_encrypted_value(&value)
+        {
+            return Ok(value);
+        }
+        let key_name = Self::user_kv_key(key);
+        let field_name = Self::user_hash_field(field);
+        self.encryption()
+            .decrypt("__lux_hash", &field_name, &key_name, &value)
+            .map(Bytes::from)
+    }
+
+    fn encrypt_hash_field_value(
+        &self,
+        key: &[u8],
+        field: &[u8],
+        value: &[u8],
+    ) -> Result<Vec<u8>, String> {
+        let key_name = Self::user_kv_key(key);
+        let field_name = Self::user_hash_field(field);
+        self.encryption()
+            .encrypt("__lux_hash", &field_name, &key_name, value)
+    }
+
+    pub(crate) fn kv_string_is_encrypted(&self, key: &[u8], now: Instant) -> bool {
+        let idx = self.shard_index(key);
+        let shard = self.shards[idx].read();
+        Self::get_from_shard(&shard.data, key, now)
+            .as_ref()
+            .is_some_and(|value| {
+                crate::vendor::lux::encryption::EncryptionKeyring::is_encrypted_value(value)
+            })
+    }
+
+    pub(crate) fn get_raw_string(&self, key: &[u8], now: Instant) -> Option<Bytes> {
+        let idx = self.shard_index(key);
+        let shard = self.shards[idx].read();
+        Self::get_from_shard(&shard.data, key, now)
+    }
+
+    pub(crate) fn get_kv_string(&self, key: &[u8], now: Instant) -> Result<Option<Bytes>, String> {
+        self.get_raw_string(key, now)
+            .map(|value| self.decrypt_kv_string_value(key, value))
+            .transpose()
     }
 
     #[inline(always)]
@@ -1121,6 +3607,29 @@ impl Store {
             Some(entry) if !entry.is_expired_at(now) => {
                 if let Some(s) = entry.value.string_bytes() {
                     crate::vendor::lux::resp::write_bulk_raw(out, s);
+                } else {
+                    crate::vendor::lux::resp::write_null(out);
+                }
+            }
+            _ => crate::vendor::lux::resp::write_null(out),
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn get_kv_and_write_from_shard(
+        &self,
+        data: &ShardData,
+        key: &[u8],
+        now: Instant,
+        out: &mut bytes::BytesMut,
+    ) {
+        match data.get(key) {
+            Some(entry) if !entry.is_expired_at(now) => {
+                if let Some(s) = entry.value.string_to_bytes() {
+                    match self.decrypt_kv_string_value(key, s) {
+                        Ok(value) => crate::vendor::lux::resp::write_bulk_raw(out, &value),
+                        Err(err) => crate::vendor::lux::resp::write_error(out, &err),
+                    }
                 } else {
                     crate::vendor::lux::resp::write_null(out);
                 }
@@ -1176,65 +3685,24 @@ impl Store {
         }
     }
 
-    #[inline(always)]
-    pub(crate) fn set_on_shard_batched(
-        &self,
-        data: &mut ShardData,
-        key: &[u8],
-        value: &[u8],
-        stats: &mut StoreBatchStats,
-    ) {
-        let hash = fx_hash(key);
-        let new_value = StoreValue::Str(Bytes::copy_from_slice(value));
-        let new_size = key.len() + 64 + value.len();
-        let clock = self.lru_clock();
-        match data
-            .raw_entry_mut()
-            .from_hash(hash, |k| k.as_slice() == key)
-        {
-            hashbrown::hash_map::RawEntryMut::Occupied(mut e) => {
-                let old_size = estimate_entry_memory(e.key(), &e.get().value);
-                let entry = e.get_mut();
-                entry.value = new_value;
-                entry.expires_at = None;
-                entry.lru_clock = clock;
-                if new_size >= old_size {
-                    stats.mem_added += new_size - old_size;
-                } else {
-                    stats.mem_removed += old_size - new_size;
-                }
-            }
-            hashbrown::hash_map::RawEntryMut::Vacant(e) => {
-                e.insert_with_hasher(
-                    hash,
-                    key_bytes(key),
-                    Entry {
-                        value: new_value,
-                        expires_at: None,
-                        lru_clock: clock,
-                    },
-                    |k| fx_hash(k),
-                );
-                stats.mem_added += new_size;
-                stats.keys_added += 1;
-            }
-        }
-    }
-
-    pub fn get(&self, key: &[u8], now: Instant) -> Option<Bytes> {
+    pub(crate) fn get_checked(&self, key: &[u8], now: Instant) -> Result<Option<Bytes>, String> {
         let idx = self.shard_index(key);
         let shard = self.shards[idx].read();
         let result = Self::get_from_shard(&shard.data, key, now);
         if result.is_some() {
-            return result;
+            return Ok(result);
         }
         drop(shard);
-        if self.try_promote(key, now) {
+        if self.try_promote(key, now)? {
             let shard = self.shards[idx].read();
-            Self::get_from_shard(&shard.data, key, now)
+            Ok(Self::get_from_shard(&shard.data, key, now))
         } else {
-            None
+            Ok(None)
         }
+    }
+
+    pub fn get(&self, key: &[u8], now: Instant) -> Option<Bytes> {
+        self.get_checked(key, now).ok().flatten()
     }
 
     pub fn get_entry_type(&self, key: &[u8], now: Instant) -> Option<&'static str> {
@@ -1256,7 +3724,7 @@ impl Store {
             return raw;
         }
         drop(shard);
-        if self.try_promote(key, now) {
+        if self.try_promote(key, now).unwrap_or(false) {
             let shard = self.shards[idx].read();
             shard.data.get(key).and_then(|entry| {
                 if entry.is_expired_at(now) {
@@ -1320,6 +3788,128 @@ impl Store {
         shard.version += 1;
         self.set_on_shard(&mut shard.data, key, value, ttl, now);
         self.remove_from_disk(key);
+    }
+
+    #[cfg(any())]
+    pub fn set_conditional(
+        &self,
+        key: &[u8],
+        value: &[u8],
+        options: SetOptions<'_>,
+        now: Instant,
+    ) -> Result<(bool, Option<Bytes>), String> {
+        let prepared = self.prepare_conditional_set(key, value, options, now)?;
+        Ok(self.apply_conditional_set(key, prepared))
+    }
+
+    pub(crate) fn prepare_conditional_set(
+        &self,
+        key: &[u8],
+        value: &[u8],
+        options: SetOptions<'_>,
+        now: Instant,
+    ) -> Result<PreparedConditionalSet, String> {
+        let idx = self.shard_index(key);
+        let shard = self.shards[idx].read();
+        let mut exists = false;
+        let mut old = None;
+        let mut old_expires_at = None;
+        let mut existing_encrypted = false;
+        let mut ifeq_matches = options.ifeq.is_none();
+        if let Some(entry) = shard
+            .data
+            .get(key)
+            .filter(|entry| !entry.is_expired_at(now))
+        {
+            exists = true;
+            old_expires_at = entry.expires_at;
+            existing_encrypted = entry
+                .value
+                .string_bytes()
+                .is_some_and(crate::vendor::lux::encryption::EncryptionKeyring::is_encrypted_value);
+            if options.get {
+                let raw = entry
+                    .value
+                    .string_to_bytes()
+                    .ok_or_else(|| WRONGTYPE.to_string())?;
+                old = Some(self.decrypt_kv_string_value(key, raw)?);
+            }
+            if let Some(expected) = options.ifeq {
+                let raw = entry
+                    .value
+                    .string_to_bytes()
+                    .ok_or_else(|| WRONGTYPE.to_string())?;
+                let current = self.decrypt_kv_string_value(key, raw)?;
+                ifeq_matches = current == expected;
+            }
+        }
+        let should_set = if options.ifeq.is_some() {
+            ifeq_matches
+        } else {
+            (!options.nx || !exists) && (!options.xx || exists)
+        };
+        let expires_at = if should_set {
+            if options.keep_ttl {
+                old_expires_at
+            } else {
+                options.ttl.map(|d| now + d)
+            }
+        } else {
+            None
+        };
+        let stored_value = if should_set {
+            Some(if options.encrypted || existing_encrypted {
+                self.encrypt_kv_string_value(key, value)?
+            } else {
+                value.to_vec()
+            })
+        } else {
+            None
+        };
+        Ok(PreparedConditionalSet {
+            should_set,
+            old,
+            stored_value,
+            expires_at,
+        })
+    }
+
+    pub(crate) fn apply_conditional_set(
+        &self,
+        key: &[u8],
+        prepared: PreparedConditionalSet,
+    ) -> (bool, Option<Bytes>) {
+        if prepared.should_set {
+            let idx = self.shard_index(key);
+            let mut shard = self.shards[idx].write();
+            shard.version += 1;
+            let stored_value = prepared
+                .stored_value
+                .expect("prepared SET value is present when should_set is true");
+            let new_value = StoreValue::Str(Bytes::from(stored_value));
+            let mem = estimate_entry_memory(key, &new_value);
+            let old_entry = shard.data.insert(
+                key_bytes(key),
+                Entry {
+                    value: new_value,
+                    expires_at: prepared.expires_at,
+                    lru_clock: self.lru_clock(),
+                },
+            );
+            if let Some(old_entry) = old_entry {
+                let old_mem = estimate_entry_memory(key, &old_entry.value);
+                if mem >= old_mem {
+                    self.mem_add(mem - old_mem);
+                } else {
+                    self.mem_sub(old_mem - mem);
+                }
+            } else {
+                self.mem_add(mem);
+                self.key_added();
+            }
+            self.remove_from_disk(key);
+        }
+        (prepared.should_set, prepared.old)
     }
 
     pub fn set_nx(&self, key: &[u8], value: &[u8], now: Instant) -> bool {
@@ -1530,23 +4120,39 @@ impl Store {
         count
     }
 
-    pub(crate) fn del_on_shard(&self, shard: &mut Shard, key: &[u8], now: Instant) -> i64 {
-        let Some(entry) = shard.data.remove(key) else {
-            return 0;
+    pub fn delifeq(&self, key: &[u8], expected: &[u8], now: Instant) -> Result<bool, String> {
+        let idx = self.shard_index(key);
+        let mut shard = self.shards[idx].write();
+        let action = match shard.data.get(key) {
+            Some(entry) if entry.is_expired_at(now) => Some(false),
+            Some(entry) => {
+                let current = entry
+                    .value
+                    .string_bytes()
+                    .ok_or_else(|| WRONGTYPE.to_string())?;
+                if current == expected {
+                    Some(true)
+                } else {
+                    None
+                }
+            }
+            None => None,
         };
-        self.key_removed();
-        let expired = entry.is_expired_at(now);
-        let vector_dims = match &entry.value {
-            StoreValue::Vector(v) => Some(v.dims),
-            _ => None,
-        };
-        let mem = estimate_entry_memory(key_str(key), &entry.value);
-        shard.used_memory = shard.used_memory.saturating_sub(mem);
-        self.mem_sub(mem);
-        if let Some(dims) = vector_dims {
-            self.remove_vector_indexes(key_str(key), dims);
+
+        match action {
+            Some(should_count) => {
+                shard.version += 1;
+                if let Some(entry) = shard.data.remove(key) {
+                    self.key_removed();
+                    let mem = estimate_entry_memory(key, &entry.value);
+                    shard.used_memory = shard.used_memory.saturating_sub(mem);
+                    self.mem_sub(mem);
+                    self.remove_from_disk(key);
+                }
+                Ok(should_count)
+            }
+            None => Ok(false),
         }
-        i64::from(!expired)
     }
 
     pub fn exists(&self, keys: &[&[u8]], now: Instant) -> i64 {
@@ -1615,6 +4221,7 @@ impl Store {
     }
 
     pub fn incr(&self, key: &[u8], delta: i64, now: Instant) -> Result<i64, String> {
+        self.try_promote(key, now)?;
         let idx = self.shard_index(key);
         let mut shard = self.shards[idx].write();
         shard.version += 1;
@@ -1639,57 +4246,6 @@ impl Store {
         let new_value = StoreValue::Str(Bytes::from(new_val.to_string()));
         let mem = estimate_entry_memory(ks, &new_value);
         let old_entry = shard.data.insert(
-            key_bytes(key),
-            Entry {
-                value: new_value,
-                expires_at,
-                lru_clock: self.lru_clock(),
-            },
-        );
-        if let Some(oe) = old_entry {
-            let old_mem = estimate_entry_memory(ks, &oe.value);
-            if mem >= old_mem {
-                self.mem_add(mem - old_mem);
-            } else {
-                self.mem_sub(old_mem - mem);
-            }
-        } else {
-            self.mem_add(mem);
-            self.key_added();
-        }
-        Ok(new_val)
-    }
-
-    /// INCRBY primitive for callers that already hold the correct shard write
-    /// lock. The caller owns shard versioning, WAL logging, and key events.
-    pub(crate) fn incr_on_shard(
-        &self,
-        data: &mut ShardData,
-        key: &[u8],
-        delta: i64,
-        now: Instant,
-    ) -> Result<i64, String> {
-        let ks = key;
-        let (current, expires_at) = match data.get(ks) {
-            Some(e) if !e.is_expired_at(now) => match e.value.string_bytes() {
-                Some(s) => {
-                    let s = std::str::from_utf8(s)
-                        .map_err(|_| "ERR value is not an integer or out of range".to_string())?;
-                    let n = s
-                        .parse::<i64>()
-                        .map_err(|_| "ERR value is not an integer or out of range".to_string())?;
-                    (n, e.expires_at)
-                }
-                None => return Err(WRONGTYPE.to_string()),
-            },
-            _ => (0, None),
-        };
-        let new_val = current
-            .checked_add(delta)
-            .ok_or_else(|| "ERR increment or decrement would overflow".to_string())?;
-        let new_value = StoreValue::Str(Bytes::from(new_val.to_string()));
-        let mem = estimate_entry_memory(ks, &new_value);
-        let old_entry = data.insert(
             key_bytes(key),
             Entry {
                 value: new_value,
@@ -1853,6 +4409,7 @@ impl Store {
         }
     }
 
+    #[cfg(any())]
     pub fn expire(&self, key: &[u8], seconds: u64, now: Instant) -> bool {
         let idx = self.shard_index(key);
         let mut shard = self.shards[idx].write();
@@ -1894,6 +4451,16 @@ impl Store {
 
     pub fn rename(&self, key: &[u8], new_key: &[u8], now: Instant) -> Result<(), String> {
         let old_idx = self.shard_index(key);
+        {
+            // A value whose AEAD AAD is bound to the key name can't be decrypted
+            // at a new key; moving it would orphan it. Refuse rather than lose it.
+            let shard = self.shards[old_idx].read();
+            if let Some(e) = shard.data.get(key) {
+                if !e.is_expired_at(now) && Self::value_has_key_bound_encryption(&e.value) {
+                    return Err(RENAME_ENCRYPTED_ERR.to_string());
+                }
+            }
+        }
         let entry = {
             let mut shard = self.shards[old_idx].write();
             shard.version += 1;
@@ -1928,6 +4495,13 @@ impl Store {
         replace: bool,
         now: Instant,
     ) -> Result<bool, String> {
+        // COPY derives its destination from mutable source state. Hold the full
+        // multi-key gate while reading both keys, recording the resolved value,
+        // and applying it so replay observes the same source/destination order.
+        let route: [&[u8]; 3] = [b"COPY", src, dst];
+        let prepare = self
+            .prepare_journaled(&route)
+            .map_err(|e| format!("ERR WAL append failed: {e}"))?;
         let src_idx = self.shard_index(src);
         let dst_idx = self.shard_index(dst);
 
@@ -1936,6 +4510,9 @@ impl Store {
             let ks = src;
             match shard.data.get(ks) {
                 Some(entry) if !entry.is_expired_at(now) => {
+                    if Self::value_has_key_bound_encryption(&entry.value) {
+                        return Err(RENAME_ENCRYPTED_ERR.to_string());
+                    }
                     let ttl = entry.expires_at.map(|exp| exp.duration_since(now));
                     let dv = store_value_to_dump_value(&entry.value);
                     (dv, ttl)
@@ -1954,8 +4531,117 @@ impl Store {
             }
         }
 
-        self.load_entry(key_string(dst), dump_val, ttl);
+        // Record the resolved destination as `LXRESTORE dst <blob>`. Replaying a
+        // raw COPY would re-read a mutable source and could reproduce a different
+        // value. The blob captures the exact acknowledged destination state.
+        let ttl_ms = ttl
+            .map(|duration| i64::try_from(duration.as_millis()).unwrap_or(i64::MAX))
+            .unwrap_or(-1);
+        let entry = DumpEntry {
+            key: key_string(dst),
+            value: dump_val,
+            ttl_ms,
+        };
+        let blob = crate::vendor::lux::snapshot::encode_dump_blob(self, &entry)
+            .map_err(|e| format!("ERR COPY encode failed: {e}"))?;
+        let command: [&[u8]; 3] = [b"LXRESTORE", dst, &blob];
+        let commit = prepare
+            .commit(&command)
+            .map_err(|e| format!("ERR WAL append failed: {e}"))?;
+        self.load_entry(entry.key, entry.value, ttl);
+        commit
+            .complete()
+            .map_err(|error| format!("ERR journal apply failed: {error}"))?;
         Ok(true)
+    }
+
+    /// DUMP: serialize the value at `key` into Lux's snapshot value format.
+    /// Returns None when the key is missing/expired. The blob is Lux-internal
+    /// (not RDB-compatible) and round-trips within Lux via RESTORE. Refuses
+    /// key-bound-encrypted values, same as COPY.
+    pub fn dump_key(&self, key: &[u8], now: Instant) -> Result<Option<Vec<u8>>, String> {
+        let idx = self.shard_index(key);
+        let shard = self.shards[idx].read();
+        match shard.data.get(key) {
+            Some(entry) if !entry.is_expired_at(now) => {
+                if Self::value_has_key_bound_encryption(&entry.value) {
+                    return Err(RENAME_ENCRYPTED_ERR.to_string());
+                }
+                let ttl_ms = entry
+                    .expires_at
+                    .map(|exp| exp.duration_since(now).as_millis() as i64)
+                    .unwrap_or(-1);
+                let value = store_value_to_dump_value(&entry.value);
+                let dentry = DumpEntry {
+                    key: key_string(key),
+                    value,
+                    ttl_ms,
+                };
+                let blob = crate::vendor::lux::snapshot::encode_dump_blob(self, &dentry)
+                    .map_err(|e| format!("ERR DUMP failed: {e}"))?;
+                Ok(Some(blob))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// Validate and fully decode RESTORE without changing state. The journal
+    /// gate held by the caller keeps the BUSYKEY decision valid through apply.
+    pub(crate) fn prepare_restore_key(
+        &self,
+        key: &[u8],
+        ttl_ms: i64,
+        blob: &[u8],
+        replace: bool,
+        absttl: bool,
+        now: Instant,
+    ) -> Result<PreparedRestore, String> {
+        if ttl_ms < 0 {
+            return Err("ERR Invalid TTL value, must be >= 0".to_string());
+        }
+        {
+            let idx = self.shard_index(key);
+            let shard = self.shards[idx].read();
+            if let Some(entry) = shard.data.get(key) {
+                if !entry.is_expired_at(now) && !replace {
+                    return Err("BUSYKEY Target key name already exists.".to_string());
+                }
+            }
+        }
+        let (value, _embedded_ttl) =
+            crate::vendor::lux::snapshot::decode_dump_blob_value(self, blob)
+                .map_err(|_| "ERR Bad data format".to_string())?;
+        let (ttl, delete_only) = if ttl_ms == 0 {
+            (None, false)
+        } else if absttl {
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as i64;
+            let remaining = ttl_ms.saturating_sub(now_ms);
+            if remaining <= 0 {
+                (None, true)
+            } else {
+                (Some(Duration::from_millis(remaining as u64)), false)
+            }
+        } else {
+            (Some(Duration::from_millis(ttl_ms as u64)), false)
+        };
+        Ok(PreparedRestore {
+            value,
+            ttl,
+            delete_only,
+        })
+    }
+
+    pub(crate) fn apply_prepared_restore(&self, key: &[u8], prepared: PreparedRestore) {
+        // Clear any existing value first so memory/key accounting stays exact on
+        // REPLACE (load_entry only adds). A past absolute deadline is a resolved
+        // delete and must never resurrect the decoded value during recovery.
+        self.del(&[key]);
+        if !prepared.delete_only {
+            self.load_entry(key_string(key), prepared.value, prepared.ttl);
+        }
     }
 
     pub fn dbsize(&self, now: Instant) -> i64 {
@@ -2030,47 +4716,6 @@ impl Store {
         }
     }
 
-    /// LPUSH variant for callers that already hold the correct shard write
-    /// lock. The caller owns shard versioning, WAL logging, key events, disk
-    /// invalidation, and blocked-list waiter draining.
-    pub(crate) fn lpush_on_shard(
-        &self,
-        shard: &mut Shard,
-        key: &[u8],
-        values: &[&[u8]],
-        now: Instant,
-    ) -> Result<i64, String> {
-        let added_mem: usize = values.iter().map(|v| v.len() + 32).sum();
-        let ks = key_bytes(key);
-        let entry = match shard.data.entry(ks) {
-            hashbrown::hash_map::Entry::Occupied(o) => o.into_mut(),
-            hashbrown::hash_map::Entry::Vacant(v) => {
-                self.key_added();
-                v.insert(Entry {
-                    value: StoreValue::List(VecDeque::new()),
-                    expires_at: None,
-                    lru_clock: self.lru_clock(),
-                })
-            }
-        };
-        if entry.is_expired_at(now) {
-            entry.value = StoreValue::List(VecDeque::new());
-            entry.expires_at = None;
-        }
-        match &mut entry.value {
-            StoreValue::List(list) => {
-                for v in values {
-                    list.push_front(Bytes::copy_from_slice(v));
-                }
-                let len = list.len() as i64;
-                shard.used_memory += added_mem;
-                self.mem_add(added_mem);
-                Ok(len)
-            }
-            _ => Err(WRONGTYPE.to_string()),
-        }
-    }
-
     pub fn rpush(&self, key: &[u8], values: &[&[u8]], now: Instant) -> Result<i64, String> {
         let added_mem: usize = values.iter().map(|v| v.len() + 32).sum();
         let idx = self.shard_index(key);
@@ -2097,45 +4742,6 @@ impl Store {
                 }
                 let len = list.len() as i64;
                 let _ = entry;
-                shard.used_memory += added_mem;
-                self.mem_add(added_mem);
-                Ok(len)
-            }
-            _ => Err(WRONGTYPE.to_string()),
-        }
-    }
-
-    /// RPUSH variant for callers that already hold the correct shard write
-    /// lock. The caller owns shard versioning, WAL logging, key events, disk
-    /// invalidation, and blocked-list waiter draining.
-    pub(crate) fn rpush_on_shard(
-        &self,
-        shard: &mut Shard,
-        key: &[u8],
-        values: &[&[u8]],
-        now: Instant,
-    ) -> Result<i64, String> {
-        let added_mem: usize = values.iter().map(|v| v.len() + 32).sum();
-        let ks = key_bytes(key);
-        let existed = shard.data.contains_key(&ks);
-        let entry = shard.data.entry(ks).or_insert_with(|| Entry {
-            value: StoreValue::List(VecDeque::new()),
-            expires_at: None,
-            lru_clock: self.lru_clock(),
-        });
-        if !existed {
-            self.key_added();
-        }
-        if entry.is_expired_at(now) {
-            entry.value = StoreValue::List(VecDeque::new());
-            entry.expires_at = None;
-        }
-        match &mut entry.value {
-            StoreValue::List(list) => {
-                for v in values {
-                    list.push_back(Bytes::copy_from_slice(v));
-                }
-                let len = list.len() as i64;
                 shard.used_memory += added_mem;
                 self.mem_add(added_mem);
                 Ok(len)
@@ -2250,6 +4856,91 @@ impl Store {
         }
     }
 
+    /// LMPOP/BLMPOP core: pop up to `count` elements from the `pop_left` side of
+    /// the first non-empty list among `keys`. Returns the popped key and the
+    /// elements (raw, caller decrypts), or None if every key is missing/empty.
+    /// Errors WRONGTYPE if a scanned key holds a non-list value (Redis matches
+    /// on the first such key). Empty lists are left in place, mirroring LPOP.
+    #[allow(clippy::type_complexity)]
+    pub fn lmpop(
+        &self,
+        keys: &[&[u8]],
+        pop_left: bool,
+        count: usize,
+        now: Instant,
+    ) -> Result<Option<(Vec<u8>, Vec<Bytes>)>, String> {
+        for key in keys {
+            self.try_promote(key, now)?;
+            let idx = self.shard_index(key);
+            let mut shard = self.shards[idx].write();
+            match shard.data.get(*key) {
+                Some(entry) if !entry.is_expired_at(now) => match &entry.value {
+                    StoreValue::List(list) => {
+                        if list.is_empty() {
+                            continue;
+                        }
+                    }
+                    _ => return Err(WRONGTYPE.to_string()),
+                },
+                _ => continue,
+            }
+            let mut items = Vec::with_capacity(count.min(1024));
+            for _ in 0..count {
+                let popped = if pop_left {
+                    self.lpop_on_shard(&mut shard, key, now)
+                } else {
+                    self.rpop_on_shard(&mut shard, key, now)
+                };
+                match popped {
+                    Some(v) => items.push(v),
+                    None => break,
+                }
+            }
+            if !items.is_empty() {
+                shard.version += 1;
+                drop(shard);
+                self.remove_from_disk(key);
+                return Ok(Some((key.to_vec(), items)));
+            }
+        }
+        Ok(None)
+    }
+
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn preview_lmpop(
+        &self,
+        keys: &[&[u8]],
+        pop_left: bool,
+        count: usize,
+        now: Instant,
+    ) -> Result<Option<(Vec<u8>, Vec<Bytes>)>, String> {
+        for key in keys {
+            self.try_promote(key, now)?;
+            let idx = self.shard_index(key);
+            let shard = self.shards[idx].read();
+            match shard
+                .data
+                .get(*key)
+                .filter(|entry| !entry.is_expired_at(now))
+            {
+                Some(entry) => match &entry.value {
+                    StoreValue::List(list) if list.is_empty() => continue,
+                    StoreValue::List(list) => {
+                        let items = if pop_left {
+                            list.iter().take(count).cloned().collect()
+                        } else {
+                            list.iter().rev().take(count).cloned().collect()
+                        };
+                        return Ok(Some((key.to_vec(), items)));
+                    }
+                    _ => return Err(WRONGTYPE.to_string()),
+                },
+                None => continue,
+            }
+        }
+        Ok(None)
+    }
+
     pub fn llen(&self, key: &[u8], now: Instant) -> Result<i64, String> {
         let idx = self.shard_index(key);
         let shard = self.shards[idx].read();
@@ -2323,48 +5014,10 @@ impl Store {
     }
 
     pub fn sadd(&self, key: &[u8], members: &[&[u8]], now: Instant) -> Result<i64, String> {
+        self.try_promote(key, now)?;
         let idx = self.shard_index(key);
         let mut shard = self.shards[idx].write();
         shard.version += 1;
-        let ks = key_bytes(key);
-        let existed = shard.data.contains_key(&ks);
-        let entry = shard.data.entry(ks).or_insert_with(|| Entry {
-            value: StoreValue::Set(SetData::new()),
-            expires_at: None,
-            lru_clock: self.lru_clock(),
-        });
-        if !existed {
-            self.key_added();
-        }
-        if entry.is_expired_at(now) {
-            entry.value = StoreValue::Set(SetData::new());
-            entry.expires_at = None;
-        }
-        match &mut entry.value {
-            StoreValue::Set(set) => {
-                let mut added = 0i64;
-                let mut mem_added = 0usize;
-                for m in members {
-                    if set.insert(key_string(m)) {
-                        mem_added += m.len() + 32;
-                        added += 1;
-                    }
-                }
-                shard.used_memory += mem_added;
-                self.mem_add(mem_added);
-                Ok(added)
-            }
-            _ => Err(WRONGTYPE.to_string()),
-        }
-    }
-
-    pub(crate) fn sadd_on_shard(
-        &self,
-        shard: &mut Shard,
-        key: &[u8],
-        members: &[&[u8]],
-        now: Instant,
-    ) -> Result<i64, String> {
         let ks = key_bytes(key);
         let existed = shard.data.contains_key(&ks);
         let entry = shard.data.entry(ks).or_insert_with(|| Entry {
@@ -2398,6 +5051,7 @@ impl Store {
     }
 
     pub fn srem(&self, key: &[u8], members: &[&[u8]], now: Instant) -> Result<i64, String> {
+        self.try_promote(key, now)?;
         let idx = self.shard_index(key);
         let mut shard = self.shards[idx].write();
         shard.version += 1;
@@ -2423,6 +5077,7 @@ impl Store {
     }
 
     pub fn smembers(&self, key: &[u8], now: Instant) -> Result<Vec<String>, String> {
+        self.try_promote(key, now)?;
         let idx = self.shard_index(key);
         let shard = self.shards[idx].read();
         match shard.data.get(key) {
@@ -2431,6 +5086,27 @@ impl Store {
                 _ => Err(WRONGTYPE.to_string()),
             },
             _ => Ok(vec![]),
+        }
+    }
+
+    /// Resolve the members `SPOP` would remove without changing the set.
+    ///
+    /// The caller must hold the key's journal gate until the returned members
+    /// are durably recorded and removed.
+    pub(crate) fn preview_spop(
+        &self,
+        key: &[u8],
+        count: usize,
+        now: Instant,
+    ) -> Result<Vec<String>, String> {
+        let idx = self.shard_index(key);
+        let shard = self.shards[idx].read();
+        match shard.data.get(key) {
+            Some(entry) if !entry.is_expired_at(now) => match &entry.value {
+                StoreValue::Set(set) => Ok(set.iter().rev().take(count).cloned().collect()),
+                _ => Err(WRONGTYPE.to_string()),
+            },
+            _ => Ok(Vec::new()),
         }
     }
 
@@ -2663,7 +5339,7 @@ impl Store {
     }
 
     #[cfg(any())]
-    pub fn dump_all(&self, now: Instant) -> Vec<DumpEntry> {
+    pub fn dump_all(&self, now: Instant) -> std::io::Result<Vec<DumpEntry>> {
         let mut entries = Vec::new();
         for shard in self.shards.iter() {
             let shard = shard.read();
@@ -2682,15 +5358,26 @@ impl Store {
                 });
             }
         }
-        let mut disk_entries = self.dump_disk_entries(now);
+        let mut disk_entries = self.dump_disk_entries(now)?;
         entries.append(&mut disk_entries);
-        entries
+        Ok(entries)
     }
 
     pub(crate) fn with_write_barrier<R>(
         &self,
         f: impl FnOnce(&mut [parking_lot::RwLockWriteGuard<'_, Shard>]) -> R,
     ) -> R {
+        let _execution_guard = self.enter_execution_read();
+        let _table_guard = self.table_mutation_gate.lock();
+        // Mutations acquire their journal domain before they append and keep it
+        // through the state change. Take every domain in the same order before
+        // locking shards so a snapshot cannot observe the pre-apply state and
+        // then truncate an already-appended mutation from the journal.
+        let _journal_guards: Vec<_> = self
+            .journal_gates
+            .iter()
+            .map(parking_lot::ReentrantMutex::lock)
+            .collect();
         let mut guards: Vec<_> = self.shards.iter().map(|shard| shard.write()).collect();
         f(&mut guards)
     }
@@ -2699,7 +5386,7 @@ impl Store {
         &self,
         shards: &[parking_lot::RwLockWriteGuard<'_, Shard>],
         now: Instant,
-    ) -> Vec<DumpEntry> {
+    ) -> std::io::Result<Vec<DumpEntry>> {
         let mut entries = Vec::new();
         for shard in shards {
             for (key, entry) in shard.data.iter() {
@@ -2717,9 +5404,9 @@ impl Store {
                 });
             }
         }
-        let mut disk_entries = self.dump_disk_entries(now);
+        let mut disk_entries = self.dump_disk_entries(now)?;
         entries.append(&mut disk_entries);
-        entries
+        Ok(entries)
     }
 
     pub fn load_entry(&self, key: String, value: DumpValue, ttl: Option<Duration>) {
@@ -2730,8 +5417,12 @@ impl Store {
         let store_value = match value {
             DumpValue::Str(s) => StoreValue::Str(Bytes::from(s)),
             DumpValue::List(l) => StoreValue::List(l.into_iter().map(Bytes::from).collect()),
-            DumpValue::Hash(h) => {
-                StoreValue::Hash(h.into_iter().map(|(k, v)| (k, Bytes::from(v))).collect())
+            DumpValue::Hash(h, expiries) => {
+                let mut hd = HashData::from_fields(
+                    h.into_iter().map(|(k, v)| (k, Bytes::from(v))).collect(),
+                );
+                hd.expiries = expiries.into_iter().collect();
+                StoreValue::Hash(hd)
             }
             DumpValue::Set(s) => StoreValue::Set(SetData::from_members(s)),
             DumpValue::SortedSet(members) => {
@@ -2811,7 +5502,7 @@ impl Store {
                     groups,
                 })
             }
-            DumpValue::Vector(data, metadata) => {
+            DumpValue::Vector(data, metadata, encrypted) => {
                 let dims = data.len() as u32;
                 let index_data = data.clone();
                 let key_clone = key.clone();
@@ -2819,6 +5510,7 @@ impl Store {
                     dims,
                     data,
                     metadata,
+                    encrypted,
                 });
                 let expires_at = ttl.map(|d| Instant::now() + d);
                 let mem = estimate_entry_memory(&key, &sv);
@@ -2911,7 +5603,13 @@ impl Store {
         }
     }
 
-    pub fn getrange(&self, key: &[u8], start: i64, end: i64, now: Instant) -> Bytes {
+    pub fn getrange(
+        &self,
+        key: &[u8],
+        start: i64,
+        end: i64,
+        now: Instant,
+    ) -> Result<Bytes, String> {
         let idx = self.shard_index(key);
         let shard = self.shards[idx].read();
         match shard.data.get(key) {
@@ -2929,69 +5627,115 @@ impl Store {
                         (end + 1).min(len) as usize
                     };
                     if s_i >= e_i {
-                        Bytes::new()
+                        Ok(Bytes::new())
                     } else {
-                        Bytes::copy_from_slice(&s[s_i..e_i])
+                        Ok(Bytes::copy_from_slice(&s[s_i..e_i]))
                     }
                 } else {
-                    Bytes::new()
+                    Err(WRONGTYPE.to_string())
                 }
             }
-            _ => Bytes::new(),
+            _ => Ok(Bytes::new()),
         }
     }
 
-    pub fn setrange(&self, key: &[u8], offset: usize, value: &[u8], now: Instant) -> i64 {
+    pub fn setrange(
+        &self,
+        key: &[u8],
+        offset: usize,
+        value: &[u8],
+        now: Instant,
+    ) -> Result<i64, String> {
         let idx = self.shard_index(key);
         let mut shard = self.shards[idx].write();
-        shard.version += 1;
         let ks = key_bytes(key);
-        let existed = shard.data.contains_key(&ks);
-        let entry = shard.data.entry(ks).or_insert_with(|| Entry {
-            value: StoreValue::Str(Bytes::new()),
-            expires_at: None,
-            lru_clock: self.lru_clock(),
-        });
-        if !existed {
-            self.key_added();
+        let expired = shard
+            .data
+            .get(&ks)
+            .is_some_and(|entry| entry.is_expired_at(now));
+        if expired {
+            shard.data.remove(&ks);
+            self.key_removed();
         }
-        if entry.is_expired_at(now) {
-            entry.value = StoreValue::Str(Bytes::new());
-            entry.expires_at = None;
-        }
-        if let Some(s) = entry.value.string_bytes() {
-            let old_len = s.len();
-            let mut buf = s.to_vec();
-            let needed = offset + value.len();
-            if buf.len() < needed {
-                buf.resize(needed, 0);
+
+        let Some(entry) = shard.data.get(&ks) else {
+            if value.is_empty() {
+                return Ok(0);
             }
-            buf[offset..offset + value.len()].copy_from_slice(value);
-            let new_len = buf.len();
-            let len = new_len as i64;
-            entry.value = StoreValue::StrBuf(buf);
-            if new_len > old_len {
-                let added = new_len - old_len;
-                let _ = entry;
+            shard.version += 1;
+            let needed = offset + value.len();
+            let mut buf = vec![0; needed];
+            buf[offset..needed].copy_from_slice(value);
+            let new_value = StoreValue::StrBuf(buf);
+            let mem = estimate_entry_memory(&ks, &new_value);
+            shard.data.insert(
+                ks,
+                Entry {
+                    value: new_value,
+                    expires_at: None,
+                    lru_clock: self.lru_clock(),
+                },
+            );
+            shard.used_memory += mem;
+            self.mem_add(mem);
+            self.key_added();
+            return Ok(needed as i64);
+        };
+
+        let (expires_at, mut buf) = {
+            let Some(s) = entry.value.string_bytes() else {
+                return Err(WRONGTYPE.to_string());
+            };
+            if value.is_empty() {
+                return Ok(s.len() as i64);
+            }
+            (entry.expires_at, s.to_vec())
+        };
+
+        shard.version += 1;
+        let needed = offset + value.len();
+        if buf.len() < needed {
+            buf.resize(needed, 0);
+        }
+        buf[offset..offset + value.len()].copy_from_slice(value);
+        let len = buf.len() as i64;
+        let new_value = StoreValue::StrBuf(buf);
+        let mem = estimate_entry_memory(&ks, &new_value);
+        let old_entry = shard.data.insert(
+            ks,
+            Entry {
+                value: new_value,
+                expires_at,
+                lru_clock: self.lru_clock(),
+            },
+        );
+        if let Some(old_entry) = old_entry {
+            let old_mem = estimate_entry_memory(key, &old_entry.value);
+            if mem >= old_mem {
+                let added = mem - old_mem;
                 shard.used_memory += added;
                 self.mem_add(added);
+            } else {
+                let freed = old_mem - mem;
+                shard.used_memory = shard.used_memory.saturating_sub(freed);
+                self.mem_sub(freed);
             }
-            len
-        } else {
-            0
         }
+        Ok(len)
     }
 
     pub fn msetnx(&self, pairs: &[(&[u8], &[u8])], now: Instant) -> bool {
-        for (key, _) in pairs {
-            if self.get(key, now).is_some() {
-                return false;
-            }
+        if !self.msetnx_would_set(pairs, now) {
+            return false;
         }
         for (key, value) in pairs {
             self.set(key, value, None, now);
         }
         true
+    }
+
+    pub(crate) fn msetnx_would_set(&self, pairs: &[(&[u8], &[u8])], now: Instant) -> bool {
+        pairs.iter().all(|(key, _)| self.get(key, now).is_none())
     }
 
     pub fn setbit(&self, key: &[u8], offset: u64, value: u8, now: Instant) -> Result<u8, String> {
@@ -3059,6 +5803,116 @@ impl Store {
             },
             _ => Ok(0),
         }
+    }
+
+    /// BITFIELD/BITFIELD_RO: apply a batch of GET/SET/INCRBY operations against
+    /// the key's bitmap atomically (all under one shard lock). Returns one result
+    /// per op in order (None where an OVERFLOW FAIL suppressed a SET/INCRBY).
+    pub fn bitfield(
+        &self,
+        key: &[u8],
+        ops: &[BitfieldOp],
+        now: Instant,
+    ) -> Result<Vec<Option<i64>>, String> {
+        let has_write = ops.iter().any(|o| !matches!(o, BitfieldOp::Get { .. }));
+        let idx = self.shard_index(key);
+
+        if !has_write {
+            let shard = self.shards[idx].read();
+            let buf: Vec<u8> = match shard.data.get(key) {
+                Some(entry) if !entry.is_expired_at(now) => match entry.value.string_bytes() {
+                    Some(s) => s.to_vec(),
+                    None => return Err(WRONGTYPE.to_string()),
+                },
+                _ => Vec::new(),
+            };
+            let mut results = Vec::with_capacity(ops.len());
+            for op in ops {
+                if let BitfieldOp::Get {
+                    signed,
+                    bits,
+                    offset,
+                } = op
+                {
+                    results.push(Some(bf_read(&buf, *offset, *bits, *signed)));
+                }
+            }
+            return Ok(results);
+        }
+
+        let mut shard = self.shards[idx].write();
+        shard.version += 1;
+        let ks = key_bytes(key);
+        let existed = shard.data.contains_key(&ks);
+        let entry = shard.data.entry(ks).or_insert_with(|| Entry {
+            value: StoreValue::Str(Bytes::new()),
+            expires_at: None,
+            lru_clock: self.lru_clock(),
+        });
+        if !existed {
+            self.key_added();
+        }
+        if entry.is_expired_at(now) {
+            entry.value = StoreValue::Str(Bytes::new());
+            entry.expires_at = None;
+        }
+        let mut buf = match entry.value.string_bytes() {
+            Some(s) => s.to_vec(),
+            None => return Err(WRONGTYPE.to_string()),
+        };
+        let old_len = buf.len();
+        let mut results = Vec::with_capacity(ops.len());
+        for op in ops {
+            match op {
+                BitfieldOp::Get {
+                    signed,
+                    bits,
+                    offset,
+                } => results.push(Some(bf_read(&buf, *offset, *bits, *signed))),
+                BitfieldOp::Set {
+                    signed,
+                    bits,
+                    offset,
+                    value,
+                    overflow,
+                } => {
+                    let old = bf_read(&buf, *offset, *bits, *signed);
+                    match bf_clamp(*signed, *bits, *value as i128, *overflow) {
+                        Some(v) => {
+                            bf_write(&mut buf, *offset, *bits, v as u64);
+                            results.push(Some(old));
+                        }
+                        None => results.push(None),
+                    }
+                }
+                BitfieldOp::IncrBy {
+                    signed,
+                    bits,
+                    offset,
+                    incr,
+                    overflow,
+                } => {
+                    let old = bf_read(&buf, *offset, *bits, *signed);
+                    let new = old as i128 + *incr as i128;
+                    match bf_clamp(*signed, *bits, new, *overflow) {
+                        Some(v) => {
+                            bf_write(&mut buf, *offset, *bits, v as u64);
+                            results.push(Some(v));
+                        }
+                        None => results.push(None),
+                    }
+                }
+            }
+        }
+        let new_len = buf.len();
+        entry.value = StoreValue::StrBuf(buf);
+        if new_len > old_len {
+            let added = new_len - old_len;
+            let _ = entry;
+            shard.used_memory += added;
+            self.mem_add(added);
+        }
+        Ok(results)
     }
 
     pub fn bitcount(
@@ -3297,21 +6151,23 @@ impl Store {
         self.del(keys)
     }
 
+    #[cfg(any())]
     pub fn expireat(&self, key: &[u8], timestamp: u64, now: Instant) -> bool {
         let target = std::time::UNIX_EPOCH + Duration::from_secs(timestamp);
         let now_sys = std::time::SystemTime::now();
         if target <= now_sys {
-            return false;
+            return self.del(&[key]) == 1;
         }
         let dur = target.duration_since(now_sys).unwrap_or(Duration::ZERO);
         self.expire(key, dur.as_secs(), now)
     }
 
+    #[cfg(any())]
     pub fn pexpireat(&self, key: &[u8], timestamp_ms: u64, now: Instant) -> bool {
         let target = std::time::UNIX_EPOCH + Duration::from_millis(timestamp_ms);
         let now_sys = std::time::SystemTime::now();
         if target <= now_sys {
-            return false;
+            return self.del(&[key]) == 1;
         }
         let dur = target.duration_since(now_sys).unwrap_or(Duration::ZERO);
         self.pexpire(key, dur.as_millis() as u64, now)
@@ -3628,6 +6484,45 @@ impl Store {
         val
     }
 
+    pub(crate) fn preview_lmove(
+        &self,
+        src: &[u8],
+        dst: &[u8],
+        from_left: bool,
+        now: Instant,
+    ) -> Result<Option<Bytes>, String> {
+        self.try_promote(src, now)?;
+        self.try_promote(dst, now)?;
+        let dst_idx = self.shard_index(dst);
+        if let Some(entry) = self.shards[dst_idx]
+            .read()
+            .data
+            .get(dst)
+            .filter(|entry| !entry.is_expired_at(now))
+        {
+            if !matches!(entry.value, StoreValue::List(_)) {
+                return Err(WRONGTYPE.to_string());
+            }
+        }
+        let src_idx = self.shard_index(src);
+        let shard = self.shards[src_idx].read();
+        match shard
+            .data
+            .get(src)
+            .filter(|entry| !entry.is_expired_at(now))
+        {
+            Some(entry) => match &entry.value {
+                StoreValue::List(list) => Ok(if from_left {
+                    list.front().cloned()
+                } else {
+                    list.back().cloned()
+                }),
+                _ => Err(WRONGTYPE.to_string()),
+            },
+            None => Ok(None),
+        }
+    }
+
     pub fn hsetnx(
         &self,
         key: &[u8],
@@ -3641,7 +6536,7 @@ impl Store {
         let ks = key_bytes(key);
         let existed = shard.data.contains_key(&ks);
         let entry = shard.data.entry(ks).or_insert_with(|| Entry {
-            value: StoreValue::Hash(HashMap::new()),
+            value: StoreValue::Hash(HashData::default()),
             expires_at: None,
             lru_clock: self.lru_clock(),
         });
@@ -3649,7 +6544,7 @@ impl Store {
             self.key_added();
         }
         if entry.is_expired_at(now) {
-            entry.value = StoreValue::Hash(HashMap::new());
+            entry.value = StoreValue::Hash(HashData::default());
             entry.expires_at = None;
         }
         match &mut entry.value {
@@ -3682,7 +6577,7 @@ impl Store {
         let ks = key_bytes(key);
         let existed = shard.data.contains_key(&ks);
         let entry = shard.data.entry(ks).or_insert_with(|| Entry {
-            value: StoreValue::Hash(HashMap::new()),
+            value: StoreValue::Hash(HashData::default()),
             expires_at: None,
             lru_clock: self.lru_clock(),
         });
@@ -3690,7 +6585,7 @@ impl Store {
             self.key_added();
         }
         if entry.is_expired_at(now) {
-            entry.value = StoreValue::Hash(HashMap::new());
+            entry.value = StoreValue::Hash(HashData::default());
             entry.expires_at = None;
         }
         match &mut entry.value {
@@ -3750,6 +6645,7 @@ impl Store {
         }
     }
 
+    #[cfg(any())]
     pub fn spop(&self, key: &[u8], count: usize, now: Instant) -> Result<Vec<String>, String> {
         if count == 1 {
             return Ok(self.spop_one(key, now).into_iter().collect());
@@ -3816,6 +6712,7 @@ impl Store {
         }
     }
 
+    #[cfg(any())]
     pub fn spop_one(&self, key: &[u8], now: Instant) -> Option<String> {
         let idx = self.shard_index(key);
         let mut shard = self.shards[idx].write();
@@ -3879,6 +6776,18 @@ impl Store {
         now: Instant,
     ) -> Result<bool, String> {
         let mem_size = member.len() + 32;
+        // Validate the destination type BEFORE mutating the source. Otherwise a
+        // wrong-type destination returns WRONGTYPE only after the member has
+        // already been removed from the source, losing it permanently.
+        let dst_idx = self.shard_index(dst);
+        {
+            let shard = self.shards[dst_idx].read();
+            if let Some(entry) = shard.data.get(dst) {
+                if !entry.is_expired_at(now) && !matches!(entry.value, StoreValue::Set(_)) {
+                    return Err(WRONGTYPE.to_string());
+                }
+            }
+        }
         let src_idx = self.shard_index(src);
         let removed = {
             let mut shard = self.shards[src_idx].write();
@@ -3901,7 +6810,6 @@ impl Store {
         if !removed {
             return Ok(false);
         }
-        let dst_idx = self.shard_index(dst);
         let mut shard = self.shards[dst_idx].write();
         shard.version += 1;
         let ks = key_bytes(dst);
@@ -3931,6 +6839,41 @@ impl Store {
         }
     }
 
+    pub(crate) fn smove_would_move(
+        &self,
+        src: &[u8],
+        dst: &[u8],
+        member: &[u8],
+        now: Instant,
+    ) -> Result<bool, String> {
+        self.try_promote(src, now)?;
+        self.try_promote(dst, now)?;
+        let dst_idx = self.shard_index(dst);
+        if let Some(entry) = self.shards[dst_idx]
+            .read()
+            .data
+            .get(dst)
+            .filter(|entry| !entry.is_expired_at(now))
+        {
+            if !matches!(entry.value, StoreValue::Set(_)) {
+                return Err(WRONGTYPE.to_string());
+            }
+        }
+        let src_idx = self.shard_index(src);
+        let shard = self.shards[src_idx].read();
+        match shard
+            .data
+            .get(src)
+            .filter(|entry| !entry.is_expired_at(now))
+        {
+            Some(entry) => match &entry.value {
+                StoreValue::Set(set) => Ok(set.contains(key_str(member))),
+                _ => Err(WRONGTYPE.to_string()),
+            },
+            None => Ok(false),
+        }
+    }
+
     pub fn smismember(&self, key: &[u8], members: &[&[u8]], now: Instant) -> Vec<bool> {
         let idx = self.shard_index(key);
         let shard = self.shards[idx].read();
@@ -3943,68 +6886,106 @@ impl Store {
         }
     }
 
-    pub fn sdiffstore(&self, dst: &[u8], keys: &[&[u8]], now: Instant) -> Result<i64, String> {
-        let result = self.sdiff(keys, now)?;
-        let members: Vec<&[u8]> = result.iter().map(|s| s.as_bytes()).collect();
+    /// Replace `dst` with `members` and journal the resolved DEL + SADD effect,
+    /// independent of later changes to the source keys.
+    fn write_computed_set(
+        &self,
+        prepare: JournalPrepareGuard<'_>,
+        dst: &[u8],
+        members: &[&[u8]],
+        now: Instant,
+    ) -> Result<i64, String> {
+        let del: [&[u8]; 2] = [b"DEL", dst];
+        let mut sadd: Vec<&[u8]> = Vec::with_capacity(members.len() + 2);
+        if !members.is_empty() {
+            sadd.push(b"SADD");
+            sadd.push(dst);
+            sadd.extend_from_slice(members);
+        }
+        let mut commands: Vec<&[&[u8]]> = vec![&del];
+        if !sadd.is_empty() {
+            commands.push(&sadd);
+        }
+        let commit = prepare
+            .commit_batch(&commands)
+            .map_err(|e| format!("ERR WAL append failed: {e}"))?;
         self.del(&[dst]);
         if !members.is_empty() {
-            let member_refs: Vec<&[u8]> = members;
-            self.sadd(dst, &member_refs, now)?;
+            self.sadd(dst, members, now)?;
         }
-        Ok(result.len() as i64)
+        commit
+            .complete()
+            .map_err(|error| format!("ERR journal apply failed: {error}"))?;
+        Ok(members.len() as i64)
+    }
+
+    pub fn sdiffstore(&self, dst: &[u8], keys: &[&[u8]], now: Instant) -> Result<i64, String> {
+        let route: [&[u8]; 2] = [b"SDIFFSTORE", dst];
+        let prepare = self
+            .prepare_journaled(&route)
+            .map_err(|e| format!("ERR WAL append failed: {e}"))?;
+        let result = self.sdiff(keys, now)?;
+        let members: Vec<&[u8]> = result.iter().map(|s| s.as_bytes()).collect();
+        self.write_computed_set(prepare, dst, &members, now)
     }
 
     pub fn sinterstore(&self, dst: &[u8], keys: &[&[u8]], now: Instant) -> Result<i64, String> {
+        let route: [&[u8]; 2] = [b"SINTERSTORE", dst];
+        let prepare = self
+            .prepare_journaled(&route)
+            .map_err(|e| format!("ERR WAL append failed: {e}"))?;
         let result = self.sinter(keys, now)?;
         let members: Vec<&[u8]> = result.iter().map(|s| s.as_bytes()).collect();
-        self.del(&[dst]);
-        if !members.is_empty() {
-            self.sadd(dst, &members, now)?;
-        }
-        Ok(result.len() as i64)
+        self.write_computed_set(prepare, dst, &members, now)
     }
 
     pub fn sunionstore(&self, dst: &[u8], keys: &[&[u8]], now: Instant) -> Result<i64, String> {
+        let route: [&[u8]; 2] = [b"SUNIONSTORE", dst];
+        let prepare = self
+            .prepare_journaled(&route)
+            .map_err(|e| format!("ERR WAL append failed: {e}"))?;
         let result = self.sunion(keys, now)?;
         let members: Vec<&[u8]> = result.iter().map(|s| s.as_bytes()).collect();
-        self.del(&[dst]);
-        if !members.is_empty() {
-            self.sadd(dst, &members, now)?;
-        }
-        Ok(result.len() as i64)
+        self.write_computed_set(prepare, dst, &members, now)
     }
 
     pub fn expire_sweep(&self, now: Instant) {
+        // Active expiry is a logical mutation even though an expired value is
+        // already invisible to reads. Keep it outside an EXEC boundary so it
+        // cannot race a queued command that revives or replaces the same key.
+        let Ok(_execution_guard) = self.execution_read_guard() else {
+            return;
+        };
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
         let mut hasher = DefaultHasher::new();
         now.hash(&mut hasher);
         let seed = hasher.finish() as usize;
 
-        let mut expired_vectors: Vec<(String, u32)> = Vec::new();
         for (i, shard) in self.shards.iter().enumerate() {
-            let should_check = {
+            let keys: Vec<ShardKey> = {
                 let shard = shard.read();
-                !shard.data.is_empty()
+                shard
+                    .data
+                    .keys()
+                    .enumerate()
+                    .filter(|(j, _)| (*j + seed + i).is_multiple_of(5))
+                    .take(20)
+                    .map(|(_, key)| key.clone())
+                    .collect()
             };
-            if !should_check {
-                continue;
-            }
-
-            let mut shard = shard.write();
-            let keys: Vec<ShardKey> = shard
-                .data
-                .keys()
-                .enumerate()
-                .filter(|(j, _)| (*j + seed + i).is_multiple_of(5))
-                .take(20)
-                .map(|(_, k)| k.clone())
-                .collect();
-            let mut removed_any = false;
             for key in keys {
-                let should_remove = shard.data.get(&key).is_some_and(|e| e.is_expired_at(now));
-                if should_remove {
-                    if let Some(entry) = shard.data.remove(&key) {
+                let _expiry_guard = self.journal_gates[self.journal_gate_index(&key)].lock();
+                let vector_dims = {
+                    let mut shard = shard.write();
+                    if !shard
+                        .data
+                        .get(&key)
+                        .is_some_and(|entry| entry.is_expired_at(now))
+                    {
+                        continue;
+                    }
+                    let vector_dims = if let Some(entry) = shard.data.remove(&key) {
                         self.key_removed();
                         let vector_dims = match &entry.value {
                             StoreValue::Vector(vector) => Some(vector.dims),
@@ -4013,20 +6994,16 @@ impl Store {
                         let mem = estimate_entry_memory(&key, &entry.value);
                         shard.used_memory = shard.used_memory.saturating_sub(mem);
                         self.mem_sub(mem);
-                        if let Some(dims) = vector_dims {
-                            expired_vectors.push((key_string(&key), dims));
-                        }
-                    }
-                    removed_any = true;
+                        vector_dims
+                    } else {
+                        None
+                    };
+                    shard.version += 1;
+                    vector_dims
+                };
+                if let Some(dims) = vector_dims {
+                    self.remove_vector_indexes(&key_string(&key), dims);
                 }
-            }
-            if removed_any {
-                shard.version += 1;
-            }
-        }
-        if !expired_vectors.is_empty() {
-            for (key, dims) in &expired_vectors {
-                self.remove_vector_indexes(key, *dims);
             }
         }
     }
@@ -4217,9 +7194,13 @@ fn store_value_to_dump_value(value: &StoreValue) -> DumpValue {
         StoreValue::Str(s) => DumpValue::Str(s.to_vec()),
         StoreValue::StrBuf(s) => DumpValue::Str(s.clone()),
         StoreValue::List(l) => DumpValue::List(l.iter().map(|b| b.to_vec()).collect()),
-        StoreValue::Hash(h) => {
-            DumpValue::Hash(h.iter().map(|(k, v)| (k.clone(), v.to_vec())).collect())
-        }
+        StoreValue::Hash(h) => DumpValue::Hash(
+            h.fields
+                .iter()
+                .map(|(k, v)| (k.clone(), v.to_vec()))
+                .collect(),
+            h.expiries.iter().map(|(k, &ms)| (k.clone(), ms)).collect(),
+        ),
         StoreValue::Set(s) => DumpValue::Set(s.iter().cloned().collect()),
         StoreValue::SortedSet(_, scores) => {
             DumpValue::SortedSet(scores.iter().map(|(m, s)| (m.clone(), *s)).collect())
@@ -4267,7 +7248,7 @@ fn store_value_to_dump_value(value: &StoreValue) -> DumpValue {
                 .collect();
             DumpValue::Stream(entries, s.last_id.to_string(), groups)
         }
-        StoreValue::Vector(v) => DumpValue::Vector(v.data.clone(), v.metadata.clone()),
+        StoreValue::Vector(v) => DumpValue::Vector(v.data.clone(), v.metadata.clone(), v.encrypted),
         StoreValue::HyperLogLog(regs, cached) => DumpValue::HyperLogLog(regs.clone(), *cached),
         StoreValue::TimeSeries(ts) => {
             DumpValue::TimeSeries(ts.samples.clone(), ts.retention, ts.labels.clone())
@@ -4289,11 +7270,14 @@ pub type StreamGroupDump = (
 pub enum DumpValue {
     Str(Vec<u8>),
     List(Vec<Vec<u8>>),
-    Hash(Vec<(String, Vec<u8>)>),
+    /// Hash fields plus per-field absolute-ms TTLs (empty when no field has one).
+    Hash(Vec<(String, Vec<u8>)>, Vec<(String, i64)>),
     Set(Vec<String>),
     SortedSet(Vec<(String, f64)>),
     Stream(Vec<StreamDumpEntry>, String, Vec<StreamGroupDump>),
-    Vector(Vec<f32>, Option<String>),
+    /// f32 data, metadata, and whether it is encrypted-at-rest (sealed in the
+    /// snapshot; the in-memory copy is plaintext).
+    Vector(Vec<f32>, Option<String>, bool),
     HyperLogLog(Vec<u8>, u64),
     TimeSeries(Vec<(i64, f64)>, u64, Vec<(String, String)>),
 }
@@ -4319,6 +7303,11 @@ impl GlobMatcher {
     fn matches(&self, s: &str) -> bool {
         if self.pattern.len() == 1 && self.pattern[0] == '*' {
             return true;
+        }
+        if self.pattern.len() > 10_000
+            && self.pattern.iter().filter(|&&ch| ch == '*').count() > 1_000
+        {
+            return false;
         }
         let s: Vec<char> = s.chars().collect();
         Self::do_match(&self.pattern, &s)
@@ -4367,12 +7356,173 @@ mod tests {
         Instant::now()
     }
 
+    fn persistent_test_config(dir: &std::path::Path) -> Arc<crate::vendor::lux::ServerConfig> {
+        Arc::new(crate::vendor::lux::ServerConfig {
+            data_dir: dir.to_string_lossy().into_owned(),
+            durability: crate::vendor::lux::DurabilityConfig {
+                policy: crate::vendor::lux::DurabilityPolicy::AlwaysSync,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    fn wal_rotation_requires_the_global_snapshot_checkpoint() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::try_new_with_config(persistent_test_config(dir.path())).unwrap();
+
+        let error = store
+            .truncate_wal(&[])
+            .expect_err("a snapshot without its global checkpoint must not rotate the journal");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("global WAL checkpoint"));
+    }
+
+    #[test]
+    fn wal_rotation_requires_every_legacy_snapshot_checkpoint() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = persistent_test_config(dir.path());
+        drop(crate::vendor::lux::disk::Wal::open(&config.journal_dir(), 0).unwrap());
+        let store = Store::try_new_with_config(config).unwrap();
+        let checkpoints = store.wal_checkpoints().unwrap();
+        let global_only: Vec<_> = checkpoints
+            .iter()
+            .filter(|(name, _)| name == "global")
+            .cloned()
+            .collect();
+
+        let error = store
+            .truncate_wal(&global_only)
+            .expect_err("a snapshot missing a legacy checkpoint must fail closed");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("shard_0 WAL checkpoint"));
+    }
+
+    #[test]
+    fn wal_rotation_applies_every_complete_checkpoint() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = persistent_test_config(dir.path());
+        drop(crate::vendor::lux::disk::Wal::open(&config.journal_dir(), 0).unwrap());
+        let store = Store::try_new_with_config(config).unwrap();
+        let checkpoints = store.wal_checkpoints().unwrap();
+
+        store.truncate_wal(&checkpoints).unwrap();
+        let rotated = store.wal_checkpoints().unwrap();
+        for (name, checkpoint) in checkpoints {
+            let replacement = rotated
+                .iter()
+                .find(|(rotated_name, _)| rotated_name == &name)
+                .map(|(_, checkpoint)| checkpoint)
+                .unwrap();
+            assert_eq!(
+                Some(replacement.generation),
+                checkpoint.successor_generation,
+                "{name} did not rotate to the snapshot-authorized successor"
+            );
+        }
+    }
+
     #[test]
     fn set_get_roundtrip() {
         let store = Store::new();
         let n = now();
         store.set(b"key1", b"value1", None, n);
         assert_eq!(store.get(b"key1", n).unwrap(), &b"value1"[..]);
+    }
+
+    fn assert_store_metrics_match_entries(store: &Store) {
+        let (keys, memory) = store
+            .shards
+            .iter()
+            .map(|shard| {
+                let shard = shard.read();
+                let memory = shard
+                    .data
+                    .iter()
+                    .map(|(key, entry)| estimate_entry_memory(key, &entry.value))
+                    .sum::<usize>();
+                (shard.data.len(), memory)
+            })
+            .fold((0usize, 0usize), |(keys, memory), next| {
+                (keys + next.0, memory + next.1)
+            });
+        assert_eq!(store.tracked_key_count(), keys);
+        assert_eq!(store.approximate_memory(), memory);
+    }
+
+    #[test]
+    fn atomic_table_batch_tracks_net_memory_keys_and_vectors() {
+        let store = Store::new();
+        let n = now();
+        let mut insert = AtomicTableBatch::new(&store, n);
+        insert
+            .hash_set("_t:items:row:1", &[("name".to_string(), b"first".to_vec())])
+            .unwrap();
+        insert.set_add("_t:items:idx:name:first", "1").unwrap();
+        insert.sorted_set_add("_t:items:ids", "1", 1.0).unwrap();
+        insert
+            .vector_set("_t:items:vec:embedding:1", vec![1.0, 0.0], None, false)
+            .unwrap();
+        insert.apply();
+        assert_store_metrics_match_entries(&store);
+        assert_eq!(store.vcard(n), 1);
+
+        let mut update = AtomicTableBatch::new(&store, n);
+        update
+            .hash_set(
+                "_t:items:row:1",
+                &[
+                    ("name".to_string(), b"a much longer value".to_vec()),
+                    ("detail".to_string(), b"temporary".to_vec()),
+                ],
+            )
+            .unwrap();
+        update
+            .hash_delete(
+                "_t:items:row:1",
+                &["detail".to_string(), "missing".to_string()],
+            )
+            .unwrap();
+        update.set_add("_t:items:idx:name:first", "1").unwrap();
+        update
+            .set_remove("_t:items:idx:name:first", "missing")
+            .unwrap();
+        update.sorted_set_add("_t:items:ids", "1", 2.0).unwrap();
+        update.sorted_set_remove("_t:items:ids", "missing").unwrap();
+        update
+            .vector_set("_t:items:vec:embedding:1", vec![0.0, 1.0], None, false)
+            .unwrap();
+        update.apply();
+        assert_store_metrics_match_entries(&store);
+        assert_eq!(store.vcard(n), 1);
+
+        let mut delete = AtomicTableBatch::new(&store, n);
+        delete.delete_hash("_t:items:row:1").unwrap();
+        delete.delete_vector("_t:items:vec:embedding:1").unwrap();
+        delete.set_remove("_t:items:idx:name:first", "1").unwrap();
+        delete.sorted_set_remove("_t:items:ids", "1").unwrap();
+        delete.apply();
+        assert_store_metrics_match_entries(&store);
+        assert_eq!(store.vcard(n), 0);
+    }
+
+    #[test]
+    fn internal_table_key_journal_routes_take_the_table_mutation_gate() {
+        assert!(Store::requires_table_mutation_gate(&[
+            b"ZREM",
+            b"_t:_ttl",
+            b"sessions\0one",
+        ]));
+        assert!(Store::requires_table_mutation_gate(&[
+            b"TROWSET",
+            b"sessions",
+        ]));
+        assert!(!Store::requires_table_mutation_gate(&[
+            b"SET",
+            b"ordinary",
+            b"value",
+        ]));
     }
 
     #[test]
@@ -4644,7 +7794,7 @@ mod tests {
         assert_eq!(store.append(b"key", b" world", n), 11);
         assert_eq!(store.get(b"key", n).unwrap(), &b"hello world"[..]);
         assert_eq!(store.strlen(b"key", n), 11);
-        assert_eq!(store.getrange(b"key", 6, -1, n), &b"world"[..]);
+        assert_eq!(store.getrange(b"key", 6, -1, n).unwrap(), &b"world"[..]);
     }
 
     #[test]
@@ -4801,8 +7951,8 @@ mod tests {
         let store = Store::new();
         let n = now();
         store.set(b"key", b"Hello, World!", None, n);
-        assert_eq!(store.getrange(b"key", 0, 4, n), &b"Hello"[..]);
-        assert_eq!(store.getrange(b"key", -6, -1, n), &b"World!"[..]);
+        assert_eq!(store.getrange(b"key", 0, 4, n).unwrap(), &b"Hello"[..]);
+        assert_eq!(store.getrange(b"key", -6, -1, n).unwrap(), &b"World!"[..]);
     }
 
     #[test]
@@ -4810,10 +7960,40 @@ mod tests {
         let store = Store::new();
         let n = now();
         store.set(b"key", b"Hello", None, n);
-        store.setrange(b"key", 6, b"World", n);
+        store.setrange(b"key", 6, b"World", n).unwrap();
         let val = store.get(b"key", n).unwrap();
         assert_eq!(val.len(), 11);
         assert_eq!(val[5], 0);
+    }
+
+    #[test]
+    fn setrange_empty_missing_does_not_create_key() {
+        let store = Store::new();
+        let n = now();
+
+        assert_eq!(store.setrange(b"key", 0, b"", n).unwrap(), 0);
+        assert!(store.get(b"key", n).is_none());
+        assert_eq!(store.dbsize(n), 0);
+    }
+
+    #[test]
+    fn range_commands_error_on_wrong_type() {
+        let store = Store::new();
+        let n = now();
+
+        store.lpush(b"list", &[b"value"], n).unwrap();
+        assert!(
+            store
+                .getrange(b"list", 0, -1, n)
+                .unwrap_err()
+                .contains("WRONGTYPE")
+        );
+        assert!(
+            store
+                .setrange(b"list", 0, b"", n)
+                .unwrap_err()
+                .contains("WRONGTYPE")
+        );
     }
 
     #[test]
@@ -5350,11 +8530,12 @@ mod tests {
     }
 
     #[test]
-    fn expireat_past_timestamp_fails() {
+    fn expireat_past_timestamp_deletes_key() {
         let store = Store::new();
         let n = now();
         store.set(b"k", b"v", None, n);
-        assert!(!store.expireat(b"k", 1000, n));
+        assert!(store.expireat(b"k", 1000, n));
+        assert!(store.get(b"k", Instant::now()).is_none());
     }
 
     #[test]
@@ -5485,8 +8666,8 @@ mod tests {
     fn vector_search_indexes_are_dimension_scoped() {
         let store = Store::new();
         let n = now();
-        store.vset(b"two_dim", vec![1.0, 0.0], None, None, n);
-        store.vset(b"three_dim", vec![0.0, 1.0, 0.0], None, None, n);
+        store.vset(b"two_dim", vec![1.0, 0.0], None, None, false, n);
+        store.vset(b"three_dim", vec![0.0, 1.0, 0.0], None, None, false, n);
 
         let two_dim = store.vsearch(&[1.0, 0.0], 1, None, None, n);
         assert_eq!(
@@ -5530,5 +8711,564 @@ mod tests {
         let m3 = GlobMatcher::new("*");
         assert!(m3.matches("anything"));
         assert!(m3.matches(""));
+    }
+
+    #[test]
+    fn keys_matches_very_long_nested_pattern() {
+        let store = Store::new();
+        let n = now();
+        let key = "a".repeat(50_000);
+        let pattern = "*?".repeat(50_000);
+
+        store.set(key.as_bytes(), b"1", None, n);
+        assert!(store.keys(pattern.as_bytes(), n).is_empty());
+    }
+
+    #[test]
+    fn legacy_shard_wals_replay_before_new_global_journal_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Arc::new(crate::vendor::lux::ServerConfig {
+            data_dir: dir.path().to_string_lossy().to_string(),
+            storage: crate::vendor::lux::StorageConfig {
+                mode: crate::vendor::lux::StorageMode::Tiered,
+                dir: dir.path().to_string_lossy().to_string(),
+            },
+            durability: crate::vendor::lux::DurabilityConfig {
+                policy: crate::vendor::lux::DurabilityPolicy::EverySecond,
+                ..Default::default()
+            },
+            ..crate::vendor::lux::ServerConfig::default()
+        });
+        {
+            let mut legacy = crate::vendor::lux::disk::Wal::open(dir.path(), 0).unwrap();
+            legacy
+                .append_command(&[b"SET", b"legacy", b"value"])
+                .unwrap();
+        }
+
+        let store = Store::new_with_config(config.clone());
+        store
+            .replay_wal(&crate::vendor::lux::pubsub::Broker::new())
+            .unwrap();
+        assert_eq!(store.get(b"legacy", now()).unwrap(), b"value".as_slice());
+
+        let command: [&[u8]; 3] = [b"SET", b"global", b"value"];
+        store
+            .commit_journaled(&command, || store.set(b"global", b"value", None, now()))
+            .unwrap();
+        store.fsync_wal();
+        drop(store);
+
+        assert!(dir.path().join("global/wal.lux").exists());
+        let restored = Store::new_with_config(config);
+        restored
+            .replay_wal(&crate::vendor::lux::pubsub::Broker::new())
+            .unwrap();
+        assert_eq!(restored.get(b"legacy", now()).unwrap(), b"value".as_slice());
+        assert_eq!(restored.get(b"global", now()).unwrap(), b"value".as_slice());
+    }
+
+    #[test]
+    fn poisoned_journal_rejects_every_later_mutation() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Arc::new(crate::vendor::lux::ServerConfig {
+            data_dir: dir.path().to_string_lossy().to_string(),
+            durability: crate::vendor::lux::DurabilityConfig {
+                policy: crate::vendor::lux::DurabilityPolicy::AlwaysSync,
+                ..Default::default()
+            },
+            ..crate::vendor::lux::ServerConfig::default()
+        });
+        let store = Store::new_with_config(config);
+        store.poison_journal();
+
+        let command: [&[u8]; 3] = [b"SET", b"unsafe", b"value"];
+        let error = store
+            .commit_journaled(&command, || store.set(b"unsafe", b"value", None, now()))
+            .expect_err("a poisoned journal must fail closed");
+        assert!(error.to_string().contains("restart required"));
+        assert!(store.get(b"unsafe", now()).is_none());
+        assert!(!store.wal_enabled());
+        assert!(!store.ready_for_traffic());
+    }
+
+    #[test]
+    fn periodic_fsync_failure_fences_later_mutations() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Arc::new(crate::vendor::lux::ServerConfig {
+            data_dir: dir.path().to_string_lossy().to_string(),
+            durability: crate::vendor::lux::DurabilityConfig {
+                policy: crate::vendor::lux::DurabilityPolicy::EverySecond,
+                ..Default::default()
+            },
+            ..crate::vendor::lux::ServerConfig::default()
+        });
+        let store = Store::new_with_config(config);
+        let accepted: [&[u8]; 3] = [b"SET", b"accepted", b"value"];
+        store
+            .commit_journaled(&accepted, || store.set(b"accepted", b"value", None, now()))
+            .unwrap();
+
+        store.inject_journal_fsync_failures(1);
+        let error = store
+            .fsync_wal_checked()
+            .expect_err("the injected periodic sync must fail");
+        assert!(error.to_string().contains("injected journal fsync failure"));
+        assert!(!store.wal_enabled());
+
+        let later: [&[u8]; 3] = [b"SET", b"later", b"value"];
+        let error = store
+            .commit_journaled(&later, || store.set(b"later", b"value", None, now()))
+            .expect_err("writes after a failed periodic sync must fail closed");
+        assert!(error.to_string().contains("restart required"));
+        assert!(store.get(b"later", now()).is_none());
+    }
+
+    #[test]
+    fn failed_prepared_apply_poison_fences_later_mutations() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Arc::new(crate::vendor::lux::ServerConfig {
+            data_dir: dir.path().to_string_lossy().to_string(),
+            durability: crate::vendor::lux::DurabilityConfig {
+                policy: crate::vendor::lux::DurabilityPolicy::AlwaysSync,
+                ..Default::default()
+            },
+            ..crate::vendor::lux::ServerConfig::default()
+        });
+        let store = Store::new_with_config(config.clone());
+        let route: [&[u8]; 2] = [b"SET", b"planned"];
+        let result: std::io::Result<Result<(), String>> = store.commit_prepared(
+            &route,
+            || {
+                Ok(JournalPlan::command(
+                    vec![b"SET".to_vec(), b"planned".to_vec(), b"value".to_vec()],
+                    (),
+                ))
+            },
+            |()| Err("injected apply failure".to_string()),
+        );
+        assert_eq!(
+            result.unwrap().unwrap_err(),
+            "injected apply failure".to_string()
+        );
+        assert!(!store.wal_enabled());
+
+        let later: [&[u8]; 3] = [b"SET", b"later", b"value"];
+        let error = store
+            .commit_journaled(&later, || store.set(b"later", b"value", None, now()))
+            .expect_err("an indeterminate apply must fence later mutations");
+        assert!(error.to_string().contains("restart required"));
+        assert!(store.get(b"later", now()).is_none());
+        drop(store);
+
+        let restored = Store::new_with_config(config);
+        restored
+            .replay_wal(&crate::vendor::lux::pubsub::Broker::new())
+            .unwrap();
+        assert_eq!(
+            restored.get(b"planned", now()).unwrap(),
+            b"value".as_slice()
+        );
+        assert!(restored.get(b"later", now()).is_none());
+    }
+
+    #[test]
+    fn panicked_prepared_apply_poison_fences_later_mutations() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Arc::new(crate::vendor::lux::ServerConfig {
+            data_dir: dir.path().to_string_lossy().to_string(),
+            durability: crate::vendor::lux::DurabilityConfig {
+                policy: crate::vendor::lux::DurabilityPolicy::AlwaysSync,
+                ..Default::default()
+            },
+            ..crate::vendor::lux::ServerConfig::default()
+        });
+        let store = Store::new_with_config(config.clone());
+        let route: [&[u8]; 2] = [b"SET", b"planned"];
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _: std::io::Result<Result<(), String>> = store.commit_prepared(
+                &route,
+                || {
+                    Ok(JournalPlan::command(
+                        vec![b"SET".to_vec(), b"planned".to_vec(), b"value".to_vec()],
+                        (),
+                    ))
+                },
+                |()| panic!("injected apply panic"),
+            );
+        }));
+        assert!(panic.is_err());
+        assert!(!store.wal_enabled());
+
+        let later: [&[u8]; 3] = [b"SET", b"later", b"value"];
+        assert!(
+            store
+                .commit_journaled(&later, || store.set(b"later", b"value", None, now()))
+                .is_err()
+        );
+        drop(store);
+
+        let restored = Store::new_with_config(config);
+        restored
+            .replay_wal(&crate::vendor::lux::pubsub::Broker::new())
+            .unwrap();
+        assert_eq!(
+            restored.get(b"planned", now()).unwrap(),
+            b"value".as_slice()
+        );
+        assert!(restored.get(b"later", now()).is_none());
+    }
+
+    #[test]
+    fn panicked_checked_apply_poison_fences_later_mutations() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Arc::new(crate::vendor::lux::ServerConfig {
+            data_dir: dir.path().to_string_lossy().to_string(),
+            durability: crate::vendor::lux::DurabilityConfig {
+                policy: crate::vendor::lux::DurabilityPolicy::AlwaysSync,
+                ..Default::default()
+            },
+            ..crate::vendor::lux::ServerConfig::default()
+        });
+        let store = Store::new_with_config(config.clone());
+        let command: [&[u8]; 3] = [b"SET", b"planned", b"value"];
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _: std::io::Result<()> =
+                store.commit_journaled_checked(&command, || panic!("injected checked apply panic"));
+        }));
+        assert!(panic.is_err());
+        assert!(!store.wal_enabled());
+
+        let later: [&[u8]; 3] = [b"SET", b"later", b"value"];
+        assert!(
+            store
+                .commit_journaled(&later, || store.set(b"later", b"value", None, now()))
+                .is_err()
+        );
+        drop(store);
+
+        let restored = Store::new_with_config(config);
+        restored
+            .replay_wal(&crate::vendor::lux::pubsub::Broker::new())
+            .unwrap();
+        assert_eq!(
+            restored.get(b"planned", now()).unwrap(),
+            b"value".as_slice()
+        );
+        assert!(restored.get(b"later", now()).is_none());
+    }
+
+    #[test]
+    fn rejected_checked_tail_is_removed_during_recovery() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Arc::new(crate::vendor::lux::ServerConfig {
+            data_dir: dir.path().to_string_lossy().to_string(),
+            durability: crate::vendor::lux::DurabilityConfig {
+                policy: crate::vendor::lux::DurabilityPolicy::AlwaysSync,
+                ..Default::default()
+            },
+            ..crate::vendor::lux::ServerConfig::default()
+        });
+        let store = Store::new_with_config(config.clone());
+        let command: [&[u8]; 3] = [b"RENAME", b"missing", b"destination"];
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _: std::io::Result<()> =
+                store.commit_journaled_checked(&command, || panic!("simulated process stop"));
+        }));
+        assert!(panic.is_err());
+        drop(store);
+
+        let restored = Store::new_with_config(config.clone());
+        restored
+            .replay_wal(&crate::vendor::lux::pubsub::Broker::new())
+            .unwrap();
+        let later: [&[u8]; 3] = [b"SET", b"later", b"value"];
+        restored
+            .commit_journaled(&later, || restored.set(b"later", b"value", None, now()))
+            .unwrap();
+        drop(restored);
+
+        let reopened = Store::new_with_config(config);
+        reopened
+            .replay_wal(&crate::vendor::lux::pubsub::Broker::new())
+            .unwrap();
+        assert_eq!(reopened.get(b"later", now()).unwrap(), b"value".as_slice());
+    }
+
+    #[test]
+    fn rejected_checked_command_before_a_later_frame_fails_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Arc::new(crate::vendor::lux::ServerConfig {
+            data_dir: dir.path().to_string_lossy().to_string(),
+            durability: crate::vendor::lux::DurabilityConfig {
+                policy: crate::vendor::lux::DurabilityPolicy::AlwaysSync,
+                ..Default::default()
+            },
+            ..crate::vendor::lux::ServerConfig::default()
+        });
+        drop(Store::new_with_config(config.clone()));
+        {
+            let mut wal =
+                crate::vendor::lux::disk::Wal::open_named(&config.journal_dir(), "global").unwrap();
+            wal.append_checked_command(&[b"RENAME", b"missing", b"destination"])
+                .unwrap();
+            wal.append_commands([&[b"SET".as_slice(), b"later", b"value"][..]])
+                .unwrap();
+            wal.fsync().unwrap();
+        }
+
+        let restored = Store::new_with_config(config);
+        let error = restored
+            .replay_wal(&crate::vendor::lux::pubsub::Broker::new())
+            .expect_err("a rejected checked command is discardable only at the tail");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("RENAME"));
+    }
+
+    #[test]
+    fn abandoned_journal_commit_guard_fences_later_mutations() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Arc::new(crate::vendor::lux::ServerConfig {
+            data_dir: dir.path().to_string_lossy().to_string(),
+            durability: crate::vendor::lux::DurabilityConfig {
+                policy: crate::vendor::lux::DurabilityPolicy::AlwaysSync,
+                ..Default::default()
+            },
+            ..crate::vendor::lux::ServerConfig::default()
+        });
+        let store = Store::new_with_config(config);
+        let command: [&[u8]; 3] = [b"SET", b"planned", b"value"];
+        let commit = store.begin_journaled(&command).unwrap();
+        drop(commit);
+
+        assert!(!store.wal_enabled());
+        let later: [&[u8]; 3] = [b"SET", b"later", b"value"];
+        let error = store
+            .commit_journaled(&later, || store.set(b"later", b"value", None, now()))
+            .expect_err("an abandoned live apply must fence later mutations");
+        assert!(error.to_string().contains("restart required"));
+        assert!(store.get(b"later", now()).is_none());
+    }
+
+    #[test]
+    fn computed_multi_key_write_holds_source_gate_during_resolution() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Arc::new(crate::vendor::lux::ServerConfig {
+            data_dir: dir.path().to_string_lossy().to_string(),
+            storage: crate::vendor::lux::StorageConfig {
+                mode: crate::vendor::lux::StorageMode::Tiered,
+                dir: dir.path().to_string_lossy().to_string(),
+            },
+            durability: crate::vendor::lux::DurabilityConfig {
+                policy: crate::vendor::lux::DurabilityPolicy::EverySecond,
+                ..Default::default()
+            },
+            ..crate::vendor::lux::ServerConfig::default()
+        });
+        let store = Arc::new(Store::new_with_config(config));
+        let n = now();
+        store.sadd(b"source", &[b"before"], n).unwrap();
+
+        let source_route: [&[u8]; 2] = [b"SADD", b"source"];
+        let source_gate = store.prepare_journaled(&source_route).unwrap();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let worker_store = store.clone();
+        let worker = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            let result = worker_store.sunionstore(b"destination", &[b"source"], n);
+            done_tx.send(result).unwrap();
+        });
+
+        started_rx.recv().unwrap();
+        assert!(done_rx.recv_timeout(Duration::from_millis(50)).is_err());
+        store.sadd(b"source", &[b"during"], n).unwrap();
+        drop(source_gate);
+
+        assert_eq!(done_rx.recv_timeout(Duration::from_secs(2)).unwrap(), Ok(2));
+        worker.join().unwrap();
+        let members = store.smembers(b"destination", n).unwrap();
+        assert!(members.iter().any(|member| member == "before"));
+        assert!(members.iter().any(|member| member == "during"));
+    }
+
+    #[test]
+    fn tiered_eviction_waits_for_the_logical_mutation_boundary() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Arc::new(crate::vendor::lux::ServerConfig {
+            data_dir: dir.path().to_string_lossy().to_string(),
+            storage: crate::vendor::lux::StorageConfig {
+                mode: crate::vendor::lux::StorageMode::Tiered,
+                dir: dir.path().to_string_lossy().to_string(),
+            },
+            durability: crate::vendor::lux::DurabilityConfig {
+                policy: crate::vendor::lux::DurabilityPolicy::EverySecond,
+                ..Default::default()
+            },
+            ..crate::vendor::lux::ServerConfig::default()
+        });
+        let store = Arc::new(Store::new_with_config(config));
+        store.set(b"key", b"before", None, now());
+        let command: [&[u8]; 3] = [b"SET", b"key", b"after"];
+        let prepared = store.prepare_journaled(&command).unwrap();
+
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let worker_store = store.clone();
+        let shard = store.shard_for_key(b"key");
+        let worker = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            done_tx.send(worker_store.evict_key(shard, b"key")).unwrap();
+        });
+
+        started_rx.recv().unwrap();
+        assert!(done_rx.recv_timeout(Duration::from_millis(50)).is_err());
+        let commit = prepared.commit(&command).unwrap();
+        store.set(b"key", b"after", None, now());
+        commit.complete().unwrap();
+
+        assert!(done_rx.recv_timeout(Duration::from_secs(2)).unwrap());
+        worker.join().unwrap();
+        assert!(store.try_promote(b"key", now()).unwrap());
+        assert_eq!(store.get(b"key", now()).unwrap(), b"after".as_slice());
+    }
+
+    #[test]
+    fn tiered_promotion_waits_for_the_logical_mutation_boundary() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Arc::new(crate::vendor::lux::ServerConfig {
+            data_dir: dir.path().to_string_lossy().to_string(),
+            storage: crate::vendor::lux::StorageConfig {
+                mode: crate::vendor::lux::StorageMode::Tiered,
+                dir: dir.path().to_string_lossy().to_string(),
+            },
+            durability: crate::vendor::lux::DurabilityConfig {
+                policy: crate::vendor::lux::DurabilityPolicy::EverySecond,
+                ..Default::default()
+            },
+            ..crate::vendor::lux::ServerConfig::default()
+        });
+        let store = Arc::new(Store::new_with_config(config));
+        store.set(b"key", b"before", None, now());
+        let shard = store.shard_for_key(b"key");
+        assert!(store.evict_key(shard, b"key"));
+
+        let command: [&[u8]; 3] = [b"SET", b"key", b"after"];
+        let prepared = store.prepare_journaled(&command).unwrap();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let worker_store = store.clone();
+        let worker = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            done_tx
+                .send(worker_store.try_promote(b"key", now()))
+                .unwrap();
+        });
+
+        started_rx.recv().unwrap();
+        assert!(done_rx.recv_timeout(Duration::from_millis(50)).is_err());
+        let commit = prepared.commit(&command).unwrap();
+        store.set(b"key", b"after", None, now());
+        commit.complete().unwrap();
+
+        assert!(
+            !done_rx
+                .recv_timeout(Duration::from_secs(2))
+                .unwrap()
+                .unwrap()
+        );
+        worker.join().unwrap();
+        assert_eq!(store.get(b"key", now()).unwrap(), b"after".as_slice());
+    }
+
+    #[test]
+    fn shutdown_barrier_waits_for_inflight_mutation_and_syncs_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Arc::new(crate::vendor::lux::ServerConfig {
+            data_dir: dir.path().to_string_lossy().into_owned(),
+            durability: crate::vendor::lux::DurabilityConfig {
+                policy: crate::vendor::lux::DurabilityPolicy::EverySecond,
+                sync_interval: Duration::from_secs(1),
+            },
+            ..crate::vendor::lux::ServerConfig::default()
+        });
+        let store = Arc::new(Store::new_with_config(config.clone()));
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let command: [&[u8]; 3] = [b"SET", b"shutdown:key", b"value"];
+        let worker_store = store.clone();
+        let worker = std::thread::spawn(move || {
+            let apply_store = worker_store.clone();
+            worker_store.commit_journaled(&command, || {
+                entered_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                apply_store.set(b"shutdown:key", b"value", None, now());
+            })
+        });
+
+        entered_rx.recv().unwrap();
+        store.begin_shutdown();
+        assert!(!store.ready_for_traffic());
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let final_store = store.clone();
+        let finalizer = std::thread::spawn(move || {
+            done_tx.send(final_store.finalize_shutdown()).unwrap();
+        });
+        assert!(done_rx.recv_timeout(Duration::from_millis(50)).is_err());
+
+        release_tx.send(()).unwrap();
+        worker.join().unwrap().unwrap();
+        done_rx
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap()
+            .unwrap();
+        finalizer.join().unwrap();
+
+        let rejected: [&[u8]; 3] = [b"SET", b"shutdown:late", b"lost"];
+        assert!(
+            store
+                .commit_journaled(&rejected, || {
+                    store.set(b"shutdown:late", b"lost", None, now())
+                })
+                .is_err()
+        );
+        drop(store);
+
+        let recovered = Store::new_with_config(config);
+        recovered
+            .replay_wal(&crate::vendor::lux::pubsub::Broker::new())
+            .unwrap();
+        assert_eq!(
+            recovered.get(b"shutdown:key", now()).unwrap(),
+            b"value".as_slice()
+        );
+        assert!(recovered.get(b"shutdown:late", now()).is_none());
+    }
+
+    #[test]
+    fn mutation_waiting_for_a_domain_is_rechecked_after_shutdown() {
+        let store = Arc::new(Store::new());
+        let command: [&[u8]; 3] = [b"SET", b"same-key", b"value"];
+        let held = store.prepare_journaled(&command).unwrap();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let waiting_store = store.clone();
+        let waiter = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            let result = waiting_store.prepare_journaled(&command).map(drop);
+            done_tx.send(result).unwrap();
+        });
+
+        started_rx.recv().unwrap();
+        assert!(done_rx.recv_timeout(Duration::from_millis(50)).is_err());
+        store.begin_shutdown();
+        drop(held);
+
+        let error = done_rx
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap()
+            .unwrap_err();
+        assert!(error.to_string().contains("shutting down"), "{error}");
+        waiter.join().unwrap();
     }
 }

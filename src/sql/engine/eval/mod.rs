@@ -5,7 +5,6 @@ use std::ops::ControlFlow;
 
 use sqlparser::ast::{Function, FunctionArg, Visit, Visitor};
 
-
 thread_local! {
     static EVAL_DATABASE: RefCell<String> = RefCell::new("app".into());
     static EVAL_USER_VARIABLES: RefCell<std::collections::HashMap<String, Value>> =
@@ -61,9 +60,7 @@ pub(super) fn eval_regexp_match_values(
     scalar::eval_regexp_values(target, pattern, negated)
 }
 
-
 pub(crate) const MYSQL_BINARY_SENTINEL: &str = "\0my_sqweel_binary:";
-
 
 pub(crate) use common::unquote_sql_string;
 pub(crate) use json::{
@@ -99,14 +96,12 @@ pub(super) fn mark_json_nulls(value: Value) -> Value {
 pub(super) fn public_json_value(value: &Value) -> Value {
     match value {
         Value::String(value) if is_json_null(value) => Value::Null,
-        Value::String(value) if value.starts_with(JSON_EXTRACT_TEXT_SENTINEL) => {
-            Value::String(
-                value
-                    .strip_prefix(JSON_EXTRACT_TEXT_SENTINEL)
-                    .unwrap_or_default()
-                    .to_string(),
-            )
-        }
+        Value::String(value) if value.starts_with(JSON_EXTRACT_TEXT_SENTINEL) => Value::String(
+            value
+                .strip_prefix(JSON_EXTRACT_TEXT_SENTINEL)
+                .unwrap_or_default()
+                .to_string(),
+        ),
         Value::Array(values) => Value::Array(values.iter().map(public_json_value).collect()),
         Value::Object(values) => Value::Object(
             values
@@ -409,7 +404,6 @@ pub(super) fn aggregate_select_result(
         return Ok(None);
     }
 
-
     let mut rows = std::mem::take(rows);
     for item in &select.projection {
         let SelectItem::ExprWithAlias { expr, alias } = item else {
@@ -613,8 +607,6 @@ pub(super) fn deduplicate_rows(rows: &mut Vec<Map<String, Value>>) {
     let mut seen = HashSet::new();
     rows.retain(|row| seen.insert(encode_json_row(row)));
 }
-
-
 
 pub(super) fn projection_has_aggregate(projection: &[SelectItem]) -> bool {
     projection.iter().any(|item| match item {
@@ -909,7 +901,11 @@ pub(super) fn project_aggregate_item(
             }
             let value =
                 aggregate_or_eval_expr(expr, group, base, last_insert_id, order_hints, eval)?;
-            out.insert(key.expect("expression item carries an output key").to_string(), value);
+            out.insert(
+                key.expect("expression item carries an output key")
+                    .to_string(),
+                value,
+            );
         }
         SelectItem::ExprWithAlias { expr, alias: _ } => {
             if expr_has_window(expr) {
@@ -920,7 +916,11 @@ pub(super) fn project_aggregate_item(
             if aggregate_call(expr).is_some() {
                 out.insert(projection_expr_column_name(expr), value.clone());
             }
-            out.insert(key.expect("expression item carries an output key").to_string(), value);
+            out.insert(
+                key.expect("expression item carries an output key")
+                    .to_string(),
+                value,
+            );
         }
         _ => {}
     }
@@ -1521,7 +1521,10 @@ fn eval_aggregate_call_rows<'a>(
                 .iter()
                 .map(json_to_f64_lossy)
                 .try_fold(0.0, |acc, value| value.map(|value| acc + value))?;
-            Ok(number_from_f64(round_aggregate(sum / values.len() as f64, &values)))
+            Ok(number_from_f64(round_aggregate(
+                sum / values.len() as f64,
+                &values,
+            )))
         }
         AggregateKind::Std
         | AggregateKind::StdSample
@@ -3970,7 +3973,7 @@ pub(super) fn eval_function_text(
                 Ok(Value::Null)
             } else {
                 Ok(Value::Number(Number::from(
-                    eval_octet_length_value(&value) as u64,
+                    eval_octet_length_value(&value) as u64
                 )))
             }
         }

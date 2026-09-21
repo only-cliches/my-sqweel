@@ -28,6 +28,7 @@ use crate::storage::RedisStore;
 
 mod catalog;
 pub(crate) use catalog::may_start_with;
+pub use catalog::{AuthPrivilege, AuthScope};
 mod transaction;
 pub use transaction::{Engine, EngineSession};
 mod compat;
@@ -40,12 +41,14 @@ mod storage_format;
 mod support;
 mod values;
 
+pub(crate) use values::substitute_params as bind_params;
+
 use compat::*;
 use ddl::*;
 pub(crate) use eval::MYSQL_BINARY_SENTINEL;
-pub(crate) use eval::row_keys_for_columns;
 pub(crate) use eval::json_compact_text;
 pub(crate) use eval::json_wire_text;
+pub(crate) use eval::row_keys_for_columns;
 use eval::*;
 use storage_format::*;
 use support::*;
@@ -60,43 +63,6 @@ pub(crate) const JSON_NULL_SENTINEL: &str = "\0my_sqweel_json_null";
 /// sends the suffix verbatim instead of re-serializing it.
 pub(crate) const JSON_AGGREGATE_TEXT_SENTINEL: &str = "\0my_sqweel_json_agg_text";
 pub(crate) const JSON_EXTRACT_TEXT_SENTINEL: &str = "\0my_sqweel_json_extract:";
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum UniqueMode {
-    #[default]
-    Overwrite,
-    Enforce,
-}
-
-/// Controls whether MySqweel favors schema-drift convenience or MySQL's
-/// fail-fast behavior. The default remains drift tolerant for backwards
-/// compatibility; callers that need MySQL parity should select `MysqlStrict`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CompatibilityProfile {
-    #[default]
-    Drift,
-    MysqlStrict,
-}
-
-impl CompatibilityProfile {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Drift => "drift",
-            Self::MysqlStrict => "mysql_strict",
-        }
-    }
-}
-
-impl UniqueMode {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Overwrite => "overwrite",
-            Self::Enforce => "enforce",
-        }
-    }
-}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -120,9 +86,6 @@ pub struct EngineConfig {
     /// Fixed SQL timezone inherited by new sessions; None selects UTC.
     #[serde(default)]
     pub default_time_zone: Option<String>,
-    pub unique_mode: UniqueMode,
-    #[serde(default)]
-    pub compatibility_profile: CompatibilityProfile,
     pub failure_injection: FailureInjectionConfig,
 }
 
@@ -137,22 +100,16 @@ impl Default for EngineConfig {
     fn default() -> Self {
         Self {
             default_time_zone: None,
-            unique_mode: UniqueMode::Overwrite,
-            compatibility_profile: CompatibilityProfile::Drift,
             failure_injection: FailureInjectionConfig::default(),
         }
     }
 }
 
 impl EngineConfig {
-    /// A parity-oriented configuration that rejects schema drift and enforces
-    /// declared uniqueness in the same places MySQL does.
+    /// Compatibility alias retained for callers that used this constructor.
+    /// All engine configurations now use strict schemas.
     pub fn mysql_strict() -> Self {
-        Self {
-            unique_mode: UniqueMode::Enforce,
-            compatibility_profile: CompatibilityProfile::MysqlStrict,
-            ..Self::default()
-        }
+        Self::default()
     }
 }
 
@@ -572,6 +529,19 @@ pub struct Snapshot {
     pub index_comments: BTreeMap<String, String>,
 }
 
+/// A complete, portable image of an embedded MySqweel instance.
+///
+/// `metadata` contains the database and account catalog.  It is deliberately
+/// opaque so storage implementations do not need to depend on MySqweel's
+/// internal authorization representation, while still being responsible for
+/// retaining it with the table data.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EngineState {
+    pub version: u32,
+    pub metadata: Value,
+    pub databases: BTreeMap<String, Snapshot>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SeedReport {
     pub table: String,
@@ -760,7 +730,7 @@ impl RawEngine {
     }
 
     pub(super) fn mysql_strict(&self) -> bool {
-        self.cfg.compatibility_profile == CompatibilityProfile::MysqlStrict
+        true
     }
 
     pub(super) fn traditional_sql_mode(&self) -> bool {
@@ -796,7 +766,7 @@ impl RawEngine {
     }
 
     pub(super) fn enforces_uniqueness(&self) -> bool {
-        self.mysql_strict() || self.cfg.unique_mode == UniqueMode::Enforce
+        true
     }
 
     fn execute_sql_internal(
@@ -1724,12 +1694,11 @@ impl RawEngine {
             return Err(anyhow!("invalid UPDATE statement"));
         };
 
-        let suffix_query = super::parse(&format!(
-            "SELECT * FROM __my_sqweel_update_target {suffix}"
-        ))?
-        .into_iter()
-        .next()
-        .ok_or_else(|| anyhow!("invalid UPDATE ordering or limit"))?;
+        let suffix_query =
+            super::parse(&format!("SELECT * FROM __my_sqweel_update_target {suffix}"))?
+                .into_iter()
+                .next()
+                .ok_or_else(|| anyhow!("invalid UPDATE ordering or limit"))?;
         let Statement::Query(query) = suffix_query else {
             return Err(anyhow!("invalid UPDATE ordering or limit"));
         };
@@ -4265,8 +4234,7 @@ fn rewrite_group_by_with_rollup(sql: &str) -> String {
         return sql.to_string();
     };
     let group_start = group_by + "GROUP BY".len();
-    let Some(rollup_offset) = find_top_level_keyword(&upper[group_start..], "WITH ROLLUP")
-    else {
+    let Some(rollup_offset) = find_top_level_keyword(&upper[group_start..], "WITH ROLLUP") else {
         return sql.to_string();
     };
     let rollup = group_start + rollup_offset;
@@ -4802,7 +4770,6 @@ fn rewrite_interval_function(sql: &str) -> String {
     output
 }
 
-
 fn rewrite_interval_cast(sql: &str) -> String {
     let upper = sql.to_ascii_uppercase();
     let mut output = String::with_capacity(sql.len());
@@ -4980,16 +4947,16 @@ fn rewrite_insert_set(sql: &str) -> String {
             (assignments.trim(), None)
         };
     let upper_assignments = assignments.to_ascii_uppercase();
-    let (assignments, duplicate) =
-        if let Some(offset) = find_top_level_keyword(&upper_assignments, "ON DUPLICATE KEY UPDATE")
-        {
-            (
-                assignments[..offset].trim_end(),
-                Some(assignments[offset..].trim()),
-            )
-        } else {
-            (assignments, None)
-        };
+    let (assignments, duplicate) = if let Some(offset) =
+        find_top_level_keyword(&upper_assignments, "ON DUPLICATE KEY UPDATE")
+    {
+        (
+            assignments[..offset].trim_end(),
+            Some(assignments[offset..].trim()),
+        )
+    } else {
+        (assignments, None)
+    };
     let mut columns = Vec::<String>::new();
     let mut values = Vec::<String>::new();
     for assignment in split_compat_assignments(assignments) {

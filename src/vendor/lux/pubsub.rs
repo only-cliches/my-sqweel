@@ -52,6 +52,14 @@ impl KeyEventCounters {
 pub struct BlockedPopRequest {
     pub tx: mpsc::Sender<(String, Bytes)>,
     pub pop_left: bool,
+    /// BLMOVE/BRPOPLPUSH are completed in the broker as one journaled move.
+    /// Plain BLPOP/BRPOP leave this empty.
+    pub destination: Option<(String, bool)>,
+    pub waiter_id: u64,
+}
+
+pub struct StreamWaiter {
+    pub tx: mpsc::Sender<()>,
     pub waiter_id: u64,
 }
 
@@ -71,8 +79,12 @@ pub struct Broker {
     key_event_counters: Arc<KeyEventCounters>,
     list_waiters: Arc<parking_lot::Mutex<HashMap<String, VecDeque<BlockedPopRequest>>>>,
     list_waiter_count: Arc<AtomicU64>,
-    stream_waiters: Arc<parking_lot::Mutex<HashMap<String, Vec<mpsc::Sender<()>>>>>,
+    stream_waiters: Arc<parking_lot::Mutex<HashMap<String, Vec<StreamWaiter>>>>,
+    stream_waiter_count: Arc<AtomicU64>,
     waiter_counter: Arc<AtomicU64>,
+    /// Per-table broadcast of typed row deltas for reactive live queries.
+    row_delta_subs: Arc<parking_lot::RwLock<HashMap<String, broadcast::Sender<RowDelta>>>>,
+    row_delta_sub_count: Arc<AtomicU64>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -88,6 +100,18 @@ pub struct Message {
     pub pattern: Option<String>,
     pub kind: MessageKind,
 }
+
+/// A typed hint, emitted at the table mutation site, that row `pk` in `table`
+/// changed. The live-query engine re-evaluates just that pk against each
+/// affected subscription, so the delta only carries the identity of what moved,
+/// not the row image.
+#[derive(Clone, Debug)]
+pub struct RowDelta {
+    pub table: String,
+    pub pk: String,
+}
+
+const ROW_DELTA_CAPACITY: usize = 4096;
 
 impl Broker {
     pub fn new() -> Self {
@@ -118,7 +142,48 @@ impl Broker {
             list_waiters: Arc::new(parking_lot::Mutex::new(HashMap::new())),
             list_waiter_count: Arc::new(AtomicU64::new(0)),
             stream_waiters: Arc::new(parking_lot::Mutex::new(HashMap::new())),
+            stream_waiter_count: Arc::new(AtomicU64::new(0)),
             waiter_counter: Arc::new(AtomicU64::new(0)),
+            row_delta_subs: Arc::new(parking_lot::RwLock::new(HashMap::new())),
+            row_delta_sub_count: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    /// Cheap global gate: are there any reactive live-query subscribers at all?
+    /// Checked on the table write hot path before doing any delta work.
+    pub fn has_any_row_delta_subs(&self) -> bool {
+        self.row_delta_sub_count.load(Ordering::Relaxed) > 0
+    }
+
+    /// Subscribe to typed row deltas for `table`. The receiver is per live query.
+    pub fn subscribe_row_deltas(&self, table: &str) -> broadcast::Receiver<RowDelta> {
+        let mut subs = self.row_delta_subs.write();
+        let tx = subs
+            .entry(table.to_string())
+            .or_insert_with(|| broadcast::channel(ROW_DELTA_CAPACITY).0);
+        let rx = tx.subscribe();
+        self.row_delta_sub_count.fetch_add(1, Ordering::Relaxed);
+        rx
+    }
+
+    /// Drop one live-query subscription to `table`'s row deltas.
+    pub fn unsubscribe_row_deltas(&self, table: &str) {
+        self.row_delta_sub_count
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
+                Some(n.saturating_sub(1))
+            })
+            .ok();
+        let mut subs = self.row_delta_subs.write();
+        if subs.get(table).is_some_and(|tx| tx.receiver_count() == 0) {
+            subs.remove(table);
+        }
+    }
+
+    /// Publish a typed row delta to any live queries watching its table.
+    pub fn publish_row_delta(&self, delta: RowDelta) {
+        let subs = self.row_delta_subs.read();
+        if let Some(tx) = subs.get(&delta.table) {
+            let _ = tx.send(delta);
         }
     }
 
@@ -134,6 +199,10 @@ impl Broker {
         self.list_waiter_count.load(Ordering::Relaxed) > 0
     }
 
+    pub fn list_waiter_count(&self) -> u64 {
+        self.list_waiter_count.load(Ordering::Relaxed)
+    }
+
     pub fn register_list_waiter(&self, key: &str, req: BlockedPopRequest) {
         let mut waiters = self.list_waiters.lock();
         waiters.entry(key.to_string()).or_default().push_back(req);
@@ -143,39 +212,141 @@ impl Broker {
     pub(crate) fn drain_list_waiters(
         &self,
         key: &str,
-        shard_data: &mut crate::vendor::lux::store::ShardData,
+        store: &crate::vendor::lux::store::Store,
         now: std::time::Instant,
     ) {
-        let mut waiters = self.list_waiters.lock();
-        let queue = match waiters.get_mut(key) {
-            Some(q) => q,
-            None => return,
-        };
-
-        while !queue.is_empty() {
-            let entry = match shard_data.get_mut(key.as_bytes()) {
-                Some(e) if !e.is_expired_at(now) => e,
-                _ => return,
+        loop {
+            let req = {
+                let mut waiters = self.list_waiters.lock();
+                let Some(queue) = waiters.get_mut(key) else {
+                    return;
+                };
+                let Some(req) = queue.pop_front() else {
+                    waiters.remove(key);
+                    return;
+                };
+                self.list_waiter_count.fetch_sub(1, Ordering::Relaxed);
+                if queue.is_empty() {
+                    waiters.remove(key);
+                }
+                req
             };
-            let list = match &mut entry.value {
-                crate::vendor::lux::store::StoreValue::List(l) if !l.is_empty() => l,
-                _ => return,
+
+            let permit = match req.tx.clone().try_reserve_owned() {
+                Ok(permit) => permit,
+                Err(mpsc::error::TrySendError::Closed(_)) => continue,
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    let mut waiters = self.list_waiters.lock();
+                    waiters.entry(key.to_string()).or_default().push_front(req);
+                    self.list_waiter_count.fetch_add(1, Ordering::Relaxed);
+                    return;
+                }
             };
 
-            let req = queue.pop_front().unwrap();
-            self.list_waiter_count.fetch_sub(1, Ordering::Relaxed);
-            let val = if req.pop_left {
-                list.pop_front()
+            let raw = if let Some((destination, push_left)) = &req.destination {
+                let route: [&[u8]; 3] = [b"LMOVE", key.as_bytes(), destination.as_bytes()];
+                store.commit_prepared(
+                    &route,
+                    || -> Result<crate::vendor::lux::store::JournalPlan<Option<Bytes>>, String> {
+                        let value = store.preview_lmove(
+                            key.as_bytes(),
+                            destination.as_bytes(),
+                            req.pop_left,
+                            now,
+                        )?;
+                        let Some(value) = value else {
+                            return Ok(crate::vendor::lux::store::JournalPlan::no_op(None));
+                        };
+                        let pop = if req.pop_left { b"LPOP" } else { b"RPOP" };
+                        let push = if *push_left { b"LPUSH" } else { b"RPUSH" };
+                        Ok(crate::vendor::lux::store::JournalPlan::batch(
+                            vec![
+                                vec![pop.to_vec(), key.as_bytes().to_vec()],
+                                vec![
+                                    push.to_vec(),
+                                    destination.as_bytes().to_vec(),
+                                    value.to_vec(),
+                                ],
+                            ],
+                            Some(value),
+                        ))
+                    },
+                    |expected| -> Result<Option<Bytes>, String> {
+                        let Some(expected) = expected else {
+                            return Ok(None);
+                        };
+                        let moved = store.lmove(
+                            key.as_bytes(),
+                            destination.as_bytes(),
+                            req.pop_left,
+                            *push_left,
+                            now,
+                        );
+                        if moved.as_ref() != Some(&expected) {
+                            return Err(
+                                "ERR list changed during journaled blocked move".to_string()
+                            );
+                        }
+                        Ok(moved)
+                    },
+                )
             } else {
-                list.pop_back()
+                let pop: &[u8] = if req.pop_left { b"LPOP" } else { b"RPOP" };
+                let route: [&[u8]; 2] = [pop, key.as_bytes()];
+                store.commit_prepared(
+                    &route,
+                    || -> Result<crate::vendor::lux::store::JournalPlan<Option<Bytes>>, String> {
+                        let preview =
+                            store.preview_lmpop(&[key.as_bytes()], req.pop_left, 1, now)?;
+                        let Some((_, mut values)) = preview else {
+                            return Ok(crate::vendor::lux::store::JournalPlan::no_op(None));
+                        };
+                        let value = values.pop().expect("non-empty blocked pop preview");
+                        Ok(crate::vendor::lux::store::JournalPlan::command(
+                            vec![pop.to_vec(), key.as_bytes().to_vec()],
+                            Some(value),
+                        ))
+                    },
+                    |expected| -> Result<Option<Bytes>, String> {
+                        let Some(expected) = expected else {
+                            return Ok(None);
+                        };
+                        let value = if req.pop_left {
+                            store.lpop(key.as_bytes(), now)
+                        } else {
+                            store.rpop(key.as_bytes(), now)
+                        };
+                        if value.as_ref() != Some(&expected) {
+                            return Err("ERR list changed during journaled blocked pop".to_string());
+                        }
+                        Ok(value)
+                    },
+                )
             };
-            if let Some(v) = val {
-                let _ = req.tx.try_send((key.to_string(), v));
-            }
-        }
 
-        if queue.is_empty() {
-            waiters.remove(key);
+            let raw = match raw {
+                Ok(Ok(Some(value))) => value,
+                Ok(Ok(None)) => {
+                    let mut waiters = self.list_waiters.lock();
+                    waiters.entry(key.to_string()).or_default().push_front(req);
+                    self.list_waiter_count.fetch_add(1, Ordering::Relaxed);
+                    return;
+                }
+                Ok(Err(_)) | Err(_) => {
+                    let mut waiters = self.list_waiters.lock();
+                    waiters.entry(key.to_string()).or_default().push_front(req);
+                    self.list_waiter_count.fetch_add(1, Ordering::Relaxed);
+                    return;
+                }
+            };
+            let value = store.decrypt_list_element(raw.clone()).unwrap_or(raw);
+            permit.send((key.to_string(), value));
+
+            if let Some((destination, _)) = &req.destination {
+                if destination != key && self.has_list_waiters(destination) {
+                    self.drain_list_waiters(destination, store, now);
+                }
+            }
         }
     }
 
@@ -197,16 +368,44 @@ impl Broker {
         }
     }
 
-    pub fn register_stream_waiter(&self, key: &str, tx: mpsc::Sender<()>) {
+    pub fn stream_waiter_count(&self) -> u64 {
+        self.stream_waiter_count.load(Ordering::Relaxed)
+    }
+
+    pub fn register_stream_waiter(&self, key: &str, tx: mpsc::Sender<()>, waiter_id: u64) {
         let mut waiters = self.stream_waiters.lock();
-        waiters.entry(key.to_string()).or_default().push(tx);
+        waiters
+            .entry(key.to_string())
+            .or_default()
+            .push(StreamWaiter { tx, waiter_id });
+        self.stream_waiter_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn remove_stream_waiters_by_id(&self, keys: &[String], id: u64) {
+        let mut waiters = self.stream_waiters.lock();
+        for key in keys {
+            if let Some(queue) = waiters.get_mut(key) {
+                let before = queue.len();
+                queue.retain(|r| r.waiter_id != id);
+                let removed = before - queue.len();
+                if removed > 0 {
+                    self.stream_waiter_count
+                        .fetch_sub(removed as u64, Ordering::Relaxed);
+                }
+                if queue.is_empty() {
+                    waiters.remove(key);
+                }
+            }
+        }
     }
 
     pub fn wake_stream_waiters(&self, key: &str) {
         let mut waiters = self.stream_waiters.lock();
         if let Some(senders) = waiters.remove(key) {
-            for tx in senders {
-                let _ = tx.try_send(());
+            self.stream_waiter_count
+                .fetch_sub(senders.len() as u64, Ordering::Relaxed);
+            for waiter in senders {
+                let _ = waiter.tx.try_send(());
             }
         }
     }
@@ -278,6 +477,57 @@ impl Broker {
         count
     }
 
+    /// Return the delivery count a publish would report without sending it.
+    /// EXEC uses this while its exclusive execution boundary is held, then
+    /// releases the actual message only after the transaction's WAL frame is
+    /// durable.
+    pub(crate) fn publish_subscriber_count(&self, channel: &str) -> i64 {
+        let exact = self
+            .channels
+            .read()
+            .get(channel)
+            .map(|tx| tx.receiver_count() as i64)
+            .unwrap_or(0);
+        let patterns = self
+            .pattern_subs
+            .read()
+            .iter()
+            .filter(|(pattern, tx)| glob_match(pattern, channel) && tx.receiver_count() > 0)
+            .map(|(_, tx)| tx.receiver_count() as i64)
+            .sum::<i64>();
+        exact + patterns
+    }
+
+    /// PUBSUB CHANNELS: active channels (those with at least one subscriber),
+    /// optionally filtered by a glob `pattern`.
+    pub fn pubsub_channels(&self, pattern: Option<&str>) -> Vec<String> {
+        let channels = self.channels.read();
+        channels
+            .iter()
+            .filter(|(_, tx)| tx.receiver_count() > 0)
+            .map(|(name, _)| name.clone())
+            .filter(|name| pattern.is_none_or(|p| glob_match(p, name)))
+            .collect()
+    }
+
+    /// PUBSUB NUMSUB: number of subscribers for an exact channel name.
+    pub fn pubsub_numsub(&self, channel: &str) -> i64 {
+        let channels = self.channels.read();
+        channels
+            .get(channel)
+            .map(|tx| tx.receiver_count() as i64)
+            .unwrap_or(0)
+    }
+
+    /// PUBSUB NUMPAT: number of active pattern subscriptions.
+    pub fn pubsub_numpat(&self) -> i64 {
+        let patterns = self.pattern_subs.read();
+        patterns
+            .values()
+            .filter(|tx| tx.receiver_count() > 0)
+            .count() as i64
+    }
+
     pub fn ksubscribe(&self, pattern: &str) -> broadcast::Receiver<Message> {
         if is_glob_pattern(pattern) {
             let mut subs = self.key_glob_subs.write();
@@ -345,6 +595,11 @@ impl Broker {
     #[inline(always)]
     pub fn has_key_subs(&self) -> bool {
         self.key_sub_count.load(Ordering::Relaxed) > 0
+    }
+
+    #[cfg(any())]
+    pub(crate) fn key_event_loop_started(&self) -> bool {
+        self.key_event_started.load(Ordering::Relaxed)
     }
 
     #[inline(always)]
@@ -583,6 +838,32 @@ fn do_glob(p: &[char], s: &[char], pi: usize, si: usize) -> bool {
 #[cfg(any())]
 mod tests {
     use super::*;
+    use crate::vendor::lux::{
+        DurabilityConfig, DurabilityPolicy, ServerConfig, StorageConfig, StorageMode,
+    };
+    use std::sync::Arc;
+    use std::time::Instant;
+
+    fn journal_store(
+        dir: &std::path::Path,
+    ) -> (crate::vendor::lux::store::Store, Arc<ServerConfig>) {
+        let config = Arc::new(ServerConfig {
+            data_dir: dir.to_string_lossy().to_string(),
+            storage: StorageConfig {
+                mode: StorageMode::Tiered,
+                dir: dir.to_string_lossy().to_string(),
+            },
+            durability: DurabilityConfig {
+                policy: DurabilityPolicy::EverySecond,
+                ..Default::default()
+            },
+            ..ServerConfig::default()
+        });
+        (
+            crate::vendor::lux::store::Store::new_with_config(config.clone()),
+            config,
+        )
+    }
 
     #[test]
     fn subscribe_and_publish() {
@@ -653,6 +934,121 @@ mod tests {
         assert_eq!(
             rx2.try_recv().err(),
             Some(broadcast::error::TryRecvError::Empty)
+        );
+    }
+
+    #[test]
+    fn row_delta_subscriber_count_gates_and_reclaims() {
+        let broker = Broker::new();
+        assert!(!broker.has_any_row_delta_subs());
+
+        let rx1 = broker.subscribe_row_deltas("tasks");
+        let mut rx2 = broker.subscribe_row_deltas("tasks");
+        assert!(broker.has_any_row_delta_subs());
+
+        // A published delta reaches every live receiver on the table.
+        broker.publish_row_delta(RowDelta {
+            table: "tasks".to_string(),
+            pk: "t1".to_string(),
+        });
+        assert_eq!(rx2.try_recv().unwrap().pk, "t1");
+
+        // Dropping one receiver then unsubscribing keeps the channel (rx2 lives).
+        drop(rx1);
+        broker.unsubscribe_row_deltas("tasks");
+        assert!(broker.has_any_row_delta_subs());
+        assert!(broker.row_delta_subs.read().contains_key("tasks"));
+
+        // Dropping the last receiver before unsubscribe reclaims the channel and
+        // flips the global gate back off.
+        drop(rx2);
+        broker.unsubscribe_row_deltas("tasks");
+        assert!(!broker.has_any_row_delta_subs());
+        assert!(!broker.row_delta_subs.read().contains_key("tasks"));
+    }
+
+    #[test]
+    fn publish_row_delta_to_idle_table_is_noop() {
+        let broker = Broker::new();
+        // No panic, no subscribers, nothing to receive.
+        broker.publish_row_delta(RowDelta {
+            table: "ghost".to_string(),
+            pk: "x".to_string(),
+        });
+        assert!(!broker.has_any_row_delta_subs());
+    }
+
+    #[test]
+    fn blocked_pop_does_not_mutate_when_the_journal_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, _) = journal_store(dir.path());
+        let now = Instant::now();
+        store.lpush(b"jobs", &[b"one"], now).unwrap();
+
+        let broker = Broker::new();
+        let (tx, mut rx) = mpsc::channel(1);
+        broker.register_list_waiter(
+            "jobs",
+            BlockedPopRequest {
+                tx,
+                pop_left: true,
+                destination: None,
+                waiter_id: broker.next_waiter_id(),
+            },
+        );
+        store.inject_journal_failures(1);
+        broker.drain_list_waiters("jobs", &store, now);
+
+        assert_eq!(store.llen(b"jobs", now).unwrap(), 1);
+        assert!(rx.try_recv().is_err());
+        assert_eq!(broker.list_waiter_count(), 1);
+
+        broker.drain_list_waiters("jobs", &store, now);
+        assert_eq!(rx.try_recv().unwrap().1.as_ref(), b"one");
+        assert_eq!(store.llen(b"jobs", now).unwrap(), 0);
+    }
+
+    #[test]
+    fn blocked_move_is_one_durable_resolved_effect() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, config) = journal_store(dir.path());
+        let now = Instant::now();
+        let push: [&[u8]; 3] = [b"LPUSH", b"source", b"one"];
+        store
+            .commit_journaled(&push, || store.lpush(b"source", &[b"one"], now))
+            .unwrap()
+            .unwrap();
+
+        let broker = Broker::new();
+        let (tx, mut rx) = mpsc::channel(1);
+        broker.register_list_waiter(
+            "source",
+            BlockedPopRequest {
+                tx,
+                pop_left: true,
+                destination: Some(("destination".to_string(), false)),
+                waiter_id: broker.next_waiter_id(),
+            },
+        );
+        broker.drain_list_waiters("source", &store, now);
+
+        assert_eq!(rx.try_recv().unwrap().1.as_ref(), b"one");
+        assert_eq!(store.llen(b"source", now).unwrap(), 0);
+        assert_eq!(
+            store.lrange(b"destination", 0, -1, now).unwrap()[0],
+            b"one".as_slice()
+        );
+        store.fsync_wal();
+        drop(store);
+
+        let restored = crate::vendor::lux::store::Store::new_with_config(config);
+        restored.replay_wal(&Broker::new()).unwrap();
+        assert_eq!(restored.llen(b"source", Instant::now()).unwrap(), 0);
+        assert_eq!(
+            restored
+                .lrange(b"destination", 0, -1, Instant::now())
+                .unwrap()[0],
+            b"one".as_slice()
         );
     }
 }

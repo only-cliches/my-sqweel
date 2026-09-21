@@ -2,7 +2,9 @@ use bytes::BytesMut;
 use std::time::Instant;
 
 use crate::vendor::lux::resp;
-use crate::vendor::lux::store::{Store, StoreValue};
+use crate::vendor::lux::store::{
+    HExpireCond, HFieldTtl, HGetexTtl, JournalPlan, Store, StoreValue, epoch_ms,
+};
 
 use super::{CmdResult, arg_str, cmd_eq, parse_i64, parse_u64};
 
@@ -20,7 +22,13 @@ fn parse_usize_arg(arg: &[u8], out: &mut BytesMut) -> Option<usize> {
 
 pub fn cmd_hset(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Instant) -> CmdResult {
     let is_hmset = cmd_eq(args[0], b"HMSET");
-    if args.len() < 4 || !(args.len() - 2).is_multiple_of(2) {
+    let encrypted = args.last().is_some_and(|arg| cmd_eq(arg, b"ENCRYPTED"));
+    let end = if encrypted {
+        args.len() - 1
+    } else {
+        args.len()
+    };
+    if end < 4 || !(end - 2).is_multiple_of(2) {
         let cmd_name = if is_hmset { "hmset" } else { "hset" };
         resp::write_error(
             out,
@@ -28,12 +36,35 @@ pub fn cmd_hset(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Instant)
         );
         return CmdResult::Written;
     }
-    let result = if args.len() == 4 {
-        let pair = [(args[2], args[3])];
-        store.hset(args[1], &pair, now)
-    } else {
-        let pairs: Vec<(&[u8], &[u8])> = args[2..].chunks(2).map(|c| (c[0], c[1])).collect();
-        store.hset(args[1], &pairs, now)
+    let pairs: Vec<(&[u8], &[u8])> = args[2..end].chunks(2).map(|c| (c[0], c[1])).collect();
+    // Always journal the resolved bytes. Whether an existing field must remain
+    // encrypted is state-dependent, so deciding between raw and resolved WAL
+    // paths before acquiring the key gate would race another HSET.
+    let route: [&[u8]; 2] = [b"HSET", args[1]];
+    let result = match store.commit_prepared(
+        &route,
+        || {
+            let stored_pairs = store.prepare_hset_kv(args[1], &pairs, encrypted, now)?;
+            let mut command = Vec::with_capacity(3 + stored_pairs.len() * 2);
+            command.push(b"ENC".to_vec());
+            command.push(b"RAWHSET".to_vec());
+            command.push(args[1].to_vec());
+            for (field, value) in &stored_pairs {
+                command.push(field.clone());
+                command.push(value.clone());
+            }
+            Ok(JournalPlan::command(command, stored_pairs))
+        },
+        |stored_pairs| {
+            let refs: Vec<(&[u8], &[u8])> = stored_pairs
+                .iter()
+                .map(|(field, value)| (field.as_slice(), value.as_slice()))
+                .collect();
+            store.hset(args[1], &refs, now)
+        },
+    ) {
+        Ok(result) => result,
+        Err(error) => Err(format!("ERR WAL append failed: {error}")),
     };
     match result {
         Ok(n) => {
@@ -65,7 +96,10 @@ pub fn cmd_hget(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Instant)
         resp::write_error(out, "ERR wrong number of arguments for 'hget' command");
         return CmdResult::Written;
     }
-    resp::write_optional_bulk_raw(out, &store.hget(args[1], args[2], now));
+    match store.hget_checked(args[1], args[2], now) {
+        Ok(value) => resp::write_optional_bulk_raw(out, &value),
+        Err(error) => resp::write_error(out, &error),
+    }
     CmdResult::Written
 }
 
@@ -254,8 +288,9 @@ pub fn cmd_hrandfield(
     match shard.data.get(ks) {
         Some(entry) if !entry.is_expired_at(now) => {
             if let StoreValue::Hash(map) = &entry.value {
+                let now_ms = crate::vendor::lux::store::epoch_ms();
                 if args.len() <= 2 {
-                    let all: Vec<_> = map.iter().collect();
+                    let all: Vec<_> = map.live_iter(now_ms).collect();
                     if all.is_empty() {
                         resp::write_null(out);
                     } else {
@@ -266,7 +301,7 @@ pub fn cmd_hrandfield(
                 } else if abs_count == 0 {
                     resp::write_array_header(out, 0);
                 } else {
-                    let all: Vec<_> = map.iter().collect();
+                    let all: Vec<_> = map.live_iter(now_ms).collect();
                     let seed = now.elapsed().as_nanos() as usize;
                     let n = if allow_dup {
                         abs_count
@@ -360,7 +395,9 @@ pub fn cmd_hscan(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Instant
         Some(entry) if !entry.is_expired_at(now) => {
             if cmd_eq(args[0], b"HSCAN") {
                 if let StoreValue::Hash(map) = &entry.value {
-                    let all: Vec<_> = map.iter().collect();
+                    let all: Vec<_> = map
+                        .live_iter(crate::vendor::lux::store::epoch_ms())
+                        .collect();
                     let s = cursor.min(all.len());
                     let e = (s + count).min(all.len());
                     let next = if e >= all.len() { 0 } else { e };
@@ -382,7 +419,13 @@ pub fn cmd_hscan(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Instant
                         resp::write_array_header(out, filtered.len() * 2);
                         for (k, v) in &filtered {
                             resp::write_bulk(out, k);
-                            resp::write_bulk_raw(out, v);
+                            match store.decrypt_hash_field_value(ks, k.as_bytes(), (*v).clone()) {
+                                Ok(value) => resp::write_bulk_raw(out, &value),
+                                Err(err) => {
+                                    resp::write_error(out, &err);
+                                    return CmdResult::Written;
+                                }
+                            }
                         }
                     }
                 } else {
@@ -450,4 +493,353 @@ fn do_glob(p: &[char], s: &[char], pi: usize, si: usize) -> bool {
         return do_glob(p, s, pi + 1, si + 1);
     }
     false
+}
+
+// --- Hash field TTL family (Redis 7.4) ---
+
+/// The four HEXPIRE setters differ only in unit and relative/absolute base.
+#[derive(Clone, Copy)]
+enum ExpireUnit {
+    Seconds,
+    Millis,
+    SecondsAt,
+    MillisAt,
+}
+
+/// The four HTTL queries differ only in how the deadline is formatted.
+#[derive(Clone, Copy)]
+enum TtlForm {
+    Seconds,
+    Millis,
+    ExpireSeconds,
+    ExpireMillis,
+}
+
+/// Parse a trailing `FIELDS <numfields> <field>...` clause starting at `at`.
+fn parse_fields_clause<'a>(
+    args: &'a [&'a [u8]],
+    at: usize,
+    out: &mut BytesMut,
+) -> Option<Vec<&'a [u8]>> {
+    if at >= args.len() || !cmd_eq(args[at], b"FIELDS") {
+        resp::write_error(
+            out,
+            "ERR Mandatory keyword FIELDS is missing or not at the right position",
+        );
+        return None;
+    }
+    let numfields = match args.get(at + 1).and_then(|a| parse_u64(a).ok()) {
+        Some(n) if n >= 1 => n as usize,
+        _ => {
+            resp::write_error(out, "ERR Parameter `numFields` should be greater than 0");
+            return None;
+        }
+    };
+    let start = at + 2;
+    if start + numfields != args.len() {
+        resp::write_error(
+            out,
+            "ERR The `numFields` parameter must match the number of arguments",
+        );
+        return None;
+    }
+    Some(args[start..start + numfields].to_vec())
+}
+
+fn cmd_hexpire_generic(
+    args: &[&[u8]],
+    store: &Store,
+    out: &mut BytesMut,
+    now: Instant,
+    unit: ExpireUnit,
+) -> CmdResult {
+    // H(P)EXPIRE(AT) key ttl [NX|XX|GT|LT] FIELDS numfields field [field...]
+    if args.len() < 6 {
+        resp::write_error(out, "ERR wrong number of arguments");
+        return CmdResult::Written;
+    }
+    let ttl = match parse_i64(args[2]) {
+        Ok(v) => v,
+        Err(_) => {
+            resp::write_error(out, INTEGER_ERR);
+            return CmdResult::Written;
+        }
+    };
+    let mut i = 3;
+    let cond = if cmd_eq(args[i], b"NX") {
+        i += 1;
+        HExpireCond::Nx
+    } else if cmd_eq(args[i], b"XX") {
+        i += 1;
+        HExpireCond::Xx
+    } else if cmd_eq(args[i], b"GT") {
+        i += 1;
+        HExpireCond::Gt
+    } else if cmd_eq(args[i], b"LT") {
+        i += 1;
+        HExpireCond::Lt
+    } else {
+        HExpireCond::None
+    };
+    let Some(fields) = parse_fields_clause(args, i, out) else {
+        return CmdResult::Written;
+    };
+    let now_ms = epoch_ms();
+    let deadline_ms = match unit {
+        ExpireUnit::Seconds => now_ms.saturating_add(ttl.saturating_mul(1000)),
+        ExpireUnit::Millis => now_ms.saturating_add(ttl),
+        ExpireUnit::SecondsAt => ttl.saturating_mul(1000),
+        ExpireUnit::MillisAt => ttl,
+    };
+    // Journal the resolved absolute deadline before mutating any field TTL.
+    let dl = deadline_ms.to_string();
+    let nf = fields.len().to_string();
+    let mut journal_args: Vec<Vec<u8>> =
+        vec![b"HPEXPIREAT".to_vec(), args[1].to_vec(), dl.into_bytes()];
+    match cond {
+        HExpireCond::None => {}
+        HExpireCond::Nx => journal_args.push(b"NX".to_vec()),
+        HExpireCond::Xx => journal_args.push(b"XX".to_vec()),
+        HExpireCond::Gt => journal_args.push(b"GT".to_vec()),
+        HExpireCond::Lt => journal_args.push(b"LT".to_vec()),
+    }
+    journal_args.push(b"FIELDS".to_vec());
+    journal_args.push(nf.into_bytes());
+    journal_args.extend(fields.iter().map(|field| field.to_vec()));
+    let refs: Vec<&[u8]> = journal_args.iter().map(Vec::as_slice).collect();
+    let result = match store.commit_journaled_checked(&refs, || {
+        let result = store.hexpire_fields(args[1], &fields, deadline_ms, cond, now);
+        let committed = result.is_ok();
+        (result, committed)
+    }) {
+        Ok(result) => result,
+        Err(e) => {
+            resp::write_error(out, &format!("ERR WAL append failed: {e}"));
+            return CmdResult::Written;
+        }
+    };
+    match result {
+        Ok(results) => {
+            resp::write_array_header(out, results.len());
+            for r in results {
+                resp::write_integer(out, r);
+            }
+        }
+        Err(e) => resp::write_error(out, &e),
+    }
+    CmdResult::Written
+}
+
+pub fn cmd_hexpire(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Instant) -> CmdResult {
+    cmd_hexpire_generic(args, store, out, now, ExpireUnit::Seconds)
+}
+pub fn cmd_hpexpire(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Instant) -> CmdResult {
+    cmd_hexpire_generic(args, store, out, now, ExpireUnit::Millis)
+}
+pub fn cmd_hexpireat(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Instant) -> CmdResult {
+    cmd_hexpire_generic(args, store, out, now, ExpireUnit::SecondsAt)
+}
+pub fn cmd_hpexpireat(
+    args: &[&[u8]],
+    store: &Store,
+    out: &mut BytesMut,
+    now: Instant,
+) -> CmdResult {
+    cmd_hexpire_generic(args, store, out, now, ExpireUnit::MillisAt)
+}
+
+fn cmd_httl_generic(
+    args: &[&[u8]],
+    store: &Store,
+    out: &mut BytesMut,
+    now: Instant,
+    form: TtlForm,
+) -> CmdResult {
+    // H(P)TTL / H(P)EXPIRETIME key FIELDS numfields field [field...]
+    if args.len() < 5 {
+        resp::write_error(out, "ERR wrong number of arguments");
+        return CmdResult::Written;
+    }
+    let Some(fields) = parse_fields_clause(args, 2, out) else {
+        return CmdResult::Written;
+    };
+    match store.httl_fields(args[1], &fields, now) {
+        Ok(results) => {
+            let now_ms = epoch_ms();
+            resp::write_array_header(out, results.len());
+            for r in results {
+                let v = match r {
+                    HFieldTtl::Missing => -2,
+                    HFieldTtl::NoTtl => -1,
+                    HFieldTtl::ExpiresAtMs(ms) => match form {
+                        TtlForm::Seconds => (ms - now_ms + 999).div_euclid(1000).max(0),
+                        TtlForm::Millis => (ms - now_ms).max(0),
+                        TtlForm::ExpireSeconds => ms.div_euclid(1000),
+                        TtlForm::ExpireMillis => ms,
+                    },
+                };
+                resp::write_integer(out, v);
+            }
+        }
+        Err(e) => resp::write_error(out, &e),
+    }
+    CmdResult::Written
+}
+
+pub fn cmd_httl(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Instant) -> CmdResult {
+    cmd_httl_generic(args, store, out, now, TtlForm::Seconds)
+}
+pub fn cmd_hpttl(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Instant) -> CmdResult {
+    cmd_httl_generic(args, store, out, now, TtlForm::Millis)
+}
+pub fn cmd_hexpiretime(
+    args: &[&[u8]],
+    store: &Store,
+    out: &mut BytesMut,
+    now: Instant,
+) -> CmdResult {
+    cmd_httl_generic(args, store, out, now, TtlForm::ExpireSeconds)
+}
+pub fn cmd_hpexpiretime(
+    args: &[&[u8]],
+    store: &Store,
+    out: &mut BytesMut,
+    now: Instant,
+) -> CmdResult {
+    cmd_httl_generic(args, store, out, now, TtlForm::ExpireMillis)
+}
+
+pub fn cmd_hpersist(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Instant) -> CmdResult {
+    if args.len() < 5 {
+        resp::write_error(out, "ERR wrong number of arguments");
+        return CmdResult::Written;
+    }
+    let Some(fields) = parse_fields_clause(args, 2, out) else {
+        return CmdResult::Written;
+    };
+    match store.hpersist_fields(args[1], &fields, now) {
+        Ok(results) => {
+            resp::write_array_header(out, results.len());
+            for r in results {
+                resp::write_integer(out, r);
+            }
+        }
+        Err(e) => resp::write_error(out, &e),
+    }
+    CmdResult::Written
+}
+
+pub fn cmd_hgetdel(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Instant) -> CmdResult {
+    if args.len() < 5 {
+        resp::write_error(out, "ERR wrong number of arguments for 'hgetdel' command");
+        return CmdResult::Written;
+    }
+    let Some(fields) = parse_fields_clause(args, 2, out) else {
+        return CmdResult::Written;
+    };
+    match store.hgetdel_fields(args[1], &fields, now) {
+        Ok(values) => {
+            resp::write_array_header(out, values.len());
+            for v in &values {
+                resp::write_optional_bulk_raw(out, v);
+            }
+        }
+        Err(e) => resp::write_error(out, &e),
+    }
+    CmdResult::Written
+}
+
+pub fn cmd_hgetex(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Instant) -> CmdResult {
+    // HGETEX key [EX s|PX ms|EXAT unix-s|PXAT unix-ms|PERSIST] FIELDS n field...
+    if args.len() < 5 {
+        resp::write_error(out, "ERR wrong number of arguments for 'hgetex' command");
+        return CmdResult::Written;
+    }
+    let now_ms = epoch_ms();
+    let mut i = 2;
+    let ttl = if cmd_eq(args[i], b"PERSIST") {
+        i += 1;
+        HGetexTtl::Persist
+    } else if let Some(unit) = if cmd_eq(args[i], b"EX") {
+        Some(ExpireUnit::Seconds)
+    } else if cmd_eq(args[i], b"PX") {
+        Some(ExpireUnit::Millis)
+    } else if cmd_eq(args[i], b"EXAT") {
+        Some(ExpireUnit::SecondsAt)
+    } else if cmd_eq(args[i], b"PXAT") {
+        Some(ExpireUnit::MillisAt)
+    } else {
+        None
+    } {
+        let amount = match args.get(i + 1).map(|a| parse_i64(a)) {
+            Some(Ok(v)) => v,
+            _ => {
+                resp::write_error(out, INTEGER_ERR);
+                return CmdResult::Written;
+            }
+        };
+        i += 2;
+        let ms = match unit {
+            ExpireUnit::Seconds => now_ms.saturating_add(amount.saturating_mul(1000)),
+            ExpireUnit::Millis => now_ms.saturating_add(amount),
+            ExpireUnit::SecondsAt => amount.saturating_mul(1000),
+            ExpireUnit::MillisAt => amount,
+        };
+        HGetexTtl::SetMs(ms)
+    } else {
+        HGetexTtl::Keep
+    };
+    let Some(fields) = parse_fields_clause(args, i, out) else {
+        return CmdResult::Written;
+    };
+    let journal_args: Option<Vec<Vec<u8>>> = match ttl {
+        HGetexTtl::Keep => None,
+        HGetexTtl::Persist => {
+            let mut command = vec![
+                b"HPERSIST".to_vec(),
+                args[1].to_vec(),
+                b"FIELDS".to_vec(),
+                fields.len().to_string().into_bytes(),
+            ];
+            command.extend(fields.iter().map(|field| field.to_vec()));
+            Some(command)
+        }
+        HGetexTtl::SetMs(ms) => {
+            let mut command = vec![
+                b"HPEXPIREAT".to_vec(),
+                args[1].to_vec(),
+                ms.to_string().into_bytes(),
+                b"FIELDS".to_vec(),
+                fields.len().to_string().into_bytes(),
+            ];
+            command.extend(fields.iter().map(|field| field.to_vec()));
+            Some(command)
+        }
+    };
+    let result = if let Some(journal_args) = &journal_args {
+        let refs: Vec<&[u8]> = journal_args.iter().map(Vec::as_slice).collect();
+        match store.commit_journaled_checked(&refs, || {
+            let result = store.hgetex_fields(args[1], &fields, ttl, now);
+            let committed = result.is_ok();
+            (result, committed)
+        }) {
+            Ok(result) => result,
+            Err(e) => {
+                resp::write_error(out, &format!("ERR WAL append failed: {e}"));
+                return CmdResult::Written;
+            }
+        }
+    } else {
+        store.hgetex_fields(args[1], &fields, ttl, now)
+    };
+    match result {
+        Ok(values) => {
+            resp::write_array_header(out, values.len());
+            for v in &values {
+                resp::write_optional_bulk_raw(out, v);
+            }
+        }
+        Err(e) => resp::write_error(out, &e),
+    }
+    CmdResult::Written
 }

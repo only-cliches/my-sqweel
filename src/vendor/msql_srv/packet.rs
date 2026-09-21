@@ -1,6 +1,6 @@
 use byteorder::{ByteOrder, LittleEndian};
 #[cfg(feature = "tls")]
-use rustls::{pki_types::CertificateDer, ServerConfig};
+use rustls::{ServerConfig, pki_types::CertificateDer};
 use std::io;
 use std::io::prelude::*;
 
@@ -115,7 +115,7 @@ impl<R: Read + Write> PacketConn<R> {
                         return Err(io::Error::new(
                             io::ErrorKind::InvalidData,
                             format!("{:?}", ctx),
-                        ))
+                        ));
                     }
                 }
             }

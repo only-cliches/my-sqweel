@@ -10,6 +10,13 @@ fn parse_f32(arg: &[u8]) -> Result<f32, ()> {
     arg_str(arg).parse::<f32>().map_err(|_| ())
 }
 
+fn epoch_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or(0)
+}
+
 pub fn cmd_vset(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Instant) -> CmdResult {
     if args.len() < 4 {
         resp::write_error(out, "ERR wrong number of arguments for 'vset' command");
@@ -40,8 +47,13 @@ pub fn cmd_vset(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Instant)
     let mut i = 3 + dims;
     let mut metadata = None;
     let mut ttl = None;
+    let mut expires_at_ms = None;
+    let mut encrypted = false;
     while i < args.len() {
-        if cmd_eq(args[i], b"META") {
+        if cmd_eq(args[i], b"ENCRYPTED") {
+            encrypted = true;
+            i += 1;
+        } else if cmd_eq(args[i], b"META") {
             if i + 1 >= args.len() {
                 resp::write_error(out, "ERR syntax error");
                 return CmdResult::Written;
@@ -54,7 +66,13 @@ pub fn cmd_vset(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Instant)
                 return CmdResult::Written;
             }
             match parse_u64(args[i + 1]) {
-                Ok(s) => ttl = Some(Duration::from_secs(s)),
+                Ok(s) => {
+                    ttl = Some(Duration::from_secs(s));
+                    expires_at_ms = ttl.map(|duration| {
+                        epoch_ms()
+                            .saturating_add(u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
+                    });
+                }
                 Err(_) => {
                     resp::write_error(out, "ERR value is not an integer or out of range");
                     return CmdResult::Written;
@@ -67,7 +85,26 @@ pub fn cmd_vset(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Instant)
                 return CmdResult::Written;
             }
             match parse_u64(args[i + 1]) {
-                Ok(ms) => ttl = Some(Duration::from_millis(ms)),
+                Ok(ms) => {
+                    ttl = Some(Duration::from_millis(ms));
+                    expires_at_ms = Some(epoch_ms().saturating_add(ms));
+                }
+                Err(_) => {
+                    resp::write_error(out, "ERR value is not an integer or out of range");
+                    return CmdResult::Written;
+                }
+            }
+            i += 2;
+        } else if cmd_eq(args[i], b"PXAT") {
+            if i + 1 >= args.len() {
+                resp::write_error(out, "ERR syntax error");
+                return CmdResult::Written;
+            }
+            match parse_u64(args[i + 1]) {
+                Ok(deadline) => {
+                    ttl = Some(Duration::from_millis(deadline.saturating_sub(epoch_ms())));
+                    expires_at_ms = Some(deadline);
+                }
                 Err(_) => {
                     resp::write_error(out, "ERR value is not an integer or out of range");
                     return CmdResult::Written;
@@ -79,7 +116,50 @@ pub fn cmd_vset(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Instant)
             return CmdResult::Written;
         }
     }
-    store.vset(key, data, metadata, ttl, now);
+    // Encrypted vectors keep plaintext in RAM but journal the sealed payload as
+    // ENC RAWVSET so the journal carries no plaintext f32.
+    let sealed = if encrypted {
+        match store.encrypt_vector(key, &data) {
+            Ok(c) => Some(c),
+            Err(e) => {
+                resp::write_error(out, &e);
+                return CmdResult::Written;
+            }
+        }
+    } else {
+        None
+    };
+    let mut journal_args = if let Some(ct) = sealed {
+        vec![b"ENC".to_vec(), b"RAWVSET".to_vec(), key.to_vec(), ct]
+    } else {
+        let mut command = Vec::with_capacity(3 + dims + 4);
+        command.push(b"VSET".to_vec());
+        command.push(key.to_vec());
+        command.push(args[2].to_vec());
+        command.extend(args[3..3 + dims].iter().map(|arg| arg.to_vec()));
+        command
+    };
+    if let Some(m) = &metadata {
+        journal_args.push(b"META".to_vec());
+        journal_args.push(m.as_bytes().to_vec());
+    }
+    if let Some(deadline) = expires_at_ms {
+        journal_args.push(b"PXAT".to_vec());
+        journal_args.push(deadline.to_string().into_bytes());
+    }
+    let refs: Vec<&[u8]> = journal_args.iter().map(Vec::as_slice).collect();
+    let commit = match store.begin_journaled(&refs) {
+        Ok(commit) => commit,
+        Err(e) => {
+            resp::write_error(out, &format!("ERR WAL append failed: {e}"));
+            return CmdResult::Written;
+        }
+    };
+    store.vset(key, data, metadata, ttl, encrypted, now);
+    if let Err(error) = commit.complete() {
+        resp::write_error(out, &format!("ERR journal apply failed: {error}"));
+        return CmdResult::Written;
+    }
     resp::write_ok(out);
     CmdResult::Written
 }

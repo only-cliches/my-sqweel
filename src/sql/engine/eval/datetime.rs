@@ -309,9 +309,9 @@ pub(super) fn eval_week_of_year(
     let Some(datetime) = parse_mysql_datetime_value(&value) else {
         return Ok(Value::Null);
     };
-    Ok(Value::Number(Number::from(
-        i64::from(datetime.date().iso_week().week()),
-    )))
+    Ok(Value::Number(Number::from(i64::from(
+        datetime.date().iso_week().week(),
+    ))))
 }
 
 pub(super) fn eval_extract_datetime_field(field: &DateTimeField, value: Value) -> Result<Value> {
@@ -734,10 +734,7 @@ pub(super) fn parse_mysql_interval(raw: &str) -> Option<MysqlInterval> {
     let body = strip_ascii_prefix(trimmed, "INTERVAL")?.trim();
     let (amount_text, unit_text) = split_interval_amount_and_unit(body)?;
     if unit_text.trim().eq_ignore_ascii_case("HOUR TO MINUTE") {
-        let amount_text = amount_text
-            .trim()
-            .trim_matches('\'')
-            .trim_matches('"');
+        let amount_text = amount_text.trim().trim_matches('\'').trim_matches('"');
         let negative = amount_text.starts_with('-');
         let amount_text = amount_text.trim_start_matches(['+', '-']);
         let (hours, minutes) = amount_text.split_once(':')?;

@@ -18,6 +18,7 @@ include = [
     "/Cargo.lock",
     "/Cargo.toml",
     "/CHANGELOG.md",
+    "/examples/**",
     "/LICENSE",
     "/README.md",
     "/benches/**",
@@ -47,6 +48,14 @@ path = "src/lib.rs"
 [[bin]]
 name = "sqwl"
 path = "src/bin/sqwl.rs"
+
+[[example]]
+name = "json_storage"
+path = "examples/json_storage.rs"
+
+[[example]]
+name = "csv_storage"
+path = "examples/csv_storage.rs"
 
 [[test]]
 name = "wire_transactions"
@@ -137,6 +146,9 @@ version = "0.8"
 [dependencies.base64]
 version = "0.22"
 
+[dependencies.bcrypt]
+version = "0.17"
+
 [dependencies.bytes]
 version = "1.10"
 
@@ -164,6 +176,9 @@ version = "0.14"
 [dependencies.jsonwebtoken]
 version = "10"
 features = ["rust_crypto"]
+
+[dependencies.libc]
+version = "0.2"
 
 [dependencies.md-5]
 version = "0.10"
@@ -199,6 +214,10 @@ version = "4"
 [dependencies.parking_lot]
 version = "0.12"
 
+[dependencies.p256]
+version = "0.13"
+features = ["jwk", "ecdh"]
+
 [dependencies.rand_core]
 version = "0.6"
 features = ["getrandom"]
@@ -216,6 +235,9 @@ features = [
     "rustls-tls",
 ]
 default-features = false
+
+[dependencies.ring]
+version = "0.17"
 
 [dependencies.rmp]
 version = "0.8"
@@ -269,6 +291,16 @@ features = [
 
 [dev-dependencies.mysql]
 version = "26.0"
+
+[dev-dependencies.proptest]
+version = "1"
+
+[dev-dependencies.rsa]
+version = "0.9"
+features = ["pem"]
+
+[dev-dependencies.tempfile]
+version = "3"
 
 [[test]]
 name = "database_isolation"

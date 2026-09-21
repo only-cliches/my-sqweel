@@ -757,7 +757,7 @@ pub(super) fn sql_value_to_json(v: &SqlValue) -> Result<Value> {
     }
 }
 
-pub(super) fn substitute_params(sql: &str, params: &[Value]) -> Result<String> {
+pub(crate) fn substitute_params(sql: &str, params: &[Value]) -> Result<String> {
     let mut out = String::with_capacity(sql.len() + params.len() * 8);
     let mut params = params.iter();
     let mut in_single = false;

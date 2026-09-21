@@ -1,31 +1,329 @@
 use crate::vendor::msql_srv;
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
 use std::io;
 use std::net::TcpListener;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::Duration;
 
-use chrono::{Datelike, Timelike};
 use crate::vendor::msql_srv::{
     AuthenticationContext, Column, ColumnFlags, ColumnType, ErrorKind, InitWriter,
     MysqlIntermediary, MysqlShim, ParamParser, ParamValue, QueryResultWriter, StatementMetaWriter,
     StatusFlags, ToMysqlValue, ValueInner,
 };
+use chrono::{Datelike, Timelike};
 use serde_json::{Map, Value};
 
 use crate::sql::engine::{
-    Engine, EngineSession, MysqlColumnType, QueryResult, QueryWarning, row_keys_for_columns,
+    AuthScope, Engine, EngineSession, MysqlColumnType, QueryResult, QueryWarning,
+    row_keys_for_columns,
 };
+
+/// Authentication material provided by a MySQL native-password handshake.
+///
+/// MySQL clients never send the clear-text password. External authenticators
+/// receive the challenge and native-password response so they can verify it
+/// against their own password record or delegate that verification.
+#[derive(Debug, Clone)]
+pub struct AuthenticationRequest {
+    pub username: String,
+    pub challenge: Vec<u8>,
+    pub response: Vec<u8>,
+    pub database: Option<String>,
+}
+
+/// The principal and scopes returned by an external authenticator.
+#[derive(Debug, Clone)]
+pub struct AuthenticatedUser {
+    pub username: String,
+    pub scopes: Vec<AuthScope>,
+}
+
+impl AuthenticatedUser {
+    pub fn new(username: impl Into<String>, scopes: impl IntoIterator<Item = AuthScope>) -> Self {
+        Self {
+            username: username.into(),
+            scopes: scopes.into_iter().collect(),
+        }
+    }
+}
+
+/// The account-management statement offered to an external authenticator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccountOperationKind {
+    CreateUser,
+    AlterUser,
+    DropUser,
+    RenameUser,
+    SetPassword,
+    Grant,
+    Revoke,
+}
+
+/// A wire-level account-management request.
+///
+/// `sql` remains available because custom backends can support richer MariaDB
+/// account syntax than MySqweel's built-in catalog.
+#[derive(Debug, Clone)]
+pub struct AccountOperation {
+    pub kind: AccountOperationKind,
+    pub sql: String,
+}
+
+/// How an external account backend wants MySqweel to process an operation.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum AccountOperationAction {
+    /// Continue through MySqweel's built-in account catalog.
+    #[default]
+    Continue,
+    /// The callback completed the operation; return a successful empty result
+    /// without modifying the local account catalog.
+    Handled,
+}
+
+/// An application-provided asynchronous authenticator for wire connections.
+#[allow(async_fn_in_trait)]
+pub trait AsyncAuthenticator: Send + Sync + 'static {
+    /// Return `Ok(None)` to reject the connection. Errors also reject it.
+    async fn authenticate(
+        &self,
+        request: AuthenticationRequest,
+    ) -> anyhow::Result<Option<AuthenticatedUser>>;
+
+    /// Optionally persist or handle a user/privilege statement in an external
+    /// account system. The default keeps MySqweel's built-in behavior.
+    async fn account_operation(
+        &self,
+        _operation: AccountOperation,
+    ) -> anyhow::Result<AccountOperationAction> {
+        Ok(AccountOperationAction::Continue)
+    }
+}
+
+trait ErasedAsyncAuthenticator: Send + Sync {
+    fn authenticate<'a>(
+        &'a self,
+        request: AuthenticationRequest,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<Option<AuthenticatedUser>>> + 'a>>;
+
+    fn account_operation<'a>(
+        &'a self,
+        operation: AccountOperation,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<AccountOperationAction>> + 'a>>;
+}
+
+impl<T: AsyncAuthenticator> ErasedAsyncAuthenticator for T {
+    fn authenticate<'a>(
+        &'a self,
+        request: AuthenticationRequest,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<Option<AuthenticatedUser>>> + 'a>> {
+        Box::pin(AsyncAuthenticator::authenticate(self, request))
+    }
+
+    fn account_operation<'a>(
+        &'a self,
+        operation: AccountOperation,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<AccountOperationAction>> + 'a>> {
+        Box::pin(AsyncAuthenticator::account_operation(self, operation))
+    }
+}
+
+/// Type-erased storage for an [`AsyncAuthenticator`].
+#[derive(Clone)]
+pub struct AsyncAuthenticatorHandle(Arc<dyn ErasedAsyncAuthenticator>);
+
+impl AsyncAuthenticatorHandle {
+    pub fn new<T: AsyncAuthenticator>(authenticator: T) -> Self {
+        Self(Arc::new(authenticator))
+    }
+
+    fn authenticate(
+        &self,
+        request: AuthenticationRequest,
+    ) -> anyhow::Result<Option<AuthenticatedUser>> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        runtime.block_on(self.0.authenticate(request))
+    }
+
+    fn account_operation(
+        &self,
+        operation: AccountOperation,
+    ) -> anyhow::Result<AccountOperationAction> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        runtime.block_on(self.0.account_operation(operation))
+    }
+}
+
+impl std::fmt::Debug for AsyncAuthenticatorHandle {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("AsyncAuthenticatorHandle(..)")
+    }
+}
+
+/// A configured username/password record for [`Authentication::Static`].
+#[derive(Clone)]
+pub struct StaticUser {
+    pub username: String,
+    pub password: String,
+    pub scopes: Vec<AuthScope>,
+}
+
+impl StaticUser {
+    pub fn new(
+        username: impl Into<String>,
+        password: impl Into<String>,
+        scopes: impl IntoIterator<Item = AuthScope>,
+    ) -> Self {
+        Self {
+            username: username.into(),
+            password: password.into(),
+            scopes: scopes.into_iter().collect(),
+        }
+    }
+}
+
+impl std::fmt::Debug for StaticUser {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("StaticUser")
+            .field("username", &self.username)
+            .field("password", &"[redacted]")
+            .field("scopes", &self.scopes)
+            .finish()
+    }
+}
+
+/// Wire-server authentication policy.
+///
+/// The default is permissive for local fixtures. `EngineAccounts` uses
+/// SQL-created catalog accounts; static users and callbacks install scopes
+/// without creating catalog records.
+#[derive(Debug, Clone, Default)]
+pub enum Authentication {
+    EngineAccounts,
+    #[default]
+    AllowAll,
+    Static(Vec<StaticUser>),
+    Callback(AsyncAuthenticatorHandle),
+}
+
+impl Authentication {
+    pub fn static_users(users: impl IntoIterator<Item = StaticUser>) -> Self {
+        Self::Static(users.into_iter().collect())
+    }
+
+    pub fn callback<T: AsyncAuthenticator>(authenticator: T) -> Self {
+        Self::Callback(AsyncAuthenticatorHandle::new(authenticator))
+    }
+
+    fn authenticate(&self, request: AuthenticationRequest) -> anyhow::Result<AuthDecision> {
+        match self {
+            Self::EngineAccounts => Ok(AuthDecision::EngineAccounts),
+            Self::AllowAll => Ok(AuthDecision::External(AuthenticatedUser::new(
+                request.username,
+                [AuthScope::All],
+            ))),
+            Self::Static(users) => Ok(users
+                .iter()
+                .find(|user| {
+                    user.username == request.username
+                        && verify_mysql_native_password(
+                            &user.password,
+                            &request.challenge,
+                            &request.response,
+                        )
+                })
+                .map(|user| {
+                    AuthDecision::External(AuthenticatedUser::new(
+                        user.username.clone(),
+                        user.scopes.clone(),
+                    ))
+                })
+                .unwrap_or(AuthDecision::Reject)),
+            Self::Callback(authenticator) => Ok(authenticator
+                .authenticate(request)?
+                .map(AuthDecision::External)
+                .unwrap_or(AuthDecision::Reject)),
+        }
+    }
+}
+
+enum AuthDecision {
+    EngineAccounts,
+    External(AuthenticatedUser),
+    Reject,
+}
+
+fn account_operation(sql: &str) -> Option<AccountOperation> {
+    let trimmed = sql.trim().trim_end_matches(';').trim();
+    let mut words = trimmed.split_whitespace();
+    let first = words.next()?.to_ascii_uppercase();
+    let second = words.next().map(|word| word.to_ascii_uppercase());
+    let kind = match (first.as_str(), second.as_deref()) {
+        ("CREATE", Some("USER")) => AccountOperationKind::CreateUser,
+        ("ALTER", Some("USER")) => AccountOperationKind::AlterUser,
+        ("DROP", Some("USER")) => AccountOperationKind::DropUser,
+        ("RENAME", Some("USER")) => AccountOperationKind::RenameUser,
+        ("SET", Some("PASSWORD")) => AccountOperationKind::SetPassword,
+        ("GRANT", _) => AccountOperationKind::Grant,
+        ("REVOKE", _) => AccountOperationKind::Revoke,
+        _ => return None,
+    };
+    Some(AccountOperation {
+        kind,
+        sql: trimmed.to_owned(),
+    })
+}
+
+/// Verify a MySQL native-password response against a clear-text password.
+/// This is useful for external authenticators that store credentials outside
+/// MySqweel but receive a standard MySQL handshake response.
+pub fn verify_mysql_native_password(password: &str, challenge: &[u8], response: &[u8]) -> bool {
+    if password.is_empty() {
+        return response.is_empty();
+    }
+    if response.len() != 20 {
+        return false;
+    }
+    let first = sha1_smol::Sha1::from(password).digest().bytes();
+    let expected = sha1_smol::Sha1::from(&first).digest().bytes();
+    let mut digest = sha1_smol::Sha1::new();
+    digest.update(challenge);
+    digest.update(&expected);
+    let mask = digest.digest().bytes();
+    let candidate: [u8; 20] = std::array::from_fn(|index| response[index] ^ mask[index]);
+    let actual = sha1_smol::Sha1::from(&candidate).digest().bytes();
+    actual
+        .iter()
+        .zip(expected)
+        .fold(0u8, |difference, (left, right)| {
+            difference | (*left ^ right)
+        })
+        == 0
+}
 
 #[derive(Clone)]
 pub struct WireServer {
     engine: Arc<Engine>,
+    authentication: Authentication,
 }
 
 impl WireServer {
     pub fn new(engine: Arc<Engine>) -> Self {
-        Self { engine }
+        Self::with_authentication(engine, Authentication::default())
+    }
+
+    pub fn with_authentication(engine: Arc<Engine>, authentication: Authentication) -> Self {
+        Self {
+            engine,
+            authentication,
+        }
     }
 
     pub fn serve(&self, bind_addr: std::net::SocketAddr) -> io::Result<()> {
@@ -89,7 +387,8 @@ impl WireServer {
     }
 
     fn spawn_session(&self, stream: std::net::TcpStream) {
-        let backend = Backend::new(self.engine.clone());
+        let backend =
+            Backend::with_authentication(self.engine.clone(), self.authentication.clone());
         std::thread::spawn(move || {
             if let Err(err) = stream.set_nonblocking(false) {
                 tracing::warn!(error = %err, "failed setting mysql session stream to blocking mode");
@@ -110,6 +409,7 @@ impl WireServer {
 
 struct Backend {
     session: EngineSession,
+    authentication: Authentication,
     next_stmt_id: AtomicU32,
     statements: HashMap<u32, PreparedStatement>,
     last_insert_id: u64,
@@ -123,9 +423,10 @@ struct PreparedStatement {
 }
 
 impl Backend {
-    fn new(engine: Arc<Engine>) -> Self {
+    fn with_authentication(engine: Arc<Engine>, authentication: Authentication) -> Self {
         Self {
             session: engine.session(),
+            authentication,
             next_stmt_id: AtomicU32::new(1),
             statements: HashMap::new(),
             last_insert_id: 0,
@@ -215,23 +516,48 @@ impl<W: io::Read + io::Write> MysqlShim<W> for Backend {
             .as_deref()
             .and_then(|user| std::str::from_utf8(user).ok())
             .ok_or_else(|| io::Error::new(io::ErrorKind::PermissionDenied, "Invalid username"))?;
-        if !self
-            .session
-            .authenticate(user, &context.auth_plugin_data, &context.auth_response)
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "Access denied",
-            ));
-        }
-        if let Some(database) = context
+        let database = context
             .database
             .as_deref()
             .filter(|database| !database.is_empty())
-        {
-            let database = std::str::from_utf8(database)
-                .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
-            self.session.use_database(database).map_err(|error| {
+            .map(|database| std::str::from_utf8(database).map(str::to_owned))
+            .transpose()
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+        let decision = self
+            .authentication
+            .authenticate(AuthenticationRequest {
+                username: user.to_owned(),
+                challenge: context.auth_plugin_data.to_vec(),
+                response: context.auth_response.to_vec(),
+                database: database.clone(),
+            })
+            .map_err(|_| io::Error::new(io::ErrorKind::PermissionDenied, "Access denied"))?;
+        match decision {
+            AuthDecision::EngineAccounts => {
+                if !self.session.authenticate(
+                    user,
+                    &context.auth_plugin_data,
+                    &context.auth_response,
+                ) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "Access denied",
+                    ));
+                }
+            }
+            AuthDecision::External(user) => self
+                .session
+                .authenticate_external(user.username, user.scopes)
+                .map_err(|_| io::Error::new(io::ErrorKind::PermissionDenied, "Access denied"))?,
+            AuthDecision::Reject => {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "Access denied",
+                ));
+            }
+        }
+        if let Some(database) = database {
+            self.session.use_database(&database).map_err(|error| {
                 io::Error::new(io::ErrorKind::PermissionDenied, error.to_string())
             })?;
         }
@@ -363,6 +689,10 @@ impl Backend {
         if params.is_empty() {
             return self.execute_text_query(query);
         }
+        let bound = crate::sql::engine::bind_params(query, params)?;
+        if let Some(results) = self.handle_external_account_operation(&bound)? {
+            return Ok(results);
+        }
         self.session.execute_sql_with_params_for_wire(query, params)
     }
 
@@ -373,12 +703,32 @@ impl Backend {
         if let Some(column) = last_insert_id_column(query) {
             return Ok(vec![last_insert_id_result(self.last_insert_id, column)]);
         }
+        if let Some(results) = self.handle_external_account_operation(query)? {
+            return Ok(results);
+        }
         let results = self.session.execute_sql_for_wire(query)?;
         let trimmed = query.trim().trim_end_matches(';').trim();
         if trimmed.to_ascii_uppercase().starts_with("SET ") {
             self.apply_set_statement(&trimmed[4..]);
         }
         Ok(results)
+    }
+
+    fn handle_external_account_operation(
+        &mut self,
+        query: &str,
+    ) -> anyhow::Result<Option<Vec<QueryResult>>> {
+        let Authentication::Callback(authenticator) = &self.authentication else {
+            return Ok(None);
+        };
+        let Some(operation) = account_operation(query) else {
+            return Ok(None);
+        };
+        self.session.require_administrator()?;
+        match authenticator.account_operation(operation)? {
+            AccountOperationAction::Continue => Ok(None),
+            AccountOperationAction::Handled => Ok(Some(vec![QueryResult::default()])),
+        }
     }
 
     fn execute_session_query(&mut self, query: &str) -> Option<QueryResult> {
@@ -436,7 +786,11 @@ impl Backend {
         let mut row = Map::new();
         for item in select.projection {
             let (column, value) = self.session_projection_value(&item)?;
-            let count = columns.iter().filter(|existing| *existing == &column).count() + 1;
+            let count = columns
+                .iter()
+                .filter(|existing| *existing == &column)
+                .count()
+                + 1;
             let key = if count == 1 {
                 column.clone()
             } else {
@@ -937,10 +1291,7 @@ fn default_session_vars() -> HashMap<String, Value> {
         ("autocommit", serde_json::json!(1)),
         ("sql_mode", serde_json::json!("")),
         ("time_zone", serde_json::json!("+00:00")),
-        (
-            "version",
-            serde_json::json!("8.0.0-my-sqweel"),
-        ),
+        ("version", serde_json::json!("8.0.0-my-sqweel")),
         ("version_comment", serde_json::json!("MySqweel")),
         (
             "transaction_isolation",
@@ -1084,10 +1435,16 @@ fn write_row<W: io::Read + io::Write>(
             }
             Value::Null => rw.write_col(Option::<String>::None)?,
             Value::Number(number) if definition.coltype == ColumnType::MYSQL_TYPE_NEWDECIMAL => {
-                rw.write_col(format_decimal_text(&number.to_string(), decimal_columns.get(name).copied().unwrap_or(0)))?;
+                rw.write_col(format_decimal_text(
+                    &number.to_string(),
+                    decimal_columns.get(name).copied().unwrap_or(0),
+                ))?;
             }
             Value::String(value) if definition.coltype == ColumnType::MYSQL_TYPE_NEWDECIMAL => {
-                rw.write_col(format_decimal_text(value, decimal_columns.get(name).copied().unwrap_or(0)))?;
+                rw.write_col(format_decimal_text(
+                    value,
+                    decimal_columns.get(name).copied().unwrap_or(0),
+                ))?;
             }
             Value::Bool(value) => {
                 write_numeric_column(rw, i64::from(*value), definition)?;
@@ -1128,9 +1485,8 @@ fn write_row<W: io::Read + io::Write>(
                 rw.write_col("null")?;
             }
             Value::String(value)
-                if let Some(text) = value
-                    .strip_prefix(crate::sql::engine::JSON_EXTRACT_TEXT_SENTINEL)
-            =>
+                if let Some(text) =
+                    value.strip_prefix(crate::sql::engine::JSON_EXTRACT_TEXT_SENTINEL) =>
             {
                 if json_columns[index] {
                     match serde_json::from_str::<serde_json::Value>(text) {
@@ -1146,9 +1502,8 @@ fn write_row<W: io::Read + io::Write>(
                 }
             }
             Value::String(value)
-                if let Some(text) = value
-                    .strip_prefix(crate::sql::engine::JSON_AGGREGATE_TEXT_SENTINEL)
-            =>
+                if let Some(text) =
+                    value.strip_prefix(crate::sql::engine::JSON_AGGREGATE_TEXT_SENTINEL) =>
             {
                 rw.write_col(text)?;
             }
@@ -1911,9 +2266,9 @@ mod tests {
     use serde_json::{Map, json};
 
     use super::{
-        Backend, canonicalize_information_schema_columns, normalize_session_var_name,
-        parse_mysql_datetime_value, prepared_result_columns, references_information_schema,
-        validate_wire_rows,
+        Authentication, Backend, canonicalize_information_schema_columns,
+        normalize_session_var_name, parse_mysql_datetime_value, prepared_result_columns,
+        references_information_schema, validate_wire_rows,
     };
     use crate::sql::engine::{Engine, EngineConfig, QueryResult};
 
@@ -1960,7 +2315,7 @@ mod tests {
     fn wire_text_and_prepared_statements_share_transaction_state() {
         let engine =
             Arc::new(Engine::open_with_data_dir(EngineConfig::mysql_strict(), None).unwrap());
-        let mut backend = Backend::new(engine.clone());
+        let mut backend = Backend::with_authentication(engine.clone(), Authentication::default());
         backend
             .execute_text_query("CREATE TABLE wire_tx (id BIGINT PRIMARY KEY)")
             .unwrap();
@@ -1999,7 +2354,7 @@ mod tests {
             .execute_text_query("INSERT INTO wire_tx (id) VALUES (2)")
             .unwrap();
         drop(backend);
-        let mut reconnected = Backend::new(engine);
+        let mut reconnected = Backend::with_authentication(engine, Authentication::default());
         assert!(
             reconnected
                 .execute_text_query("SELECT * FROM wire_tx")
@@ -2011,7 +2366,8 @@ mod tests {
 
     #[test]
     fn wire_session_shortcuts_do_not_swallow_later_statements() {
-        let mut backend = Backend::new(Arc::new(Engine::default()));
+        let mut backend =
+            Backend::with_authentication(Arc::new(Engine::default()), Authentication::default());
         assert!(
             backend
                 .execute_session_query("SELECT @@autocommit; BEGIN")
@@ -2089,7 +2445,8 @@ mod tests {
 
     #[test]
     fn session_select_shortcut_does_not_capture_table_queries() {
-        let backend = Backend::new(Arc::new(Engine::default()));
+        let backend =
+            Backend::with_authentication(Arc::new(Engine::default()), Authentication::default());
 
         let session_only = backend
             .select_session_values("SELECT DATABASE() AS db")

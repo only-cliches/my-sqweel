@@ -4684,13 +4684,29 @@ mod tests {
     }
 
     #[test]
-    fn seed_table_extends_schema_and_replaces_rows() {
+    fn seed_table_requires_declared_schema_and_replaces_rows() {
         let state = meili_state("seed-table");
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .unwrap();
 
+        let (status, _) = rt.block_on(seed_table(
+            Path("seeded_users".to_string()),
+            State(state.clone()),
+            Json(json!({
+                "rows": [
+                    { "email": "a@example.com" },
+                    { "email": "b@example.com", "score": 20 }
+                ]
+            })),
+        ));
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        state
+            .engine
+            .execute_sql("CREATE TABLE seeded_users (email TEXT, score INT)")
+            .unwrap();
         let (status, _) = rt.block_on(seed_table(
             Path("seeded_users".to_string()),
             State(state.clone()),

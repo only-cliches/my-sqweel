@@ -62,8 +62,24 @@ pub fn cmd_tsadd(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Instant
         }
     }
 
-    match store.tsadd(key, timestamp, value, retention, labels, now) {
-        Ok(ts) => resp::write_integer(out, ts),
+    let mut journal_args: Vec<Vec<u8>> = args.iter().map(|arg| arg.to_vec()).collect();
+    journal_args[2] = timestamp.to_string().into_bytes();
+    let refs: Vec<&[u8]> = journal_args.iter().map(Vec::as_slice).collect();
+    let result = match store.commit_journaled_checked(&refs, || {
+        let result = store.tsadd(key, timestamp, value, retention, labels, now);
+        let committed = result.is_ok();
+        (result, committed)
+    }) {
+        Ok(result) => result,
+        Err(e) => {
+            resp::write_error(out, &format!("ERR WAL append failed: {e}"));
+            return CmdResult::Written;
+        }
+    };
+    match result {
+        Ok(ts) => {
+            resp::write_integer(out, ts);
+        }
         Err(e) => resp::write_error(out, &e),
     }
     CmdResult::Written
@@ -75,21 +91,44 @@ pub fn cmd_tsmadd(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Instan
         return CmdResult::Written;
     }
     let count = (args.len() - 1) / 3;
-    resp::write_array_header(out, count);
+    let mut resolved = Vec::with_capacity(count);
     let mut i = 1;
     while i + 2 < args.len() {
-        let key = args[i];
         let timestamp = if args[i + 1] == b"*" {
             now_ms()
         } else {
-            parse_i64(args[i + 1]).unwrap_or(0)
+            match parse_i64(args[i + 1]) {
+                Ok(timestamp) => timestamp,
+                Err(_) => {
+                    resp::write_error(out, "ERR invalid timestamp");
+                    return CmdResult::Written;
+                }
+            }
         };
-        let value: f64 = arg_str(args[i + 2]).parse().unwrap_or(0.0);
-        match store.tsadd(key, timestamp, value, None, None, now) {
-            Ok(ts) => resp::write_integer(out, ts),
-            Err(e) => resp::write_error(out, &e),
-        }
+        let value: f64 = match arg_str(args[i + 2]).parse() {
+            Ok(value) => value,
+            Err(_) => {
+                resp::write_error(out, "ERR value is not a valid float");
+                return CmdResult::Written;
+            }
+        };
+        resolved.push((args[i], timestamp, value, args[i + 2]));
         i += 3;
+    }
+    resp::write_array_header(out, count);
+    for (key, timestamp, value, raw_value) in resolved {
+        let timestamp_bytes = timestamp.to_string().into_bytes();
+        let journal_args: [&[u8]; 4] = [b"TSADD", key, &timestamp_bytes, raw_value];
+        let result = store.commit_journaled_checked(&journal_args, || {
+            let result = store.tsadd(key, timestamp, value, None, None, now);
+            let committed = result.is_ok();
+            (result, committed)
+        });
+        match result {
+            Ok(Ok(ts)) => resp::write_integer(out, ts),
+            Ok(Err(e)) => resp::write_error(out, &e),
+            Err(e) => resp::write_error(out, &format!("ERR WAL append failed: {e}")),
+        }
     }
     CmdResult::Written
 }

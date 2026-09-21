@@ -1,18 +1,14 @@
 mod common;
 
-use my_sqweel::sql::engine::{CompatibilityProfile, Engine, EngineConfig, MysqlColumnType};
+use my_sqweel::sql::engine::{Engine, EngineConfig, MysqlColumnType};
 use serde_json::Value;
 
 use common::test_lock;
 
 #[test]
-fn strict_profile_rejects_drift_and_exposes_typed_metadata() {
+fn strict_schema_rejects_drift_and_exposes_typed_metadata() {
     let _guard = test_lock();
     let engine = Engine::new(EngineConfig::mysql_strict());
-    assert_eq!(
-        engine.compatibility_profile(),
-        CompatibilityProfile::MysqlStrict
-    );
     engine
         .execute_sql(
             "CREATE TABLE typed_values (id BIGINT UNSIGNED PRIMARY KEY, amount DECIMAL(12,2), happened_at DATETIME, payload JSON)",
@@ -93,7 +89,10 @@ fn unix_timestamp_precision_does_not_depend_on_result_rows() {
     }
     assert!(empty.rows.is_empty());
     assert_eq!(populated.rows[0]["raw_epoch"], Value::Null);
-    assert_eq!(populated.rows[1]["raw_epoch"].as_f64(), Some(1_577_836_800.0));
+    assert_eq!(
+        populated.rows[1]["raw_epoch"].as_f64(),
+        Some(1_577_836_800.0)
+    );
 }
 
 #[test]
@@ -124,6 +123,45 @@ fn qualified_wildcards_join_variants_and_derived_joins_work() {
         qualified[0].rows[1].get("id").and_then(Value::as_i64),
         Some(3)
     );
+
+    let full = engine
+        .execute_sql(
+            "SELECT l.id AS left_id, l.left_name, r.id AS right_id, r.right_name \
+             FROM join_left AS l FULL OUTER JOIN join_right AS r ON l.id = r.id \
+             ORDER BY COALESCE(l.id, r.id)",
+        )
+        .unwrap();
+    assert_eq!(full[0].rows.len(), 3);
+    assert_eq!(full[0].rows[0]["left_id"], Value::from(1));
+    assert_eq!(full[0].rows[0]["right_id"], Value::Null);
+    assert_eq!(full[0].rows[1]["left_id"], Value::from(2));
+    assert_eq!(full[0].rows[1]["right_id"], Value::from(2));
+    assert_eq!(full[0].rows[2]["left_id"], Value::Null);
+    assert_eq!(full[0].rows[2]["right_id"], Value::from(3));
+    assert!(full[0].column_metadata[0].nullable);
+    assert!(full[0].column_metadata[2].nullable);
+
+    let full_using = engine
+        .execute_sql(
+            "SELECT l.id AS left_id, r.id AS right_id \
+             FROM join_left AS l FULL JOIN join_right AS r USING (id) \
+             ORDER BY COALESCE(l.id, r.id)",
+        )
+        .unwrap();
+    assert_eq!(full_using[0].rows.len(), 3);
+    assert_eq!(full_using[0].rows[0]["right_id"], Value::Null);
+    assert_eq!(full_using[0].rows[2]["left_id"], Value::Null);
+
+    let full_natural = engine
+        .execute_sql(
+            "SELECT l.id AS left_id, r.id AS right_id \
+             FROM join_left AS l NATURAL FULL OUTER JOIN join_right AS r \
+             ORDER BY COALESCE(l.id, r.id)",
+        )
+        .unwrap();
+    assert_eq!(full_natural[0].rows.len(), 3);
+    assert_eq!(full_natural[0].rows[0]["right_id"], Value::Null);
+    assert_eq!(full_natural[0].rows[2]["left_id"], Value::Null);
 
     let using_join = engine
         .execute_sql("SELECT l.id, r.right_name FROM join_left l JOIN join_right r USING (id)")

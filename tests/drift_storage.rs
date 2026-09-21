@@ -37,8 +37,21 @@ fn reports_schema_drift() {
         .execute_sql("CREATE TABLE users (id BIGINT PRIMARY KEY AUTO_INCREMENT, email VARCHAR(255), name TEXT);")
         .unwrap();
     engine
-        .execute_sql("INSERT INTO users (email, legacy) VALUES ('a@example.com', 'old-shape');")
+        .execute_sql("INSERT INTO users (email) VALUES ('a@example.com');")
         .unwrap();
+
+    // Simulate a legacy snapshot or a backend that was edited below the SQL
+    // layer. Strict SQL writes cannot introduce this drift.
+    let mut snapshot = engine.snapshot();
+    let row = snapshot
+        .rows
+        .get_mut("users")
+        .and_then(|rows| rows.values_mut().next())
+        .expect("stored user row");
+    row.data.remove("name");
+    row.data
+        .insert("legacy".to_string(), serde_json::json!("old-shape"));
+    engine.restore_snapshot(snapshot).unwrap();
 
     let report = engine.drift_report();
     let users = &report["tables"]["users"];
@@ -216,9 +229,9 @@ fn lux_storage_rehydrates_incremental_mutations() {
 }
 
 #[test]
-fn lux_storage_does_not_rehydrate_rows_overwritten_by_unique_mode() {
+fn lux_storage_preserves_rows_after_rejected_unique_conflict() {
     let _guard = test_lock();
-    let dir = temp_lux_dir("unique-overwrite");
+    let dir = temp_lux_dir("unique-conflict");
 
     {
         let engine = Engine::open_with_data_dir(EngineConfig::default(), Some(&dir)).unwrap();
@@ -226,8 +239,13 @@ fn lux_storage_does_not_rehydrate_rows_overwritten_by_unique_mode() {
             .execute_sql("CREATE TABLE users (id BIGINT PRIMARY KEY AUTO_INCREMENT, email VARCHAR(255) UNIQUE, name TEXT);")
             .unwrap();
         engine
-            .execute_sql("INSERT INTO users (email, name) VALUES ('a@example.com', 'Alice'), ('a@example.com', 'Ada');")
+            .execute_sql("INSERT INTO users (email, name) VALUES ('a@example.com', 'Alice');")
             .unwrap();
+        assert!(
+            engine
+                .execute_sql("INSERT INTO users (email, name) VALUES ('a@example.com', 'Ada');")
+                .is_err()
+        );
     }
 
     {
@@ -238,7 +256,7 @@ fn lux_storage_does_not_rehydrate_rows_overwritten_by_unique_mode() {
         assert_eq!(rows[0].rows.len(), 1);
         assert_eq!(
             rows[0].rows[0].get("name").and_then(|value| value.as_str()),
-            Some("Ada")
+            Some("Alice")
         );
     }
 

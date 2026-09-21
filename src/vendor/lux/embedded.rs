@@ -2677,6 +2677,7 @@ fn pair_refs<K: AsRef<[u8]>, V: AsRef<[u8]>>(pairs: &[(K, V)]) -> Vec<(&[u8], &[
 fn ok(value: CommandOutput) -> Result<(), LuxError> {
     match value {
         CommandOutput::Simple(s) if s.eq_ignore_ascii_case("OK") => Ok(()),
+        CommandOutput::SimpleOwned(s) if s.eq_ignore_ascii_case("OK") => Ok(()),
         CommandOutput::Bulk(bytes) if bytes.eq_ignore_ascii_case(b"OK") => Ok(()),
         other => Err(protocol(format!("expected OK, got {other:?}"))),
     }
@@ -2685,6 +2686,7 @@ fn ok(value: CommandOutput) -> Result<(), LuxError> {
 fn simple_string(value: CommandOutput) -> Result<String, LuxError> {
     match value {
         CommandOutput::Simple(s) => Ok(s.to_string()),
+        CommandOutput::SimpleOwned(s) => Ok(s),
         CommandOutput::Bulk(bytes) => Ok(String::from_utf8_lossy(&bytes).into_owned()),
         other => Err(protocol(format!("expected string, got {other:?}"))),
     }
@@ -2715,6 +2717,7 @@ fn optional_bulk(value: CommandOutput) -> Result<Option<Bytes>, LuxError> {
         CommandOutput::Nil => Ok(None),
         CommandOutput::Bulk(bytes) => Ok(Some(bytes)),
         CommandOutput::Simple(s) => Ok(Some(Bytes::from(s))),
+        CommandOutput::SimpleOwned(s) => Ok(Some(Bytes::from(s))),
         other => Err(protocol(format!("expected bulk string, got {other:?}"))),
     }
 }
@@ -2748,7 +2751,9 @@ fn pair_bulk_vec(value: CommandOutput) -> Result<Vec<(Bytes, Bytes)>, LuxError> 
         return Err(protocol("expected an even number of array items"));
     }
     Ok(values
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|chunk| (chunk[0].clone(), chunk[1].clone()))
         .collect())
 }
@@ -2759,7 +2764,7 @@ fn scored_members(value: CommandOutput) -> Result<Vec<ScoredMember>, LuxError> {
         return Err(protocol("expected member/score pairs"));
     }
     let mut out = Vec::with_capacity(values.len() / 2);
-    for chunk in values.chunks_exact(2) {
+    for chunk in values.as_chunks::<2>().0 {
         out.push(ScoredMember {
             member: chunk[0].clone(),
             score: parse_f64(&chunk[1])?,
@@ -2818,6 +2823,7 @@ fn command_output_to_embedded_value(value: CommandOutput) -> Result<EmbeddedValu
         CommandOutput::Nil => EmbeddedValue::Nil,
         CommandOutput::Int(n) => EmbeddedValue::Int(n),
         CommandOutput::Simple(s) => EmbeddedValue::Simple(s.to_string()),
+        CommandOutput::SimpleOwned(s) => EmbeddedValue::Simple(s),
         CommandOutput::Bulk(bytes) => EmbeddedValue::Bulk(bytes),
         CommandOutput::Array(values) => EmbeddedValue::Array(
             values

@@ -1,13 +1,9 @@
 //! Row-level access grants (the GRANT language).
 //!
-//! A grant is a *contract*: `GRANT read, write ON messages WHERE user_id =
-//! auth.uid()` means a token user may query `messages`, but only for rows their
-//! query already restricts to `user_id = <their uid>`. It is NOT a filter that
-//! gets silently AND'ed in. On every request the server resolves the grant
-//! predicate against the principal and checks that the client's query
-//! **satisfies** it (contains the grant's conditions). If it does, the query
-//! runs as written; if not, it's rejected. The client must explicitly scope its
-//! query to what it's entitled to.
+//! A grant is an enforced row filter: `GRANT read, write ON messages WHERE
+//! user_id = auth.uid()` means a token user may only read or mutate rows whose
+//! `user_id` matches their principal. The engine injects the resolved predicate
+//! at the query boundary; clients do not have to repeat it.
 //!
 //! Scopes: `read` (SELECT and `.live()`) and `write` (INSERT/UPDATE/DELETE).
 //! No grant for a (table, scope) => deny-by-default. Operator / service key
@@ -48,10 +44,9 @@ pub enum Operand {
 
 /// A subquery operand: `( SELECT <projected> FROM <table> [WHERE <inner>] )`.
 ///
-/// `inner` is restricted to simple `Cmp` conditions (depth-1 - no nested
-/// subqueries, enforced at parse time) and is *uncorrelated*: it may reference
-/// `auth.*`, literals, and the subquery table's own columns, never the outer
-/// row. At enforcement time the subquery is executed once to a set of values.
+/// `inner` is uncorrelated: it may reference `auth.*`, literals, and the
+/// subquery table's own columns, never the outer row. At enforcement time the
+/// subquery is executed once to a set of values.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Subquery {
     pub projected: String,
@@ -76,10 +71,31 @@ pub enum Condition {
     },
 }
 
-/// A grant predicate: a conjunction (AND) of conditions. Empty = unconditional.
+/// A grant predicate: alternatives (OR) of conjunctions (AND). `conditions` is
+/// the first conjunction for compatibility with older callers/tests; each entry
+/// in `alternatives` is another OR branch. Empty first conjunction means
+/// unconditional.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Predicate {
     pub conditions: Vec<Condition>,
+    pub alternatives: Vec<Vec<Condition>>,
+}
+
+impl Predicate {
+    pub fn clauses(&self) -> impl Iterator<Item = &[Condition]> {
+        std::iter::once(self.conditions.as_slice())
+            .chain(self.alternatives.iter().map(Vec::as_slice))
+    }
+
+    pub fn append_alternatives(&mut self, other: &Predicate) {
+        if self.conditions.is_empty() || other.conditions.is_empty() {
+            self.conditions.clear();
+            self.alternatives.clear();
+            return;
+        }
+        self.alternatives.push(other.conditions.clone());
+        self.alternatives.extend(other.alternatives.clone());
+    }
 }
 
 /// A grant: one or more scopes over a table, with a predicate.
@@ -111,7 +127,7 @@ pub enum ResolvedCondition {
         inner_table: String,
         inner_projected: String,
         /// Inner WHERE conditions with `auth.*` already substituted.
-        inner_conds: Vec<ResolvedCond>,
+        inner_conds: Vec<ResolvedCondition>,
     },
 }
 
@@ -147,15 +163,42 @@ fn parse_operand(tok: &str) -> Operand {
 /// Parse a predicate: `<condition> [AND <condition> ...]`, where a condition is
 /// either `column op operand` or `column [NOT] IN ( SELECT ... )`.
 pub fn parse_predicate(tokens: &[&str]) -> Result<Predicate, String> {
-    parse_predicate_inner(tokens, true)
+    let ranges = split_top_level(tokens, "OR");
+    let mut clauses = Vec::with_capacity(ranges.len());
+    for (start, end) in ranges {
+        clauses.push(parse_predicate_inner(&tokens[start..end])?);
+    }
+    let mut clauses = clauses.into_iter();
+    let conditions = clauses.next().unwrap_or_default();
+    Ok(Predicate {
+        conditions,
+        alternatives: clauses.collect(),
+    })
 }
 
-/// `allow_subquery` is false inside a subquery's own WHERE (depth-1 guard).
-fn parse_predicate_inner(tokens: &[&str], allow_subquery: bool) -> Result<Predicate, String> {
+fn split_top_level(tokens: &[&str], sep: &str) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    let mut start = 0;
+    let mut depth = 0usize;
+    for (i, tok) in tokens.iter().enumerate() {
+        if *tok == "(" {
+            depth += 1;
+        } else if *tok == ")" {
+            depth = depth.saturating_sub(1);
+        } else if depth == 0 && tok.eq_ignore_ascii_case(sep) {
+            out.push((start, i));
+            start = i + 1;
+        }
+    }
+    out.push((start, tokens.len()));
+    out
+}
+
+fn parse_predicate_inner(tokens: &[&str]) -> Result<Vec<Condition>, String> {
     let mut conditions = Vec::new();
     let mut i = 0;
     while i < tokens.len() {
-        let (cond, next) = parse_one_condition(tokens, i, allow_subquery)?;
+        let (cond, next) = parse_one_condition(tokens, i)?;
         conditions.push(cond);
         i = next;
         if i < tokens.len() {
@@ -166,21 +209,17 @@ fn parse_predicate_inner(tokens: &[&str], allow_subquery: bool) -> Result<Predic
                 }
             } else {
                 return Err(format!(
-                    "ERR expected 'AND' between grant conditions, got '{}'",
+                    "ERR expected 'AND' or 'OR' between grant conditions, got '{}'",
                     tokens[i]
                 ));
             }
         }
     }
-    Ok(Predicate { conditions })
+    Ok(conditions)
 }
 
 /// Parse one condition starting at `i`; return it and the index just past it.
-fn parse_one_condition(
-    tokens: &[&str],
-    i: usize,
-    allow_subquery: bool,
-) -> Result<(Condition, usize), String> {
+fn parse_one_condition(tokens: &[&str], i: usize) -> Result<(Condition, usize), String> {
     let column = tokens
         .get(i)
         .ok_or_else(|| "ERR incomplete grant predicate (expected column)".to_string())?
@@ -191,7 +230,7 @@ fn parse_one_condition(
 
     // `column IN ( SELECT ... )`
     if op_tok.eq_ignore_ascii_case("IN") {
-        let (subquery, next) = parse_subquery(tokens, i + 2, allow_subquery)?;
+        let (subquery, next) = parse_subquery(tokens, i + 2)?;
         return Ok((
             Condition::InSubquery {
                 column,
@@ -209,7 +248,7 @@ fn parse_one_condition(
         if !in_tok.eq_ignore_ascii_case("IN") {
             return Err(format!("ERR expected 'IN' after 'NOT', got '{in_tok}'"));
         }
-        let (subquery, next) = parse_subquery(tokens, i + 3, allow_subquery)?;
+        let (subquery, next) = parse_subquery(tokens, i + 3)?;
         return Ok((
             Condition::InSubquery {
                 column,
@@ -242,14 +281,7 @@ fn parse_one_condition(
 
 /// Parse `( SELECT <col> FROM <table> [WHERE <inner-pred>] )` starting at the
 /// opening paren. Returns the subquery and the index just past the `)`.
-fn parse_subquery(
-    tokens: &[&str],
-    mut i: usize,
-    allow_subquery: bool,
-) -> Result<(Subquery, usize), String> {
-    if !allow_subquery {
-        return Err("ERR nested subquery in grant is not supported (depth-1 only)".to_string());
-    }
+fn parse_subquery(tokens: &[&str], mut i: usize) -> Result<(Subquery, usize), String> {
     let expect = |i: usize, want: &str| -> Result<(), String> {
         match tokens.get(i) {
             Some(t) if t.eq_ignore_ascii_case(want) => Ok(()),
@@ -279,8 +311,9 @@ fn parse_subquery(
         .get(i)
         .ok_or_else(|| "ERR grant subquery expects a table after FROM".to_string())?
         .to_string();
-    if table.to_ascii_lowercase().starts_with("auth.") {
-        return Err("ERR grant subquery may not read reserved 'auth.*' tables".to_string());
+    let lower_table = table.to_ascii_lowercase();
+    if lower_table.starts_with("auth.") || lower_table.starts_with("push.") {
+        return Err("ERR grant subquery may not read reserved system tables".to_string());
     }
     i += 1;
 
@@ -288,7 +321,20 @@ fn parse_subquery(
     let mut inner_tokens: Vec<&str> = Vec::new();
     if matches!(tokens.get(i), Some(t) if t.eq_ignore_ascii_case("WHERE")) {
         i += 1;
-        while i < tokens.len() && tokens[i] != ")" {
+        let mut depth = 0usize;
+        while i < tokens.len() {
+            if tokens[i] == ")" {
+                if depth == 0 {
+                    break;
+                }
+                depth -= 1;
+                inner_tokens.push(tokens[i]);
+                i += 1;
+                continue;
+            }
+            if tokens[i] == "(" {
+                depth += 1;
+            }
             inner_tokens.push(tokens[i]);
             i += 1;
         }
@@ -296,8 +342,7 @@ fn parse_subquery(
     expect(i, ")")?;
     i += 1;
 
-    // Inner predicate is Cmp-only (no nested subqueries).
-    let inner = parse_predicate_inner(&inner_tokens, false)?;
+    let inner = parse_predicate(&inner_tokens)?;
     Ok((
         Subquery {
             projected,
@@ -375,23 +420,30 @@ pub fn parse_revoke(tokens: &[&str]) -> Result<(String, Vec<Scope>), String> {
     Ok((table, scopes))
 }
 
-/// Serialize a predicate to canonical text for storage / display. The output is
-/// whitespace-separable so `load_grant_predicate` can re-tokenize it with
-/// `split_whitespace()` and parse back an identical predicate (every token,
-/// including parens, is space-delimited).
+/// Serialize a predicate to canonical text for storage / display. Literal
+/// operands are quoted so spaces, operators, and keywords remain data when the
+/// stored predicate is parsed again.
 pub fn predicate_to_string(pred: &Predicate) -> String {
-    pred.conditions
-        .iter()
-        .map(condition_to_string)
+    pred.clauses()
+        .map(|conditions| {
+            conditions
+                .iter()
+                .map(condition_to_string)
+                .collect::<Vec<_>>()
+                .join(" AND ")
+        })
         .collect::<Vec<_>>()
-        .join(" AND ")
+        .join(" OR ")
 }
 
 fn operand_to_string(operand: &Operand) -> String {
     match operand {
         Operand::AuthUid => "auth.uid()".to_string(),
         Operand::AuthClaim(name) => format!("auth.{name}"),
-        Operand::Literal(v) => v.clone(),
+        Operand::Literal(value) => {
+            let escaped = value.replace('\\', "\\\\").replace('\'', "\\'");
+            format!("'{escaped}'")
+        }
     }
 }
 
@@ -437,41 +489,13 @@ fn resolve_operand(
     })
 }
 
-/// Resolve a Cmp-only (inner) predicate to concrete `(column, op, value)`.
-fn resolve_cmp_only(
-    pred: &Predicate,
+fn resolve_predicate(
+    conditions: &[Condition],
     uid: &str,
     claim: &impl Fn(&str) -> Option<String>,
-) -> Result<Vec<ResolvedCond>, String> {
-    let mut out = Vec::with_capacity(pred.conditions.len());
-    for c in &pred.conditions {
-        match c {
-            Condition::Cmp {
-                column,
-                op,
-                operand,
-            } => out.push(ResolvedCond {
-                column: column.clone(),
-                op: op.clone(),
-                value: resolve_operand(operand, uid, claim)?,
-            }),
-            Condition::InSubquery { .. } => {
-                return Err("ERR nested subquery in grant is not supported".to_string());
-            }
-        }
-    }
-    Ok(out)
-}
-
-/// Resolve a grant predicate's `auth.*` operands against the principal. Subquery
-/// conditions keep their (now resolved) inner WHERE for later execution.
-pub fn resolve(
-    pred: &Predicate,
-    uid: &str,
-    claim: impl Fn(&str) -> Option<String>,
 ) -> Result<Vec<ResolvedCondition>, String> {
-    let mut out = Vec::with_capacity(pred.conditions.len());
-    for c in &pred.conditions {
+    let mut out = Vec::with_capacity(conditions.len());
+    for c in conditions {
         match c {
             Condition::Cmp {
                 column,
@@ -480,22 +504,51 @@ pub fn resolve(
             } => out.push(ResolvedCondition::Cmp(ResolvedCond {
                 column: column.clone(),
                 op: op.clone(),
-                value: resolve_operand(operand, uid, &claim)?,
+                value: resolve_operand(operand, uid, claim)?,
             })),
             Condition::InSubquery {
                 column,
                 negated,
                 subquery,
-            } => out.push(ResolvedCondition::InSubqueryResolved {
-                column: column.clone(),
-                negated: *negated,
-                inner_table: subquery.table.clone(),
-                inner_projected: subquery.projected.clone(),
-                inner_conds: resolve_cmp_only(&subquery.inner, uid, &claim)?,
-            }),
+            } => {
+                if !subquery.inner.alternatives.is_empty() {
+                    return Err("ERR OR inside grant subquery is not supported".to_string());
+                }
+                out.push(ResolvedCondition::InSubqueryResolved {
+                    column: column.clone(),
+                    negated: *negated,
+                    inner_table: subquery.table.clone(),
+                    inner_projected: subquery.projected.clone(),
+                    inner_conds: resolve_predicate(&subquery.inner.conditions, uid, claim)?,
+                });
+            }
         }
     }
     Ok(out)
+}
+
+/// Resolve the first grant predicate clause's `auth.*` operands. Most callers
+/// should use `resolve_clauses`; this exists for unit tests and older helpers.
+#[cfg(any())]
+pub fn resolve(
+    pred: &Predicate,
+    uid: &str,
+    claim: impl Fn(&str) -> Option<String>,
+) -> Result<Vec<ResolvedCondition>, String> {
+    resolve_predicate(&pred.conditions, uid, &claim)
+}
+
+/// Resolve all OR branches of a grant predicate's `auth.*` operands against the
+/// principal. Subquery conditions keep their resolved inner WHERE for later
+/// execution.
+pub fn resolve_clauses(
+    pred: &Predicate,
+    uid: &str,
+    claim: impl Fn(&str) -> Option<String>,
+) -> Result<Vec<Vec<ResolvedCondition>>, String> {
+    pred.clauses()
+        .map(|conditions| resolve_predicate(conditions, uid, &claim))
+        .collect()
 }
 
 /// Compare a concrete value against `op target`, numeric when both parse.
@@ -783,9 +836,9 @@ mod tests {
             s,
             "workspace_id IN ( SELECT workspace_id FROM members WHERE user_id = auth.uid() )"
         );
-        // The stored string re-tokenizes (split_whitespace) and parses identically.
-        let toks: Vec<&str> = s.split_whitespace().collect();
-        let reparsed = parse_predicate(&toks).unwrap();
+        let tokens = crate::vendor::lux::tables::tokenize_where(&s).unwrap();
+        let token_refs = tokens.iter().map(String::as_str).collect::<Vec<_>>();
+        let reparsed = parse_predicate(&token_refs).unwrap();
         assert_eq!(reparsed, g.predicate);
     }
 
@@ -823,14 +876,110 @@ mod tests {
     }
 
     #[test]
-    fn rejects_nested_subquery() {
-        // a subquery inside a subquery's WHERE is depth-2 => rejected.
-        let err = parse_grant(&[
+    fn predicate_round_trips_or_alternatives() {
+        let g = parse_grant(&[
+            "read",
+            "ON",
+            "profiles",
+            "WHERE",
+            "id",
+            "=",
+            "auth.uid()",
+            "OR",
+            "id",
+            "IN",
+            "(",
+            "SELECT",
+            "user_id",
+            "FROM",
+            "members",
+            "WHERE",
+            "team_id",
+            "IN",
+            "(",
+            "SELECT",
+            "team_id",
+            "FROM",
+            "members",
+            "WHERE",
+            "user_id",
+            "=",
+            "auth.uid()",
+            ")",
+            ")",
+        ])
+        .unwrap();
+        let s = predicate_to_string(&g.predicate);
+        assert_eq!(
+            s,
+            "id = auth.uid() OR id IN ( SELECT user_id FROM members WHERE team_id IN ( SELECT team_id FROM members WHERE user_id = auth.uid() ) )"
+        );
+        let tokens = crate::vendor::lux::tables::tokenize_where(&s).unwrap();
+        let token_refs = tokens.iter().map(String::as_str).collect::<Vec<_>>();
+        let reparsed = parse_predicate(&token_refs).unwrap();
+        assert_eq!(reparsed, g.predicate);
+        assert_eq!(g.predicate.conditions.len(), 1);
+        assert_eq!(g.predicate.alternatives.len(), 1);
+    }
+
+    #[test]
+    fn parses_nested_subquery() {
+        let g = parse_grant(&[
             "read", "ON", "m", "WHERE", "a", "IN", "(", "SELECT", "x", "FROM", "t", "WHERE", "y",
             "IN", "(", "SELECT", "z", "FROM", "u", ")", ")",
         ])
-        .unwrap_err();
-        assert!(err.contains("nested subquery"), "got: {err}");
+        .unwrap();
+        let s = predicate_to_string(&g.predicate);
+        assert_eq!(s, "a IN ( SELECT x FROM t WHERE y IN ( SELECT z FROM u ) )");
+        let tokens = crate::vendor::lux::tables::tokenize_where(&s).unwrap();
+        let token_refs = tokens.iter().map(String::as_str).collect::<Vec<_>>();
+        let reparsed = parse_predicate(&token_refs).unwrap();
+        assert_eq!(reparsed, g.predicate);
+        match &g.predicate.conditions[0] {
+            Condition::InSubquery { subquery, .. } => {
+                assert!(matches!(
+                    subquery.inner.conditions[0],
+                    Condition::InSubquery { .. }
+                ));
+            }
+            other => panic!("expected InSubquery, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_team_membership_grant_with_two_subquery_layers() {
+        let g = parse_grant(&[
+            "read",
+            "ON",
+            "profiles",
+            "WHERE",
+            "id",
+            "IN",
+            "(",
+            "SELECT",
+            "user_id",
+            "FROM",
+            "members",
+            "WHERE",
+            "team_id",
+            "IN",
+            "(",
+            "SELECT",
+            "team_id",
+            "FROM",
+            "members",
+            "WHERE",
+            "user_id",
+            "=",
+            "auth.uid()",
+            ")",
+            ")",
+        ])
+        .unwrap();
+        assert_eq!(
+            predicate_to_string(&g.predicate),
+            "id IN ( SELECT user_id FROM members WHERE team_id IN ( SELECT team_id FROM members WHERE user_id = auth.uid() ) )"
+        );
     }
 
     #[test]
@@ -879,7 +1028,71 @@ mod tests {
                 assert!(!negated);
                 assert_eq!(inner_table, "members");
                 assert_eq!(inner_projected, "workspace_id");
-                assert_eq!(inner_conds, &vec![rc("user_id", "=", "user-42")]);
+                assert_eq!(
+                    inner_conds,
+                    &vec![ResolvedCondition::Cmp(rc("user_id", "=", "user-42"))]
+                );
+            }
+            other => panic!("expected InSubqueryResolved, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolve_substitutes_inside_nested_subquery() {
+        let g = parse_grant(&[
+            "read",
+            "ON",
+            "profiles",
+            "WHERE",
+            "id",
+            "IN",
+            "(",
+            "SELECT",
+            "user_id",
+            "FROM",
+            "members",
+            "WHERE",
+            "team_id",
+            "IN",
+            "(",
+            "SELECT",
+            "team_id",
+            "FROM",
+            "members",
+            "WHERE",
+            "user_id",
+            "=",
+            "auth.uid()",
+            ")",
+            ")",
+        ])
+        .unwrap();
+        let resolved = resolve(&g.predicate, "user-42", |_| None).unwrap();
+        match &resolved[0] {
+            ResolvedCondition::InSubqueryResolved {
+                inner_table,
+                inner_projected,
+                inner_conds,
+                ..
+            } => {
+                assert_eq!(inner_table, "members");
+                assert_eq!(inner_projected, "user_id");
+                match &inner_conds[0] {
+                    ResolvedCondition::InSubqueryResolved {
+                        inner_table,
+                        inner_projected,
+                        inner_conds,
+                        ..
+                    } => {
+                        assert_eq!(inner_table, "members");
+                        assert_eq!(inner_projected, "team_id");
+                        assert_eq!(
+                            inner_conds,
+                            &vec![ResolvedCondition::Cmp(rc("user_id", "=", "user-42"))]
+                        );
+                    }
+                    other => panic!("expected nested InSubqueryResolved, got {other:?}"),
+                }
             }
             other => panic!("expected InSubqueryResolved, got {other:?}"),
         }

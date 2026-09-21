@@ -2,11 +2,12 @@ use bytes::BytesMut;
 use std::time::{Duration, Instant};
 
 use crate::vendor::lux::resp;
-use crate::vendor::lux::store::{Store, StoreValue};
+use crate::vendor::lux::store::{JournalPlan, Store, StoreValue};
 
-use super::{CmdResult, arg_str, cmd_eq, format_float, parse_i64, parse_u64};
+use super::{CmdResult, arg_str, cmd_eq, format_float, parse_i64, parse_u64, promote_keys};
 
 const INTEGER_ERR: &str = "ERR value is not an integer or out of range";
+type SortedSetPopResult = Option<(Vec<u8>, Vec<(String, f64)>)>;
 
 fn parse_i64_arg(arg: &[u8], out: &mut BytesMut) -> Option<i64> {
     match parse_i64(arg) {
@@ -115,7 +116,7 @@ fn parse_zstore_options(
     while i < args.len() {
         if cmd_eq(args[i], b"WEIGHTS") {
             i += 1;
-            if i + numkeys > args.len() {
+            if numkeys > args.len().saturating_sub(i) {
                 resp::write_error(out, "ERR syntax error");
                 return None;
             }
@@ -865,13 +866,13 @@ pub fn cmd_zunionstore(
         Some(numkeys) => numkeys,
         None => return CmdResult::Written,
     };
-    if 3 + numkeys > args.len() {
+    if numkeys > args.len().saturating_sub(3) {
         resp::write_error(out, "ERR syntax error");
         return CmdResult::Written;
     }
     let keys: Vec<&[u8]> = args[3..3 + numkeys].to_vec();
-    for key in &keys {
-        store.try_promote(key, now);
+    if !promote_keys(store, &keys, out, now) {
+        return CmdResult::Written;
     }
     let (weights, aggregate) = match parse_zstore_options(&args[3 + numkeys..], numkeys, out) {
         Some(parsed) => parsed,
@@ -901,13 +902,13 @@ pub fn cmd_zinterstore(
         Some(numkeys) => numkeys,
         None => return CmdResult::Written,
     };
-    if 3 + numkeys > args.len() {
+    if numkeys > args.len().saturating_sub(3) {
         resp::write_error(out, "ERR syntax error");
         return CmdResult::Written;
     }
     let keys: Vec<&[u8]> = args[3..3 + numkeys].to_vec();
-    for key in &keys {
-        store.try_promote(key, now);
+    if !promote_keys(store, &keys, out, now) {
+        return CmdResult::Written;
     }
     let (weights, aggregate) = match parse_zstore_options(&args[3 + numkeys..], numkeys, out) {
         Some(parsed) => parsed,
@@ -937,21 +938,286 @@ pub fn cmd_zdiffstore(
         Some(numkeys) => numkeys,
         None => return CmdResult::Written,
     };
-    if 3 + numkeys > args.len() {
+    if numkeys > args.len().saturating_sub(3) {
         resp::write_error(out, "ERR syntax error");
         return CmdResult::Written;
     }
-    if 3 + numkeys != args.len() {
+    if numkeys != args.len().saturating_sub(3) {
         resp::write_error(out, "ERR syntax error");
         return CmdResult::Written;
     }
     let keys: Vec<&[u8]> = args[3..3 + numkeys].to_vec();
-    for key in &keys {
-        store.try_promote(key, now);
+    if !promote_keys(store, &keys, out, now) {
+        return CmdResult::Written;
     }
     match store.zdiffstore(args[1], &keys, now) {
         Ok(n) => resp::write_integer(out, n),
         Err(e) => resp::write_error(out, &e),
+    }
+    CmdResult::Written
+}
+
+/// Parsed pieces of a direct-return sorted-set set-op (ZUNION/ZINTER/ZDIFF).
+struct ZSetSetOp<'a> {
+    keys: Vec<&'a [u8]>,
+    weights: Vec<f64>,
+    aggregate: String,
+    with_scores: bool,
+}
+
+/// Parse `numkeys key [key ...] [WEIGHTS ...] [AGGREGATE ...] [WITHSCORES]` for the
+/// direct-return ZUNION/ZINTER (allow_options=true) and ZDIFF (allow_options=false).
+fn parse_zset_setop<'a>(
+    args: &[&'a [u8]],
+    out: &mut BytesMut,
+    allow_options: bool,
+) -> Option<ZSetSetOp<'a>> {
+    let numkeys = parse_zstore_numkeys(args[1], out)?;
+    if numkeys > args.len().saturating_sub(2) {
+        resp::write_error(out, "ERR syntax error");
+        return None;
+    }
+    let keys: Vec<&[u8]> = args[2..2 + numkeys].to_vec();
+    let mut tail = &args[2 + numkeys..];
+    let mut with_scores = false;
+    if tail.last().is_some_and(|t| cmd_eq(t, b"WITHSCORES")) {
+        with_scores = true;
+        tail = &tail[..tail.len() - 1];
+    }
+    let (weights, aggregate) = if allow_options {
+        parse_zstore_options(tail, numkeys, out)?
+    } else {
+        if !tail.is_empty() {
+            resp::write_error(out, "ERR syntax error");
+            return None;
+        }
+        (Vec::new(), "SUM".to_string())
+    };
+    Some(ZSetSetOp {
+        keys,
+        weights,
+        aggregate,
+        with_scores,
+    })
+}
+
+pub fn cmd_zunion(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Instant) -> CmdResult {
+    if args.len() < 3 {
+        resp::write_error(out, "ERR wrong number of arguments for 'zunion' command");
+        return CmdResult::Written;
+    }
+    let Some(ZSetSetOp {
+        keys,
+        weights,
+        aggregate,
+        with_scores,
+    }) = parse_zset_setop(args, out, true)
+    else {
+        return CmdResult::Written;
+    };
+    if !promote_keys(store, &keys, out, now) {
+        return CmdResult::Written;
+    }
+    match store.zunion(&keys, &weights, &aggregate, now) {
+        Ok(items) => write_zset_result(out, &items, with_scores),
+        Err(e) => resp::write_error(out, &e),
+    }
+    CmdResult::Written
+}
+
+pub fn cmd_zinter(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Instant) -> CmdResult {
+    if args.len() < 3 {
+        resp::write_error(out, "ERR wrong number of arguments for 'zinter' command");
+        return CmdResult::Written;
+    }
+    let Some(ZSetSetOp {
+        keys,
+        weights,
+        aggregate,
+        with_scores,
+    }) = parse_zset_setop(args, out, true)
+    else {
+        return CmdResult::Written;
+    };
+    if !promote_keys(store, &keys, out, now) {
+        return CmdResult::Written;
+    }
+    match store.zinter(&keys, &weights, &aggregate, now) {
+        Ok(items) => write_zset_result(out, &items, with_scores),
+        Err(e) => resp::write_error(out, &e),
+    }
+    CmdResult::Written
+}
+
+pub fn cmd_zdiff(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Instant) -> CmdResult {
+    if args.len() < 3 {
+        resp::write_error(out, "ERR wrong number of arguments for 'zdiff' command");
+        return CmdResult::Written;
+    }
+    let Some(ZSetSetOp {
+        keys, with_scores, ..
+    }) = parse_zset_setop(args, out, false)
+    else {
+        return CmdResult::Written;
+    };
+    if !promote_keys(store, &keys, out, now) {
+        return CmdResult::Written;
+    }
+    match store.zdiff(&keys, now) {
+        Ok(items) => write_zset_result(out, &items, with_scores),
+        Err(e) => resp::write_error(out, &e),
+    }
+    CmdResult::Written
+}
+
+pub fn cmd_zintercard(
+    args: &[&[u8]],
+    store: &Store,
+    out: &mut BytesMut,
+    now: Instant,
+) -> CmdResult {
+    if args.len() < 3 {
+        resp::write_error(
+            out,
+            "ERR wrong number of arguments for 'zintercard' command",
+        );
+        return CmdResult::Written;
+    }
+    let numkeys = match parse_zstore_numkeys(args[1], out) {
+        Some(n) => n,
+        None => return CmdResult::Written,
+    };
+    if numkeys > args.len().saturating_sub(2) {
+        resp::write_error(out, "ERR syntax error");
+        return CmdResult::Written;
+    }
+    let keys: Vec<&[u8]> = args[2..2 + numkeys].to_vec();
+    if !promote_keys(store, &keys, out, now) {
+        return CmdResult::Written;
+    }
+    let tail = &args[2 + numkeys..];
+    let mut limit = 0usize;
+    if !tail.is_empty() {
+        if tail.len() == 2 && cmd_eq(tail[0], b"LIMIT") {
+            match parse_u64(tail[1]) {
+                Ok(l) => limit = l as usize,
+                Err(_) => {
+                    resp::write_error(out, "ERR LIMIT can't be negative");
+                    return CmdResult::Written;
+                }
+            }
+        } else {
+            resp::write_error(out, "ERR syntax error");
+            return CmdResult::Written;
+        }
+    }
+    match store.zintercard(&keys, limit, now) {
+        Ok(n) => resp::write_integer(out, n),
+        Err(e) => resp::write_error(out, &e),
+    }
+    CmdResult::Written
+}
+
+pub fn cmd_zrandmember(
+    args: &[&[u8]],
+    store: &Store,
+    out: &mut BytesMut,
+    now: Instant,
+) -> CmdResult {
+    // ZRANDMEMBER key [count [WITHSCORES]]
+    if args.len() < 2 || args.len() > 4 {
+        resp::write_error(
+            out,
+            "ERR wrong number of arguments for 'zrandmember' command",
+        );
+        return CmdResult::Written;
+    }
+    if let Err(error) = store.try_promote(args[1], now) {
+        resp::write_error(out, &error);
+        return CmdResult::Written;
+    }
+
+    // No count: a single member as a bulk string (or nil).
+    if args.len() == 2 {
+        match store.zrandmember(args[1], 1, now) {
+            Ok(members) => match members.first() {
+                Some((m, _)) => resp::write_bulk(out, m),
+                None => resp::write_null(out),
+            },
+            Err(e) => resp::write_error(out, &e),
+        }
+        return CmdResult::Written;
+    }
+
+    let count = match parse_i64(args[2]) {
+        Ok(n) => n,
+        Err(_) => {
+            resp::write_error(out, "ERR value is not an integer or out of range");
+            return CmdResult::Written;
+        }
+    };
+    let with_scores = if args.len() == 4 {
+        if cmd_eq(args[3], b"WITHSCORES") {
+            true
+        } else {
+            resp::write_error(out, "ERR syntax error");
+            return CmdResult::Written;
+        }
+    } else {
+        false
+    };
+    match store.zrandmember(args[1], count, now) {
+        Ok(members) => write_zset_result(out, &members, with_scores),
+        Err(e) => resp::write_error(out, &e),
+    }
+    CmdResult::Written
+}
+
+pub fn cmd_zmpop(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Instant) -> CmdResult {
+    // ZMPOP numkeys key [key ...] <MIN | MAX> [COUNT count]
+    if args.len() < 4 {
+        resp::write_error(out, "ERR wrong number of arguments for 'zmpop' command");
+        return CmdResult::Written;
+    }
+    let numkeys = match parse_zstore_numkeys(args[1], out) {
+        Some(n) => n,
+        None => return CmdResult::Written,
+    };
+    // Need at least the MIN|MAX token after the keys.
+    if numkeys >= args.len().saturating_sub(2) {
+        resp::write_error(out, "ERR syntax error");
+        return CmdResult::Written;
+    }
+    let keys: Vec<&[u8]> = args[2..2 + numkeys].to_vec();
+    let dir_idx = 2 + numkeys;
+    let is_min = if cmd_eq(args[dir_idx], b"MIN") {
+        true
+    } else if cmd_eq(args[dir_idx], b"MAX") {
+        false
+    } else {
+        resp::write_error(out, "ERR syntax error");
+        return CmdResult::Written;
+    };
+    let mut count = 1usize;
+    let rest = &args[dir_idx + 1..];
+    if !rest.is_empty() {
+        if rest.len() == 2 && cmd_eq(rest[0], b"COUNT") {
+            match parse_u64(rest[1]) {
+                Ok(n) if n >= 1 => count = n as usize,
+                _ => {
+                    resp::write_error(out, "ERR count should be greater than 0");
+                    return CmdResult::Written;
+                }
+            }
+        } else {
+            resp::write_error(out, "ERR syntax error");
+            return CmdResult::Written;
+        }
+    }
+    match journaled_zmpop(store, &keys, is_min, count, now) {
+        Ok(Some((key, items))) => write_zmpop_reply(out, &key, &items),
+        Ok(None) => resp::write_null_array(out),
+        Err(error) => resp::write_error(out, &error),
     }
     CmdResult::Written
 }
@@ -1148,21 +1414,19 @@ pub fn cmd_bzpopmin(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Inst
     let timeout_secs: f64 = arg_str(args[args.len() - 1]).parse().unwrap_or(0.0);
     let keys: Vec<&[u8]> = args[1..args.len() - 1].to_vec();
 
-    for key in &keys {
-        let result = if is_min {
-            store.zpopmin(key, 1, now)
-        } else {
-            store.zpopmax(key, 1, now)
-        };
-        if let Ok(items) = result {
-            if !items.is_empty() {
-                let (member, score) = &items[0];
-                resp::write_array_header(out, 3);
-                resp::write_bulk_raw(out, key);
-                resp::write_bulk(out, member);
-                resp::write_bulk(out, &format_float(*score));
-                return CmdResult::Written;
-            }
+    match journaled_zmpop(store, &keys, is_min, 1, now) {
+        Ok(Some((key, items))) => {
+            let (member, score) = &items[0];
+            resp::write_array_header(out, 3);
+            resp::write_bulk_raw(out, &key);
+            resp::write_bulk(out, member);
+            resp::write_bulk(out, &format_float(*score));
+            return CmdResult::Written;
+        }
+        Ok(None) => {}
+        Err(error) => {
+            resp::write_error(out, &error);
+            return CmdResult::Written;
         }
     }
 
@@ -1177,4 +1441,263 @@ pub fn cmd_bzpopmin(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Inst
         timeout,
         pop_min: is_min,
     }
+}
+
+/// Write the ZMPOP/BZMPOP success reply: `[key, [[member, score], ...]]`.
+fn write_zmpop_reply(out: &mut BytesMut, key: &[u8], items: &[(String, f64)]) {
+    resp::write_array_header(out, 2);
+    resp::write_bulk_raw(out, key);
+    resp::write_array_header(out, items.len());
+    for (member, score) in items {
+        resp::write_array_header(out, 2);
+        resp::write_bulk(out, member);
+        resp::write_bulk(out, &format_float(*score));
+    }
+}
+
+pub(crate) fn journaled_zmpop(
+    store: &Store,
+    keys: &[&[u8]],
+    pop_min: bool,
+    count: usize,
+    now: Instant,
+) -> Result<SortedSetPopResult, String> {
+    let route: [&[u8]; 1] = [b"ZMPOP"];
+    store
+        .commit_prepared(
+            &route,
+            || {
+                let mut expected = None;
+                for key in keys {
+                    store.try_promote(key, now)?;
+                    let items = store.preview_zpop(key, count, pop_min, now)?;
+                    if !items.is_empty() {
+                        expected = Some((key.to_vec(), items));
+                        break;
+                    }
+                }
+                let Some((key, items)) = &expected else {
+                    return Ok(JournalPlan::no_op(None));
+                };
+                let mut command = vec![b"ZREM".to_vec(), key.clone()];
+                command.extend(items.iter().map(|(member, _)| member.as_bytes().to_vec()));
+                Ok(JournalPlan::command(command, expected))
+            },
+            |expected| {
+                let Some((key, expected_items)) = expected else {
+                    return Ok(None);
+                };
+                let actual_items = if pop_min {
+                    store.zpopmin(&key, count, now)?
+                } else {
+                    store.zpopmax(&key, count, now)?
+                };
+                if actual_items != expected_items {
+                    return Err("ERR sorted-set pop changed while committing".to_string());
+                }
+                Ok(Some((key, actual_items)))
+            },
+        )
+        .map_err(|error| format!("ERR WAL append failed: {error}"))?
+}
+
+pub fn cmd_bzmpop(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Instant) -> CmdResult {
+    // BZMPOP timeout numkeys key [key ...] <MIN|MAX> [COUNT count]
+    if args.len() < 5 {
+        resp::write_error(out, "ERR wrong number of arguments for 'bzmpop' command");
+        return CmdResult::Written;
+    }
+    let timeout_secs: f64 = arg_str(args[1]).parse().unwrap_or(-1.0);
+    if timeout_secs < 0.0 {
+        resp::write_error(out, "ERR timeout is not a float or out of range");
+        return CmdResult::Written;
+    }
+    let numkeys = match parse_zstore_numkeys(args[2], out) {
+        Some(n) => n,
+        None => return CmdResult::Written,
+    };
+    if numkeys >= args.len().saturating_sub(3) {
+        resp::write_error(out, "ERR syntax error");
+        return CmdResult::Written;
+    }
+    let keys: Vec<&[u8]> = args[3..3 + numkeys].to_vec();
+    let dir_idx = 3 + numkeys;
+    let pop_min = if cmd_eq(args[dir_idx], b"MIN") {
+        true
+    } else if cmd_eq(args[dir_idx], b"MAX") {
+        false
+    } else {
+        resp::write_error(out, "ERR syntax error");
+        return CmdResult::Written;
+    };
+    let mut count = 1usize;
+    let rest = &args[dir_idx + 1..];
+    if !rest.is_empty() {
+        if rest.len() == 2 && cmd_eq(rest[0], b"COUNT") {
+            match parse_u64(rest[1]) {
+                Ok(n) if n >= 1 => count = n as usize,
+                _ => {
+                    resp::write_error(out, "ERR count should be greater than 0");
+                    return CmdResult::Written;
+                }
+            }
+        } else {
+            resp::write_error(out, "ERR syntax error");
+            return CmdResult::Written;
+        }
+    }
+    // Immediately satisfiable -> behave like ZMPOP through the same journal boundary.
+    match journaled_zmpop(store, &keys, pop_min, count, now) {
+        Ok(Some((key, items))) => {
+            write_zmpop_reply(out, &key, &items);
+            return CmdResult::Written;
+        }
+        Ok(None) => {}
+        Err(e) => {
+            resp::write_error(out, &e);
+            return CmdResult::Written;
+        }
+    }
+    let timeout = if timeout_secs <= 0.0 {
+        Duration::from_secs(300)
+    } else {
+        Duration::from_secs_f64(timeout_secs)
+    };
+    let owned_keys: Vec<String> = keys.iter().map(|k| arg_str(k).to_string()).collect();
+    CmdResult::BlockZMPop {
+        keys: owned_keys,
+        pop_min,
+        count,
+        timeout,
+    }
+}
+
+pub fn cmd_zrangestore(
+    args: &[&[u8]],
+    store: &Store,
+    out: &mut BytesMut,
+    now: Instant,
+) -> CmdResult {
+    // ZRANGESTORE dst src min max [BYSCORE|BYLEX] [REV] [LIMIT offset count]
+    if args.len() < 5 {
+        resp::write_error(
+            out,
+            "ERR wrong number of arguments for 'zrangestore' command",
+        );
+        return CmdResult::Written;
+    }
+    let dst = args[1];
+    let src = args[2];
+    if let Err(error) = store.try_promote(src, now) {
+        resp::write_error(out, &error);
+        return CmdResult::Written;
+    }
+    let mut reverse = false;
+    let mut byscore = false;
+    let mut bylex = false;
+    let mut offset: Option<usize> = None;
+    let mut count: Option<usize> = None;
+    let mut i = 5;
+    while i < args.len() {
+        if cmd_eq(args[i], b"REV") {
+            reverse = true;
+            i += 1;
+        } else if cmd_eq(args[i], b"BYSCORE") {
+            byscore = true;
+            i += 1;
+        } else if cmd_eq(args[i], b"BYLEX") {
+            bylex = true;
+            i += 1;
+        } else if cmd_eq(args[i], b"LIMIT") {
+            let parsed = match parse_limit(args, i, out) {
+                Some(parsed) => parsed,
+                None => return CmdResult::Written,
+            };
+            offset = parsed.0;
+            count = parsed.1;
+            i += 3;
+        } else {
+            resp::write_error(out, "ERR syntax error");
+            return CmdResult::Written;
+        }
+    }
+    if byscore && bylex {
+        resp::write_error(out, "ERR syntax error");
+        return CmdResult::Written;
+    }
+    if (offset.is_some() || count.is_some()) && !(byscore || bylex) {
+        resp::write_error(
+            out,
+            "ERR syntax error, LIMIT is only supported in combination with either BYSCORE or BYLEX",
+        );
+        return CmdResult::Written;
+    }
+    let prepare = match store.prepare_journaled(args) {
+        Ok(prepare) => prepare,
+        Err(error) => {
+            resp::write_error(out, &format!("ERR WAL append failed: {error}"));
+            return CmdResult::Written;
+        }
+    };
+    let pairs: Result<Vec<(String, f64)>, String> = if byscore {
+        let (min, min_ex) = match parse_score_bound(arg_str(args[3]), false) {
+            Ok(bound) => bound,
+            Err(e) => {
+                resp::write_error(out, &e);
+                return CmdResult::Written;
+            }
+        };
+        let (max, max_ex) = match parse_score_bound(arg_str(args[4]), true) {
+            Ok(bound) => bound,
+            Err(e) => {
+                resp::write_error(out, &e);
+                return CmdResult::Written;
+            }
+        };
+        store.zrangebyscore(
+            src, min, max, min_ex, max_ex, reverse, offset, count, true, now,
+        )
+    } else if bylex {
+        match store.zrangebylex(
+            src,
+            arg_str(args[3]),
+            arg_str(args[4]),
+            offset,
+            count,
+            reverse,
+            now,
+        ) {
+            Ok(members) => {
+                let mut v = Vec::with_capacity(members.len());
+                for m in members {
+                    let s = store
+                        .zscore(src, m.as_bytes(), now)
+                        .ok()
+                        .flatten()
+                        .unwrap_or(0.0);
+                    v.push((m, s));
+                }
+                Ok(v)
+            }
+            Err(e) => Err(e),
+        }
+    } else {
+        let start = match parse_i64_arg(args[3], out) {
+            Some(v) => v,
+            None => return CmdResult::Written,
+        };
+        let stop = match parse_i64_arg(args[4], out) {
+            Some(v) => v,
+            None => return CmdResult::Written,
+        };
+        store.zrange(src, start, stop, reverse, true, now)
+    };
+    match pairs {
+        Ok(pairs) => match store.zrangestore(prepare, dst, pairs) {
+            Ok(n) => resp::write_integer(out, n),
+            Err(e) => resp::write_error(out, &e),
+        },
+        Err(e) => resp::write_error(out, &e),
+    }
+    CmdResult::Written
 }

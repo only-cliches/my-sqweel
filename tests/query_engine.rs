@@ -567,10 +567,7 @@ fn supports_contains_like_and_order_by_projection_alias() {
 #[test]
 fn update_validates_unique_constraints_and_rekeys_primary_key_rows() {
     let _guard = test_lock();
-    let engine = Engine::new(EngineConfig {
-        unique_mode: my_sqweel::sql::engine::UniqueMode::Enforce,
-        ..EngineConfig::default()
-    });
+    let engine = Engine::default();
     engine
         .execute_sql(
             "CREATE TABLE users (id BIGINT PRIMARY KEY AUTO_INCREMENT, email TEXT, UNIQUE(email));",

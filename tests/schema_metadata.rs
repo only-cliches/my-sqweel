@@ -1,15 +1,12 @@
 mod common;
 
 use common::test_lock;
-use my_sqweel::sql::engine::{Engine, EngineConfig, UniqueMode};
+use my_sqweel::sql::engine::{Engine, EngineConfig};
 
 #[test]
-fn unique_enforcement_mode_blocks_duplicates() {
+fn strict_schema_blocks_duplicate_unique_values() {
     let _guard = test_lock();
-    let engine = Engine::new(EngineConfig {
-        unique_mode: UniqueMode::Enforce,
-        ..EngineConfig::default()
-    });
+    let engine = Engine::default();
     engine
         .execute_sql("CREATE TABLE users (id BIGINT PRIMARY KEY AUTO_INCREMENT, email VARCHAR(255), UNIQUE(email));")
         .unwrap();
@@ -24,12 +21,9 @@ fn unique_enforcement_mode_blocks_duplicates() {
 }
 
 #[test]
-fn unique_enforcement_allows_multiple_null_values() {
+fn strict_unique_constraints_allow_multiple_null_values() {
     let _guard = test_lock();
-    let engine = Engine::new(EngineConfig {
-        unique_mode: UniqueMode::Enforce,
-        ..EngineConfig::default()
-    });
+    let engine = Engine::default();
     engine
         .execute_sql("CREATE TABLE users (id BIGINT PRIMARY KEY AUTO_INCREMENT, email VARCHAR(255), UNIQUE(email));")
         .unwrap();
@@ -47,7 +41,7 @@ fn unique_enforcement_allows_multiple_null_values() {
 }
 
 #[test]
-fn unique_overwrite_mode_replaces_conflicting_rows() {
+fn strict_schema_preserves_original_row_after_unique_conflict() {
     let _guard = test_lock();
     let engine = Engine::default();
     engine
@@ -56,9 +50,11 @@ fn unique_overwrite_mode_replaces_conflicting_rows() {
     engine
         .execute_sql("INSERT INTO users (email, name) VALUES ('a@example.com', 'Alice');")
         .unwrap();
-    engine
-        .execute_sql("INSERT INTO users (email, name) VALUES ('a@example.com', 'Ada');")
-        .unwrap();
+    assert!(
+        engine
+            .execute_sql("INSERT INTO users (email, name) VALUES ('a@example.com', 'Ada');")
+            .is_err()
+    );
 
     let rows = engine
         .execute_sql("SELECT email, name FROM users WHERE email = 'a@example.com'")
@@ -66,22 +62,33 @@ fn unique_overwrite_mode_replaces_conflicting_rows() {
     assert_eq!(rows[0].rows.len(), 1);
     assert_eq!(
         rows[0].rows[0].get("name").and_then(|value| value.as_str()),
-        Some("Ada")
+        Some("Alice")
     );
 
     engine
         .execute_sql("INSERT INTO users (email, name) VALUES ('b@example.com', 'Bob');")
         .unwrap();
-    engine
-        .execute_sql("UPDATE users SET email = 'a@example.com', name = 'Updated' WHERE email = 'b@example.com'")
-        .unwrap();
+    assert!(
+        engine
+            .execute_sql("UPDATE users SET email = 'a@example.com', name = 'Updated' WHERE email = 'b@example.com'")
+            .is_err()
+    );
     let rows = engine
         .execute_sql("SELECT email, name FROM users WHERE email = 'a@example.com'")
         .unwrap();
     assert_eq!(rows[0].rows.len(), 1);
     assert_eq!(
         rows[0].rows[0].get("name").and_then(|value| value.as_str()),
-        Some("Updated")
+        Some("Alice")
+    );
+
+    let bob = engine
+        .execute_sql("SELECT email, name FROM users WHERE email = 'b@example.com'")
+        .unwrap();
+    assert_eq!(bob[0].rows.len(), 1);
+    assert_eq!(
+        bob[0].rows[0].get("name").and_then(|value| value.as_str()),
+        Some("Bob")
     );
 }
 
@@ -124,7 +131,7 @@ fn supports_create_and_drop_index_metadata() {
 }
 
 #[test]
-fn duplicate_create_table_merges_existing_schema() {
+fn duplicate_create_table_is_rejected_without_changing_schema() {
     let _guard = test_lock();
     let engine = Engine::default();
 
@@ -134,13 +141,15 @@ fn duplicate_create_table_merges_existing_schema() {
     engine
         .execute_sql("INSERT INTO users (email) VALUES ('a@example.com')")
         .unwrap();
-    engine
-        .execute_sql("CREATE TABLE users (id BIGINT PRIMARY KEY AUTO_INCREMENT, email TEXT UNIQUE, display_name TEXT DEFAULT 'anon');")
-        .unwrap();
+    assert!(
+        engine
+            .execute_sql("CREATE TABLE users (id BIGINT PRIMARY KEY AUTO_INCREMENT, email TEXT UNIQUE, display_name TEXT DEFAULT 'anon');")
+            .is_err()
+    );
 
     let columns = engine.execute_sql("SHOW COLUMNS FROM users").unwrap();
     assert!(
-        columns[0].rows.iter().any(|row| {
+        !columns[0].rows.iter().any(|row| {
             row.get("Field").and_then(|value| value.as_str()) == Some("display_name")
         })
     );
@@ -149,133 +158,64 @@ fn duplicate_create_table_merges_existing_schema() {
         .execute_sql("INSERT INTO users (email) VALUES ('b@example.com')")
         .unwrap();
     let rows = engine
-        .execute_sql("SELECT email, display_name FROM users ORDER BY id")
+        .execute_sql("SELECT email FROM users ORDER BY id")
         .unwrap();
     assert_eq!(rows[0].rows.len(), 2);
-    assert_eq!(
-        rows[0].rows[1]
-            .get("display_name")
-            .and_then(|value| value.as_str()),
-        Some("anon")
-    );
 }
 
 #[test]
-fn permissive_schema_ddl_infers_missing_metadata_and_noops_unknown_drops() {
+fn strict_schema_ddl_rejects_missing_objects() {
     let _guard = test_lock();
     let engine = Engine::default();
 
-    engine
-        .execute_sql("ALTER TABLE missing_users ADD COLUMN email TEXT")
-        .unwrap();
-    engine
-        .execute_sql("CREATE INDEX idx_missing_email ON missing_users (email)")
-        .unwrap();
-    let columns = engine
-        .execute_sql("SHOW COLUMNS FROM missing_users")
-        .unwrap();
     assert!(
-        columns[0]
-            .rows
-            .iter()
-            .any(|row| { row.get("Field").and_then(|value| value.as_str()) == Some("email") })
+        engine
+            .execute_sql("ALTER TABLE missing_users ADD COLUMN email TEXT")
+            .is_err()
     );
-    let indexes = engine.execute_sql("SHOW INDEX FROM missing_users").unwrap();
-    assert!(indexes[0].rows.iter().any(|row| {
-        row.get("Key_name").and_then(|value| value.as_str()) == Some("idx_missing_email")
-    }));
-
-    engine.execute_sql("TRUNCATE TABLE unknown_table").unwrap();
-    engine.execute_sql("DROP TABLE unknown_table").unwrap();
-    engine
-        .execute_sql("DROP INDEX IF EXISTS unknown_index ON missing_users")
-        .unwrap();
-
-    engine
-        .execute_sql("ALTER TABLE missing_users SET TBLPROPERTIES ('vendor' = 'ignored')")
-        .unwrap();
-}
-
-#[test]
-fn insert_into_unknown_table_infers_schema_from_named_columns() {
-    let _guard = test_lock();
-    let engine = Engine::default();
-
-    engine
-        .execute_sql("INSERT INTO inferred_users (email, score) VALUES ('a@example.com', 10)")
-        .unwrap();
-    let rows = engine
-        .execute_sql("SELECT email, score FROM inferred_users")
-        .unwrap();
-    assert_eq!(
-        rows[0].rows[0]
-            .get("email")
-            .and_then(|value| value.as_str()),
-        Some("a@example.com")
-    );
-    assert_eq!(
-        rows[0].rows[0]
-            .get("score")
-            .and_then(|value| value.as_i64()),
-        Some(10)
-    );
-
-    let columns = engine
-        .execute_sql("SHOW COLUMNS FROM inferred_users")
-        .unwrap();
-    assert_eq!(columns[0].rows.len(), 2);
     assert!(
-        columns[0]
-            .rows
-            .iter()
-            .any(|row| { row.get("Field").and_then(|value| value.as_str()) == Some("email") })
+        engine
+            .execute_sql("CREATE INDEX idx_missing_email ON missing_users (email)")
+            .is_err()
+    );
+    assert!(engine.execute_sql("TRUNCATE TABLE unknown_table").is_err());
+    assert!(engine.execute_sql("DROP TABLE unknown_table").is_err());
+
+    engine
+        .execute_sql("CREATE TABLE users (id INT PRIMARY KEY)")
+        .unwrap();
+    engine
+        .execute_sql("DROP INDEX IF EXISTS unknown_index ON users")
+        .unwrap();
+    engine
+        .execute_sql("DROP TABLE IF EXISTS unknown_table")
+        .unwrap();
+}
+
+#[test]
+fn insert_into_unknown_table_is_rejected() {
+    let _guard = test_lock();
+    let engine = Engine::default();
+
+    assert!(
+        engine
+            .execute_sql("INSERT INTO inferred_users (email, score) VALUES ('a@example.com', 10)")
+            .is_err()
     );
 }
 
 #[test]
-fn positional_insert_into_unknown_table_generates_index_columns() {
+fn positional_insert_into_unknown_table_is_rejected() {
     let _guard = test_lock();
     let engine = Engine::default();
 
-    engine
-        .execute_sql(
-            "INSERT INTO positional_users VALUES ('a@example.com', 10), ('b@example.com', 20, true)",
-        )
-        .unwrap();
-
-    let rows = engine
-        .execute_sql("SELECT * FROM positional_users ORDER BY column_1")
-        .unwrap();
-    assert_eq!(rows[0].rows.len(), 2);
-    assert_eq!(
-        rows[0].rows[0]
-            .get("column_1")
-            .and_then(|value| value.as_str()),
-        Some("a@example.com")
+    assert!(
+        engine
+            .execute_sql(
+                "INSERT INTO positional_users VALUES ('a@example.com', 10), ('b@example.com', 20, true)",
+            )
+            .is_err()
     );
-    assert_eq!(
-        rows[0].rows[0]
-            .get("column_2")
-            .and_then(|value| value.as_i64()),
-        Some(10)
-    );
-    assert!(rows[0].rows[0].get("column_3").unwrap().is_null());
-    assert_eq!(
-        rows[0].rows[1]
-            .get("column_3")
-            .and_then(|value| value.as_bool()),
-        Some(true)
-    );
-
-    let columns = engine
-        .execute_sql("SHOW COLUMNS FROM positional_users")
-        .unwrap();
-    let fields = columns[0]
-        .rows
-        .iter()
-        .map(|row| row.get("Field").and_then(|value| value.as_str()).unwrap())
-        .collect::<Vec<_>>();
-    assert_eq!(fields, vec!["column_1", "column_2", "column_3"]);
 }
 
 #[test]
@@ -592,7 +532,10 @@ fn exposes_richer_information_schema_columns() {
     assert_eq!(id.get("column_key").unwrap().as_str().unwrap(), "PRI");
     assert_eq!(id.get("extra").unwrap().as_str().unwrap(), "auto_increment");
     assert_eq!(id.get("is_nullable").unwrap().as_str().unwrap(), "NO");
-    assert_eq!(id.get("column_type").unwrap().as_str().unwrap(), "bigint(20)");
+    assert_eq!(
+        id.get("column_type").unwrap().as_str().unwrap(),
+        "bigint(20)"
+    );
     assert_eq!(id.get("data_type").unwrap().as_str().unwrap(), "bigint");
 
     let email = info[0]
@@ -772,8 +715,7 @@ fn information_schema_schemata_reports_server_default_charset() {
         Some("latin1")
     );
     assert_eq!(
-        row.get("default_collation_name")
-            .and_then(|v| v.as_str()),
+        row.get("default_collation_name").and_then(|v| v.as_str()),
         Some("latin1_swedish_ci")
     );
 }

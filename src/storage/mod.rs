@@ -12,6 +12,12 @@ use fs2::FileExt;
 
 use crate::vendor::lux;
 
+mod async_store;
+pub use async_store::{
+    AsyncStorage, DatabaseMetadata, LuxStorage, MetadataMutation, RowMutation, RowPage, RowScan,
+    StorageBatch, StorageCatalog, TableState,
+};
+
 /// Minimal Redis command surface MySqweel uses for durable table storage.
 pub trait RedisStore: Send + Sync {
     fn is_persistent(&self) -> bool;
@@ -129,6 +135,57 @@ impl LuxRedisStore {
             client.execute("SAVE", &[]).await?;
             Ok(())
         })
+    }
+
+    /// Read one cursor page from a hash without materializing the full hash in
+    /// the caller. The cursor is the opaque value returned by Lux's `HSCAN`.
+    pub(crate) fn hscan(
+        &self,
+        key: &str,
+        cursor: Option<&str>,
+        count: usize,
+    ) -> Result<(String, Vec<(String, String)>)> {
+        let client = self.client.clone();
+        let key = key.to_owned();
+        let cursor = cursor.unwrap_or("0").to_owned();
+        let count = count.max(1).to_string();
+        let response = self.run_lux(async move {
+            client
+                .execute_value("HSCAN", &[&key, &cursor, "COUNT", &count])
+                .await
+        })?;
+        let lux::EmbeddedValue::Array(mut response) = response else {
+            return Err(anyhow!("Lux HSCAN returned an invalid response"));
+        };
+        if response.len() != 2 {
+            return Err(anyhow!("Lux HSCAN returned an invalid response length"));
+        }
+        let values = response.pop().expect("checked response length");
+        let next_cursor = embedded_value_string(response.pop().expect("checked response length"))?;
+        let lux::EmbeddedValue::Array(values) = values else {
+            return Err(anyhow!("Lux HSCAN returned invalid row values"));
+        };
+        if !values.len().is_multiple_of(2) {
+            return Err(anyhow!("Lux HSCAN returned an odd number of row values"));
+        }
+        values
+            .chunks(2)
+            .map(|pair| {
+                Ok((
+                    embedded_value_string(pair[0].clone())?,
+                    embedded_value_string(pair[1].clone())?,
+                ))
+            })
+            .collect::<Result<Vec<_>>>()
+            .map(|rows| (next_cursor, rows))
+    }
+}
+
+fn embedded_value_string(value: lux::EmbeddedValue) -> Result<String> {
+    match value {
+        lux::EmbeddedValue::Bulk(value) => String::from_utf8(value.to_vec()).map_err(Into::into),
+        lux::EmbeddedValue::Simple(value) => Ok(value),
+        value => Err(anyhow!("Lux returned a non-string HSCAN value: {value:?}")),
     }
 }
 

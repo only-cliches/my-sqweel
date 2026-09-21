@@ -138,7 +138,9 @@ pub struct Column {
 
 pub use crate::vendor::msql_srv::errorcodes::ErrorKind;
 pub use crate::vendor::msql_srv::params::{ParamParser, ParamValue, Params};
-pub use crate::vendor::msql_srv::resultset::{InitWriter, QueryResultWriter, RowWriter, StatementMetaWriter};
+pub use crate::vendor::msql_srv::resultset::{
+    InitWriter, QueryResultWriter, RowWriter, StatementMetaWriter,
+};
 pub use crate::vendor::msql_srv::value::{ToMysqlValue, Value, ValueInner};
 
 /// Implementors of this trait can be used to drive a MySQL-compatible database backend.

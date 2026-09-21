@@ -12,9 +12,21 @@ use std::io::Cursor;
 /// Binary snapshot loader (`lux.dat`).
 pub fn fuzz_snapshot(data: &[u8]) {
     let store = crate::vendor::lux::store::Store::new_with_config(std::sync::Arc::new(
-        crate::vendor::lux::ServerConfig::default(),
+        crate::vendor::lux::ServerConfig {
+            durability: crate::vendor::lux::DurabilityConfig {
+                policy: crate::vendor::lux::DurabilityPolicy::Ephemeral,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
     ));
-    let _ = crate::vendor::lux::snapshot::load_binary(&store, &mut Cursor::new(data), true, true);
+    let _ = crate::vendor::lux::snapshot::load_binary(
+        &store,
+        &mut Cursor::new(data),
+        true,
+        true,
+        false,
+    );
 }
 
 /// RESP request parser.
@@ -78,7 +90,13 @@ pub fn fuzz_command(data: &[u8]) {
         return;
     }
     let store = crate::vendor::lux::store::Store::new_with_config(std::sync::Arc::new(
-        crate::vendor::lux::ServerConfig::default(),
+        crate::vendor::lux::ServerConfig {
+            durability: crate::vendor::lux::DurabilityConfig {
+                policy: crate::vendor::lux::DurabilityPolicy::Ephemeral,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
     ));
     let broker = crate::vendor::lux::pubsub::Broker::new();
     let cache = std::sync::Arc::new(parking_lot::RwLock::new(

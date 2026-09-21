@@ -169,7 +169,6 @@ fn unsupported_or_unresolved_sql_fails_closed() {
         "SELECT definitely_not_a_mysql_function(1)",
         "SELECT * FROM missing_table",
         "SELECT missing_column FROM fail_closed_values",
-        "SELECT * FROM fail_closed_values AS a FULL JOIN fail_closed_values AS b ON b.id = a.id",
     ] {
         let result = engine.execute_sql(sql);
         assert!(

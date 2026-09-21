@@ -1,7 +1,7 @@
+use crate::vendor::msql_srv::Column;
 use crate::vendor::msql_srv::myc;
 use crate::vendor::msql_srv::myc::constants::{ColumnFlags, ColumnType};
 use crate::vendor::msql_srv::myc::io::WriteMysqlExt;
-use crate::vendor::msql_srv::Column;
 use byteorder::{LittleEndian, WriteBytesExt};
 use std::io::{self, ErrorKind::Other, Write};
 
@@ -674,8 +674,8 @@ impl ToMysqlValue for myc::value::Value {
 mod tests {
     use super::ToMysqlValue;
     use crate::vendor::msql_srv::myc::value;
-    use crate::vendor::msql_srv::myc::value::convert::from_value;
     use crate::vendor::msql_srv::myc::value::Value;
+    use crate::vendor::msql_srv::myc::value::convert::from_value;
     use crate::vendor::msql_srv::{Column, ColumnFlags, ColumnType};
     use chrono::{self, TimeZone};
     use std::time;
@@ -686,7 +686,7 @@ mod tests {
         use crate::vendor::msql_srv::myc::{
             io::ParseBuf,
             proto::MyDeserialize,
-            value::{convert::FromValue, TextValue, ValueDeserializer},
+            value::{TextValue, ValueDeserializer, convert::FromValue},
         };
 
         macro_rules! rt {
@@ -754,7 +754,7 @@ mod tests {
         use crate::vendor::msql_srv::myc::{
             io::ParseBuf,
             proto::MyDeserialize,
-            value::{convert::FromValue, BinValue, ValueDeserializer},
+            value::{BinValue, ValueDeserializer, convert::FromValue},
         };
 
         macro_rules! rt {

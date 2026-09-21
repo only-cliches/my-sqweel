@@ -3,11 +3,12 @@ use std::time::{Duration, Instant};
 
 use crate::vendor::lux::pubsub::Broker;
 use crate::vendor::lux::resp;
-use crate::vendor::lux::store::{Store, StoreValue};
+use crate::vendor::lux::store::{JournalPlan, Store, StoreValue};
 
 use super::{CmdResult, arg_str, cmd_eq, parse_i64, parse_u64};
 
 const INTEGER_ERR: &str = "ERR value is not an integer or out of range";
+type ListPopResult = Option<(Vec<u8>, Vec<Bytes>)>;
 
 fn parse_i64_arg(arg: &[u8], out: &mut BytesMut) -> Option<i64> {
     match parse_i64(arg) {
@@ -56,10 +57,97 @@ fn parse_block_timeout(arg: &[u8], out: &mut BytesMut) -> Option<Duration> {
     }
 }
 
-pub fn cmd_lpush(
+/// Decrypt a list element for output, passing plaintext (and, defensively, any
+/// value we cannot decrypt) through unchanged.
+fn decrypt_out(store: &Store, raw: Bytes) -> Bytes {
+    store.decrypt_list_element(raw.clone()).unwrap_or(raw)
+}
+
+/// Shared LPUSH/RPUSH body. Supports a trailing `ENCRYPTED` flag (mirrors
+/// `SET ... ENCRYPTED`): each pushed element is sealed as an envelope and the
+/// resolved ciphertext crosses the journal as `ENC RAWLPUSH/RAWRPUSH` so
+/// replay is deterministic (envelopes carry random nonces).
+fn push_list(
     args: &[&[u8]],
     store: &Store,
     _broker: &Broker,
+    out: &mut BytesMut,
+    now: Instant,
+    front: bool,
+) -> CmdResult {
+    let name = if front { "lpush" } else { "rpush" };
+    let encrypted = args.last().is_some_and(|a| cmd_eq(a, b"ENCRYPTED"));
+    let end = if encrypted {
+        args.len() - 1
+    } else {
+        args.len()
+    };
+    if end < 3 {
+        resp::write_error(
+            out,
+            &format!("ERR wrong number of arguments for '{name}' command"),
+        );
+        return CmdResult::Written;
+    }
+    let stored: Vec<Vec<u8>> = if encrypted {
+        match args[2..end]
+            .iter()
+            .map(|v| store.encrypt_list_element(v))
+            .collect::<Result<Vec<_>, _>>()
+        {
+            Ok(s) => s,
+            Err(e) => {
+                resp::write_error(out, &e);
+                return CmdResult::Written;
+            }
+        }
+    } else {
+        args[2..end].iter().map(|v| v.to_vec()).collect()
+    };
+    let journal_args = if encrypted {
+        let raw_cmd: &[u8] = if front { b"RAWLPUSH" } else { b"RAWRPUSH" };
+        let mut command = vec![b"ENC".to_vec(), raw_cmd.to_vec(), args[1].to_vec()];
+        command.extend(stored.iter().cloned());
+        Some(command)
+    } else {
+        None
+    };
+    let stored_refs: Vec<&[u8]> = stored.iter().map(Vec::as_slice).collect();
+    let res = if let Some(journal_args) = &journal_args {
+        let journal_refs: Vec<&[u8]> = journal_args.iter().map(Vec::as_slice).collect();
+        match store.commit_journaled_checked(&journal_refs, || {
+            let result = if front {
+                store.lpush(args[1], &stored_refs, now)
+            } else {
+                store.rpush(args[1], &stored_refs, now)
+            };
+            let committed = result.is_ok();
+            (result, committed)
+        }) {
+            Ok(result) => result,
+            Err(e) => {
+                resp::write_error(out, &format!("ERR WAL append failed: {e}"));
+                return CmdResult::Written;
+            }
+        }
+    } else {
+        if front {
+            store.lpush(args[1], &stored_refs, now)
+        } else {
+            store.rpush(args[1], &stored_refs, now)
+        }
+    };
+    match res {
+        Ok(n) => resp::write_integer(out, n),
+        Err(e) => resp::write_error(out, &e),
+    }
+    CmdResult::Written
+}
+
+pub fn cmd_lpush(
+    args: &[&[u8]],
+    store: &Store,
+    broker: &Broker,
     out: &mut BytesMut,
     now: Instant,
 ) -> CmdResult {
@@ -67,25 +155,13 @@ pub fn cmd_lpush(
         resp::write_error(out, "ERR wrong number of arguments for 'lpush' command");
         return CmdResult::Written;
     }
-    match store.lpush(args[1], &args[2..], now) {
-        Ok(n) => {
-            resp::write_integer(out, n);
-            let key_s = arg_str(args[1]);
-            if _broker.has_list_waiters(key_s) {
-                let shard_idx = store.shard_for_key(args[1]);
-                let mut shard = store.lock_write_shard(shard_idx);
-                _broker.drain_list_waiters(key_s, &mut shard.data, now);
-            }
-        }
-        Err(e) => resp::write_error(out, &e),
-    }
-    CmdResult::Written
+    push_list(args, store, broker, out, now, true)
 }
 
 pub fn cmd_rpush(
     args: &[&[u8]],
     store: &Store,
-    _broker: &Broker,
+    broker: &Broker,
     out: &mut BytesMut,
     now: Instant,
 ) -> CmdResult {
@@ -93,19 +169,7 @@ pub fn cmd_rpush(
         resp::write_error(out, "ERR wrong number of arguments for 'rpush' command");
         return CmdResult::Written;
     }
-    match store.rpush(args[1], &args[2..], now) {
-        Ok(n) => {
-            resp::write_integer(out, n);
-            let key_s = arg_str(args[1]);
-            if _broker.has_list_waiters(key_s) {
-                let shard_idx = store.shard_for_key(args[1]);
-                let mut shard = store.lock_write_shard(shard_idx);
-                _broker.drain_list_waiters(key_s, &mut shard.data, now);
-            }
-        }
-        Err(e) => resp::write_error(out, &e),
-    }
-    CmdResult::Written
+    push_list(args, store, broker, out, now, false)
 }
 
 pub fn cmd_lpushx(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Instant) -> CmdResult {
@@ -157,7 +221,7 @@ pub fn cmd_lpop(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Instant)
                         let items: Vec<Bytes> = (0..n).filter_map(|_| list.pop_front()).collect();
                         resp::write_array_header(out, items.len());
                         for item in &items {
-                            resp::write_bulk_raw(out, item);
+                            resp::write_bulk_raw(out, &decrypt_out(store, item.clone()));
                         }
                     }
                 } else {
@@ -170,7 +234,10 @@ pub fn cmd_lpop(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Instant)
             _ => resp::write_null_array(out),
         }
     } else {
-        resp::write_optional_bulk_raw(out, &store.lpop(args[1], now));
+        resp::write_optional_bulk_raw(
+            out,
+            &store.lpop(args[1], now).map(|b| decrypt_out(store, b)),
+        );
     }
     CmdResult::Written
 }
@@ -206,7 +273,7 @@ pub fn cmd_rpop(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Instant)
                         let items: Vec<Bytes> = (0..n).filter_map(|_| list.pop_back()).collect();
                         resp::write_array_header(out, items.len());
                         for item in &items {
-                            resp::write_bulk_raw(out, item);
+                            resp::write_bulk_raw(out, &decrypt_out(store, item.clone()));
                         }
                     }
                 } else {
@@ -219,7 +286,10 @@ pub fn cmd_rpop(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Instant)
             _ => resp::write_null_array(out),
         }
     } else {
-        resp::write_optional_bulk_raw(out, &store.rpop(args[1], now));
+        resp::write_optional_bulk_raw(
+            out,
+            &store.rpop(args[1], now).map(|b| decrypt_out(store, b)),
+        );
     }
     CmdResult::Written
 }
@@ -250,7 +320,10 @@ pub fn cmd_lrange(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Instan
         None => return CmdResult::Written,
     };
     match store.lrange(args[1], start, stop, now) {
-        Ok(items) => resp::write_bulk_array_raw(out, &items),
+        Ok(items) => {
+            let dec: Vec<Bytes> = items.into_iter().map(|b| decrypt_out(store, b)).collect();
+            resp::write_bulk_array_raw(out, &dec);
+        }
         Err(e) => resp::write_error(out, &e),
     }
     CmdResult::Written
@@ -265,7 +338,12 @@ pub fn cmd_lindex(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Instan
         Some(n) => n,
         None => return CmdResult::Written,
     };
-    resp::write_optional_bulk_raw(out, &store.lindex(args[1], index, now));
+    resp::write_optional_bulk_raw(
+        out,
+        &store
+            .lindex(args[1], index, now)
+            .map(|b| decrypt_out(store, b)),
+    );
     CmdResult::Written
 }
 
@@ -469,6 +547,48 @@ pub fn cmd_lpos(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Instant)
     CmdResult::Written
 }
 
+/// Resolve, journal, and apply a list move under the same mutation gates.
+fn journaled_list_move(
+    store: &Store,
+    src: &[u8],
+    dst: &[u8],
+    src_left: bool,
+    dst_left: bool,
+    now: Instant,
+) -> Result<Option<Bytes>, String> {
+    let route: [&[u8]; 3] = [b"LMOVE", src, dst];
+    store
+        .commit_prepared(
+            &route,
+            || {
+                let moved = store.preview_lmove(src, dst, src_left, now)?;
+                let Some(moved) = moved else {
+                    return Ok(JournalPlan::no_op(None));
+                };
+                let pop = if src_left { b"LPOP" } else { b"RPOP" };
+                let push = if dst_left { b"LPUSH" } else { b"RPUSH" };
+                Ok(JournalPlan::batch(
+                    vec![
+                        vec![pop.to_vec(), src.to_vec()],
+                        vec![push.to_vec(), dst.to_vec(), moved.to_vec()],
+                    ],
+                    Some(moved),
+                ))
+            },
+            |expected| {
+                let Some(expected) = expected else {
+                    return Ok(None);
+                };
+                let actual = store.lmove(src, dst, src_left, dst_left, now);
+                if actual.as_ref() != Some(&expected) {
+                    return Err("ERR list move changed while committing".to_string());
+                }
+                Ok(actual)
+            },
+        )
+        .map_err(|error| format!("ERR WAL append failed: {error}"))?
+}
+
 pub fn cmd_lmove(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Instant) -> CmdResult {
     if args.len() < 5 {
         resp::write_error(out, "ERR wrong number of arguments for 'lmove' command");
@@ -482,7 +602,13 @@ pub fn cmd_lmove(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Instant
         Some(side) => side,
         None => return CmdResult::Written,
     };
-    resp::write_optional_bulk_raw(out, &store.lmove(args[1], args[2], src_left, dst_left, now));
+    match journaled_list_move(store, args[1], args[2], src_left, dst_left, now) {
+        Ok(Some(v)) => {
+            resp::write_bulk_raw(out, &decrypt_out(store, v));
+        }
+        Ok(None) => resp::write_null(out),
+        Err(error) => resp::write_error(out, &error),
+    }
     CmdResult::Written
 }
 
@@ -491,7 +617,13 @@ pub fn cmd_rpoplpush(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Ins
         resp::write_error(out, "ERR wrong number of arguments for 'rpoplpush' command");
         return CmdResult::Written;
     }
-    resp::write_optional_bulk_raw(out, &store.lmove(args[1], args[2], false, true, now));
+    match journaled_list_move(store, args[1], args[2], false, true, now) {
+        Ok(Some(v)) => {
+            resp::write_bulk_raw(out, &decrypt_out(store, v));
+        }
+        Ok(None) => resp::write_null(out),
+        Err(error) => resp::write_error(out, &error),
+    }
     CmdResult::Written
 }
 
@@ -515,17 +647,20 @@ pub fn cmd_blpop(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Instant
         .iter()
         .map(|k| arg_str(k).to_string())
         .collect();
-
-    for key in &keys {
-        let val = if pop_left {
-            store.lpop(key.as_bytes(), now)
-        } else {
-            store.rpop(key.as_bytes(), now)
-        };
-        if let Some(v) = val {
+    let key_refs: Vec<&[u8]> = args[1..args.len() - 1].to_vec();
+    match journaled_lmpop(store, &key_refs, pop_left, 1, now) {
+        Ok(Some((key, mut items))) => {
+            let v = items
+                .pop()
+                .expect("journaled single list pop returned one item");
             resp::write_array_header(out, 2);
-            resp::write_bulk(out, key);
-            resp::write_bulk_raw(out, &v);
+            resp::write_bulk_raw(out, &key);
+            resp::write_bulk_raw(out, &decrypt_out(store, v));
+            return CmdResult::Written;
+        }
+        Ok(None) => {}
+        Err(error) => {
+            resp::write_error(out, &error);
             return CmdResult::Written;
         }
     }
@@ -557,11 +692,213 @@ pub fn cmd_blmove(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Instan
         None => return CmdResult::Written,
     };
 
-    if let Some(v) = store.lmove(args[1], args[2], src_left, dst_left, now) {
-        resp::write_bulk_raw(out, &v);
-        return CmdResult::Written;
+    // Immediately-satisfiable BLMOVE moves like LMOVE, so it must be logged the
+    // same way (it isn't classified as a write command, so execute_with_wal never
+    // logs it). Self-log the resolved pop+push keyed per-key. The blocked path
+    // (CmdResult::BlockMove) is logged when the waiter is later satisfied.
+    match journaled_list_move(store, args[1], args[2], src_left, dst_left, now) {
+        Ok(Some(v)) => {
+            resp::write_bulk_raw(out, &decrypt_out(store, v));
+            return CmdResult::Written;
+        }
+        Ok(None) => {}
+        Err(error) => {
+            resp::write_error(out, &error);
+            return CmdResult::Written;
+        }
     }
 
+    CmdResult::BlockMove {
+        src,
+        dst,
+        src_left,
+        dst_left,
+        timeout,
+    }
+}
+
+/// Parse the shared tail of LMPOP/BLMPOP starting at the numkeys argument index
+/// `base`: `numkeys key [key ...] <LEFT|RIGHT> [COUNT count]`.
+fn parse_lmpop_args<'a>(
+    args: &'a [&'a [u8]],
+    base: usize,
+    out: &mut BytesMut,
+) -> Option<(Vec<&'a [u8]>, bool, usize)> {
+    let numkeys = match parse_u64(args[base]) {
+        Ok(n) if n >= 1 => n as usize,
+        _ => {
+            resp::write_error(out, "ERR numkeys should be greater than 0");
+            return None;
+        }
+    };
+    let dir_idx = base + 1 + numkeys;
+    if dir_idx >= args.len() {
+        resp::write_error(out, "ERR syntax error");
+        return None;
+    }
+    let keys: Vec<&[u8]> = args[base + 1..base + 1 + numkeys].to_vec();
+    let pop_left = if cmd_eq(args[dir_idx], b"LEFT") {
+        true
+    } else if cmd_eq(args[dir_idx], b"RIGHT") {
+        false
+    } else {
+        resp::write_error(out, "ERR syntax error");
+        return None;
+    };
+    let mut count = 1usize;
+    let rest = &args[dir_idx + 1..];
+    if !rest.is_empty() {
+        if rest.len() == 2 && cmd_eq(rest[0], b"COUNT") {
+            match parse_u64(rest[1]) {
+                Ok(n) if n >= 1 => count = n as usize,
+                _ => {
+                    resp::write_error(out, "ERR count should be greater than 0");
+                    return None;
+                }
+            }
+        } else {
+            resp::write_error(out, "ERR syntax error");
+            return None;
+        }
+    }
+    Some((keys, pop_left, count))
+}
+
+/// Write the LMPOP/BLMPOP success reply: `[key, [elements...]]`.
+fn write_lmpop_reply(store: &Store, out: &mut BytesMut, key: &[u8], items: &[Bytes]) {
+    resp::write_array_header(out, 2);
+    resp::write_bulk_raw(out, key);
+    resp::write_array_header(out, items.len());
+    for item in items {
+        resp::write_bulk_raw(out, &decrypt_out(store, item.clone()));
+    }
+}
+
+pub(crate) fn journaled_lmpop(
+    store: &Store,
+    keys: &[&[u8]],
+    pop_left: bool,
+    count: usize,
+    now: Instant,
+) -> Result<ListPopResult, String> {
+    let route: [&[u8]; 1] = [b"LMPOP"];
+    store
+        .commit_prepared(
+            &route,
+            || {
+                let expected = store.preview_lmpop(keys, pop_left, count, now)?;
+                let Some((key, items)) = &expected else {
+                    return Ok(JournalPlan::no_op(None));
+                };
+                let command = if pop_left { b"LPOP" } else { b"RPOP" };
+                Ok(JournalPlan::command(
+                    vec![
+                        command.to_vec(),
+                        key.clone(),
+                        items.len().to_string().into_bytes(),
+                    ],
+                    expected,
+                ))
+            },
+            |expected| {
+                let Some(expected) = expected else {
+                    return Ok(None);
+                };
+                let actual = store.lmpop(keys, pop_left, count, now)?;
+                if actual.as_ref() != Some(&expected) {
+                    return Err("ERR list pop changed while committing".to_string());
+                }
+                Ok(actual)
+            },
+        )
+        .map_err(|error| format!("ERR WAL append failed: {error}"))?
+}
+
+pub fn cmd_lmpop(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Instant) -> CmdResult {
+    // LMPOP numkeys key [key ...] <LEFT|RIGHT> [COUNT count]
+    if args.len() < 4 {
+        resp::write_error(out, "ERR wrong number of arguments for 'lmpop' command");
+        return CmdResult::Written;
+    }
+    let Some((keys, pop_left, count)) = parse_lmpop_args(args, 1, out) else {
+        return CmdResult::Written;
+    };
+    match journaled_lmpop(store, &keys, pop_left, count, now) {
+        Ok(Some((key, items))) => {
+            write_lmpop_reply(store, out, &key, &items);
+        }
+        Ok(None) => resp::write_null_array(out),
+        Err(e) => resp::write_error(out, &e),
+    }
+    CmdResult::Written
+}
+
+pub fn cmd_blmpop(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Instant) -> CmdResult {
+    // BLMPOP timeout numkeys key [key ...] <LEFT|RIGHT> [COUNT count]
+    if args.len() < 5 {
+        resp::write_error(out, "ERR wrong number of arguments for 'blmpop' command");
+        return CmdResult::Written;
+    }
+    let timeout = match parse_block_timeout(args[1], out) {
+        Some(t) => t,
+        None => return CmdResult::Written,
+    };
+    let Some((keys, pop_left, count)) = parse_lmpop_args(args, 2, out) else {
+        return CmdResult::Written;
+    };
+    // Immediately satisfiable -> behave like LMPOP and journal the resolved effect.
+    match journaled_lmpop(store, &keys, pop_left, count, now) {
+        Ok(Some((key, items))) => {
+            write_lmpop_reply(store, out, &key, &items);
+            return CmdResult::Written;
+        }
+        Ok(None) => {}
+        Err(e) => {
+            resp::write_error(out, &e);
+            return CmdResult::Written;
+        }
+    }
+    let owned_keys: Vec<String> = keys.iter().map(|k| arg_str(k).to_string()).collect();
+    CmdResult::BlockListMPop {
+        keys: owned_keys,
+        pop_left,
+        count,
+        timeout,
+    }
+}
+
+pub fn cmd_brpoplpush(
+    args: &[&[u8]],
+    store: &Store,
+    out: &mut BytesMut,
+    now: Instant,
+) -> CmdResult {
+    // BRPOPLPUSH src dst timeout == BLMOVE src dst RIGHT LEFT timeout.
+    if args.len() != 4 {
+        resp::write_error(
+            out,
+            "ERR wrong number of arguments for 'brpoplpush' command",
+        );
+        return CmdResult::Written;
+    }
+    let src = arg_str(args[1]).to_string();
+    let dst = arg_str(args[2]).to_string();
+    let timeout = match parse_block_timeout(args[3], out) {
+        Some(t) => t,
+        None => return CmdResult::Written,
+    };
+    let (src_left, dst_left) = (false, true);
+    match journaled_list_move(store, args[1], args[2], src_left, dst_left, now) {
+        Ok(Some(v)) => {
+            resp::write_bulk_raw(out, &decrypt_out(store, v));
+            return CmdResult::Written;
+        }
+        Ok(None) => {}
+        Err(error) => {
+            resp::write_error(out, &error);
+            return CmdResult::Written;
+        }
+    }
     CmdResult::BlockMove {
         src,
         dst,

@@ -1,4 +1,5 @@
 use bytes::BytesMut;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 use crate::vendor::lux::resp;
@@ -7,6 +8,45 @@ use crate::vendor::lux::store::{Store, StoreValue};
 use super::{CmdResult, arg_str, cmd_eq, parse_i64, parse_u64};
 
 const INTEGER_ERR: &str = "ERR value is not an integer or out of range";
+static RANDOMKEY_CURSOR: AtomicUsize = AtomicUsize::new(0);
+
+fn epoch_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or(0)
+}
+
+fn journaled_expiry(
+    store: &Store,
+    key: &[u8],
+    expires_at_ms: u64,
+    ttl_ms: u64,
+    now: Instant,
+) -> std::io::Result<bool> {
+    let route: [&[u8]; 2] = [b"PEXPIREAT", key];
+    let prepare = store.prepare_journaled(&route)?;
+    let exists = store.exists(&[key], now) == 1;
+    let commit = if exists {
+        let deadline = expires_at_ms.to_string().into_bytes();
+        let command: [&[u8]; 3] = [b"PEXPIREAT", key, &deadline];
+        prepare.commit(&command)?
+    } else {
+        prepare.commit_batch(&[])?
+    };
+    if !exists {
+        commit.complete()?;
+        return Ok(false);
+    }
+    let changed = if ttl_ms == 0 {
+        store.del(&[key]);
+        true
+    } else {
+        store.pexpire(key, ttl_ms, now)
+    };
+    commit.complete()?;
+    Ok(changed)
+}
 
 fn parse_usize_arg(arg: &[u8], out: &mut BytesMut) -> Option<usize> {
     match parse_u64(arg).ok().and_then(|n| usize::try_from(n).ok()) {
@@ -52,11 +92,11 @@ pub fn cmd_keys(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Instant)
         resp::write_error(out, "ERR wrong number of arguments for 'keys' command");
         return CmdResult::Written;
     }
-    // Hide the internal table-storage namespace from enumeration.
+    // Hide internal storage namespaces from enumeration.
     let keys: Vec<String> = store
         .keys(args[1], now)
         .into_iter()
-        .filter(|k| !k.starts_with("_t:"))
+        .filter(|key| !super::is_reserved_internal_argument(key.as_bytes()))
         .collect();
     resp::write_bulk_array(out, &keys);
     CmdResult::Written
@@ -98,10 +138,10 @@ pub fn cmd_scan(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Instant)
         }
     }
     let (next_cursor, all_keys) = store.scan(cursor, pattern, count, now);
-    // Hide the internal table-storage namespace; apply any TYPE filter too.
+    // Hide internal storage namespaces; apply any TYPE filter too.
     let keys: Vec<String> = all_keys
         .into_iter()
-        .filter(|k| !k.starts_with("_t:"))
+        .filter(|key| !super::is_reserved_internal_argument(key.as_bytes()))
         .filter(|k| {
             type_filter.is_none_or(|tf| store.get_entry_type(k.as_bytes(), now) == Some(tf))
         })
@@ -129,7 +169,9 @@ pub fn cmd_rename(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Instan
         resp::write_error(out, "ERR wrong number of arguments for 'rename' command");
         return CmdResult::Written;
     }
-    store.try_promote(args[2], now);
+    if !super::promote_keys(store, &args[1..3], out, now) {
+        return CmdResult::Written;
+    }
     match store.rename(args[1], args[2], now) {
         Ok(()) => resp::write_ok(out),
         Err(e) => resp::write_error(out, &e),
@@ -142,7 +184,9 @@ pub fn cmd_renamenx(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Inst
         resp::write_error(out, "ERR wrong number of arguments for 'renamenx' command");
         return CmdResult::Written;
     }
-    store.try_promote(args[2], now);
+    if !super::promote_keys(store, &args[1..3], out, now) {
+        return CmdResult::Written;
+    }
     if store.get(args[2], now).is_some() {
         resp::write_integer(out, 0);
     } else {
@@ -160,9 +204,16 @@ pub fn cmd_randomkey(
     out: &mut BytesMut,
     now: Instant,
 ) -> CmdResult {
-    match store.keys(b"*", now).into_iter().next() {
-        Some(k) => resp::write_bulk(out, &k),
-        None => resp::write_null(out),
+    let keys: Vec<_> = store
+        .keys(b"*", now)
+        .into_iter()
+        .filter(|key| !super::is_reserved_internal_argument(key.as_bytes()))
+        .collect();
+    if keys.is_empty() {
+        resp::write_null(out);
+    } else {
+        let idx = RANDOMKEY_CURSOR.fetch_add(1, Ordering::Relaxed) % keys.len();
+        resp::write_bulk(out, &keys[idx]);
     }
     CmdResult::Written
 }
@@ -202,7 +253,9 @@ pub fn cmd_copy(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Instant)
             return CmdResult::Written;
         }
     }
-    store.try_promote(args[2], now);
+    if !super::promote_keys(store, &args[1..3], out, now) {
+        return CmdResult::Written;
+    }
     match store.copy_key(args[1], args[2], replace, now) {
         Ok(copied) => resp::write_integer(out, if copied { 1 } else { 0 }),
         Err(e) => resp::write_error(out, &e),
@@ -234,14 +287,14 @@ pub fn cmd_expire(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Instan
         return CmdResult::Written;
     }
     match parse_u64(args[2]) {
-        Ok(secs) => resp::write_integer(
-            out,
-            if store.expire(args[1], secs, now) {
-                1
-            } else {
-                0
-            },
-        ),
+        Ok(secs) => {
+            let ttl_ms = secs.saturating_mul(1000);
+            let expires_at_ms = epoch_ms().saturating_add(ttl_ms);
+            match journaled_expiry(store, args[1], expires_at_ms, ttl_ms, now) {
+                Ok(expired) => resp::write_integer(out, i64::from(expired)),
+                Err(error) => resp::write_error(out, &format!("ERR WAL append failed: {error}")),
+            }
+        }
         Err(_) => resp::write_error(out, "ERR value is not an integer or out of range"),
     }
     CmdResult::Written
@@ -253,14 +306,13 @@ pub fn cmd_pexpire(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Insta
         return CmdResult::Written;
     }
     match parse_u64(args[2]) {
-        Ok(ms) => resp::write_integer(
-            out,
-            if store.pexpire(args[1], ms, now) {
-                1
-            } else {
-                0
-            },
-        ),
+        Ok(ms) => {
+            let expires_at_ms = epoch_ms().saturating_add(ms);
+            match journaled_expiry(store, args[1], expires_at_ms, ms, now) {
+                Ok(expired) => resp::write_integer(out, i64::from(expired)),
+                Err(error) => resp::write_error(out, &format!("ERR WAL append failed: {error}")),
+            }
+        }
         Err(_) => resp::write_error(out, "ERR value is not an integer or out of range"),
     }
     CmdResult::Written
@@ -272,14 +324,14 @@ pub fn cmd_expireat(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Inst
         return CmdResult::Written;
     }
     match parse_u64(args[2]) {
-        Ok(ts) => resp::write_integer(
-            out,
-            if store.expireat(args[1], ts, now) {
-                1
-            } else {
-                0
-            },
-        ),
+        Ok(ts) => {
+            let expires_at_ms = ts.saturating_mul(1000);
+            let ttl_ms = expires_at_ms.saturating_sub(epoch_ms());
+            match journaled_expiry(store, args[1], expires_at_ms, ttl_ms, now) {
+                Ok(expired) => resp::write_integer(out, i64::from(expired)),
+                Err(error) => resp::write_error(out, &format!("ERR WAL append failed: {error}")),
+            }
+        }
         Err(_) => resp::write_error(out, "ERR value is not an integer or out of range"),
     }
     CmdResult::Written
@@ -291,14 +343,13 @@ pub fn cmd_pexpireat(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Ins
         return CmdResult::Written;
     }
     match parse_u64(args[2]) {
-        Ok(ts) => resp::write_integer(
-            out,
-            if store.pexpireat(args[1], ts, now) {
-                1
-            } else {
-                0
-            },
-        ),
+        Ok(ts) => {
+            let ttl_ms = ts.saturating_sub(epoch_ms());
+            match journaled_expiry(store, args[1], ts, ttl_ms, now) {
+                Ok(expired) => resp::write_integer(out, i64::from(expired)),
+                Err(error) => resp::write_error(out, &format!("ERR WAL append failed: {error}")),
+            }
+        }
         Err(_) => resp::write_error(out, "ERR value is not an integer or out of range"),
     }
     CmdResult::Written
@@ -337,7 +388,33 @@ pub fn cmd_persist(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Insta
         resp::write_error(out, "ERR wrong number of arguments for 'persist' command");
         return CmdResult::Written;
     }
-    resp::write_integer(out, if store.persist(args[1], now) { 1 } else { 0 });
+    let route: [&[u8]; 2] = [b"PERSIST", args[1]];
+    let prepare = match store.prepare_journaled(&route) {
+        Ok(prepare) => prepare,
+        Err(error) => {
+            resp::write_error(out, &format!("ERR WAL append failed: {error}"));
+            return CmdResult::Written;
+        }
+    };
+    let has_ttl = store.pttl(args[1], now) >= 0;
+    let commit = if has_ttl {
+        prepare.commit(&route)
+    } else {
+        prepare.commit_batch(&[])
+    };
+    let commit = match commit {
+        Ok(commit) => commit,
+        Err(error) => {
+            resp::write_error(out, &format!("ERR WAL append failed: {error}"));
+            return CmdResult::Written;
+        }
+    };
+    let changed = has_ttl && store.persist(args[1], now);
+    if let Err(error) = commit.complete() {
+        resp::write_error(out, &format!("ERR journal apply failed: {error}"));
+        return CmdResult::Written;
+    }
+    resp::write_integer(out, i64::from(changed));
     CmdResult::Written
 }
 
@@ -353,9 +430,7 @@ pub fn cmd_flushdb(_args: &[&[u8]], store: &Store, out: &mut BytesMut, _now: Ins
 }
 
 pub fn cmd_object(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Instant) -> CmdResult {
-    if args.len() > 2 && cmd_eq(args[1], b"REFCOUNT") {
-        resp::write_integer(out, 1);
-    } else if args.len() > 2 && cmd_eq(args[1], b"ENCODING") {
+    if args.len() > 2 && cmd_eq(args[1], b"ENCODING") {
         let key = args[2];
         let idx = store.shard_for_key(key);
         let shard = store.lock_read_shard(idx);
@@ -376,21 +451,9 @@ pub fn cmd_object(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Instan
                             "raw"
                         }
                     }
-                    StoreValue::StrBuf(s) => {
-                        if let Ok(ss) = std::str::from_utf8(s) {
-                            if ss.parse::<i64>().is_ok() {
-                                "int"
-                            } else if s.len() <= 44 {
-                                "embstr"
-                            } else {
-                                "raw"
-                            }
-                        } else {
-                            "raw"
-                        }
-                    }
+                    StoreValue::StrBuf(_) => "raw",
                     StoreValue::List(l) => {
-                        if l.len() <= 128 {
+                        if l.len() <= 128 && l.iter().all(|item| item.len() <= 4096) {
                             "listpack"
                         } else {
                             "quicklist"
@@ -413,7 +476,8 @@ pub fn cmd_object(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Instan
                         }
                     }
                     StoreValue::SortedSet(_, scores) => {
-                        if scores.len() < 128 {
+                        let max_entries = super::server::zset_max_ziplist_entries();
+                        if max_entries > 0 && scores.len() <= max_entries {
                             "listpack"
                         } else {
                             "skiplist"
@@ -428,10 +492,8 @@ pub fn cmd_object(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Instan
             }
             _ => resp::write_error(out, "ERR no such key"),
         }
-    } else if args.len() > 2 && cmd_eq(args[1], b"IDLETIME") {
-        resp::write_integer(out, 0);
     } else {
-        resp::write_ok(out);
+        resp::write_error(out, "ERR only OBJECT ENCODING is supported");
     }
     CmdResult::Written
 }
@@ -478,7 +540,7 @@ pub fn cmd_memory(args: &[&[u8]], store: &Store, out: &mut BytesMut, now: Instan
             _ => resp::write_null(out),
         }
     } else {
-        resp::write_ok(out);
+        resp::write_error(out, "ERR only MEMORY USAGE is supported");
     }
     CmdResult::Written
 }

@@ -3,6 +3,7 @@ use super::catalog::{
     AdminCommand, Catalog, CatalogEffect, Identity, PreparedCommand, PreparedSource, parse_use,
 };
 use super::*;
+use anyhow::ensure;
 mod persistence;
 use parking_lot::Condvar;
 use persistence::Persistence;
@@ -156,9 +157,6 @@ impl Engine {
     pub fn session(&self) -> EngineSession {
         EngineSession::new(self.shared.clone())
     }
-    pub fn compatibility_profile(&self) -> CompatibilityProfile {
-        self.shared.cfg.compatibility_profile
-    }
     pub fn execute_sql(&self, sql: &str) -> Result<Vec<QueryResult>> {
         self.default_session
             .lock()
@@ -180,6 +178,58 @@ impl Engine {
     }
     pub fn snapshot(&self) -> Snapshot {
         self.shared.committed.lock().databases["app"].snapshot()
+    }
+
+    /// Export every database together with its catalog for an external
+    /// storage backend.  The result is intended to be committed as one unit.
+    pub fn export_state(&self) -> Result<EngineState> {
+        let state = self.shared.committed.lock();
+        Ok(EngineState {
+            version: 1,
+            metadata: serde_json::to_value(&state.catalog)?,
+            databases: state
+                .databases
+                .iter()
+                .map(|(name, raw)| (name.clone(), raw.snapshot()))
+                .collect(),
+        })
+    }
+
+    /// Replace the complete committed state from an external storage backend.
+    /// Existing sessions keep their connection-local transaction state, so
+    /// this is intended for opening an engine before sessions are created.
+    pub fn import_state(&self, image: EngineState) -> Result<()> {
+        if image.version != 1 {
+            return Err(anyhow!(
+                "unsupported engine state version: {}",
+                image.version
+            ));
+        }
+        if !image.databases.contains_key("app") {
+            return Err(anyhow!(
+                "external storage state is missing the app database"
+            ));
+        }
+        let catalog: Catalog = serde_json::from_value(image.metadata)?;
+        let mut databases = BTreeMap::new();
+        for (name, snapshot) in image.databases {
+            if snapshot.version != 1 {
+                return Err(anyhow!(
+                    "unsupported snapshot version: {}",
+                    snapshot.version
+                ));
+            }
+            let mut raw =
+                RawEngine::with_storage(self.shared.cfg.clone(), Arc::new(PrivateStorage))?;
+            raw.database_name = name.clone();
+            raw.apply_snapshot(snapshot);
+            databases.insert(name, Arc::new(raw));
+        }
+        let committed = Committed { catalog, databases };
+        let identity = committed.catalog.administrator_identity();
+        self.shared.publish(committed)?;
+        self.default_session.lock().identity = identity;
+        Ok(())
     }
     pub fn restore_snapshot(&self, snapshot: Snapshot) -> Result<()> {
         if snapshot.version != 1 {
@@ -374,13 +424,7 @@ impl EngineSession {
         &self.database
     }
     pub fn authenticate(&mut self, username: &str, salt: &[u8], response: &[u8]) -> bool {
-        self.rollback();
-        self.release_advisory_locks();
-        self.session_state = None;
-        self.variables.clear();
-        self.prepared.clear();
-        self.autocommit = true;
-        self.identity = Identity::unauthenticated();
+        self.reset_authentication_state();
         let state = self.shared.committed.lock();
         if self.shared.check().is_err() || !state.catalog.authenticate(username, salt, response) {
             return false;
@@ -390,6 +434,40 @@ impl EngineSession {
         };
         self.identity = identity;
         true
+    }
+
+    pub(crate) fn authenticate_external(
+        &mut self,
+        username: String,
+        scopes: Vec<super::AuthScope>,
+    ) -> Result<()> {
+        self.reset_authentication_state();
+        self.shared.check()?;
+        self.identity = Identity::external(username, scopes)?;
+        Ok(())
+    }
+
+    pub(crate) fn require_administrator(&self) -> Result<()> {
+        self.shared.check()?;
+        ensure!(
+            self.shared
+                .committed
+                .lock()
+                .catalog
+                .is_admin(&self.identity),
+            "Administrative command denied"
+        );
+        Ok(())
+    }
+
+    fn reset_authentication_state(&mut self) {
+        self.rollback();
+        self.release_advisory_locks();
+        self.session_state = None;
+        self.variables.clear();
+        self.prepared.clear();
+        self.autocommit = true;
+        self.identity = Identity::unauthenticated();
     }
     pub fn use_database(&mut self, database: &str) -> Result<()> {
         self.shared.check()?;

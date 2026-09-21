@@ -1,16 +1,16 @@
 use super::*;
 use base64::Engine;
 use md5::{Digest, Md5};
+use regex::{NoExpand, Regex};
 use sha1_smol::Sha1;
 use sha2::{Sha224, Sha256, Sha384, Sha512};
-use regex::{NoExpand, Regex};
 
 pub(super) fn eval_to_base64_value(value: Value) -> Result<Value> {
     if value == Value::Null {
         return Ok(Value::Null);
     }
-    let bytes = binary_value_bytes(&value)
-        .unwrap_or_else(|| json_scalar_to_string(&value).into_bytes());
+    let bytes =
+        binary_value_bytes(&value).unwrap_or_else(|| json_scalar_to_string(&value).into_bytes());
     Ok(Value::String(
         base64::engine::general_purpose::STANDARD.encode(bytes),
     ))
@@ -32,9 +32,7 @@ pub(super) fn eval_from_base64_value(value: Value) -> Result<Value> {
 }
 
 fn binary_value_bytes(value: &Value) -> Option<Vec<u8>> {
-    let hex = value
-        .as_str()?
-        .strip_prefix(MYSQL_BINARY_SENTINEL)?;
+    let hex = value.as_str()?.strip_prefix(MYSQL_BINARY_SENTINEL)?;
     if hex.len() % 2 != 0 {
         return None;
     }
@@ -47,16 +45,13 @@ fn binary_value_bytes(value: &Value) -> Option<Vec<u8>> {
         .collect()
 }
 fn binary_value_length(value: &Value) -> Option<usize> {
-    let hex = value
-        .as_str()?
-        .strip_prefix(MYSQL_BINARY_SENTINEL)?;
+    let hex = value.as_str()?.strip_prefix(MYSQL_BINARY_SENTINEL)?;
     (hex.len() % 2 == 0).then_some(hex.len() / 2)
 }
 
 pub(super) fn eval_octet_length_value(value: &Value) -> usize {
     binary_value_length(value).unwrap_or_else(|| json_scalar_to_string(value).len())
 }
-
 
 pub(super) fn eval_quote_value(value: Value) -> Value {
     if value == Value::Null {
@@ -151,9 +146,7 @@ pub(super) fn eval_conv_values(values: &[Value]) -> Result<Value> {
         return Ok(Value::Null);
     };
     let output_base = to_base.unsigned_abs();
-    if !(2..=36).contains(&(from_base as u64))
-        || from_base < 2
-        || !(2..=36).contains(&output_base)
+    if !(2..=36).contains(&(from_base as u64)) || from_base < 2 || !(2..=36).contains(&output_base)
     {
         return Ok(Value::Null);
     }
@@ -574,10 +567,7 @@ where
     let mut out = String::new();
     for (index, value) in values.into_iter().enumerate() {
         let value = value?;
-        if index >= u64::BITS as usize
-            || bits & (1_u64 << index) == 0
-            || value == Value::Null
-        {
+        if index >= u64::BITS as usize || bits & (1_u64 << index) == 0 || value == Value::Null {
             continue;
         }
         if !out.is_empty() {
@@ -626,7 +616,6 @@ pub(super) fn eval_export_set_values(values: &[Value]) -> Result<Value> {
             .join(&separator),
     ))
 }
-
 
 pub(super) fn eval_substring_values(
     value: Value,
@@ -691,7 +680,8 @@ pub(super) fn eval_regexp_replace_values(values: &[Value]) -> Result<Value> {
     let subject = json_scalar_to_string(subject);
     let pattern = json_scalar_to_string(pattern);
     let replacement = json_scalar_to_string(replacement);
-    let regex = Regex::new(&pattern).map_err(|error| anyhow!("invalid regular expression: {error}"))?;
+    let regex =
+        Regex::new(&pattern).map_err(|error| anyhow!("invalid regular expression: {error}"))?;
     Ok(Value::String(
         regex
             .replace_all(&subject, NoExpand(replacement.as_str()))
@@ -708,7 +698,8 @@ pub(super) fn eval_regexp_substr_values(values: &[Value]) -> Result<Value> {
     }
     let subject = json_scalar_to_string(subject);
     let pattern = json_scalar_to_string(pattern);
-    let regex = Regex::new(&pattern).map_err(|error| anyhow!("invalid regular expression: {error}"))?;
+    let regex =
+        Regex::new(&pattern).map_err(|error| anyhow!("invalid regular expression: {error}"))?;
     Ok(regex
         .find(&subject)
         .map(|matched| Value::String(matched.as_str().to_string()))
@@ -721,11 +712,11 @@ pub(super) fn eval_regexp_values(target: Value, pattern: Value, negated: bool) -
     }
     let target = json_scalar_to_string(&target);
     let pattern = json_scalar_to_string(&pattern);
-    let regex = Regex::new(&pattern).map_err(|error| anyhow!("invalid regular expression: {error}"))?;
+    let regex =
+        Regex::new(&pattern).map_err(|error| anyhow!("invalid regular expression: {error}"))?;
     let matched = regex.is_match(&target);
     Ok(Value::Bool(if negated { !matched } else { matched }))
 }
-
 
 pub(super) fn eval_repeat(
     string_arg: Option<&String>,

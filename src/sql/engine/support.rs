@@ -254,8 +254,13 @@ fn validate_select(select: &Select) -> ControlFlow<String> {
                 | JoinOperator::RightOuter(
                     JoinConstraint::On(_) | JoinConstraint::Using(_) | JoinConstraint::Natural,
                 )
+                | JoinOperator::FullOuter(
+                    JoinConstraint::On(_) | JoinConstraint::Using(_) | JoinConstraint::Natural,
+                )
                 | JoinOperator::CrossJoin => {}
-                JoinOperator::LeftOuter(constraint) | JoinOperator::RightOuter(constraint) => {
+                JoinOperator::LeftOuter(constraint)
+                | JoinOperator::RightOuter(constraint)
+                | JoinOperator::FullOuter(constraint) => {
                     return unsupported(format!("join constraint `{constraint:?}`"));
                 }
                 operator => return unsupported(format!("join operator `{operator:?}`")),

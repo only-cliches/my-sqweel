@@ -16,22 +16,93 @@ use sqlparser::tokenizer::{Token, Tokenizer};
 pub(crate) struct Identity {
     pub(crate) username: String,
     incarnation: String,
+    external_access: Option<ExternalAccess>,
 }
 impl Identity {
     pub(crate) fn unauthenticated() -> Self {
         Self {
             username: String::new(),
             incarnation: String::new(),
+            external_access: None,
         }
+    }
+
+    pub(crate) fn external(username: String, scopes: Vec<AuthScope>) -> Result<Self> {
+        ensure!(
+            !username.is_empty(),
+            "authenticated username must not be empty"
+        );
+        Ok(Self {
+            username,
+            incarnation: uuid::Uuid::new_v4().to_string(),
+            external_access: Some(ExternalAccess::from_scopes(scopes)),
+        })
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub(crate) enum Privilege {
+pub enum AuthPrivilege {
     Select,
     Insert,
     Update,
     Delete,
+}
+
+/// Database privileges assigned to an externally authenticated connection.
+/// `All` includes database administration; database scopes cover only the
+/// listed data privileges.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AuthScope {
+    All,
+    Database {
+        database: String,
+        privileges: BTreeSet<AuthPrivilege>,
+    },
+}
+
+impl AuthScope {
+    pub fn database(
+        database: impl Into<String>,
+        privileges: impl IntoIterator<Item = AuthPrivilege>,
+    ) -> Self {
+        Self::Database {
+            database: database.into(),
+            privileges: privileges.into_iter().collect(),
+        }
+    }
+}
+
+type Privilege = AuthPrivilege;
+
+#[derive(Debug, Clone)]
+struct ExternalAccess {
+    all: bool,
+    grants: BTreeMap<String, BTreeSet<Privilege>>,
+}
+
+impl ExternalAccess {
+    fn from_scopes(scopes: Vec<AuthScope>) -> Self {
+        let mut access = Self {
+            all: false,
+            grants: BTreeMap::new(),
+        };
+        for scope in scopes {
+            match scope {
+                AuthScope::All => access.all = true,
+                AuthScope::Database {
+                    database,
+                    privileges,
+                } => {
+                    access
+                        .grants
+                        .entry(database)
+                        .or_default()
+                        .extend(privileges);
+                }
+            }
+        }
+        access
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -119,10 +190,14 @@ impl Catalog {
         Ok(Identity {
             username: username.into(),
             incarnation: account.incarnation.clone(),
+            external_access: None,
         })
     }
 
     pub(crate) fn is_admin(&self, identity: &Identity) -> bool {
+        if let Some(access) = &identity.external_access {
+            return access.all;
+        }
         self.users
             .get(&identity.username)
             .is_some_and(|account| account.admin && account.incarnation == identity.incarnation)
@@ -141,6 +216,17 @@ impl Catalog {
             self.databases.contains(database),
             "Unknown database '{database}'"
         );
+        if let Some(access) = &identity.external_access {
+            ensure!(
+                access.all
+                    || access
+                        .grants
+                        .get(database)
+                        .is_some_and(|grants| !grants.is_empty()),
+                "Access denied for database '{database}'"
+            );
+            return Ok(());
+        }
         let account = self
             .users
             .get(&identity.username)
@@ -167,6 +253,17 @@ impl Catalog {
         privilege: Privilege,
     ) -> Result<()> {
         self.check_database(identity, database)?;
+        if let Some(access) = &identity.external_access {
+            ensure!(
+                access.all
+                    || access
+                        .grants
+                        .get(database)
+                        .is_some_and(|grants| grants.contains(&privilege)),
+                "{privilege:?} command denied for database '{database}'"
+            );
+            return Ok(());
+        }
         let account = &self.users[&identity.username];
         ensure!(
             account.admin
@@ -206,7 +303,8 @@ impl Catalog {
                     })
                     .to_string()
                 });
-                self.database_charsets.insert(name.clone(), (charset, collation));
+                self.database_charsets
+                    .insert(name.clone(), (charset, collation));
                 Ok(CatalogEffect::CreateDatabase(name))
             }
             AdminCommand::DropDatabase { name, if_exists } => {

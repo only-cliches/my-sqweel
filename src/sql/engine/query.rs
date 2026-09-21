@@ -249,8 +249,7 @@ impl RawEngine {
                         .map(encode_json_row)
                         .collect::<HashSet<_>>();
                     for row in next.rows {
-                        let row =
-                            remap_set_row(&row, &next.columns, &accumulated.columns)?;
+                        let row = remap_set_row(&row, &next.columns, &accumulated.columns)?;
                         if seen.insert(encode_json_row(&row)) {
                             fresh.push(row);
                         }
@@ -1354,10 +1353,7 @@ impl RawEngine {
             }
             return;
         }
-        if let TableFactor::JsonTable {
-            columns, alias, ..
-        } = factor
-        {
+        if let TableFactor::JsonTable { columns, alias, .. } = factor {
             let table = alias
                 .as_ref()
                 .map(|alias| alias.name.value.clone())
@@ -1440,7 +1436,9 @@ impl RawEngine {
         }
         match expr {
             Expr::Case {
-                results, else_result, ..
+                results,
+                else_result,
+                ..
             } => {
                 let mut branch_metadata = results
                     .iter()
@@ -1493,8 +1491,7 @@ impl RawEngine {
                 metadata.column_type = MysqlColumnType::Integer;
             }
             Expr::Floor { expr, .. } => {
-                let argument =
-                    self.expression_metadata(select, expr, String::new(), first_row);
+                let argument = self.expression_metadata(select, expr, String::new(), first_row);
                 metadata.column_type = MysqlColumnType::Decimal;
                 metadata.decimals = argument.decimals;
             }
@@ -1526,8 +1523,13 @@ impl RawEngine {
                             .ok()
                             .and_then(|arguments| arguments.into_iter().next().flatten())
                             .map(|argument| {
-                                self.expression_metadata(select, &argument, String::new(), first_row)
-                                    .column_type
+                                self.expression_metadata(
+                                    select,
+                                    &argument,
+                                    String::new(),
+                                    first_row,
+                                )
+                                .column_type
                             });
                         if argument.is_some_and(|column_type| {
                             matches!(
@@ -1563,8 +1565,8 @@ impl RawEngine {
                             MysqlColumnType::Decimal
                         }
                     }
-                    "AVG" | "SUM" | "STD" | "STDDEV" | "STDDEV_POP" | "STDDEV_SAMP"
-                    | "VAR_POP" | "VAR_SAMP" | "VARIANCE" => {
+                    "AVG" | "SUM" | "STD" | "STDDEV" | "STDDEV_POP" | "STDDEV_SAMP" | "VAR_POP"
+                    | "VAR_SAMP" | "VARIANCE" => {
                         // MariaDB 10.11.7 aggregate output types: SUM over an
                         // exact input (INT, DECIMAL) returns DECIMAL carrying
                         // the argument's scale (INT has scale 0); AVG widens
@@ -1574,7 +1576,12 @@ impl RawEngine {
                             .ok()
                             .and_then(|arguments| arguments.into_iter().next().flatten())
                             .map(|argument| {
-                                self.expression_metadata(select, &argument, String::new(), first_row)
+                                self.expression_metadata(
+                                    select,
+                                    &argument,
+                                    String::new(),
+                                    first_row,
+                                )
                             });
                         match argument {
                             Some(input)
@@ -1597,13 +1604,11 @@ impl RawEngine {
                                         MysqlColumnType::Decimal
                                     }
                                     "STDDEV_POP" | "STDDEV_SAMP" => {
-                                        metadata.decimals =
-                                            input.decimals.saturating_add(4);
+                                        metadata.decimals = input.decimals.saturating_add(4);
                                         MysqlColumnType::Double
                                     }
                                     "VAR_POP" | "VAR_SAMP" | "VARIANCE" => {
-                                        metadata.decimals =
-                                            input.decimals.saturating_add(4);
+                                        metadata.decimals = input.decimals.saturating_add(4);
                                         MysqlColumnType::Double
                                     }
                                     _ => {
@@ -1618,20 +1623,19 @@ impl RawEngine {
                                     MysqlColumnType::Float | MysqlColumnType::Double
                                 ) =>
                             {
-                                metadata.decimals = if matches!(
-                                    name.as_str(),
-                                    "STDDEV_POP" | "STDDEV_SAMP"
-                                ) {
-                                    6
-                                } else {
-                                    0
-                                };
+                                metadata.decimals =
+                                    if matches!(name.as_str(), "STDDEV_POP" | "STDDEV_SAMP") {
+                                        6
+                                    } else {
+                                        0
+                                    };
                                 MysqlColumnType::Double
                             }
                             _ if matches!(
                                 name.as_str(),
                                 "STDDEV_POP" | "STDDEV_SAMP" | "VAR_SAMP"
-                            ) => {
+                            ) =>
+                            {
                                 metadata.decimals = 6;
                                 MysqlColumnType::Double
                             }
@@ -1669,27 +1673,18 @@ impl RawEngine {
                         }
                         MysqlColumnType::Decimal
                     }
-                    "CURRENT_DATE" | "CURDATE" | "DATE" | "FROM_DAYS" | "LAST_DAY" => MysqlColumnType::Date,
-                    "CURRENT_TIME" | "CURTIME" | "TIME" | "SEC_TO_TIME" | "TIMEDIFF" => MysqlColumnType::Time,
-                    "NOW" | "CURRENT_TIMESTAMP" | "FROM_UNIXTIME" => MysqlColumnType::DateTime,
-                    "DATE_ADD" | "DATE_SUB" | "ADDDATE" | "SUBDATE" => {
-                        MysqlColumnType::DateTime
+                    "CURRENT_DATE" | "CURDATE" | "DATE" | "FROM_DAYS" | "LAST_DAY" => {
+                        MysqlColumnType::Date
                     }
+                    "CURRENT_TIME" | "CURTIME" | "TIME" | "SEC_TO_TIME" | "TIMEDIFF" => {
+                        MysqlColumnType::Time
+                    }
+                    "NOW" | "CURRENT_TIMESTAMP" | "FROM_UNIXTIME" => MysqlColumnType::DateTime,
+                    "DATE_ADD" | "DATE_SUB" | "ADDDATE" | "SUBDATE" => MysqlColumnType::DateTime,
                     "FIELD" | "FIND_IN_SET" | "BIT_COUNT" => MysqlColumnType::Integer,
-                    "YEAR"
-                    | "MONTH"
-                    | "DAY"
-                    | "DAYOFMONTH"
-                    | "DAYOFWEEK"
-                    | "WEEKDAY"
-                    | "DAYOFYEAR"
-                    | "YEARWEEK"
-                    | "WEEKOFYEAR"
-                    | "QUARTER"
-                    | "HOUR"
-                    | "MINUTE"
-                    | "SECOND"
-                    | "MICROSECOND" => MysqlColumnType::Integer,
+                    "YEAR" | "MONTH" | "DAY" | "DAYOFMONTH" | "DAYOFWEEK" | "WEEKDAY"
+                    | "DAYOFYEAR" | "YEARWEEK" | "WEEKOFYEAR" | "QUARTER" | "HOUR" | "MINUTE"
+                    | "SECOND" | "MICROSECOND" => MysqlColumnType::Integer,
                     "INTERVAL_FUNC" => MysqlColumnType::Integer,
                     "CONV" | "MAKE_SET" | "FORMAT" | "QUOTE" => MysqlColumnType::VarChar,
                     "JSON_LENGTH" => MysqlColumnType::Integer,
@@ -1835,8 +1830,7 @@ impl RawEngine {
                 .ok()
                 .and_then(|args| args.into_iter().next().flatten())
                 .is_some_and(|arg| {
-                    let input =
-                        self.expression_metadata(select, &arg, String::new(), first_row);
+                    let input = self.expression_metadata(select, &arg, String::new(), first_row);
                     !matches!(
                         input.column_type,
                         MysqlColumnType::TinyInt
@@ -1905,7 +1899,11 @@ impl RawEngine {
         ) = argument
         {
             return text.split_once('.').map_or(0, |(_, fraction)| {
-                fraction.bytes().take_while(u8::is_ascii_digit).count().min(6) as u8
+                fraction
+                    .bytes()
+                    .take_while(u8::is_ascii_digit)
+                    .count()
+                    .min(6) as u8
             });
         }
         if predicate_columns_available(argument, &Map::new()) {
@@ -1932,17 +1930,12 @@ impl RawEngine {
             for factor in std::iter::once(&table.relation)
                 .chain(table.joins.iter().map(|join| &join.relation))
             {
-                if let TableFactor::JsonTable {
-                    columns, alias, ..
-                } = factor
-                {
+                if let TableFactor::JsonTable { columns, alias, .. } = factor {
                     let table = alias
                         .as_ref()
                         .map(|alias| alias.name.value.clone())
                         .unwrap_or_else(|| "json_table".to_string());
-                    if qualifier
-                        .is_some_and(|qualifier| !qualifier.eq_ignore_ascii_case(&table))
-                    {
+                    if qualifier.is_some_and(|qualifier| !qualifier.eq_ignore_ascii_case(&table)) {
                         continue;
                     }
                     if let Some(hint) = find_json_table_column_hint(columns, column) {
@@ -2027,12 +2020,7 @@ impl RawEngine {
             .iter()
             .position(|alias| alias.name.value.eq_ignore_ascii_case(column))?;
         let inner_expr = values.rows.first()?.get(index)?;
-        Some(self.expression_metadata(
-            outer_select,
-            inner_expr,
-            column.to_string(),
-            first_row,
-        ))
+        Some(self.expression_metadata(outer_select, inner_expr, column.to_string(), first_row))
     }
 
     /// Resolve a plain column reference that names a derived-table (subquery
@@ -2563,12 +2551,20 @@ impl RawEngine {
                         accept_right(right_index)?;
                     }
                 }
-                if !matched && matches!(join.join_operator, JoinOperator::LeftOuter(_)) {
+                if !matched
+                    && matches!(
+                        join.join_operator,
+                        JoinOperator::LeftOuter(_) | JoinOperator::FullOuter(_)
+                    )
+                {
                     next.push(merge_join_rows(candidate, &right.nulls));
                 }
             }
 
-            if matches!(join.join_operator, JoinOperator::RightOuter(_)) {
+            if matches!(
+                join.join_operator,
+                JoinOperator::RightOuter(_) | JoinOperator::FullOuter(_)
+            ) {
                 for (matched, right_row) in matched_right.into_iter().zip(&right.rows) {
                     if !matched {
                         next.push(merge_join_rows(&current_nulls, right_row));
@@ -2760,7 +2756,8 @@ impl RawEngine {
         let constraint = match operator {
             JoinOperator::Inner(constraint)
             | JoinOperator::LeftOuter(constraint)
-            | JoinOperator::RightOuter(constraint) => constraint,
+            | JoinOperator::RightOuter(constraint)
+            | JoinOperator::FullOuter(constraint) => constraint,
             JoinOperator::CrossJoin => return Ok(true),
             _ => return Err(anyhow!("unsupported join type")),
         };
@@ -5395,14 +5392,11 @@ fn find_json_table_column_hint(
 ) -> Option<ColumnHint> {
     columns.iter().find_map(|column| match column {
         sqlparser::ast::JsonTableColumn::ForOrdinality(column) => {
-            column
-                .value
-                .eq_ignore_ascii_case(name)
-                .then(|| ColumnHint {
-                    sql_type: Some("INT".to_string()),
-                    nullable: Some(false),
-                    ..ColumnHint::default()
-                })
+            column.value.eq_ignore_ascii_case(name).then(|| ColumnHint {
+                sql_type: Some("INT".to_string()),
+                nullable: Some(false),
+                ..ColumnHint::default()
+            })
         }
         sqlparser::ast::JsonTableColumn::Named(column) => column
             .name
@@ -5850,6 +5844,7 @@ fn join_is_natural(join: &JoinOperator) -> bool {
         JoinOperator::Inner(JoinConstraint::Natural)
             | JoinOperator::LeftOuter(JoinConstraint::Natural)
             | JoinOperator::RightOuter(JoinConstraint::Natural)
+            | JoinOperator::FullOuter(JoinConstraint::Natural)
     )
 }
 
@@ -5857,7 +5852,8 @@ fn join_using_columns(join: &JoinOperator) -> Option<&[Ident]> {
     match join {
         JoinOperator::Inner(JoinConstraint::Using(columns))
         | JoinOperator::LeftOuter(JoinConstraint::Using(columns))
-        | JoinOperator::RightOuter(JoinConstraint::Using(columns)) => Some(columns),
+        | JoinOperator::RightOuter(JoinConstraint::Using(columns))
+        | JoinOperator::FullOuter(JoinConstraint::Using(columns)) => Some(columns),
         _ => None,
     }
 }
@@ -5874,7 +5870,8 @@ fn join_equi_keys(
     let constraint = match join {
         JoinOperator::Inner(constraint)
         | JoinOperator::LeftOuter(constraint)
-        | JoinOperator::RightOuter(constraint) => constraint,
+        | JoinOperator::RightOuter(constraint)
+        | JoinOperator::FullOuter(constraint) => constraint,
         JoinOperator::CrossJoin => return None,
         _ => return None,
     };
@@ -6215,6 +6212,12 @@ fn select_nullable_tables(select: &Select) -> BTreeSet<String> {
                 JoinOperator::RightOuter(_) => {
                     nullable.extend(accumulated.iter().cloned());
                 }
+                JoinOperator::FullOuter(_) => {
+                    nullable.extend(accumulated.iter().cloned());
+                    if let Some(right) = &right {
+                        nullable.insert(right.clone());
+                    }
+                }
                 _ => {}
             }
             if let Some(right) = right {
@@ -6249,7 +6252,10 @@ fn mysql_column_metadata_types(sql_type: Option<&str>) -> (String, String) {
                 .find(')')
                 .map(|index| open + 1 + index)
                 .unwrap_or(head.len() - 1);
-            (head[..open].to_string(), Some(head[open + 1..close].to_string()))
+            (
+                head[..open].to_string(),
+                Some(head[open + 1..close].to_string()),
+            )
         }
         None => (head.to_string(), None),
     };
@@ -7571,7 +7577,9 @@ fn join_outer_reference(
 ) -> Result<Option<String>> {
     match join {
         JoinOperator::Inner(JoinConstraint::On(expr))
-        | JoinOperator::LeftOuter(JoinConstraint::On(expr)) => {
+        | JoinOperator::LeftOuter(JoinConstraint::On(expr))
+        | JoinOperator::RightOuter(JoinConstraint::On(expr))
+        | JoinOperator::FullOuter(JoinConstraint::On(expr)) => {
             expr_outer_reference(expr, local_qualifiers)
         }
         _ => Ok(None),

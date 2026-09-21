@@ -8,13 +8,19 @@ use anyhow::{Context, Result, anyhow};
 use serde_json::{Value, json};
 use sqlparser::ast::{SetExpr, Statement, TableFactor};
 
-use crate::sql::engine::{CompatibilityProfile, Engine, QueryResult, UniqueMode};
+use crate::sql::engine::{Engine, QueryResult};
 
+pub mod async_engine;
 pub mod model;
 pub mod schema;
 pub mod server;
 pub mod sql;
 pub mod storage;
+
+pub use async_engine::{
+    AsyncEngine, AsyncEngineSession, QueryFilter, QueryFilterAction, QueryFilters, QueryRequest,
+    ResultFilter, ResultFilterAction, ResultFilters,
+};
 pub(crate) mod vendor;
 
 pub fn run_cli() -> Result<()> {
@@ -130,19 +136,8 @@ fn parse_cli(args: &[String]) -> Result<(AppConfig, Command)> {
             idx += 1;
             continue;
         }
-        if let Some(value) = option_value(args, &mut idx, "--unique-mode")? {
-            app.server.engine.unique_mode = parse_unique_mode(&value)?;
-            idx += 1;
-            continue;
-        }
         if let Some(value) = option_value(args, &mut idx, "--default-time-zone")? {
             app.server.engine.default_time_zone = Some(value);
-            idx += 1;
-            continue;
-        }
-        if arg == "--mysql-strict" {
-            app.server.engine.compatibility_profile = CompatibilityProfile::MysqlStrict;
-            app.server.engine.unique_mode = UniqueMode::Enforce;
             idx += 1;
             continue;
         }
@@ -226,16 +221,6 @@ fn parse_socket_addr(flag: &str, raw: &str) -> Result<SocketAddr> {
 fn parse_u64(flag: &str, raw: &str) -> Result<u64> {
     raw.parse::<u64>()
         .map_err(|err| anyhow!("invalid {flag}={raw:?}: {err}"))
-}
-
-fn parse_unique_mode(raw: &str) -> Result<UniqueMode> {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "overwrite" => Ok(UniqueMode::Overwrite),
-        "enforce" => Ok(UniqueMode::Enforce),
-        other => Err(anyhow!(
-            "invalid --unique-mode={other:?}; expected overwrite or enforce"
-        )),
-    }
 }
 
 fn non_empty(value: String) -> Option<String> {
@@ -508,7 +493,7 @@ fn status_json(app: &AppConfig, engine: &Engine, server_running: bool) -> Value 
         "snapshotDir": app.snapshot_dir.display().to_string(),
         "logFilter": app.log_filter,
         "engine": {
-            "uniqueMode": app.server.engine.unique_mode.as_str(),
+            "schemaMode": "strict",
             "failureInjection": {
                 "queryDelayMs": app.server.engine.failure_injection.query_delay_ms,
                 "failReadEvery": app.server.engine.failure_injection.fail_read_every,
@@ -672,9 +657,7 @@ fn print_help() {
         "  --bind <addr>                 MySQL bind address (default 127.0.0.1:3307)\n",
         "  --data-dir <dir>              locked Lux-backed data directory\n",
         "  --allow-remote                allow non-loopback bind addresses\n",
-        "  --unique-mode <mode>          overwrite or enforce (default overwrite)\n",
         "  --default-time-zone <offset>   initial session timezone (default +00:00)\n",
-        "  --mysql-strict                reject drift and enforce MySQL-style errors\n",
         "  --debug-bind <addr>           debug HTTP bind address (default: bind port + 100)\n",
         "  --query-delay-ms <n>          add fixed latency per SQL statement\n",
         "  --fail-read-every <n>         fail every Nth read statement\n",
@@ -707,8 +690,6 @@ mod tests {
             "--bind".to_string(),
             "127.0.0.1:3310".to_string(),
             "--data-dir=./data".to_string(),
-            "--unique-mode".to_string(),
-            "enforce".to_string(),
             "--snapshot-dir".to_string(),
             "./snapshots".to_string(),
             "--log-filter=my_sqweel=debug".to_string(),
@@ -720,7 +701,6 @@ mod tests {
         assert!(matches!(command, Command::Serve { repl: true }));
         assert_eq!(app.server.bind_addr.to_string(), "127.0.0.1:3310");
         assert_eq!(app.server.data_dir.as_deref(), Some("./data"));
-        assert_eq!(app.server.engine.unique_mode, UniqueMode::Enforce);
         assert_eq!(
             app.server
                 .debug_addr
@@ -743,21 +723,11 @@ mod tests {
     }
 
     #[test]
-    fn parse_cli_allows_only_two_unique_modes() {
-        let err = parse_cli(&["--unique-mode".to_string(), "warn".to_string()]).unwrap_err();
-        assert!(err.to_string().contains("expected overwrite or enforce"));
-    }
-
-    #[test]
-    fn parse_cli_enables_mysql_strict_profile_and_uniqueness() {
-        let (app, command) =
-            parse_cli(&["--mysql-strict".to_string(), "serve".to_string()]).unwrap();
-        assert!(matches!(command, Command::Serve { repl: false }));
-        assert_eq!(
-            app.server.engine.compatibility_profile,
-            CompatibilityProfile::MysqlStrict
-        );
-        assert_eq!(app.server.engine.unique_mode, UniqueMode::Enforce);
+    fn parse_cli_rejects_removed_schema_mode_options() {
+        for option in ["--unique-mode", "--mysql-strict"] {
+            let err = parse_cli(&[option.to_string(), "serve".to_string()]).unwrap_err();
+            assert!(err.to_string().contains("unknown option"), "{err:#}");
+        }
     }
 
     #[test]

@@ -12,8 +12,11 @@ mod auth;
 mod cmd;
 mod command;
 mod disk;
+mod durability;
 mod embedded;
+mod encryption;
 mod eviction;
+mod file_security;
 #[cfg(feature = "fuzzing")]
 pub mod fuzz_api;
 mod geo;
@@ -23,39 +26,99 @@ mod hnsw;
 mod http;
 mod jsonb;
 mod lua;
+mod migrations;
 mod pubsub;
+mod push;
 mod resp;
+mod restore;
 mod shard_exec;
 mod snapshot;
 mod store;
 mod tables;
 
-use self::cmd::CmdResult;
-use self::command::{Command, CommandKind, CommandOutput, PubSubCommand, SetOption};
-use self::pubsub::Broker;
-use self::resp::Parser;
-use self::shard_exec::{ShardExecutionError, ShardExecutor, ShardPipelineCommand};
-use self::store::Store;
-use self::tables::SharedSchemaCache;
 use bytes::BytesMut;
+use cmd::CmdResult;
+use command::{Command, CommandKind, CommandOutput, PubSubCommand};
+use pubsub::Broker;
+use resp::Parser;
+use shard_exec::{ShardExecutionError, ShardExecutor, ShardPipelineCommand};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use store::Store;
+use tables::SharedSchemaCache;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, oneshot, watch};
 use tokio::task::{JoinHandle, JoinSet};
 
-pub use self::disk::{StorageConfig, StorageMode};
-pub use self::embedded::{
+pub use disk::{StorageConfig, StorageMode};
+pub use durability::{DurabilityConfig, DurabilityPolicy};
+pub use embedded::{
     EmbeddedPipeline, GeoMember, GeoPosition, GeoUnit, PreparedPipeline, RedisKeyType,
     ScoredMember, SetOptions,
 };
-pub use self::eviction::{
-    EvictionConfig, EvictionPolicy, parse_eviction_policy, parse_memory_size,
-};
+pub use encryption::{EncryptionConfig, EncryptionKeyConfig};
+pub use eviction::{EvictionConfig, EvictionPolicy, parse_eviction_policy, parse_memory_size};
 
 const SUB_MODE_BATCH_MAX: usize = 64;
+
+/// Default grace period for work accepted before runtime shutdown begins.
+pub const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Result of a requested server shutdown.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ShutdownOutcome {
+    /// Every accepted request finished inside the grace period.
+    Clean,
+    /// The grace period elapsed and remaining request tasks were cancelled.
+    Forced,
+}
+
+/// Failure returned by the detailed shutdown API.
+#[derive(Debug)]
+pub enum ShutdownError {
+    /// A listener or runtime task failed independently of the final sync.
+    Runtime(std::io::Error),
+    /// The checked final persistence barrier failed.
+    Persistence(std::io::Error),
+}
+
+impl std::fmt::Display for ShutdownError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Runtime(error) => write!(f, "server runtime failed: {error}"),
+            Self::Persistence(error) => write!(f, "final persistence sync failed: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for ShutdownError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Runtime(error) | Self::Persistence(error) => Some(error),
+        }
+    }
+}
+
+impl From<std::io::Error> for ShutdownError {
+    fn from(error: std::io::Error) -> Self {
+        Self::Runtime(error)
+    }
+}
+
+impl ShutdownError {
+    fn into_io_error(self) -> std::io::Error {
+        match self {
+            Self::Runtime(error) => error,
+            Self::Persistence(error) => std::io::Error::new(
+                error.kind(),
+                format!("final persistence sync failed: {error}"),
+            ),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum LuxError {
     Command(String),
@@ -96,12 +159,55 @@ pub struct AuthConfig {
     pub refresh_token_ttl: Duration,
     /// Enables native email/password signup and sign-in.
     pub email_password_enabled: bool,
+    /// When true, email/password signup creates an unconfirmed user and requires
+    /// a confirmation token before password sign-in.
+    pub email_confirmation_required: bool,
     /// Enables accountless `signInAnonymously` sessions.
     pub anonymous_enabled: bool,
+    /// Lifetime for one-time auth flow tokens such as recovery links,
+    /// confirmation links, and OAuth authorization codes.
+    pub flow_token_ttl: Duration,
+    /// Base URL used when Lux needs to construct auth action links and no
+    /// explicit redirect target was supplied.
+    pub site_url: String,
     /// Optional initial publishable key material for local/bootstrap use.
     pub initial_publishable_key: Option<String>,
     /// Optional initial secret key material for local/bootstrap use.
     pub initial_secret_key: Option<String>,
+    /// Optional Cloud-managed email delivery config. This is intentionally not
+    /// seeded into `auth.settings`, so managed provider secrets can live
+    /// outside customer-readable project auth tables.
+    pub managed_email: Option<AuthManagedEmailConfig>,
+}
+
+/// Email delivery config injected by a host environment such as Lux Cloud.
+#[derive(Clone)]
+pub struct AuthManagedEmailConfig {
+    /// Delivery provider name. Supported today: `postmark`.
+    pub provider: String,
+    /// Sender address, optionally already formatted as `Name <email@example.com>`.
+    pub from: String,
+    /// Optional Reply-To address.
+    pub reply_to: Option<String>,
+    /// Postmark server token for managed delivery.
+    pub postmark_server_token: Option<String>,
+    /// Optional Postmark message stream. Defaults to `outbound`.
+    pub postmark_message_stream: Option<String>,
+}
+
+impl std::fmt::Debug for AuthManagedEmailConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AuthManagedEmailConfig")
+            .field("provider", &self.provider)
+            .field("from", &self.from)
+            .field("reply_to", &self.reply_to)
+            .field(
+                "postmark_server_token",
+                &self.postmark_server_token.as_ref().map(|_| "<redacted>"),
+            )
+            .field("postmark_message_stream", &self.postmark_message_stream)
+            .finish()
+    }
 }
 
 impl std::fmt::Debug for AuthConfig {
@@ -112,7 +218,13 @@ impl std::fmt::Debug for AuthConfig {
             .field("access_token_ttl", &self.access_token_ttl)
             .field("refresh_token_ttl", &self.refresh_token_ttl)
             .field("email_password_enabled", &self.email_password_enabled)
+            .field(
+                "email_confirmation_required",
+                &self.email_confirmation_required,
+            )
             .field("anonymous_enabled", &self.anonymous_enabled)
+            .field("flow_token_ttl", &self.flow_token_ttl)
+            .field("site_url", &self.site_url)
             .field(
                 "initial_publishable_key",
                 &self.initial_publishable_key.as_ref().map(|_| "<redacted>"),
@@ -121,6 +233,7 @@ impl std::fmt::Debug for AuthConfig {
                 "initial_secret_key",
                 &self.initial_secret_key.as_ref().map(|_| "<redacted>"),
             )
+            .field("managed_email", &self.managed_email)
             .finish()
     }
 }
@@ -129,13 +242,17 @@ impl Default for AuthConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            issuer: "http://localhost:7379/auth/v1".to_string(),
+            issuer: "http://localhost:5890/auth/v1".to_string(),
             access_token_ttl: Duration::from_secs(3600),
             refresh_token_ttl: Duration::from_secs(30 * 24 * 60 * 60),
             email_password_enabled: true,
+            email_confirmation_required: false,
             anonymous_enabled: true,
+            flow_token_ttl: Duration::from_secs(24 * 60 * 60),
+            site_url: "http://localhost:5890".to_string(),
             initial_publishable_key: None,
             initial_secret_key: None,
+            managed_email: None,
         }
     }
 }
@@ -178,10 +295,14 @@ pub struct ServerConfig {
     pub save_interval: Duration,
     /// Persistence/storage mode configuration.
     pub storage: StorageConfig,
+    /// Write acknowledgement policy, independent of the storage layout.
+    pub durability: DurabilityConfig,
     /// Memory pressure eviction configuration.
     pub eviction: EvictionConfig,
     /// Per-project application auth configuration.
     pub auth: AuthConfig,
+    /// Table column encryption key configuration.
+    pub encryption: EncryptionConfig,
     /// Enables the RESP listener. Use this instead of overloading `port = 0`.
     pub enable_resp: bool,
     /// Optional informational event sink. Library mode is silent when unset.
@@ -209,8 +330,10 @@ impl std::fmt::Debug for ServerConfig {
             .field("data_dir", &self.data_dir)
             .field("save_interval", &self.save_interval)
             .field("storage", &self.storage)
+            .field("durability", &self.durability)
             .field("eviction", &self.eviction)
             .field("auth", &self.auth)
+            .field("encryption", &self.encryption)
             .field("enable_resp", &self.enable_resp)
             .field("on_info", &self.on_info.as_ref().map(|_| "<callback>"))
             .field("on_warn", &self.on_warn.as_ref().map(|_| "<callback>"))
@@ -236,8 +359,10 @@ impl Default for ServerConfig {
             data_dir: ".".to_string(),
             save_interval: Duration::from_secs(60),
             storage: StorageConfig::default(),
+            durability: DurabilityConfig::default(),
             eviction: EvictionConfig::default(),
             auth: AuthConfig::default(),
+            encryption: EncryptionConfig::default(),
             enable_resp: true,
             on_info: None,
             on_warn: None,
@@ -249,6 +374,12 @@ impl Default for ServerConfig {
 /// Informational runtime events emitted through `ServerConfig::on_info`.
 #[derive(Clone, Debug)]
 pub enum ServerInfoEvent {
+    /// Effective storage layout and acknowledgement policy selected at startup.
+    PersistenceConfigured {
+        storage_layout: StorageMode,
+        durability: DurabilityPolicy,
+        sync_interval_ms: Option<u64>,
+    },
     /// Tiered storage was configured for this data directory.
     TieredStorageEnabled { dir: String },
     /// Snapshot file was absent during startup.
@@ -265,18 +396,13 @@ pub enum ServerInfoEvent {
 
 /// Warning runtime events emitted through `ServerConfig::on_warn`.
 ///
-/// Warnings are conditions Lux recovered from, such as skipping corrupted
-/// persisted data or dropping a single failed client connection.
+/// Warnings are conditions Lux recovered from without rejecting startup or a
+/// database mutation.
 #[derive(Clone, Debug)]
 pub enum ServerWarnEvent {
-    /// One checksummed WAL frame failed CRC validation and was skipped.
-    WalCorruptedFrameSkipped {
-        shard: usize,
-        stored_crc: u32,
-        computed_crc: u32,
-    },
-    /// Summary count for corrupted WAL frames skipped during replay.
-    WalCorruptedFramesSkipped { shard: usize, frames: usize },
+    /// Auth is explicitly running in development-only plaintext memory because
+    /// durability is ephemeral and no encryption key is active.
+    AuthSecretStorageDegraded,
     /// One checksummed disk entry failed CRC validation during index rebuild.
     DiskCorruptedEntrySkipped { shard: usize, offset: u64 },
     /// One disk entry failed to deserialize during index rebuild.
@@ -310,6 +436,8 @@ pub enum ServerErrorEvent {
     WalTruncateFailed { error: String },
     /// Eviction-to-disk failed; the key remains in memory.
     DiskEvictionWriteFailed { key: String, error: String },
+    /// Promoting a cold key failed; the disk index retains the entry.
+    DiskPromotionReadFailed { key: String, error: String },
     /// Opportunistic compaction on the eviction path failed.
     InlineCompactionFailed { error: String },
     /// Background disk compaction failed.
@@ -348,6 +476,14 @@ impl ServerConfig {
     pub fn listen_addr(&self) -> String {
         format!("{}:{}", self.bind_host, self.port)
     }
+
+    pub(crate) fn journal_dir(&self) -> std::path::PathBuf {
+        if self.storage.mode == StorageMode::Tiered {
+            std::path::PathBuf::from(&self.storage.dir)
+        } else {
+            std::path::Path::new(&self.data_dir).join("journal")
+        }
+    }
 }
 
 fn is_loopback_bind_host(host: &str) -> bool {
@@ -362,9 +498,21 @@ fn validate_listener_security(config: &ServerConfig) -> std::io::Result<()> {
         return Ok(());
     }
 
-    let resp_exposed_without_auth =
-        config.enable_resp && (config.password.is_empty() || !config.require_auth);
-    let http_exposed_without_auth = config.http_port != 0 && config.password.is_empty();
+    // A project key is a credential in its own right, so a key-only engine (one
+    // with no LUX_PASSWORD) is authenticated and may bind a public interface.
+    // Judging this by the password alone would refuse to start exactly the
+    // configuration the unified credential model is moving towards.
+    //
+    // Publishable keys do not count for RESP: they can never use that protocol,
+    // so a publishable-only engine really would be unauthenticated there.
+    let resp_authenticated = (!config.password.is_empty() && config.require_auth)
+        || config.auth.initial_secret_key.is_some();
+    let http_authenticated = !config.password.is_empty()
+        || config.auth.initial_secret_key.is_some()
+        || config.auth.initial_publishable_key.is_some();
+
+    let resp_exposed_without_auth = config.enable_resp && !resp_authenticated;
+    let http_exposed_without_auth = config.http_port != 0 && !http_authenticated;
     if resp_exposed_without_auth || http_exposed_without_auth {
         return Err(std::io::Error::new(
             std::io::ErrorKind::PermissionDenied,
@@ -418,11 +566,201 @@ fn validate_shard_count(config: &ServerConfig) -> std::io::Result<()> {
     Ok(())
 }
 
+fn absolute_config_path(raw: &str, field: &str) -> std::io::Result<String> {
+    if raw.trim().is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{field} must not be empty"),
+        ));
+    }
+    let path = std::path::PathBuf::from(raw);
+    let path = if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    Ok(path.to_string_lossy().into_owned())
+}
+
+fn has_persistence_state(dir: &std::path::Path) -> std::io::Result<bool> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    for entry in entries {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let is_journal = name == "global" || name.starts_with("shard_");
+        let is_tiered_shard = name.starts_with("shard_");
+        if (is_journal && entry.path().join("wal.lux").exists())
+            || (is_tiered_shard && entry.path().join("data.lux").exists())
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn verify_writable_directory(path: &std::path::Path, field: &str) -> std::io::Result<()> {
+    crate::vendor::lux::file_security::ensure_safe_dir(path).map_err(|error| {
+        std::io::Error::new(
+            error.kind(),
+            format!("cannot create {field} {}: {error}", path.display()),
+        )
+    })?;
+    static PROBE_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let id = PROBE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let from = path.join(format!(".lux-write-probe-{}-{id}", std::process::id()));
+    let to = path.join(format!(".lux-rename-probe-{}-{id}", std::process::id()));
+    let result = (|| {
+        use std::io::Write as _;
+        let mut file = crate::vendor::lux::file_security::open_private_file(&from, |options| {
+            options.create_new(true).write(true);
+        })?;
+        file.write_all(b"lux")?;
+        file.sync_all()?;
+        std::fs::rename(&from, &to)?;
+        crate::vendor::lux::file_security::verify_installed_file(&to, &file)?;
+        crate::vendor::lux::disk::sync_directory(path)?;
+        std::fs::remove_file(&to)?;
+        crate::vendor::lux::disk::sync_directory(path)?;
+        Ok::<_, std::io::Error>(())
+    })();
+    let _ = std::fs::remove_file(&from);
+    let _ = std::fs::remove_file(&to);
+    result.map_err(|error| {
+        std::io::Error::new(
+            error.kind(),
+            format!(
+                "{field} is not safely writable at {}: {error}",
+                path.display()
+            ),
+        )
+    })
+}
+
+fn resolve_and_validate_persistence(config: &mut ServerConfig) -> std::io::Result<()> {
+    let policy = config.durability.policy;
+    if config.storage.mode == StorageMode::Tiered && policy == DurabilityPolicy::Ephemeral {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "tiered storage requires every_second or always_sync durability",
+        ));
+    }
+    if policy == DurabilityPolicy::EverySecond
+        && (config.durability.sync_interval.is_zero()
+            || config.durability.sync_interval > Duration::from_secs(1))
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "every_second durability sync interval must be from 1 to 1000 ms",
+        ));
+    }
+    if !policy.is_persistent() {
+        return Ok(());
+    }
+
+    config.data_dir = absolute_config_path(&config.data_dir, "data_dir")?;
+    if config.storage.mode == StorageMode::Tiered {
+        config.storage.dir = absolute_config_path(&config.storage.dir, "storage dir")?;
+    }
+
+    let data_dir = std::path::Path::new(&config.data_dir);
+    let memory_journal_dir = data_dir.join("journal");
+    let conventional_tiered_dir = data_dir.join("storage");
+    if config.storage.mode == StorageMode::Memory
+        && has_persistence_state(&conventional_tiered_dir)?
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "tiered shard state exists; refusing an implicit switch to memory layout",
+        ));
+    }
+    if config.storage.mode == StorageMode::Tiered && has_persistence_state(&memory_journal_dir)? {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "memory-layout journal state exists; refusing an implicit switch to tiered layout",
+        ));
+    }
+
+    verify_writable_directory(data_dir, "data_dir")?;
+    let journal_dir = config.journal_dir();
+    if journal_dir != data_dir {
+        verify_writable_directory(&journal_dir, "journal directory")?;
+    }
+    Ok(())
+}
+
+fn acquire_persistence_locks(config: &ServerConfig) -> std::io::Result<Vec<std::fs::File>> {
+    if !config.durability.policy.is_persistent() {
+        return Ok(Vec::new());
+    }
+
+    let mut roots = vec![std::fs::canonicalize(&config.data_dir)?];
+    if config.storage.mode == StorageMode::Tiered {
+        roots.push(std::fs::canonicalize(&config.storage.dir)?);
+    }
+    roots.sort();
+    roots.dedup();
+    roots
+        .iter()
+        .map(|root| crate::vendor::lux::file_security::lock_state_dir(root))
+        .collect()
+}
+
+fn validate_encryption_config(config: &ServerConfig) -> std::io::Result<()> {
+    // Fail fast on a bad encryption config: unresolvable key material, a
+    // decrypt-only active key, or persisted state that no configured seal can
+    // unseal. Validate against the real data dir (not the process cwd, which
+    // would strand seal/state files there) with auto-init off, since creating a
+    // brand-new keyring is the store's job, not validation's.
+    let validation = EncryptionConfig {
+        auto_init: false,
+        ..config.encryption.clone()
+    };
+    let keyring = crate::vendor::lux::encryption::EncryptionKeyring::open(&validation, &config.data_dir)
+        .map_err(|error| {
+            let guidance = if error.contains("ENC state could not be unsealed") {
+                " Check LUX_ENC_SEAL_KEY; during seal rotation, include the prior seal in LUX_ENC_SEAL_KEY_PREVIOUS."
+            } else {
+                ""
+            };
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("{error}{guidance}"),
+            )
+        })?;
+
+    if config.auth.enabled && config.durability.policy.is_persistent() {
+        if config.encryption.auto_init
+            && config.encryption.state_path.as_deref() == Some("")
+            && !keyring.has_active_key()
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Auth secret storage is locked: persistent Auth cannot auto-initialize an ephemeral keyring; remove the empty LUX_ENC_STATE_PATH or supply LUX_ENCRYPTION_KEY/LUX_ENCRYPTION_KEYS",
+            ));
+        }
+        if !keyring.has_active_key() && !config.encryption.auto_init {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Auth secret storage is locked: persistent Auth requires a usable Lux encryption key; set LUX_ENC_AUTO_INIT=1 (and LUX_ENC_SEAL_KEY in production) or supply LUX_ENCRYPTION_KEY/LUX_ENCRYPTION_KEYS. During data-key rotation, retain prior keys until ENC REWRAP completes",
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub struct ServerHandle {
     #[allow(dead_code)]
     runtime: Arc<Runtime>,
-    shutdown_tx: watch::Sender<bool>,
-    server_task: JoinHandle<std::io::Result<()>>,
+    shutdown_tx: watch::Sender<Option<Duration>>,
+    server_task: JoinHandle<Result<ShutdownOutcome, ShutdownError>>,
     local_addr: Option<std::net::SocketAddr>,
 }
 
@@ -470,6 +808,7 @@ pub struct EmbeddedMessage {
 }
 
 pub struct EmbeddedSubscription {
+    store: Arc<Store>,
     broker: Option<Broker>,
     receiver: Option<broadcast::Receiver<pubsub::Message>>,
     kind: EmbeddedSubscriptionKind,
@@ -484,10 +823,35 @@ enum EmbeddedSubscriptionKind {
 struct Runtime {
     store: Arc<Store>,
     broker: Broker,
-    shard_executor: ShardExecutor,
     schema_cache: SharedSchemaCache,
     script_engine: Arc<lua::ScriptEngine>,
     config: Arc<ServerConfig>,
+    accepting_work: std::sync::atomic::AtomicBool,
+    snapshot_worker: parking_lot::Mutex<Option<snapshot::SnapshotWorker>>,
+    /// Open descriptors hold the advisory locks for every persistent root.
+    /// Shutdown releases them after the final persistence barrier even when a
+    /// stale embedded client keeps the otherwise-fenced runtime alive.
+    persistence_locks: parking_lot::Mutex<Option<Vec<std::fs::File>>>,
+}
+
+impl Runtime {
+    fn release_persistence_locks(&self) {
+        self.persistence_locks.lock().take();
+    }
+
+    fn request_snapshot_shutdown(&self) {
+        if let Some(worker) = self.snapshot_worker.lock().as_ref() {
+            worker.request_shutdown(&self.store);
+        }
+    }
+
+    fn join_snapshot_worker(&self) -> std::io::Result<()> {
+        if let Some(mut worker) = self.snapshot_worker.lock().take() {
+            worker.join()
+        } else {
+            Ok(())
+        }
+    }
 }
 
 pub fn default_shard_count() -> usize {
@@ -512,19 +876,76 @@ impl ServerHandle {
     }
 
     pub fn shutdown(&self) {
-        let _ = self.shutdown_tx.send(true);
+        self.shutdown_with_timeout(DEFAULT_SHUTDOWN_TIMEOUT);
+    }
+
+    /// Stop accepting new work and request a bounded graceful drain.
+    pub fn shutdown_with_timeout(&self, timeout: Duration) {
+        self.runtime
+            .accepting_work
+            .store(false, std::sync::atomic::Ordering::Release);
+        let _ = self.shutdown_tx.send(Some(timeout));
     }
 
     pub async fn wait(self) -> std::io::Result<()> {
-        match self.server_task.await {
-            Ok(result) => result,
-            Err(e) => Err(std::io::Error::other(format!("server task failed: {e}"))),
+        match self.wait_detailed().await {
+            Ok(ShutdownOutcome::Clean) => Ok(()),
+            Ok(ShutdownOutcome::Forced) => Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "graceful shutdown timed out; remaining work was cancelled",
+            )),
+            Err(error) => Err(error.into_io_error()),
         }
     }
 
     pub async fn shutdown_and_wait(self) -> std::io::Result<()> {
         self.shutdown();
         self.wait().await
+    }
+
+    /// Request shutdown with a caller-supplied grace period and preserve the
+    /// clean-versus-forced result.
+    pub async fn shutdown_and_wait_detailed(
+        self,
+        timeout: Duration,
+    ) -> Result<ShutdownOutcome, ShutdownError> {
+        self.shutdown_with_timeout(timeout);
+        self.wait_detailed().await
+    }
+
+    /// Wait for runtime termination or an external signal future, whichever
+    /// happens first. Standalone hosts use this without exposing task internals.
+    pub async fn wait_or_shutdown<F>(
+        mut self,
+        signal: F,
+        timeout: Duration,
+    ) -> Result<ShutdownOutcome, ShutdownError>
+    where
+        F: std::future::Future<Output = ()>,
+    {
+        tokio::pin!(signal);
+        tokio::select! {
+            joined = &mut self.server_task => join_server_task(joined),
+            () = &mut signal => {
+                self.shutdown_with_timeout(timeout);
+                join_server_task(self.server_task.await)
+            }
+        }
+    }
+
+    async fn wait_detailed(self) -> Result<ShutdownOutcome, ShutdownError> {
+        join_server_task(self.server_task.await)
+    }
+}
+
+fn join_server_task(
+    joined: Result<Result<ShutdownOutcome, ShutdownError>, tokio::task::JoinError>,
+) -> Result<ShutdownOutcome, ShutdownError> {
+    match joined {
+        Ok(result) => result,
+        Err(error) => Err(ShutdownError::Runtime(std::io::Error::other(format!(
+            "server task failed: {error}"
+        )))),
     }
 }
 
@@ -602,6 +1023,7 @@ impl EmbeddedClient {
         &self,
         command: command::Command<'_>,
     ) -> Result<CommandOutput, LuxError> {
+        self.ensure_accepting_work()?;
         if let Some(output) = self.execute_command_fast_path(&command).await? {
             return Ok(output);
         }
@@ -631,6 +1053,7 @@ impl EmbeddedClient {
         commands: &[Command<'_>],
         collect_outputs: bool,
     ) -> Result<Vec<CommandOutput>, LuxError> {
+        self.ensure_accepting_work()?;
         if self.runtime.store.is_tiered() {
             let mut outputs = if collect_outputs {
                 Vec::with_capacity(commands.len())
@@ -652,6 +1075,11 @@ impl EmbeddedClient {
                 .iter()
                 .all(|command| matches!(command, Command::Publish { .. }))
         {
+            let _execution_guard = self
+                .runtime
+                .store
+                .execution_read_guard()
+                .map_err(|error| LuxError::Command(format!("database unavailable: {error}")))?;
             for command in commands {
                 if let Command::Publish { channel, message } = command {
                     let channel = std::str::from_utf8(channel).unwrap_or("");
@@ -672,26 +1100,13 @@ impl EmbeddedClient {
         let mut i = 0usize;
 
         while i < commands.len() {
-            if matches!(commands[i], Command::MSet { .. }) {
-                let mut batch_end = i + 1;
-                while batch_end < commands.len()
-                    && matches!(commands[batch_end], Command::MSet { .. })
-                {
-                    batch_end += 1;
-                }
-                let batch = &commands[i..batch_end];
-                self.execute_mset_pipeline_batch(batch, now)?;
-                if collect_outputs {
-                    outputs.extend((i..batch_end).map(|_| CommandOutput::Simple("OK")));
-                }
-                self.runtime.store.add_total_commands(batch.len());
-                i = batch_end;
-                continue;
-            }
-
             let Some((key, access)) = native_pipeline_access(&commands[i]) else {
                 if !collect_outputs {
                     if let Command::Publish { channel, message } = &commands[i] {
+                        let _execution_guard =
+                            self.runtime.store.execution_read_guard().map_err(|error| {
+                                LuxError::Command(format!("database unavailable: {error}"))
+                            })?;
                         let channel = std::str::from_utf8(channel).unwrap_or("");
                         self.runtime
                             .broker
@@ -709,55 +1124,41 @@ impl EmbeddedClient {
                 continue;
             };
 
+            // A typed write must cross its own command-layer journal boundary.
+            // Pre-journaling a whole native batch is unsafe because an earlier
+            // command can fail and prevent later commands from executing even
+            // though their frames are already durable. Read-only runs remain
+            // eligible for same-shard batching.
+            if access == NativePipelineAccess::Write {
+                let out = self.execute_command_output(commands[i].clone()).await?;
+                if collect_outputs {
+                    outputs.push(out);
+                }
+                i += 1;
+                continue;
+            }
+
             let shard_idx = self.runtime.store.shard_for_key(key);
-            let mut has_write = access == NativePipelineAccess::Write;
             let mut batch_end = i + 1;
             while batch_end < commands.len() {
                 let Some((next_key, next_access)) = native_pipeline_access(&commands[batch_end])
                 else {
                     break;
                 };
-                if self.runtime.store.shard_for_key(next_key) != shard_idx {
+                if next_access == NativePipelineAccess::Write
+                    || self.runtime.store.shard_for_key(next_key) != shard_idx
+                {
                     break;
                 }
-                has_write |= next_access == NativePipelineAccess::Write;
                 batch_end += 1;
             }
 
             let batch = &commands[i..batch_end];
-            let emit_key_events = self.runtime.broker.has_key_subs();
-            let mut write_argvs = Vec::new();
-            if has_write {
-                if emit_key_events {
-                    write_argvs.reserve(batch.len());
-                }
-                for command in batch {
-                    if command_is_fast_path_write(command) {
-                        ensure_write_allowed(&self.runtime.store)?;
-                        if emit_key_events {
-                            let argv = command.to_owned_argv();
-                            let refs = argv.iter().map(Vec::as_slice).collect::<Vec<_>>();
-                            self.runtime
-                                .store
-                                .wal_log_command(&refs)
-                                .map_err(wal_lux_error)?;
-                            write_argvs.push(argv);
-                        } else {
-                            wal_log_native_command(&self.runtime.store, command)?;
-                        }
-                    }
-                }
-
-                let mut shard = self.runtime.store.lock_write_shard(shard_idx);
-                shard.version += 1;
-                for command in batch {
-                    if collect_outputs {
-                        outputs.push(self.execute_native_write_on_shard(command, &mut shard, now)?);
-                    } else {
-                        self.execute_native_write_on_shard_discard(command, &mut shard, now)?;
-                    }
-                }
-            } else if collect_outputs {
+            if collect_outputs {
+                let _execution_guard =
+                    self.runtime.store.execution_read_guard().map_err(|error| {
+                        LuxError::Command(format!("database unavailable: {error}"))
+                    })?;
                 let shard = self.runtime.store.lock_read_shard(shard_idx);
                 for command in batch {
                     outputs.push(self.execute_native_read_on_shard(command, &shard, now)?);
@@ -769,60 +1170,11 @@ impl EmbeddedClient {
             }
 
             self.runtime.store.add_total_commands(batch.len());
-            if emit_key_events {
-                for argv in &write_argvs {
-                    let refs = argv.iter().map(Vec::as_slice).collect::<Vec<_>>();
-                    fire_key_events(&self.runtime.broker, &refs);
-                }
-            }
 
             i = batch_end;
         }
 
         Ok(outputs)
-    }
-
-    fn execute_mset_pipeline_batch(
-        &self,
-        commands: &[Command<'_>],
-        now: Instant,
-    ) -> Result<(), LuxError> {
-        let emit_key_events = self.runtime.broker.has_key_subs();
-        let store = &self.runtime.store;
-        let mut pairs_by_shard: Vec<Vec<(&[u8], &[u8])>> = vec![Vec::new(); store.shard_count()];
-        let mut event_keys = Vec::new();
-
-        for command in commands {
-            ensure_write_allowed(store)?;
-            wal_log_native_command(store, command)?;
-            let Command::MSet { pairs } = command else {
-                return Err(LuxError::InvalidCommand(
-                    "MSET batch contained non-MSET command".to_string(),
-                ));
-            };
-            if emit_key_events {
-                event_keys.reserve(pairs.len());
-            }
-            for &(key, value) in pairs {
-                let idx = store.shard_for_key(key);
-                pairs_by_shard[idx].push((key, value));
-                if emit_key_events {
-                    event_keys.push(key);
-                }
-            }
-        }
-
-        self.runtime
-            .shard_executor
-            .apply_mset_batches(pairs_by_shard, now);
-
-        if emit_key_events {
-            for key in event_keys {
-                self.runtime.broker.enqueue_key_event(key, b"MSET");
-            }
-        }
-
-        Ok(())
     }
 
     fn execute_native_read_on_shard(
@@ -832,25 +1184,28 @@ impl EmbeddedClient {
         now: Instant,
     ) -> Result<CommandOutput, LuxError> {
         match command {
-            Command::Get { key } => Ok(optional_bulk_output(Store::get_from_shard(
-                &shard.data,
-                key,
-                now,
-            ))),
-            Command::StrLen { key } => Ok(CommandOutput::Int(Store::strlen_from_shard(
-                &shard.data,
-                key,
-                now,
-            ))),
+            Command::Get { key } => Ok(optional_bulk_output(
+                Store::get_from_shard(&shard.data, key, now)
+                    .map(|raw| self.runtime.store.decrypt_kv_string_value(key, raw))
+                    .transpose()
+                    .map_err(LuxError::Command)?,
+            )),
+            Command::StrLen { key } => Ok(CommandOutput::Int(
+                Store::get_from_shard(&shard.data, key, now)
+                    .map(|raw| self.runtime.store.decrypt_kv_string_value(key, raw))
+                    .transpose()
+                    .map_err(LuxError::Command)?
+                    .map_or(0, |value| value.len() as i64),
+            )),
             Command::Exists { keys } if keys.len() == 1 => Ok(CommandOutput::Int(i64::from(
                 Store::exists_on_shard(&shard.data, keys[0], now),
             ))),
-            Command::HGet { key, field } => Ok(optional_bulk_output(Store::hget_from_shard(
-                &shard.data,
-                key,
-                field,
-                now,
-            ))),
+            Command::HGet { key, field } => Ok(optional_bulk_output(
+                Store::hget_from_shard(&shard.data, key, field, now)
+                    .map(|raw| self.runtime.store.decrypt_hash_field_value(key, field, raw))
+                    .transpose()
+                    .map_err(LuxError::Command)?,
+            )),
             Command::GeoPos { key, members } => {
                 geopos_output_from_shard(&shard.data, key, members, now)
             }
@@ -861,290 +1216,6 @@ impl EmbeddedClient {
                 unit,
             } => geodist_output_from_shard(&shard.data, key, member_a, member_b, unit, now),
             _ => unreachable!("native pipeline read command was classified before dispatch"),
-        }
-    }
-
-    fn execute_native_write_on_shard(
-        &self,
-        command: &Command<'_>,
-        shard: &mut store::Shard,
-        now: Instant,
-    ) -> Result<CommandOutput, LuxError> {
-        match command {
-            Command::Get { key } => Ok(optional_bulk_output(Store::get_from_shard(
-                &shard.data,
-                key,
-                now,
-            ))),
-            Command::StrLen { key } => Ok(CommandOutput::Int(Store::strlen_from_shard(
-                &shard.data,
-                key,
-                now,
-            ))),
-            Command::Exists { keys } if keys.len() == 1 => Ok(CommandOutput::Int(i64::from(
-                Store::exists_on_shard(&shard.data, keys[0], now),
-            ))),
-            Command::HGet { key, field } => Ok(optional_bulk_output(Store::hget_from_shard(
-                &shard.data,
-                key,
-                field,
-                now,
-            ))),
-            Command::GeoPos { key, members } => {
-                geopos_output_from_shard(&shard.data, key, members, now)
-            }
-            Command::GeoDist {
-                key,
-                member_a,
-                member_b,
-                unit,
-            } => geodist_output_from_shard(&shard.data, key, member_a, member_b, unit, now),
-            Command::Set {
-                key,
-                value,
-                options,
-            } if can_fast_path_set(options) => {
-                self.runtime
-                    .store
-                    .set_on_shard(&mut shard.data, key, value, set_ttl(options), now);
-                self.runtime.store.remove_from_disk(key);
-                Ok(CommandOutput::Simple("OK"))
-            }
-            Command::GetSet { key, value } => {
-                let old = self
-                    .runtime
-                    .store
-                    .get_set_on_shard(&mut shard.data, key, value, now);
-                self.runtime.store.remove_from_disk(key);
-                Ok(optional_bulk_output(old))
-            }
-            Command::SetNx { key, value } => {
-                let changed = self
-                    .runtime
-                    .store
-                    .set_nx_on_shard(&mut shard.data, key, value, now);
-                if changed {
-                    self.runtime.store.remove_from_disk(key);
-                }
-                Ok(CommandOutput::Int(i64::from(changed)))
-            }
-            Command::SetEx {
-                key,
-                seconds,
-                value,
-            } => {
-                if *seconds == 0 {
-                    return Err(LuxError::Command(
-                        "ERR invalid expire time in 'setex' command".to_string(),
-                    ));
-                }
-                self.runtime.store.set_on_shard(
-                    &mut shard.data,
-                    key,
-                    value,
-                    Some(Duration::from_secs(*seconds)),
-                    now,
-                );
-                self.runtime.store.remove_from_disk(key);
-                Ok(CommandOutput::Simple("OK"))
-            }
-            Command::PSetEx {
-                key,
-                milliseconds,
-                value,
-            } => {
-                let millis = u64::try_from(*milliseconds).map_err(|_| {
-                    LuxError::Command("ERR value is not an integer or out of range".to_string())
-                })?;
-                self.runtime.store.set_on_shard(
-                    &mut shard.data,
-                    key,
-                    value,
-                    Some(Duration::from_millis(millis)),
-                    now,
-                );
-                self.runtime.store.remove_from_disk(key);
-                Ok(CommandOutput::Simple("OK"))
-            }
-            Command::Append { key, value } => {
-                let len = self.runtime.store.append_on_shard(shard, key, value, now);
-                self.runtime.store.remove_from_disk(key);
-                Ok(CommandOutput::Int(len))
-            }
-            Command::Incr { key } => Ok(CommandOutput::Int(
-                self.runtime
-                    .store
-                    .incr_on_shard(&mut shard.data, key, 1, now)
-                    .map_err(LuxError::Command)?,
-            )),
-            Command::Decr { key } => Ok(CommandOutput::Int(
-                self.runtime
-                    .store
-                    .incr_on_shard(&mut shard.data, key, -1, now)
-                    .map_err(LuxError::Command)?,
-            )),
-            Command::IncrBy { key, increment } => Ok(CommandOutput::Int(
-                self.runtime
-                    .store
-                    .incr_on_shard(&mut shard.data, key, *increment, now)
-                    .map_err(LuxError::Command)?,
-            )),
-            Command::DecrBy { key, decrement } => Ok(CommandOutput::Int(
-                self.runtime
-                    .store
-                    .incr_on_shard(&mut shard.data, key, -*decrement, now)
-                    .map_err(LuxError::Command)?,
-            )),
-            Command::Del { keys } | Command::Unlink { keys } if keys.len() == 1 => Ok(
-                CommandOutput::Int(self.runtime.store.del_on_shard(shard, keys[0], now)),
-            ),
-            Command::LPush { key, values } => {
-                let n = self
-                    .runtime
-                    .store
-                    .lpush_on_shard(shard, key, values, now)
-                    .map_err(LuxError::Command)?;
-                self.runtime.store.remove_from_disk(key);
-                self.drain_list_waiters_on_shard(key, shard, now);
-                Ok(CommandOutput::Int(n))
-            }
-            Command::RPush { key, values } => {
-                let n = self
-                    .runtime
-                    .store
-                    .rpush_on_shard(shard, key, values, now)
-                    .map_err(LuxError::Command)?;
-                self.runtime.store.remove_from_disk(key);
-                self.drain_list_waiters_on_shard(key, shard, now);
-                Ok(CommandOutput::Int(n))
-            }
-            Command::LPop { key } => {
-                let value = self.runtime.store.lpop_on_shard(shard, key, now);
-                if value.is_some() {
-                    self.runtime.store.remove_from_disk(key);
-                }
-                Ok(optional_bulk_output(value))
-            }
-            Command::RPop { key } => {
-                let value = self.runtime.store.rpop_on_shard(shard, key, now);
-                if value.is_some() {
-                    self.runtime.store.remove_from_disk(key);
-                }
-                Ok(optional_bulk_output(value))
-            }
-            Command::HSet { key, field, value } => Ok(CommandOutput::Int(
-                self.runtime
-                    .store
-                    .hset_on_shard(shard, key, &[(*field, *value)], now)
-                    .map_err(LuxError::Command)?,
-            )),
-            Command::HIncrBy {
-                key,
-                field,
-                increment,
-            } => Ok(CommandOutput::Int(
-                self.runtime
-                    .store
-                    .hincrby_on_shard(shard, key, field, *increment, now)
-                    .map_err(LuxError::Command)?,
-            )),
-            Command::SAdd { key, members } => Ok(CommandOutput::Int(
-                self.runtime
-                    .store
-                    .sadd_on_shard(shard, key, members, now)
-                    .map_err(LuxError::Command)?,
-            )),
-            Command::SPop { key } => {
-                let mut values = self
-                    .runtime
-                    .store
-                    .spop_on_shard(shard, key, 1, now)
-                    .map_err(LuxError::Command)?;
-                if !values.is_empty() {
-                    self.runtime.store.remove_from_disk(key);
-                }
-                Ok(match values.pop() {
-                    Some(value) => CommandOutput::Bulk(bytes::Bytes::from(value)),
-                    None => CommandOutput::Nil,
-                })
-            }
-            Command::ZAdd { key, score, member } => Ok(CommandOutput::Int(
-                self.runtime
-                    .store
-                    .zadd_on_shard(
-                        shard,
-                        key,
-                        &[(*member, *score)],
-                        false,
-                        false,
-                        false,
-                        false,
-                        false,
-                        now,
-                    )
-                    .map_err(LuxError::Command)?,
-            )),
-            Command::ZIncrBy {
-                key,
-                increment,
-                member,
-            } => Ok(score_output(
-                self.runtime
-                    .store
-                    .zincrby_on_shard(shard, key, member, *increment, now)
-                    .map_err(LuxError::Command)?,
-            )),
-            Command::GeoAdd { key, members } => {
-                if let [member] = members.as_slice() {
-                    crate::vendor::lux::geo::validate_coords(member.longitude, member.latitude)
-                        .map_err(LuxError::Command)?;
-                    let scored = [(
-                        member.member,
-                        crate::vendor::lux::geo::geohash_encode(member.longitude, member.latitude)
-                            as f64,
-                    )];
-                    Ok(CommandOutput::Int(
-                        self.runtime
-                            .store
-                            .zadd_on_shard(
-                                shard, key, &scored, false, false, false, false, false, now,
-                            )
-                            .map_err(LuxError::Command)?,
-                    ))
-                } else {
-                    let mut scored = Vec::with_capacity(members.len());
-                    for member in members {
-                        crate::vendor::lux::geo::validate_coords(member.longitude, member.latitude)
-                            .map_err(LuxError::Command)?;
-                        scored.push((
-                            member.member,
-                            crate::vendor::lux::geo::geohash_encode(
-                                member.longitude,
-                                member.latitude,
-                            ) as f64,
-                        ));
-                    }
-                    Ok(CommandOutput::Int(
-                        self.runtime
-                            .store
-                            .zadd_on_shard(
-                                shard, key, &scored, false, false, false, false, false, now,
-                            )
-                            .map_err(LuxError::Command)?,
-                    ))
-                }
-            }
-            Command::XAdd { key, id, fields } => {
-                require_xadd_fields(fields)?;
-                let id = self
-                    .runtime
-                    .store
-                    .xadd_on_shard(shard, key, arg_str(id), xadd_fields(fields), None, now)
-                    .map_err(LuxError::Command)?;
-                self.runtime.broker.wake_stream_waiters(arg_str(key));
-                Ok(CommandOutput::Bulk(bytes::Bytes::from(id.to_string())))
-            }
-            _ => unreachable!("native pipeline write command was classified before dispatch"),
         }
     }
 
@@ -1160,46 +1231,27 @@ impl EmbeddedClient {
         }
     }
 
-    fn execute_native_write_on_shard_discard(
-        &self,
-        command: &Command<'_>,
-        shard: &mut store::Shard,
-        now: Instant,
-    ) -> Result<(), LuxError> {
-        self.execute_native_write_on_shard(command, shard, now)
-            .map(|_| ())
-    }
-
     async fn execute_command_fast_path(
         &self,
         command: &Command<'_>,
     ) -> Result<Option<CommandOutput>, LuxError> {
-        if matches!(command, Command::Raw { .. })
-            || matches!(command, Command::Set { options, .. } if !can_fast_path_set(options))
+        // Mutations use the command layer's authoritative, state-aware journal
+        // boundary. This fast path is deliberately a read-only whitelist plus
+        // PING/PUBLISH; unknown or newly added variants fall back to the shared
+        // command implementation by default.
+        if self.runtime.store.is_tiered()
+            || matches!(command, Command::Keys { .. } | Command::RandomKey)
+            || command_touches_reserved_internal_key(command)
         {
             return Ok(None);
         }
 
         let now = Instant::now();
-        if command_is_fast_path_write(command) {
-            ensure_write_allowed(&self.runtime.store)?;
-        }
-        let mut write_argv = if command_is_fast_path_write(command)
-            && (self.runtime.store.wal_enabled() || self.runtime.broker.has_key_subs())
-            && !matches!(command, Command::MSet { .. })
-        {
-            Some(command.to_owned_argv())
-        } else {
-            None
-        };
-        if let Some(argv) = &write_argv {
-            let refs = argv.iter().map(Vec::as_slice).collect::<Vec<_>>();
-            self.runtime
-                .store
-                .wal_log_command(&refs)
-                .map_err(wal_lux_error)?;
-        }
-
+        let _execution_guard = self
+            .runtime
+            .store
+            .execution_read_guard()
+            .map_err(|error| LuxError::Command(format!("database unavailable: {error}")))?;
         let output = match command {
             Command::Ping => CommandOutput::Simple("PONG"),
             Command::Publish { channel, message } => {
@@ -1211,151 +1263,41 @@ impl EmbeddedClient {
                 )
             }
             Command::DbSize => CommandOutput::Int(self.runtime.store.dbsize(now)),
-            Command::FlushDb | Command::FlushAll => {
-                self.runtime.store.flushdb();
-                CommandOutput::Simple("OK")
-            }
-            Command::Keys { pattern } => string_array(self.runtime.store.keys(pattern, now)),
-            Command::RandomKey => random_key_output(&self.runtime.store, now),
-            Command::Get { key } => optional_bulk_output(self.runtime.store.get(key, now)),
-            Command::Set {
-                key,
-                value,
-                options,
-            } if can_fast_path_set(options) => {
-                let ttl = set_ttl(options);
-                self.runtime.store.set(key, value, ttl, now);
-                CommandOutput::Simple("OK")
-            }
-            Command::GetSet { key, value } => {
-                optional_bulk_output(self.runtime.store.get_set(key, value, now))
-            }
-            Command::SetNx { key, value } => {
-                CommandOutput::Int(i64::from(self.runtime.store.set_nx(key, value, now)))
-            }
-            Command::SetEx {
-                key,
-                seconds,
-                value,
-            } => {
-                if *seconds == 0 {
-                    return Err(LuxError::Command(
-                        "ERR invalid expire time in 'setex' command".to_string(),
-                    ));
-                }
+            Command::Get { key } => optional_bulk_output(
                 self.runtime
                     .store
-                    .set(key, value, Some(Duration::from_secs(*seconds)), now);
-                CommandOutput::Simple("OK")
-            }
-            Command::PSetEx {
-                key,
-                milliseconds,
-                value,
-            } => {
-                let millis = u64::try_from(*milliseconds).map_err(|_| {
-                    LuxError::Command("ERR value is not an integer or out of range".to_string())
-                })?;
-                self.runtime
-                    .store
-                    .set(key, value, Some(Duration::from_millis(millis)), now);
-                CommandOutput::Simple("OK")
-            }
-            Command::MGet { keys } => CommandOutput::Array(
-                keys.iter()
-                    .map(|key| optional_bulk_output(self.runtime.store.get(key, now)))
-                    .collect(),
-            ),
-            Command::MSet { .. } => {
-                self.execute_mset_pipeline_batch(std::slice::from_ref(command), now)?;
-                CommandOutput::Simple("OK")
-            }
-            Command::MSetNx { pairs } => {
-                CommandOutput::Int(i64::from(self.runtime.store.msetnx(pairs, now)))
-            }
-            Command::Append { key, value } => {
-                CommandOutput::Int(self.runtime.store.append(key, value, now))
-            }
-            Command::StrLen { key } => CommandOutput::Int(self.runtime.store.strlen(key, now)),
-            Command::Incr { key } => CommandOutput::Int(
-                self.runtime
-                    .store
-                    .incr(key, 1, now)
+                    .get_kv_string(key, now)
                     .map_err(LuxError::Command)?,
             ),
-            Command::Decr { key } => CommandOutput::Int(
+            Command::MGet { keys } => {
+                let values = keys
+                    .iter()
+                    .map(|key| {
+                        self.runtime
+                            .store
+                            .get_kv_string(key, now)
+                            .map(optional_bulk_output)
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(LuxError::Command)?;
+                CommandOutput::Array(values)
+            }
+            Command::StrLen { key } => CommandOutput::Int(
                 self.runtime
                     .store
-                    .incr(key, -1, now)
-                    .map_err(LuxError::Command)?,
+                    .get_kv_string(key, now)
+                    .map_err(LuxError::Command)?
+                    .map_or(0, |value| value.len() as i64),
             ),
-            Command::IncrBy { key, increment } => CommandOutput::Int(
-                self.runtime
-                    .store
-                    .incr(key, *increment, now)
-                    .map_err(LuxError::Command)?,
-            ),
-            Command::DecrBy { key, decrement } => CommandOutput::Int(
-                self.runtime
-                    .store
-                    .incr(key, -*decrement, now)
-                    .map_err(LuxError::Command)?,
-            ),
-            Command::Del { keys } => CommandOutput::Int(self.runtime.store.del(keys)),
-            Command::Unlink { keys } => CommandOutput::Int(self.runtime.store.unlink(keys)),
             Command::Exists { keys } => CommandOutput::Int(self.runtime.store.exists(keys, now)),
-            Command::Expire { key, seconds } => {
-                CommandOutput::Int(i64::from(self.runtime.store.expire(key, *seconds, now)))
-            }
             Command::Ttl { key } => CommandOutput::Int(self.runtime.store.ttl(key, now)),
             Command::PTtl { key } => CommandOutput::Int(self.runtime.store.pttl(key, now)),
-            Command::Persist { key } => {
-                CommandOutput::Int(i64::from(self.runtime.store.persist(key, now)))
-            }
             Command::Type { key } => CommandOutput::Simple(
                 self.runtime
                     .store
                     .get_entry_type(key, now)
                     .unwrap_or("none"),
             ),
-            Command::Rename { key, new_key } => {
-                self.runtime
-                    .store
-                    .rename(key, new_key, now)
-                    .map_err(LuxError::Command)?;
-                CommandOutput::Simple("OK")
-            }
-            Command::RenameNx { key, new_key } => {
-                if self.runtime.store.get(new_key, now).is_some() {
-                    CommandOutput::Int(0)
-                } else {
-                    self.runtime
-                        .store
-                        .rename(key, new_key, now)
-                        .map_err(LuxError::Command)?;
-                    CommandOutput::Int(1)
-                }
-            }
-            Command::LPush { key, values } => {
-                let n = self
-                    .runtime
-                    .store
-                    .lpush(key, values, now)
-                    .map_err(LuxError::Command)?;
-                self.drain_list_waiters(key, now);
-                CommandOutput::Int(n)
-            }
-            Command::RPush { key, values } => {
-                let n = self
-                    .runtime
-                    .store
-                    .rpush(key, values, now)
-                    .map_err(LuxError::Command)?;
-                self.drain_list_waiters(key, now);
-                CommandOutput::Int(n)
-            }
-            Command::LPop { key } => optional_bulk_output(self.runtime.store.lpop(key, now)),
-            Command::RPop { key } => optional_bulk_output(self.runtime.store.rpop(key, now)),
             Command::LLen { key } => CommandOutput::Int(
                 self.runtime
                     .store
@@ -1363,29 +1305,26 @@ impl EmbeddedClient {
                     .map_err(LuxError::Command)?,
             ),
             Command::LIndex { key, index } => {
-                optional_bulk_output(self.runtime.store.lindex(key, *index, now))
+                optional_bulk_output(self.runtime.store.lindex(key, *index, now).map(|raw| {
+                    self.runtime
+                        .store
+                        .decrypt_list_element(raw.clone())
+                        .unwrap_or(raw)
+                }))
             }
             Command::LRange { key, start, stop } => bytes_array(
                 self.runtime
                     .store
                     .lrange(key, *start, *stop, now)
-                    .map_err(LuxError::Command)?,
-            ),
-            Command::HSet { key, field, value } => CommandOutput::Int(
-                self.runtime
-                    .store
-                    .hset(key, &[(*field, *value)], now)
-                    .map_err(LuxError::Command)?,
-            ),
-            Command::HIncrBy {
-                key,
-                field,
-                increment,
-            } => CommandOutput::Int(
-                self.runtime
-                    .store
-                    .hincrby(key, field, *increment, now)
-                    .map_err(LuxError::Command)?,
+                    .map_err(LuxError::Command)?
+                    .into_iter()
+                    .map(|raw| {
+                        self.runtime
+                            .store
+                            .decrypt_list_element(raw.clone())
+                            .unwrap_or(raw)
+                    })
+                    .collect(),
             ),
             Command::HGet { key, field } => {
                 optional_bulk_output(self.runtime.store.hget(key, field, now))
@@ -1397,12 +1336,6 @@ impl EmbeddedClient {
                     .into_iter()
                     .map(optional_bulk_output)
                     .collect(),
-            ),
-            Command::HDel { key, fields } => CommandOutput::Int(
-                self.runtime
-                    .store
-                    .hdel(key, fields, now)
-                    .map_err(LuxError::Command)?,
             ),
             Command::HExists { key, field } => CommandOutput::Int(i64::from(
                 self.runtime
@@ -1429,18 +1362,6 @@ impl EmbeddedClient {
                 }
                 CommandOutput::Array(values)
             }
-            Command::SAdd { key, members } => CommandOutput::Int(
-                self.runtime
-                    .store
-                    .sadd(key, members, now)
-                    .map_err(LuxError::Command)?,
-            ),
-            Command::SRem { key, members } => CommandOutput::Int(
-                self.runtime
-                    .store
-                    .srem(key, members, now)
-                    .map_err(LuxError::Command)?,
-            ),
             Command::SMembers { key } => string_array(
                 self.runtime
                     .store
@@ -1459,17 +1380,6 @@ impl EmbeddedClient {
                     .scard(key, now)
                     .map_err(LuxError::Command)?,
             ),
-            Command::SPop { key } => {
-                let mut values = self
-                    .runtime
-                    .store
-                    .spop(key, 1, now)
-                    .map_err(LuxError::Command)?;
-                match values.pop() {
-                    Some(value) => CommandOutput::Bulk(bytes::Bytes::from(value)),
-                    None => CommandOutput::Nil,
-                }
-            }
             Command::SUnion { keys } => string_array(
                 self.runtime
                     .store
@@ -1488,27 +1398,6 @@ impl EmbeddedClient {
                     .sdiff(keys, now)
                     .map_err(LuxError::Command)?,
             ),
-            Command::ZAdd { key, score, member } => CommandOutput::Int(
-                self.runtime
-                    .store
-                    .zadd(
-                        key,
-                        &[(*member, *score)],
-                        false,
-                        false,
-                        false,
-                        false,
-                        false,
-                        now,
-                    )
-                    .map_err(LuxError::Command)?,
-            ),
-            Command::ZRem { key, members } => CommandOutput::Int(
-                self.runtime
-                    .store
-                    .zrem(key, members, now)
-                    .map_err(LuxError::Command)?,
-            ),
             Command::ZCard { key } => CommandOutput::Int(
                 self.runtime
                     .store
@@ -1519,16 +1408,6 @@ impl EmbeddedClient {
                 self.runtime
                     .store
                     .zscore(key, member, now)
-                    .map_err(LuxError::Command)?,
-            ),
-            Command::ZIncrBy {
-                key,
-                increment,
-                member,
-            } => score_output(
-                self.runtime
-                    .store
-                    .zincrby(key, member, *increment, now)
                     .map_err(LuxError::Command)?,
             ),
             Command::ZCount { key, min, max } => {
@@ -1553,42 +1432,6 @@ impl EmbeddedClient {
                     .map_err(LuxError::Command)?,
                 *with_scores,
             ),
-            Command::GeoAdd { key, members } => {
-                if let [member] = members.as_slice() {
-                    crate::vendor::lux::geo::validate_coords(member.longitude, member.latitude)
-                        .map_err(LuxError::Command)?;
-                    let scored = [(
-                        member.member,
-                        crate::vendor::lux::geo::geohash_encode(member.longitude, member.latitude)
-                            as f64,
-                    )];
-                    CommandOutput::Int(
-                        self.runtime
-                            .store
-                            .zadd(key, &scored, false, false, false, false, false, now)
-                            .map_err(LuxError::Command)?,
-                    )
-                } else {
-                    let mut scored = Vec::with_capacity(members.len());
-                    for member in members {
-                        crate::vendor::lux::geo::validate_coords(member.longitude, member.latitude)
-                            .map_err(LuxError::Command)?;
-                        scored.push((
-                            member.member,
-                            crate::vendor::lux::geo::geohash_encode(
-                                member.longitude,
-                                member.latitude,
-                            ) as f64,
-                        ));
-                    }
-                    CommandOutput::Int(
-                        self.runtime
-                            .store
-                            .zadd(key, &scored, false, false, false, false, false, now)
-                            .map_err(LuxError::Command)?,
-                    )
-                }
-            }
             Command::GeoPos { key, members } => {
                 let mut values = Vec::with_capacity(members.len());
                 for member in members {
@@ -1624,72 +1467,35 @@ impl EmbeddedClient {
                             "ERR unsupported unit provided. please use M, KM, FT, MI".to_string(),
                         )
                     })?;
-                let Some(score_a) = self
+                let score_a = self
                     .runtime
                     .store
                     .zscore(key, member_a, now)
-                    .map_err(LuxError::Command)?
-                else {
-                    return Ok(Some(CommandOutput::Nil));
-                };
-                let Some(score_b) = self
+                    .map_err(LuxError::Command)?;
+                let score_b = self
                     .runtime
                     .store
                     .zscore(key, member_b, now)
-                    .map_err(LuxError::Command)?
-                else {
-                    return Ok(Some(CommandOutput::Nil));
-                };
-                let (lon_a, lat_a) = crate::vendor::lux::geo::geohash_decode(score_a as u64);
-                let (lon_b, lat_b) = crate::vendor::lux::geo::geohash_decode(score_b as u64);
-                let distance = unit.from_meters(crate::vendor::lux::geo::haversine(
-                    lon_a, lat_a, lon_b, lat_b,
-                ));
-                CommandOutput::Bulk(bytes::Bytes::from(format!("{distance:.4}")))
-            }
-            Command::XAdd { key, id, fields } => {
-                require_xadd_fields(fields)?;
-                let id = self
-                    .runtime
-                    .store
-                    .xadd(key, arg_str(id), xadd_fields(fields), None, now)
                     .map_err(LuxError::Command)?;
-                self.runtime.broker.wake_stream_waiters(arg_str(key));
-                CommandOutput::Bulk(bytes::Bytes::from(id.to_string()))
+                match (score_a, score_b) {
+                    (Some(score_a), Some(score_b)) => {
+                        let (lon_a, lat_a) =
+                            crate::vendor::lux::geo::geohash_decode(score_a as u64);
+                        let (lon_b, lat_b) =
+                            crate::vendor::lux::geo::geohash_decode(score_b as u64);
+                        let distance = unit.from_meters(crate::vendor::lux::geo::haversine(
+                            lon_a, lat_a, lon_b, lat_b,
+                        ));
+                        CommandOutput::Bulk(bytes::Bytes::from(format!("{distance:.4}")))
+                    }
+                    _ => CommandOutput::Nil,
+                }
             }
-            Command::Set { .. } | Command::Raw { .. } => unreachable!("handled before fast path"),
+            _ => return Ok(None),
         };
 
         self.runtime.store.add_total_commands(1);
-        if let Some(argv) = write_argv.take() {
-            let refs = argv.iter().map(Vec::as_slice).collect::<Vec<_>>();
-            fire_key_events(&self.runtime.broker, &refs);
-        }
         Ok(Some(output))
-    }
-
-    fn drain_list_waiters(&self, key: &[u8], now: Instant) {
-        if !self.runtime.broker.has_list_waiters("") {
-            return;
-        }
-        let key_s = std::str::from_utf8(key).unwrap_or("");
-        if self.runtime.broker.has_list_waiters(key_s) {
-            let shard_idx = self.runtime.store.shard_for_key(key);
-            let mut shard = self.runtime.store.lock_write_shard(shard_idx);
-            self.drain_list_waiters_on_shard(key, &mut shard, now);
-        }
-    }
-
-    fn drain_list_waiters_on_shard(&self, key: &[u8], shard: &mut store::Shard, now: Instant) {
-        if !self.runtime.broker.has_list_waiters("") {
-            return;
-        }
-        let key_s = std::str::from_utf8(key).unwrap_or("");
-        if self.runtime.broker.has_list_waiters(key_s) {
-            self.runtime
-                .broker
-                .drain_list_waiters(key_s, &mut shard.data, now);
-        }
     }
 
     /// Executes a raw Redis command pipeline and returns raw RESP bytes for all replies.
@@ -1701,6 +1507,7 @@ impl EmbeddedClient {
     /// let resp = client.pipeline(&vec![vec![b"PING".to_vec()]]).await?;
     /// ```
     pub async fn pipeline(&self, commands: &[Vec<Vec<u8>>]) -> Result<bytes::Bytes, LuxError> {
+        self.ensure_accepting_work()?;
         let mut write_buf = BytesMut::with_capacity(4096);
         let mut session = self.session.lock().await;
         let now = Instant::now();
@@ -1723,6 +1530,8 @@ impl EmbeddedClient {
                 CmdResult::BlockMove { .. } => "BLMOVE",
                 CmdResult::BlockStreamRead { .. } => "XREAD/XREADGROUP",
                 CmdResult::BlockZPop { .. } => "BZPOP*",
+                CmdResult::BlockListMPop { .. } => "BLMPOP",
+                CmdResult::BlockZMPop { .. } => "BZMPOP",
                 _ => "unsupported",
             };
             return Err(LuxError::Unsupported(format!(
@@ -1805,7 +1614,9 @@ impl EmbeddedClient {
     /// let mut sub = client.subscribe("events");
     /// ```
     pub fn subscribe(&self, channel: &str) -> EmbeddedSubscription {
+        let _execution_guard = self.runtime.store.execution_barrier_guard();
         EmbeddedSubscription::new(
+            self.runtime.store.clone(),
             self.runtime.broker.clone(),
             self.runtime.broker.subscribe(channel),
             EmbeddedSubscriptionKind::Channel(channel.to_string()),
@@ -1821,7 +1632,9 @@ impl EmbeddedClient {
     /// let mut sub = client.psubscribe("events:*");
     /// ```
     pub fn psubscribe(&self, pattern: &str) -> EmbeddedSubscription {
+        let _execution_guard = self.runtime.store.execution_barrier_guard();
         EmbeddedSubscription::new(
+            self.runtime.store.clone(),
             self.runtime.broker.clone(),
             self.runtime.broker.psubscribe(pattern),
             EmbeddedSubscriptionKind::Pattern(pattern.to_string()),
@@ -1837,7 +1650,9 @@ impl EmbeddedClient {
     /// let mut sub = client.ksubscribe("key:*");
     /// ```
     pub fn ksubscribe(&self, pattern: &str) -> EmbeddedSubscription {
+        let _execution_guard = self.runtime.store.execution_barrier_guard();
         EmbeddedSubscription::new(
+            self.runtime.store.clone(),
             self.runtime.broker.clone(),
             self.runtime.broker.ksubscribe(pattern),
             EmbeddedSubscriptionKind::KeyPattern(pattern.to_string()),
@@ -1882,6 +1697,7 @@ impl EmbeddedClient {
         timeout: Duration,
         pop_left: bool,
     ) -> Result<Option<(String, bytes::Bytes)>, LuxError> {
+        self.ensure_accepting_work()?;
         if keys.is_empty() {
             return Err(LuxError::InvalidCommand(
                 "blocking list pop requires at least one key".to_string(),
@@ -1927,10 +1743,18 @@ impl EmbeddedClient {
             ));
         };
 
-        wait_for_blocking_pop(&self.runtime.broker, &owned_keys, timeout, pop_left).await
+        wait_for_blocking_pop(
+            &self.runtime.store,
+            &self.runtime.broker,
+            &owned_keys,
+            timeout,
+            pop_left,
+        )
+        .await
     }
 
     async fn execute_owned(&self, argv: Vec<Vec<u8>>) -> Result<bytes::Bytes, LuxError> {
+        self.ensure_accepting_work()?;
         let mut write_buf = BytesMut::with_capacity(4096);
         let mut session = self.session.lock().await;
         let now = Instant::now();
@@ -1949,6 +1773,8 @@ impl EmbeddedClient {
                 CmdResult::BlockMove { .. } => "BLMOVE",
                 CmdResult::BlockStreamRead { .. } => "XREAD/XREADGROUP",
                 CmdResult::BlockZPop { .. } => "BZPOP*",
+                CmdResult::BlockListMPop { .. } => "BLMPOP",
+                CmdResult::BlockZMPop { .. } => "BZMPOP",
                 _ => "unsupported",
             };
             return Err(LuxError::Unsupported(format!(
@@ -1956,6 +1782,20 @@ impl EmbeddedClient {
             )));
         }
         Ok(write_buf.freeze())
+    }
+
+    fn ensure_accepting_work(&self) -> Result<(), LuxError> {
+        if self
+            .runtime
+            .accepting_work
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            Ok(())
+        } else {
+            Err(LuxError::Command(
+                "SERVER shutting down; new work is not accepted".to_string(),
+            ))
+        }
     }
 }
 
@@ -1992,7 +1832,7 @@ fn embedded_value_to_command_output(value: EmbeddedValue) -> Result<CommandOutpu
     match value {
         EmbeddedValue::Nil => Ok(CommandOutput::Nil),
         EmbeddedValue::Int(n) => Ok(CommandOutput::Int(n)),
-        EmbeddedValue::Simple(s) => Ok(CommandOutput::Bulk(bytes::Bytes::from(s))),
+        EmbeddedValue::Simple(s) => Ok(CommandOutput::SimpleOwned(s)),
         EmbeddedValue::Bulk(bytes) => Ok(CommandOutput::Bulk(bytes)),
         EmbeddedValue::Array(items) => Ok(CommandOutput::Array(
             items
@@ -2114,86 +1954,6 @@ fn zrange_output(items: Vec<(String, f64)>, with_scores: bool) -> CommandOutput 
     CommandOutput::Array(values)
 }
 
-fn random_key_output(store: &Store, now: Instant) -> CommandOutput {
-    for i in 0..store.shard_count() {
-        let shard = store.lock_read_shard(i);
-        if let Some((key, _)) = shard
-            .data
-            .iter()
-            .find(|(_, entry)| !entry.is_expired_at(now))
-        {
-            return CommandOutput::Bulk(bytes::Bytes::from(key.clone()));
-        }
-    }
-    CommandOutput::Nil
-}
-
-fn arg_str(arg: &[u8]) -> &str {
-    std::str::from_utf8(arg).unwrap_or("")
-}
-
-fn xadd_fields(fields: &[(&[u8], &[u8])]) -> Vec<(String, bytes::Bytes)> {
-    fields
-        .iter()
-        .map(|(field, value)| {
-            (
-                arg_str(field).to_string(),
-                bytes::Bytes::copy_from_slice(value),
-            )
-        })
-        .collect()
-}
-
-fn require_xadd_fields(fields: &[(&[u8], &[u8])]) -> Result<(), LuxError> {
-    if fields.is_empty() {
-        return Err(LuxError::Command(
-            "ERR wrong number of arguments for 'xadd' command".to_string(),
-        ));
-    }
-    Ok(())
-}
-
-fn command_is_fast_path_write(command: &Command<'_>) -> bool {
-    matches!(
-        command,
-        Command::FlushDb
-            | Command::FlushAll
-            | Command::Set { .. }
-            | Command::GetSet { .. }
-            | Command::SetNx { .. }
-            | Command::SetEx { .. }
-            | Command::PSetEx { .. }
-            | Command::MSet { .. }
-            | Command::MSetNx { .. }
-            | Command::Append { .. }
-            | Command::Incr { .. }
-            | Command::Decr { .. }
-            | Command::IncrBy { .. }
-            | Command::DecrBy { .. }
-            | Command::Del { .. }
-            | Command::Unlink { .. }
-            | Command::Expire { .. }
-            | Command::Persist { .. }
-            | Command::Rename { .. }
-            | Command::RenameNx { .. }
-            | Command::LPush { .. }
-            | Command::RPush { .. }
-            | Command::LPop { .. }
-            | Command::RPop { .. }
-            | Command::HSet { .. }
-            | Command::HIncrBy { .. }
-            | Command::HDel { .. }
-            | Command::SAdd { .. }
-            | Command::SRem { .. }
-            | Command::SPop { .. }
-            | Command::ZAdd { .. }
-            | Command::ZRem { .. }
-            | Command::ZIncrBy { .. }
-            | Command::GeoAdd { .. }
-            | Command::XAdd { .. }
-    )
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum NativePipelineAccess {
     Read,
@@ -2211,35 +1971,25 @@ fn native_pipeline_access<'a>(command: &Command<'a>) -> Option<(&'a [u8], Native
         Command::GeoPos { key, .. } => (*key, b"GEOPOS".as_slice()),
         Command::GeoDist { key, .. } => (*key, b"GEODIST".as_slice()),
         Command::Exists { keys } if keys.len() == 1 => (keys[0], b"EXISTS".as_slice()),
-        Command::Set { key, options, .. } if can_fast_path_set(options) => {
-            (*key, b"SET".as_slice())
-        }
-        Command::GetSet { key, .. } => (*key, b"GETSET".as_slice()),
-        Command::SetNx { key, .. } => (*key, b"SETNX".as_slice()),
-        Command::SetEx { key, .. } => (*key, b"SETEX".as_slice()),
-        Command::PSetEx { key, .. } => (*key, b"PSETEX".as_slice()),
-        Command::Append { key, .. } => (*key, b"APPEND".as_slice()),
-        Command::Incr { key } => (*key, b"INCR".as_slice()),
-        Command::Decr { key } => (*key, b"DECR".as_slice()),
-        Command::IncrBy { key, .. } => (*key, b"INCRBY".as_slice()),
-        Command::DecrBy { key, .. } => (*key, b"DECRBY".as_slice()),
         Command::LPush { key, .. } => (*key, b"LPUSH".as_slice()),
         Command::RPush { key, .. } => (*key, b"RPUSH".as_slice()),
         Command::LPop { key } => (*key, b"LPOP".as_slice()),
         Command::RPop { key } => (*key, b"RPOP".as_slice()),
-        Command::HSet { key, .. } => (*key, b"HSET".as_slice()),
         Command::HIncrBy { key, .. } => (*key, b"HINCRBY".as_slice()),
         Command::SAdd { key, .. } => (*key, b"SADD".as_slice()),
-        Command::SPop { key } => (*key, b"SPOP".as_slice()),
         Command::ZAdd { key, .. } => (*key, b"ZADD".as_slice()),
         Command::ZIncrBy { key, .. } => (*key, b"ZINCRBY".as_slice()),
         Command::GeoAdd { key, .. } => (*key, b"GEOADD".as_slice()),
-        Command::XAdd { key, .. } => (*key, b"XADD".as_slice()),
+        Command::SPop { .. } | Command::XAdd { .. } => return None,
         Command::Del { keys } | Command::Unlink { keys } if keys.len() == 1 => {
             (keys[0], b"DEL".as_slice())
         }
         _ => return None,
     };
+
+    if cmd::is_reserved_internal_argument(key) {
+        return None;
+    }
 
     match cmd::pipeline_access(op) {
         cmd::PipelineAccess::Read => Some((key, NativePipelineAccess::Read)),
@@ -2248,217 +1998,38 @@ fn native_pipeline_access<'a>(command: &Command<'a>) -> Option<(&'a [u8], Native
     }
 }
 
-fn wal_log_native_command(store: &Store, command: &Command<'_>) -> Result<(), LuxError> {
-    if !store.wal_enabled() {
-        return Ok(());
-    }
-
-    // Borrowed-argv WAL fast path. Each arm must encode the exact argv that
-    // `Command::to_owned_argv` would produce so crash replay sees identical
-    // command semantics without allocating owned argument vectors.
+fn command_touches_reserved_internal_key(command: &Command<'_>) -> bool {
+    let reserved = cmd::is_reserved_internal_argument;
     match command {
-        Command::Set {
-            key,
-            value,
-            options,
-        } => match options.as_slice() {
-            [] => {
-                let args = [b"SET".as_slice(), *key, *value];
-                store.wal_log_command(&args).map_err(wal_lux_error)?;
-            }
-            [SetOption::Ex(seconds)] => {
-                let seconds = seconds.to_string();
-                let args = [
-                    b"SET".as_slice(),
-                    *key,
-                    *value,
-                    b"EX".as_slice(),
-                    seconds.as_bytes(),
-                ];
-                store.wal_log_command(&args).map_err(wal_lux_error)?;
-            }
-            [SetOption::Px(milliseconds)] => {
-                let milliseconds = milliseconds.to_string();
-                let args = [
-                    b"SET".as_slice(),
-                    *key,
-                    *value,
-                    b"PX".as_slice(),
-                    milliseconds.as_bytes(),
-                ];
-                store.wal_log_command(&args).map_err(wal_lux_error)?;
-            }
-            _ => wal_log_owned_command(store, command)?,
-        },
-        Command::GetSet { key, value } => {
-            let args = [b"GETSET".as_slice(), *key, *value];
-            store.wal_log_command(&args).map_err(wal_lux_error)?;
-        }
-        Command::SetNx { key, value } => {
-            let args = [b"SETNX".as_slice(), *key, *value];
-            store.wal_log_command(&args).map_err(wal_lux_error)?;
-        }
-        Command::SetEx {
-            key,
-            seconds,
-            value,
-        } => {
-            let seconds = seconds.to_string();
-            let args = [b"SETEX".as_slice(), *key, seconds.as_bytes(), *value];
-            store.wal_log_command(&args).map_err(wal_lux_error)?;
-        }
-        Command::PSetEx {
-            key,
-            milliseconds,
-            value,
-        } => {
-            let milliseconds = milliseconds.to_string();
-            let args = [b"PSETEX".as_slice(), *key, milliseconds.as_bytes(), *value];
-            store.wal_log_command(&args).map_err(wal_lux_error)?;
-        }
-        Command::MSet { pairs } => {
-            let mut args = Vec::with_capacity(1 + pairs.len() * 2);
-            args.push(b"MSET".as_slice());
-            for (key, value) in pairs {
-                args.push(*key);
-                args.push(*value);
-            }
-            store.wal_log_command(&args).map_err(wal_lux_error)?;
-        }
-        Command::Append { key, value } => {
-            let args = [b"APPEND".as_slice(), *key, *value];
-            store.wal_log_command(&args).map_err(wal_lux_error)?;
-        }
-        Command::Incr { key } => {
-            let args = [b"INCR".as_slice(), *key];
-            store.wal_log_command(&args).map_err(wal_lux_error)?;
-        }
-        Command::Decr { key } => {
-            let args = [b"DECR".as_slice(), *key];
-            store.wal_log_command(&args).map_err(wal_lux_error)?;
-        }
-        Command::IncrBy { key, increment } => {
-            let increment = increment.to_string();
-            let args = [b"INCRBY".as_slice(), *key, increment.as_bytes()];
-            store.wal_log_command(&args).map_err(wal_lux_error)?;
-        }
-        Command::DecrBy { key, decrement } => {
-            let decrement = decrement.to_string();
-            let args = [b"DECRBY".as_slice(), *key, decrement.as_bytes()];
-            store.wal_log_command(&args).map_err(wal_lux_error)?;
-        }
-        Command::Del { keys } if keys.len() == 1 => {
-            let args = [b"DEL".as_slice(), keys[0]];
-            store.wal_log_command(&args).map_err(wal_lux_error)?;
-        }
-        Command::Unlink { keys } if keys.len() == 1 => {
-            let args = [b"UNLINK".as_slice(), keys[0]];
-            store.wal_log_command(&args).map_err(wal_lux_error)?;
-        }
-        Command::LPush { key, values } => {
-            let mut args = Vec::with_capacity(values.len() + 2);
-            args.push(b"LPUSH".as_slice());
-            args.push(*key);
-            args.extend(values.iter().copied());
-            store.wal_log_command(&args).map_err(wal_lux_error)?;
-        }
-        Command::RPush { key, values } => {
-            let mut args = Vec::with_capacity(values.len() + 2);
-            args.push(b"RPUSH".as_slice());
-            args.push(*key);
-            args.extend(values.iter().copied());
-            store.wal_log_command(&args).map_err(wal_lux_error)?;
-        }
-        Command::LPop { key } => {
-            let args = [b"LPOP".as_slice(), *key];
-            store.wal_log_command(&args).map_err(wal_lux_error)?;
-        }
-        Command::RPop { key } => {
-            let args = [b"RPOP".as_slice(), *key];
-            store.wal_log_command(&args).map_err(wal_lux_error)?;
-        }
-        Command::HSet { key, field, value } => {
-            let args = [b"HSET".as_slice(), *key, *field, *value];
-            store.wal_log_command(&args).map_err(wal_lux_error)?;
-        }
-        Command::HIncrBy {
-            key,
-            field,
-            increment,
-        } => {
-            let increment = increment.to_string();
-            let args = [b"HINCRBY".as_slice(), *key, *field, increment.as_bytes()];
-            store.wal_log_command(&args).map_err(wal_lux_error)?;
-        }
-        Command::SAdd { key, members } => {
-            let mut args = Vec::with_capacity(members.len() + 2);
-            args.push(b"SADD".as_slice());
-            args.push(*key);
-            args.extend(members.iter().copied());
-            store.wal_log_command(&args).map_err(wal_lux_error)?;
-        }
-        Command::SPop { key } => {
-            let args = [b"SPOP".as_slice(), *key];
-            store.wal_log_command(&args).map_err(wal_lux_error)?;
-        }
-        Command::ZAdd { key, score, member } => {
-            let score = score.to_string();
-            let args = [b"ZADD".as_slice(), *key, score.as_bytes(), *member];
-            store.wal_log_command(&args).map_err(wal_lux_error)?;
-        }
-        Command::ZIncrBy {
-            key,
-            increment,
-            member,
-        } => {
-            let increment = increment.to_string();
-            let args = [b"ZINCRBY".as_slice(), *key, increment.as_bytes(), *member];
-            store.wal_log_command(&args).map_err(wal_lux_error)?;
-        }
-        Command::XAdd { key, id, fields } => {
-            let mut args = Vec::with_capacity(fields.len() * 2 + 3);
-            args.push(b"XADD".as_slice());
-            args.push(*key);
-            args.push(*id);
-            for (field, value) in fields {
-                args.push(*field);
-                args.push(*value);
-            }
-            store.wal_log_command(&args).map_err(wal_lux_error)?;
-        }
-        _ => wal_log_owned_command(store, command)?,
+        Command::Get { key }
+        | Command::StrLen { key }
+        | Command::Ttl { key }
+        | Command::PTtl { key }
+        | Command::Type { key }
+        | Command::LLen { key }
+        | Command::LIndex { key, .. }
+        | Command::LRange { key, .. }
+        | Command::HGet { key, .. }
+        | Command::HMGet { key, .. }
+        | Command::HExists { key, .. }
+        | Command::HLen { key }
+        | Command::HGetAll { key }
+        | Command::SMembers { key }
+        | Command::SIsMember { key, .. }
+        | Command::SCard { key }
+        | Command::ZCard { key }
+        | Command::ZScore { key, .. }
+        | Command::ZCount { key, .. }
+        | Command::ZRange { key, .. }
+        | Command::GeoPos { key, .. }
+        | Command::GeoDist { key, .. } => reserved(key),
+        Command::MGet { keys }
+        | Command::Exists { keys }
+        | Command::SUnion { keys }
+        | Command::SInter { keys }
+        | Command::SDiff { keys } => keys.iter().any(|key| reserved(key)),
+        _ => false,
     }
-    Ok(())
-}
-
-fn wal_lux_error(error: std::io::Error) -> LuxError {
-    LuxError::Command(format!("ERR WAL append failed: {error}"))
-}
-
-fn ensure_write_allowed(store: &Store) -> Result<(), LuxError> {
-    crate::vendor::lux::eviction::evict_if_needed(store)
-        .map_err(|e| LuxError::Command(e.to_string()))
-}
-
-fn wal_log_owned_command(store: &Store, command: &Command<'_>) -> Result<(), LuxError> {
-    let argv = command.to_owned_argv();
-    let refs = argv.iter().map(Vec::as_slice).collect::<Vec<_>>();
-    store.wal_log_command(&refs).map_err(wal_lux_error)?;
-    Ok(())
-}
-
-fn can_fast_path_set(options: &[SetOption]) -> bool {
-    options
-        .iter()
-        .all(|option| matches!(option, SetOption::Ex(_) | SetOption::Px(_)))
-}
-
-fn set_ttl(options: &[SetOption]) -> Option<Duration> {
-    options.iter().find_map(|option| match option {
-        SetOption::Ex(seconds) => Some(Duration::from_secs(*seconds)),
-        SetOption::Px(milliseconds) => u64::try_from(*milliseconds).ok().map(Duration::from_millis),
-        SetOption::Nx | SetOption::Xx | SetOption::KeepTtl => None,
-    })
 }
 
 fn parse_score_bound_bytes(input: &[u8], is_max: bool) -> (f64, bool) {
@@ -2508,11 +2079,13 @@ fn format_geo_coord(v: f64) -> String {
 
 impl EmbeddedSubscription {
     fn new(
+        store: Arc<Store>,
         broker: Broker,
         receiver: broadcast::Receiver<pubsub::Message>,
         kind: EmbeddedSubscriptionKind,
     ) -> Self {
         Self {
+            store,
             broker: Some(broker),
             receiver: Some(receiver),
             kind,
@@ -2547,6 +2120,7 @@ impl EmbeddedSubscription {
     }
 
     fn close_inner(&mut self) {
+        let _execution_guard = self.store.execution_barrier_guard();
         self.receiver.take();
         if let Some(broker) = self.broker.as_ref() {
             match &self.kind {
@@ -2634,6 +2208,7 @@ fn parse_blocking_pop_value(buf: &[u8]) -> Result<Option<(String, bytes::Bytes)>
 }
 
 async fn wait_for_blocking_pop(
+    _store: &Store,
     broker: &Broker,
     keys: &[String],
     timeout: Duration,
@@ -2648,6 +2223,7 @@ async fn wait_for_blocking_pop(
             pubsub::BlockedPopRequest {
                 tx: tx.clone(),
                 pop_left,
+                destination: None,
                 waiter_id,
             },
         );
@@ -2826,10 +2402,13 @@ pub async fn run() -> std::io::Result<()> {
 ///
 /// Readiness means storage has initialized, any snapshot has loaded, WAL replay
 /// has completed, and configured listeners have bound successfully.
-pub async fn run_with_config(config: ServerConfig) -> std::io::Result<ServerHandle> {
+pub async fn run_with_config(mut config: ServerConfig) -> std::io::Result<ServerHandle> {
     validate_listener_security(&config)?;
     validate_auth_config(&config)?;
     validate_shard_count(&config)?;
+    resolve_and_validate_persistence(&mut config)?;
+    let persistence_locks = acquire_persistence_locks(&config)?;
+    validate_encryption_config(&config)?;
     let listener = if config.enable_resp {
         let addr = config.listen_addr();
         Some(TcpListener::bind(&addr).await?)
@@ -2841,9 +2420,15 @@ pub async fn run_with_config(config: ServerConfig) -> std::io::Result<ServerHand
     } else {
         None
     };
-    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let (shutdown_tx, shutdown_rx) = watch::channel(None);
     let (ready_tx, ready_rx) = oneshot::channel();
-    let server_task = tokio::spawn(server_main(listener, config, shutdown_rx, ready_tx));
+    let server_task = tokio::spawn(server_main(
+        listener,
+        config,
+        persistence_locks,
+        shutdown_rx,
+        ready_tx,
+    ));
     let runtime =
         wait_for_startup(ready_rx, "server startup failed before readiness signal").await?;
     Ok(ServerHandle {
@@ -2857,13 +2442,23 @@ pub async fn run_with_config(config: ServerConfig) -> std::io::Result<ServerHand
 async fn server_main(
     listener: Option<TcpListener>,
     config: ServerConfig,
-    mut shutdown_rx: watch::Receiver<bool>,
+    persistence_locks: Vec<std::fs::File>,
+    mut shutdown_rx: watch::Receiver<Option<Duration>>,
     ready_tx: oneshot::Sender<std::io::Result<Arc<Runtime>>>,
-) -> std::io::Result<()> {
+) -> Result<ShutdownOutcome, ShutdownError> {
     let mut background_tasks = JoinSet::new();
-    let runtime = Runtime::start(config, &mut background_tasks).await?;
+    let runtime = match Runtime::start(config, persistence_locks, &mut background_tasks).await {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            let ready_error = std::io::Error::new(error.kind(), error.to_string());
+            let _ = ready_tx.send(Err(ready_error));
+            return Err(ShutdownError::Runtime(error));
+        }
+    };
 
-    if let Some(http_startup_rx) = runtime.start_http_if_enabled(&mut background_tasks) {
+    let mut http_task = None;
+    if let Some((http_startup_rx, task)) = runtime.start_http_if_enabled(shutdown_rx.clone()) {
+        http_task = Some(task);
         if let Err(e) = wait_for_startup(
             http_startup_rx,
             "http server startup failed before readiness signal",
@@ -2872,7 +2467,7 @@ async fn server_main(
         {
             let ready_error = std::io::Error::new(e.kind(), e.to_string());
             let _ = ready_tx.send(Err(ready_error));
-            return Err(e);
+            return Err(ShutdownError::Runtime(e));
         }
     }
     let _ = ready_tx.send(Ok(runtime.clone()));
@@ -2880,24 +2475,47 @@ async fn server_main(
     let mut conn_tasks = JoinSet::new();
     // HTTP binds inside its task, so wait for its one-shot before reporting the
     // whole runtime as ready to embedded callers.
-    if !runtime.config.enable_resp {
+    let mut runtime_failure = None;
+    let shutdown_timeout = if !runtime.config.enable_resp {
         let _ = shutdown_rx.changed().await;
+        shutdown_rx.borrow().unwrap_or(DEFAULT_SHUTDOWN_TIMEOUT)
     } else {
         let listener = listener.expect("listener must exist when RESP is enabled");
-        loop {
+        'accept: loop {
             tokio::select! {
-                _ = shutdown_rx.changed() => {
-                    break;
+                changed = shutdown_rx.changed() => {
+                    let timeout = if changed.is_ok() {
+                        shutdown_rx.borrow().unwrap_or(DEFAULT_SHUTDOWN_TIMEOUT)
+                    } else {
+                        DEFAULT_SHUTDOWN_TIMEOUT
+                    };
+                    break 'accept timeout;
+                }
+                joined = conn_tasks.join_next(), if !conn_tasks.is_empty() => {
+                    let _ = joined;
                 }
                 accepted = listener.accept() => {
-                    let (socket, peer) = accepted?;
+                    let (socket, peer) = match accepted {
+                        Ok(accepted) => accepted,
+                        Err(error) => {
+                            runtime_failure = Some(error);
+                            break 'accept DEFAULT_SHUTDOWN_TIMEOUT;
+                        }
+                    };
                     let runtime = runtime.clone();
                     let on_warn = runtime.config.on_warn.clone();
+                    let connection_shutdown = shutdown_rx.clone();
                     socket.set_nodelay(true).ok();
 
                     conn_tasks.spawn(async move {
                         runtime.store.client_connected();
-                        let result = handle_connection(socket, peer, runtime.clone()).await;
+                        let result = handle_connection(
+                            socket,
+                            peer,
+                            runtime.clone(),
+                            connection_shutdown,
+                        )
+                        .await;
                         runtime.store.client_disconnected();
                         if let Err(e) = result {
                             if e.kind() != std::io::ErrorKind::ConnectionReset {
@@ -2913,38 +2531,126 @@ async fn server_main(
                 }
             }
         }
+    };
+
+    runtime
+        .accepting_work
+        .store(false, std::sync::atomic::Ordering::Release);
+    let shutdown_started = Instant::now();
+    runtime.request_snapshot_shutdown();
+
+    // Maintenance may itself mutate durable state. Cancel it before draining
+    // accepted requests, then wait for cancellation so nothing can race the
+    // final persistence barrier.
+    background_tasks.abort_all();
+
+    let mut drained = tokio::time::timeout(shutdown_timeout, async {
+        while conn_tasks.join_next().await.is_some() {}
+        while background_tasks.join_next().await.is_some() {}
+        if let Some(task) = http_task.as_mut() {
+            let _ = task.await;
+        }
+    })
+    .await
+    .is_ok();
+
+    if !drained {
+        // The grace period is over. Close the mutation boundary before
+        // cancelling work so anything queued behind an in-flight mutation is
+        // rejected when it wakes instead of crossing the final sync later.
+        runtime.store.begin_shutdown();
+        conn_tasks.abort_all();
+        background_tasks.abort_all();
+        if let Some(task) = &http_task {
+            task.abort();
+        }
+
+        // Cancellation is cooperative. Await every owned task even after the
+        // grace period so final sync can never race code still inside a
+        // mutation. The Store-level shutdown fence prevents a waiting task from
+        // starting a new mutation after the barrier.
+        while conn_tasks.join_next().await.is_some() {}
+        while background_tasks.join_next().await.is_some() {}
+        if let Some(task) = http_task.as_mut() {
+            let _ = task.await;
+        }
     }
 
-    conn_tasks.abort_all();
-    while conn_tasks.join_next().await.is_some() {}
+    let snapshot_worker_error = runtime.join_snapshot_worker().err();
+    if shutdown_started.elapsed() > shutdown_timeout {
+        drained = false;
+    }
 
-    background_tasks.abort_all();
-    while background_tasks.join_next().await.is_some() {}
+    // A clean drain has no request or maintenance tasks left. Closing the
+    // mutation boundary here also protects against stale embedded clients.
+    runtime.store.begin_shutdown();
+    let final_sync = runtime.store.finalize_shutdown();
+    runtime.release_persistence_locks();
+    final_sync.map_err(ShutdownError::Persistence)?;
 
-    Ok(())
+    if let Some(error) = snapshot_worker_error {
+        return Err(ShutdownError::Runtime(error));
+    }
+    if let Some(error) = runtime_failure {
+        return Err(ShutdownError::Runtime(error));
+    }
+
+    Ok(if drained {
+        ShutdownOutcome::Clean
+    } else {
+        ShutdownOutcome::Forced
+    })
 }
 
 impl Runtime {
     async fn start(
         config: ServerConfig,
+        persistence_locks: Vec<std::fs::File>,
         background_tasks: &mut JoinSet<()>,
     ) -> std::io::Result<Arc<Self>> {
+        restore::commit_pending_restore(&config)?;
+        if config.storage.mode == StorageMode::Tiered && config.durability.policy.is_persistent() {
+            // Tiered files are a derived placement cache. Recovery is driven
+            // solely by the verified snapshot and ordered journal; retaining
+            // the cache would duplicate snapshot keys and replay relative
+            // mutations on top of their already-applied cold values.
+            disk::discard_tiered_cache(std::path::Path::new(&config.storage.dir))?;
+        }
         let config = Arc::new(config);
-        let store = Arc::new(Store::new_with_config(config.clone()));
+        let store = Arc::new(Store::try_new_with_config(config.clone())?);
         let schema_cache: SharedSchemaCache =
             std::sync::Arc::new(parking_lot::RwLock::new(tables::SchemaCache::new()));
         let broker = Broker::new();
-        let shard_executor = ShardExecutor::new(store.clone(), broker.clone());
+        // Wire the row-delta sink so table writes feed reactive live queries.
+        store.set_row_delta_broker(broker.clone());
         let script_engine = Arc::new(lua::ScriptEngine::new());
 
         let runtime = Arc::new(Self {
             store,
             broker,
-            shard_executor,
             schema_cache,
             script_engine,
             config,
+            accepting_work: std::sync::atomic::AtomicBool::new(true),
+            snapshot_worker: parking_lot::Mutex::new(None),
+            persistence_locks: parking_lot::Mutex::new(Some(persistence_locks)),
         });
+
+        emit_info(
+            &runtime.config,
+            ServerInfoEvent::PersistenceConfigured {
+                storage_layout: runtime.config.storage.mode,
+                durability: runtime.config.durability.policy,
+                sync_interval_ms: (runtime.config.durability.policy
+                    == DurabilityPolicy::EverySecond)
+                    .then(|| runtime.config.durability.sync_interval.as_millis() as u64),
+            },
+        );
+        if auth::secret_storage_health(&runtime.store).status
+            == auth::AuthSecretStorageStatus::Degraded
+        {
+            emit_warn(&runtime.config, ServerWarnEvent::AuthSecretStorageDegraded);
+        }
 
         if runtime.config.storage.mode == StorageMode::Tiered {
             emit_info(
@@ -2973,25 +2679,68 @@ impl Runtime {
                 ));
             }
         }
+        // lux push tables are created lazily on first use (see push::ensure_tables),
+        // so a project that never uses push carries no push.* tables. On restart,
+        // the `push.*` TCREATE/TINSERT commands are restored from the WAL like any
+        // other write, so no eager bootstrap is needed here.
         runtime
             .store
             .wal_suppress
             .store(true, std::sync::atomic::Ordering::Relaxed);
-        match snapshot::load(&runtime.store) {
-            Ok(0) => emit_info(&runtime.config, ServerInfoEvent::NoSnapshotFound),
-            Ok(n) => emit_info(&runtime.config, ServerInfoEvent::SnapshotLoaded { keys: n }),
-            Err(e) => emit_error(
-                &runtime.config,
-                ServerErrorEvent::SnapshotLoadFailed {
-                    error: e.to_string(),
-                },
-            ),
+        if runtime.config.durability.policy.is_persistent() {
+            runtime.store.begin_recovery();
+            match snapshot::load_for_recovery(&runtime.store) {
+                Ok(0) => emit_info(&runtime.config, ServerInfoEvent::NoSnapshotFound),
+                Ok(n) => emit_info(&runtime.config, ServerInfoEvent::SnapshotLoaded { keys: n }),
+                Err(e) => {
+                    // Refuse to start on a load failure (e.g. an encrypted value the
+                    // current keyring can't decrypt) rather than coming up with a
+                    // truncated dataset that the background save would then overwrite.
+                    // The on-disk snapshot is left intact and recoverable; supply the
+                    // correct keyring/seal and restart.
+                    runtime
+                        .store
+                        .wal_suppress
+                        .store(false, std::sync::atomic::Ordering::Relaxed);
+                    emit_error(
+                        &runtime.config,
+                        ServerErrorEvent::SnapshotLoadFailed {
+                            error: e.to_string(),
+                        },
+                    );
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!(
+                            "refusing to start: snapshot load failed, on-disk data preserved (not overwritten): {e}"
+                        ),
+                    ));
+                }
+            }
+        }
+        // A loaded snapshot can carry an older auth schema. Upgrade it before
+        // replaying WAL entries that may already reference newer columns.
+        if runtime.config.auth.enabled {
+            if let Err(e) =
+                auth::bootstrap(&runtime.store, &runtime.schema_cache, &runtime.config.auth)
+            {
+                runtime
+                    .store
+                    .wal_suppress
+                    .store(false, std::sync::atomic::Ordering::Relaxed);
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("auth snapshot migration failed: {e}"),
+                ));
+            }
         }
         runtime
             .store
             .wal_suppress
             .store(false, std::sync::atomic::Ordering::Relaxed);
-        runtime.store.replay_wal(&runtime.broker);
+        if runtime.config.durability.policy.is_persistent() {
+            runtime.store.replay_wal(&runtime.broker)?;
+            runtime.store.finish_recovery();
+        }
         if runtime.config.auth.enabled {
             runtime
                 .store
@@ -3013,17 +2762,48 @@ impl Runtime {
                 .store
                 .wal_suppress
                 .store(false, std::sync::atomic::Ordering::Relaxed);
-            if let Err(e) =
-                auth::bootstrap_runtime(&runtime.store, &runtime.schema_cache, &runtime.config.auth)
-            {
-                return Err(std::io::Error::new(
+            let auth_bootstrap = auth::bootstrap_runtime(
+                &runtime.store,
+                &runtime.schema_cache,
+                &runtime.config.auth,
+            )
+            .map_err(|e| {
+                std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     format!("auth runtime bootstrap failed: {e}"),
-                ));
+                )
+            })?;
+            if auth_bootstrap.secret_history_checkpoint_required {
+                snapshot::save_and_truncate_wal_consistent(&runtime.store).map_err(|e| {
+                    std::io::Error::new(
+                        e.kind(),
+                        format!("auth secret migration checkpoint failed before readiness: {e}"),
+                    )
+                })?;
+                auth::mark_secret_storage_checkpoint_complete(
+                    &runtime.store,
+                    &runtime.schema_cache,
+                )
+                .map_err(|e| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("auth secret migration finalization failed: {e}"),
+                    )
+                })?;
             }
         }
 
-        background_tasks.spawn(snapshot::background_save_loop(runtime.store.clone()));
+        // One-time migration of any pre-`push.*` data (PR1 stored it under
+        // `auth.*`). Runs post-replay with WAL logging on; a no-op when there is
+        // no legacy data. Best-effort: a failure here must not block startup.
+        if let Err(e) =
+            push::migrate_from_auth_scope(&runtime.store, &runtime.schema_cache, Instant::now())
+        {
+            eprintln!("push scope migration skipped: {e}");
+        }
+
+        let snapshot_worker = snapshot::start_background_save_worker(runtime.store.clone())?;
+        *runtime.snapshot_worker.lock() = Some(snapshot_worker);
 
         {
             let store = runtime.store.clone();
@@ -3051,23 +2831,41 @@ impl Runtime {
                 loop {
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                     let now = Instant::now();
-                    for table in tables::expire_due_rows(&store, &cache, now) {
-                        broker.enqueue_key_event(table.as_bytes(), b"TEXPIRE");
+                    match tables::expire_due_rows(&store, &cache, now) {
+                        Ok(tables) => {
+                            for table in tables {
+                                broker.enqueue_key_event(table.as_bytes(), b"TEXPIRE");
+                            }
+                        }
+                        Err(error) => {
+                            eprintln!("table TTL sweep failed; rows retained for retry: {error}");
+                        }
                     }
                 }
             });
         }
 
+        // lux push delivery worker: drains the durable `push.outbox` and delivers
+        // to APNs/etc. Runs unconditionally — push is a standalone scope and does
+        // not depend on Lux auth.
+        {
+            let store = runtime.store.clone();
+            let cache = runtime.schema_cache.clone();
+            background_tasks.spawn(push::worker::run_delivery_worker(store, cache));
+        }
+
+        if runtime.config.durability.policy == DurabilityPolicy::EverySecond {
+            let store = runtime.store.clone();
+            let sync_interval = runtime.config.durability.sync_interval;
+            background_tasks.spawn(async move {
+                loop {
+                    tokio::time::sleep(sync_interval).await;
+                    store.fsync_wal();
+                }
+            });
+        }
+
         if runtime.config.storage.mode == StorageMode::Tiered {
-            {
-                let store = runtime.store.clone();
-                background_tasks.spawn(async move {
-                    loop {
-                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                        store.fsync_wal();
-                    }
-                });
-            }
             {
                 let store = runtime.store.clone();
                 background_tasks.spawn(async move {
@@ -3084,8 +2882,11 @@ impl Runtime {
 
     fn start_http_if_enabled(
         self: &Arc<Self>,
-        background_tasks: &mut JoinSet<()>,
-    ) -> Option<oneshot::Receiver<std::io::Result<std::net::SocketAddr>>> {
+        shutdown_rx: watch::Receiver<Option<Duration>>,
+    ) -> Option<(
+        oneshot::Receiver<std::io::Result<std::net::SocketAddr>>,
+        JoinHandle<()>,
+    )> {
         if self.config.http_port == 0 {
             return None;
         }
@@ -3103,7 +2904,7 @@ impl Runtime {
                 as Arc<dyn Fn(std::net::SocketAddr) + Send + Sync>
         });
         let on_error = self.config.on_error.clone();
-        background_tasks.spawn(async move {
+        let task = tokio::spawn(async move {
             let http_config = http::HttpServerConfig {
                 bind_host,
                 http_port,
@@ -3118,6 +2919,7 @@ impl Runtime {
                 http_broker,
                 http_cache,
                 http_script_engine,
+                shutdown_rx,
             )
             .await
             {
@@ -3128,7 +2930,7 @@ impl Runtime {
                 }
             }
         });
-        Some(startup_rx)
+        Some((startup_rx, task))
     }
 }
 
@@ -3191,8 +2993,10 @@ fn handle_tx_cmd(
     tx_queue: &mut Vec<Vec<Vec<u8>>>,
     watched: &mut Vec<(String, usize, u64)>,
     authenticated: &mut bool,
+    secret_credential: &mut Option<crate::vendor::lux::auth::SecretCredential>,
     store: &Arc<Store>,
     broker: &Broker,
+    script_engine: &lua::ScriptEngine,
     schema_cache: &SharedSchemaCache,
     write_buf: &mut BytesMut,
     now: Instant,
@@ -3225,6 +3029,17 @@ fn handle_tx_cmd(
                 "EXECABORT Transaction discarded because of previous errors.",
             );
         } else {
+            let mut transaction = match store.begin_exec_transaction() {
+                Ok(transaction) => transaction,
+                Err(error) => {
+                    resp::write_error(write_buf, &format!("ERR transaction unavailable: {error}"));
+                    *in_multi = false;
+                    *tx_error = false;
+                    tx_queue.clear();
+                    watched.clear();
+                    return true;
+                }
+            };
             let mut aborted = false;
             for (_, shard_idx, version) in watched.iter() {
                 if store.shard_version(*shard_idx) != *version {
@@ -3236,42 +3051,103 @@ fn handle_tx_cmd(
                 resp::write_null_array(write_buf);
             } else {
                 let queue = std::mem::take(tx_queue);
-                resp::write_array_header(write_buf, queue.len());
-                for owned_args in &queue {
+                let mut transaction_out = BytesMut::new();
+                let mut deferred_publishes = Vec::new();
+                resp::write_array_header(&mut transaction_out, queue.len());
+                for (command_index, owned_args) in queue.iter().enumerate() {
                     let refs: Vec<&[u8]> = owned_args.iter().map(|v| v.as_slice()).collect();
                     let cmd_result = {
                         let _guard = store.script_read_guard();
-                        cmd::execute_with_wal(store, schema_cache, broker, &refs, write_buf, now)
+                        cmd::execute_with_wal(
+                            store,
+                            schema_cache,
+                            broker,
+                            &refs,
+                            &mut transaction_out,
+                            now,
+                        )
                     };
                     match cmd_result {
                         CmdResult::Written => {}
-                        CmdResult::Authenticated => {
+                        CmdResult::Quit => {
+                            resp::write_error(
+                                &mut transaction_out,
+                                "ERR QUIT is not allowed inside a transaction",
+                            );
+                        }
+                        CmdResult::Authenticated { secret } => {
                             *authenticated = true;
+                            *secret_credential = secret;
                         }
                         CmdResult::Subscribe { .. }
                         | CmdResult::PSubscribe { .. }
                         | CmdResult::KSubscribe { .. }
                         | CmdResult::KUnsubscribe { .. } => {
                             resp::write_error(
-                                write_buf,
+                                &mut transaction_out,
                                 "ERR Command 'subscribe' not allowed inside a transaction",
                             );
                         }
                         CmdResult::Publish { channel, message } => {
-                            let count = broker.publish(&channel, message);
-                            resp::write_integer(write_buf, count);
+                            let count = broker.publish_subscriber_count(&channel);
+                            resp::write_integer(&mut transaction_out, count);
+                            deferred_publishes.push((channel, message));
                         }
                         CmdResult::BlockPop { .. }
                         | CmdResult::BlockMove { .. }
                         | CmdResult::BlockStreamRead { .. }
+                        | CmdResult::BlockListMPop { .. }
+                        | CmdResult::BlockZMPop { .. }
                         | CmdResult::BlockZPop { .. } => {
                             resp::write_error(
-                                write_buf,
+                                &mut transaction_out,
                                 "ERR blocking commands not allowed inside a transaction",
                             );
                         }
-                        CmdResult::Eval { .. } | CmdResult::ScriptOp => {
-                            resp::write_error(write_buf, "ERR EVAL not supported in transaction");
+                        CmdResult::Eval { script, keys, argv } => {
+                            handle_eval(
+                                &mut transaction_out,
+                                store,
+                                broker,
+                                script_engine,
+                                &script,
+                                &keys,
+                                &argv,
+                                now,
+                            );
+                        }
+                        CmdResult::ScriptOp => {
+                            handle_script_op(&mut transaction_out, script_engine, &refs);
+                        }
+                    }
+                    store.exec_command_applied(command_index);
+                }
+
+                let committed_effects = match transaction.commit() {
+                    Ok(effects) => {
+                        write_buf.extend_from_slice(&transaction_out);
+                        for owned_args in &effects.key_events {
+                            let refs: Vec<&[u8]> = owned_args.iter().map(Vec::as_slice).collect();
+                            fire_key_events(broker, &refs);
+                        }
+                        for (channel, message) in deferred_publishes {
+                            broker.publish(&channel, message);
+                        }
+                        Some(effects)
+                    }
+                    Err(error) => {
+                        resp::write_error(write_buf, &format!("ERR WAL append failed: {error}"));
+                        None
+                    }
+                };
+                drop(transaction);
+
+                // Blocked list clients are allowed to consume committed values
+                // only after the exclusive EXEC boundary has been released.
+                if let Some(effects) = committed_effects {
+                    for key in effects.list_wake_keys {
+                        if broker.has_list_waiters(&key) {
+                            broker.drain_list_waiters(&key, store, now);
                         }
                     }
                 }
@@ -3306,6 +3182,13 @@ fn handle_tx_cmd(
                 "ERR wrong number of arguments for 'watch' command",
             );
         } else {
+            let _execution_guard = match store.execution_read_guard() {
+                Ok(guard) => guard,
+                Err(error) => {
+                    resp::write_error(write_buf, &format!("ERR database unavailable: {error}"));
+                    return true;
+                }
+            };
             for key_bytes in &args[1..] {
                 let key = std::str::from_utf8(key_bytes).unwrap_or("").to_string();
                 let shard_idx = store.shard_for_key(key_bytes);
@@ -3328,13 +3211,15 @@ fn handle_tx_cmd(
             || cmd_eq_fast(args[0], b"PUNSUBSCRIBE")
             || cmd_eq_fast(args[0], b"KSUB")
             || cmd_eq_fast(args[0], b"KUNSUB")
+            || cmd_eq_fast(args[0], b"SAVE")
+            || cmd_eq_fast(args[0], b"BGSAVE")
         {
             resp::write_error(
                 write_buf,
                 &format!(
                     "ERR Command '{}' not allowed inside a transaction",
                     std::str::from_utf8(args[0])
-                        .unwrap_or("subscribe")
+                        .unwrap_or("command")
                         .to_lowercase()
                 ),
             );
@@ -3386,6 +3271,8 @@ fn is_blocking_cmd(cmd: &[u8]) -> bool {
 
 pub(crate) struct CommandSession {
     authenticated: bool,
+    secret_credential: Option<crate::vendor::lux::auth::SecretCredential>,
+    client_name: Option<String>,
     in_multi: bool,
     tx_queue: Vec<Vec<Vec<u8>>>,
     watched: Vec<(String, usize, u64)>,
@@ -3400,6 +3287,8 @@ impl CommandSession {
     pub(crate) fn new(require_auth: bool) -> Self {
         Self {
             authenticated: !require_auth,
+            secret_credential: None,
+            client_name: None,
             in_multi: false,
             tx_queue: Vec::new(),
             watched: Vec::new(),
@@ -3414,6 +3303,64 @@ impl CommandSession {
     fn total_subscriptions(&self) -> i64 {
         (self.subscriptions.len() + self.pattern_subs.len() + self.key_subs.len()) as i64
     }
+}
+
+fn write_client_response(args: &[&[u8]], session: &mut CommandSession, out: &mut BytesMut) {
+    if args.len() < 2 {
+        resp::write_error(out, "ERR wrong number of arguments for 'client' command");
+        return;
+    }
+
+    if args[1].eq_ignore_ascii_case(b"SETNAME") {
+        if args.len() != 3 {
+            resp::write_error(
+                out,
+                "ERR wrong number of arguments for 'client|setname' command",
+            );
+            return;
+        }
+        session.client_name = Some(String::from_utf8_lossy(args[2]).into_owned());
+        resp::write_ok(out);
+    } else if args[1].eq_ignore_ascii_case(b"GETNAME") {
+        if args.len() != 2 {
+            resp::write_error(
+                out,
+                "ERR wrong number of arguments for 'client|getname' command",
+            );
+            return;
+        }
+        match session.client_name.as_deref() {
+            Some(name) => resp::write_bulk(out, name),
+            None => resp::write_null(out),
+        }
+    } else if args[1].eq_ignore_ascii_case(b"SETINFO") {
+        if args.len() != 4
+            || !(args[2].eq_ignore_ascii_case(b"LIB-NAME")
+                || args[2].eq_ignore_ascii_case(b"LIB-VER"))
+        {
+            resp::write_error(
+                out,
+                "ERR only CLIENT SETINFO LIB-NAME and LIB-VER are supported",
+            );
+            return;
+        }
+        // Redis 7.2 clients send this metadata during connection setup. Lux does
+        // not expose a client list, so accepting these two fields is an explicit
+        // compatibility no-op.
+        resp::write_ok(out);
+    } else {
+        resp::write_error(out, "ERR unsupported CLIENT subcommand");
+    }
+}
+
+fn is_script_gate_bypass_command(cmd: &[u8]) -> bool {
+    cmd.eq_ignore_ascii_case(b"PING")
+        || cmd.eq_ignore_ascii_case(b"ECHO")
+        || cmd.eq_ignore_ascii_case(b"CLIENT")
+        || cmd.eq_ignore_ascii_case(b"INFO")
+        || cmd.eq_ignore_ascii_case(b"TIME")
+        || cmd.eq_ignore_ascii_case(b"COMMAND")
+        || cmd.eq_ignore_ascii_case(b"CONFIG")
 }
 
 pub(crate) trait ArgvSlice {
@@ -3474,15 +3421,12 @@ impl CommandExecutor {
             return None;
         }
 
-        // Reserve the internal table-storage namespace ("_t:") from direct command
-        // access. This is the universal entry for both the read fast-path below
-        // and the slow path (cmd::execute), so the guard must live here -- the
-        // cmd::execute guard alone misses fast-path reads like GET. KEYS/SCAN take
-        // a pattern and are filtered in their handlers instead.
+        // Reserve internal table/auth storage from direct command access. This
+        // universal entry also covers fast-path reads; KEYS/SCAN filter results.
         if !args[0].eq_ignore_ascii_case(b"KEYS") && !args[0].eq_ignore_ascii_case(b"SCAN") {
             for arg in &args[1..] {
-                if arg.starts_with(b"_t:") {
-                    resp::write_error(write_buf, "ERR '_t:' is a reserved internal namespace");
+                if cmd::is_reserved_internal_argument(arg) {
+                    resp::write_error(write_buf, "ERR reserved internal namespace");
                     return None;
                 }
             }
@@ -3495,8 +3439,10 @@ impl CommandExecutor {
             &mut session.tx_queue,
             &mut session.watched,
             &mut session.authenticated,
+            &mut session.secret_credential,
             &self.store,
             &self.broker,
+            &self.script_engine,
             &self.schema_cache,
             write_buf,
             now,
@@ -3504,9 +3450,37 @@ impl CommandExecutor {
             return None;
         }
 
+        let _execution_guard = match self.store.execution_read_guard() {
+            Ok(guard) => guard,
+            Err(error) => {
+                resp::write_error(write_buf, &format!("ERR database unavailable: {error}"));
+                return None;
+            }
+        };
+
+        if args[0].eq_ignore_ascii_case(b"CLIENT") {
+            write_client_response(args, session, write_buf);
+            return None;
+        }
+
+        if is_script_gate_bypass_command(args[0]) {
+            let cmd_result = cmd::execute_with_wal(
+                &self.store,
+                &self.schema_cache,
+                &self.broker,
+                args,
+                write_buf,
+                now,
+            );
+            return self.apply_cmd_result(cmd_result, args, session, write_buf, now);
+        }
+
         if !cmd::is_pipeline_special_command(args[0]) {
             let access = cmd::pipeline_access_for_args(args);
-            if access == cmd::PipelineAccess::Read {
+            // The shard-local read fast-path reads stored bytes directly and has
+            // no keyring, so it cannot decrypt. When encryption is active, fall
+            // through to the slow path (cmd::execute) which decrypts on read.
+            if access == cmd::PipelineAccess::Read && !self.store.encryption().has_active_key() {
                 let command = [ShardPipelineCommand { args, access }];
                 let shard_idx = self.store.shard_for_key(args[1]);
                 if let Err(err) = self
@@ -3558,12 +3532,56 @@ impl CommandExecutor {
                 args.len() >= 3 && cmd_eq_fast(args[0], b"PUBLISH")
             })
         {
+            let _execution_guard = match self.store.execution_read_guard() {
+                Ok(guard) => guard,
+                Err(error) => {
+                    resp::write_error(write_buf, &format!("ERR database unavailable: {error}"));
+                    return None;
+                }
+            };
             for command in commands {
                 let args = command.argv();
                 let channel = String::from_utf8_lossy(args[1]).into_owned();
                 let message = bytes::Bytes::copy_from_slice(args[2]);
                 let count = self.broker.publish(&channel, message);
                 resp::write_integer(write_buf, count);
+            }
+            return None;
+        }
+
+        if !session.in_multi
+            && session.authenticated
+            && commands.iter().all(|command| {
+                let args = command.argv();
+                !args.is_empty() && is_script_gate_bypass_command(args[0])
+            })
+        {
+            let _execution_guard = match self.store.execution_read_guard() {
+                Ok(guard) => guard,
+                Err(error) => {
+                    resp::write_error(write_buf, &format!("ERR database unavailable: {error}"));
+                    return None;
+                }
+            };
+            for command in commands {
+                let args = command.argv();
+                if args[0].eq_ignore_ascii_case(b"CLIENT") {
+                    write_client_response(args, session, write_buf);
+                    continue;
+                }
+                let cmd_result = cmd::execute_with_wal(
+                    &self.store,
+                    &self.schema_cache,
+                    &self.broker,
+                    args,
+                    write_buf,
+                    now,
+                );
+                if let Some(action) =
+                    self.apply_cmd_result(cmd_result, args, session, write_buf, now)
+                {
+                    return Some(action);
+                }
             }
             return None;
         }
@@ -3582,25 +3600,30 @@ impl CommandExecutor {
                 has_special = true;
                 break;
             }
-            // Force commands touching the reserved "_t:" namespace onto the slow
-            // path, where cmd::execute's guard rejects them. The fast batch path
-            // below bypasses that guard. KEYS/SCAN take a pattern and are handled
-            // (filtered) on the slow path.
+            // Force commands touching an internal namespace onto the guarded
+            // slow path. KEYS/SCAN are filtered there.
             if !cmd.eq_ignore_ascii_case(b"KEYS")
                 && !cmd.eq_ignore_ascii_case(b"SCAN")
-                && args[1..].iter().any(|a| a.starts_with(b"_t:"))
+                && args[1..]
+                    .iter()
+                    .any(|arg| cmd::is_reserved_internal_argument(arg))
             {
                 all_single_key_rw = false;
             }
             let access = cmd::pipeline_access_for_args(args);
             flags.push(access);
-            if access == cmd::PipelineAccess::General {
+            // Writes must cross their per-command authoritative journal
+            // boundary so a rejected command cannot leave a durable frame in a
+            // pre-journaled batch. Only read-only runs use shard batching.
+            if access != cmd::PipelineAccess::Read {
                 all_single_key_rw = false;
             }
         }
 
-        if has_special || !all_single_key_rw {
-            let script_guard = self.store.script_read_guard();
+        // When encryption is active, the shard-local fast batch path can neither
+        // encrypt writes nor decrypt reads (no keyring there), so force every
+        // command onto the slow path (cmd::execute) which handles both.
+        if has_special || !all_single_key_rw || self.store.encryption().has_active_key() {
             for command in commands {
                 let args = command.argv();
                 if !session.authenticated && !is_public_without_auth_cmd(args[0]) {
@@ -3614,8 +3637,10 @@ impl CommandExecutor {
                     &mut session.tx_queue,
                     &mut session.watched,
                     &mut session.authenticated,
+                    &mut session.secret_credential,
                     &self.store,
                     &self.broker,
+                    &self.script_engine,
                     &self.schema_cache,
                     write_buf,
                     now,
@@ -3623,26 +3648,42 @@ impl CommandExecutor {
                     continue;
                 }
 
-                let cmd_result = cmd::execute_with_wal(
-                    &self.store,
-                    &self.schema_cache,
-                    &self.broker,
-                    args,
-                    write_buf,
-                    now,
-                );
+                let _execution_guard = match self.store.execution_read_guard() {
+                    Ok(guard) => guard,
+                    Err(error) => {
+                        resp::write_error(write_buf, &format!("ERR database unavailable: {error}"));
+                        continue;
+                    }
+                };
+
+                let cmd_result = {
+                    let _guard = self.store.script_read_guard();
+                    cmd::execute_with_wal(
+                        &self.store,
+                        &self.schema_cache,
+                        &self.broker,
+                        args,
+                        write_buf,
+                        now,
+                    )
+                };
                 if let Some(action) =
                     self.apply_cmd_result(cmd_result, args, session, write_buf, now)
                 {
-                    drop(script_guard);
                     return Some(action);
                 }
             }
-            drop(script_guard);
             return None;
         }
 
         let mut shards: Vec<u32> = Vec::with_capacity(cmd_count);
+        let _execution_guard = match self.store.execution_read_guard() {
+            Ok(guard) => guard,
+            Err(error) => {
+                resp::write_error(write_buf, &format!("ERR database unavailable: {error}"));
+                return None;
+            }
+        };
         for (idx, command) in commands.iter().enumerate() {
             let args = command.argv();
             shards.push(self.store.shard_for_key(args[1]) as u32);
@@ -3688,8 +3729,13 @@ impl CommandExecutor {
                 fire_key_events(&self.broker, args);
                 None
             }
-            CmdResult::Authenticated => {
+            CmdResult::Quit => {
+                resp::write_ok(write_buf);
+                Some(CmdResult::Quit)
+            }
+            CmdResult::Authenticated { secret } => {
                 session.authenticated = true;
+                session.secret_credential = secret;
                 None
             }
             CmdResult::Subscribe { channels } => {
@@ -3755,6 +3801,8 @@ impl CommandExecutor {
             CmdResult::BlockPop { .. }
             | CmdResult::BlockMove { .. }
             | CmdResult::BlockStreamRead { .. }
+            | CmdResult::BlockListMPop { .. }
+            | CmdResult::BlockZMPop { .. }
             | CmdResult::BlockZPop { .. } => Some(cmd_result),
             CmdResult::Eval { script, keys, argv } => {
                 handle_eval(
@@ -3782,9 +3830,40 @@ impl CommandExecutor {
 fn write_shard_execution_error(write_buf: &mut BytesMut, err: ShardExecutionError) {
     match err {
         ShardExecutionError::Command(message) => resp::write_error(write_buf, &message),
-        ShardExecutionError::Eviction(message) => resp::write_error(write_buf, message),
+        ShardExecutionError::Eviction(message) => resp::write_error(write_buf, &message),
         ShardExecutionError::Wal(message) => {
             resp::write_error(write_buf, &format!("ERR WAL append failed: {message}"))
+        }
+    }
+}
+
+async fn await_resp_blocking_action<F>(
+    future: F,
+    credential: Option<&crate::vendor::lux::auth::SecretCredential>,
+    store: &Store,
+    cache: &SharedSchemaCache,
+) -> std::io::Result<bool>
+where
+    F: std::future::Future<Output = std::io::Result<()>>,
+{
+    let Some(credential) = credential else {
+        future.await?;
+        return Ok(false);
+    };
+    tokio::pin!(future);
+    let mut auth_tick = tokio::time::interval(std::time::Duration::from_secs(1));
+    auth_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tokio::select! {
+            result = &mut future => {
+                result?;
+                return Ok(false);
+            }
+            _ = auth_tick.tick() => {
+                if crate::vendor::lux::auth::revalidate_secret_credential(credential, store, cache).is_err() {
+                    return Ok(true);
+                }
+            }
         }
     }
 }
@@ -3793,6 +3872,7 @@ async fn handle_connection(
     mut socket: tokio::net::TcpStream,
     _peer: std::net::SocketAddr,
     runtime: Arc<Runtime>,
+    mut shutdown_rx: watch::Receiver<Option<Duration>>,
 ) -> std::io::Result<()> {
     let store = runtime.store.clone();
     let broker = runtime.broker.clone();
@@ -3800,17 +3880,44 @@ async fn handle_connection(
     let mut write_buf = BytesMut::with_capacity(65536);
     let mut pending = BytesMut::new();
     let max_resp_request = runtime.config.max_resp_request;
-    let mut session = CommandSession::new(runtime.config.require_auth);
+    // An engine is credential-gated by a password *or* by project keys. Checked
+    // per connection rather than per command: `require_auth` is fixed at startup,
+    // so without this a key-only engine (no LUX_PASSWORD) would leave RESP wide
+    // open, and keys minted at runtime would never start gating it.
+    let keys_require_auth =
+        crate::vendor::lux::auth::project_keys_configured(&runtime.store, &runtime.schema_cache)
+            .unwrap_or(true);
+    let mut session = CommandSession::new(runtime.config.require_auth || keys_require_auth);
     let executor = CommandExecutor::new(
         runtime.store.clone(),
         runtime.broker.clone(),
         runtime.script_engine.clone(),
         runtime.schema_cache.clone(),
     );
+    let mut auth_tick = tokio::time::interval(std::time::Duration::from_secs(1));
+    auth_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     loop {
+        if shutdown_rx.borrow().is_some() {
+            return Ok(());
+        }
         if session.sub_mode {
             tokio::select! {
+                _ = shutdown_rx.changed() => return Ok(()),
+                _ = auth_tick.tick(), if session.secret_credential.is_some() => {
+                    if session.secret_credential.as_ref().is_some_and(|credential| {
+                        crate::vendor::lux::auth::revalidate_secret_credential(
+                            credential,
+                            &runtime.store,
+                            &runtime.schema_cache,
+                        )
+                        .is_err()
+                    }) {
+                        resp::write_error(&mut write_buf, "NOAUTH secret key is revoked or unavailable");
+                        socket.write_all(&write_buf).await?;
+                        return Ok(());
+                    }
+                }
                 result = socket.read(&mut read_buf) => {
                     let n = match result {
                         Ok(0) => return Ok(()),
@@ -3836,6 +3943,7 @@ async fn handle_connection(
                             }
                         };
                         if args.is_empty() { continue; }
+                        let _execution_guard = store.execution_barrier_guard();
                         if cmd_eq_fast(args[0], b"SUBSCRIBE") {
                             for ch_bytes in &args[1..] {
                                 let ch = std::str::from_utf8(ch_bytes).unwrap_or("").to_string();
@@ -3958,33 +4066,33 @@ async fn handle_connection(
                         }
                     }
 
-                    for (_ch, rx) in session.subscriptions.iter_mut() {
+                    for rx in session.subscriptions.values_mut() {
                         if let Ok(msg) = rx.try_recv() {
                             return Some(vec![msg]);
                         }
                     }
-                    for (_pat, rx) in session.pattern_subs.iter_mut() {
+                    for rx in session.pattern_subs.values_mut() {
                         if let Ok(msg) = rx.try_recv() {
                             return Some(vec![msg]);
                         }
                     }
-                    for (_pat, rx) in session.key_subs.iter_mut() {
+                    for rx in session.key_subs.values_mut() {
                         if let Ok(msg) = rx.try_recv() {
                             return Some(vec![msg]);
                         }
                     }
                     tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-                    for (_ch, rx) in session.subscriptions.iter_mut() {
+                    for rx in session.subscriptions.values_mut() {
                         if let Ok(msg) = rx.try_recv() {
                             return Some(vec![msg]);
                         }
                     }
-                    for (_pat, rx) in session.pattern_subs.iter_mut() {
+                    for rx in session.pattern_subs.values_mut() {
                         if let Ok(msg) = rx.try_recv() {
                             return Some(vec![msg]);
                         }
                     }
-                    for (_pat, rx) in session.key_subs.iter_mut() {
+                    for rx in session.key_subs.values_mut() {
                         if let Ok(msg) = rx.try_recv() {
                             return Some(vec![msg]);
                         }
@@ -4023,7 +4131,29 @@ async fn handle_connection(
                 }
             }
         } else {
-            let n = match socket.read(&mut read_buf).await {
+            // A complete read is accepted work and may finish. The next read is
+            // gated by shutdown so a persistent connection cannot start a new
+            // request after the listener closes.
+            let read = tokio::select! {
+                _ = shutdown_rx.changed() => return Ok(()),
+                _ = auth_tick.tick(), if session.secret_credential.is_some() => {
+                    if session.secret_credential.as_ref().is_some_and(|credential| {
+                        crate::vendor::lux::auth::revalidate_secret_credential(
+                            credential,
+                            &runtime.store,
+                            &runtime.schema_cache,
+                        )
+                        .is_err()
+                    }) {
+                        resp::write_error(&mut write_buf, "NOAUTH secret key is revoked or unavailable");
+                        socket.write_all(&write_buf).await?;
+                        return Ok(());
+                    }
+                    continue;
+                }
+                result = socket.read(&mut read_buf) => result,
+            };
+            let n = match read {
                 Ok(0) => return Ok(()),
                 Ok(n) => n,
                 Err(e) => return Err(e),
@@ -4083,13 +4213,29 @@ async fn handle_connection(
 
             if let Some(action) = deferred_action {
                 match action {
+                    CmdResult::Quit => return Ok(()),
                     CmdResult::BlockPop {
                         keys,
                         timeout,
                         pop_left,
                     } => {
-                        handle_block_pop(&mut socket, &store, &broker, &keys, timeout, pop_left)
-                            .await?;
+                        if await_resp_blocking_action(
+                            handle_block_pop(
+                                &mut socket,
+                                &store,
+                                &broker,
+                                &keys,
+                                timeout,
+                                pop_left,
+                            ),
+                            session.secret_credential.as_ref(),
+                            &runtime.store,
+                            &runtime.schema_cache,
+                        )
+                        .await?
+                        {
+                            return Ok(());
+                        }
                     }
                     CmdResult::BlockMove {
                         src,
@@ -4098,17 +4244,25 @@ async fn handle_connection(
                         dst_left,
                         timeout,
                     } => {
-                        handle_block_move(
-                            &mut socket,
-                            &store,
-                            &broker,
-                            &src,
-                            &dst,
-                            src_left,
-                            dst_left,
-                            timeout,
+                        if await_resp_blocking_action(
+                            handle_block_move(
+                                &mut socket,
+                                &store,
+                                &broker,
+                                &src,
+                                &dst,
+                                src_left,
+                                dst_left,
+                                timeout,
+                            ),
+                            session.secret_credential.as_ref(),
+                            &runtime.store,
+                            &runtime.schema_cache,
                         )
-                        .await?;
+                        .await?
+                        {
+                            return Ok(());
+                        }
                     }
                     CmdResult::BlockStreamRead {
                         keys,
@@ -4118,27 +4272,85 @@ async fn handle_connection(
                         noack,
                         timeout,
                     } => {
-                        handle_block_stream_read(
-                            &mut socket,
-                            &store,
-                            &broker,
-                            &keys,
-                            &ids,
-                            group,
-                            count,
-                            noack,
-                            timeout,
+                        if await_resp_blocking_action(
+                            handle_block_stream_read(
+                                &mut socket,
+                                &store,
+                                &broker,
+                                &keys,
+                                &ids,
+                                group,
+                                count,
+                                noack,
+                                timeout,
+                            ),
+                            session.secret_credential.as_ref(),
+                            &runtime.store,
+                            &runtime.schema_cache,
                         )
-                        .await?;
+                        .await?
+                        {
+                            return Ok(());
+                        }
                     }
                     CmdResult::BlockZPop {
                         keys,
                         timeout,
                         pop_min,
                     } => {
-                        handle_block_zpop(&mut socket, &store, &keys, timeout, pop_min).await?;
+                        if await_resp_blocking_action(
+                            handle_block_zpop(&mut socket, &store, &keys, timeout, pop_min),
+                            session.secret_credential.as_ref(),
+                            &runtime.store,
+                            &runtime.schema_cache,
+                        )
+                        .await?
+                        {
+                            return Ok(());
+                        }
                     }
-                    _ => {}
+                    CmdResult::BlockZMPop {
+                        keys,
+                        pop_min,
+                        count,
+                        timeout,
+                    } => {
+                        if await_resp_blocking_action(
+                            handle_block_zmpop(&mut socket, &store, &keys, pop_min, count, timeout),
+                            session.secret_credential.as_ref(),
+                            &runtime.store,
+                            &runtime.schema_cache,
+                        )
+                        .await?
+                        {
+                            return Ok(());
+                        }
+                    }
+                    CmdResult::BlockListMPop {
+                        keys,
+                        pop_left,
+                        count,
+                        timeout,
+                    } => {
+                        if await_resp_blocking_action(
+                            handle_block_lmpop(
+                                &mut socket,
+                                &store,
+                                &keys,
+                                pop_left,
+                                count,
+                                timeout,
+                            ),
+                            session.secret_credential.as_ref(),
+                            &runtime.store,
+                            &runtime.schema_cache,
+                        )
+                        .await?
+                        {
+                            return Ok(());
+                        }
+                    }
+                    _ => continue,
                 }
             }
         }
@@ -4162,6 +4374,7 @@ async fn handle_block_pop(
             pubsub::BlockedPopRequest {
                 tx: tx.clone(),
                 pop_left,
+                destination: None,
                 waiter_id,
             },
         );
@@ -4193,7 +4406,7 @@ async fn handle_block_pop(
 #[allow(clippy::too_many_arguments)]
 async fn handle_block_move(
     socket: &mut tokio::net::TcpStream,
-    store: &Arc<Store>,
+    _store: &Arc<Store>,
     broker: &Broker,
     src: &str,
     dst: &str,
@@ -4209,6 +4422,7 @@ async fn handle_block_move(
         pubsub::BlockedPopRequest {
             tx: tx.clone(),
             pop_left: src_left,
+            destination: Some((dst.to_string(), dst_left)),
             waiter_id,
         },
     );
@@ -4222,13 +4436,6 @@ async fn handle_block_move(
 
     match result {
         Some((_key, val)) => {
-            let now = Instant::now();
-            let vals: &[&[u8]] = &[val.as_ref()];
-            if dst_left {
-                let _ = store.lpush(dst.as_bytes(), vals, now);
-            } else {
-                let _ = store.rpush(dst.as_bytes(), vals, now);
-            }
             resp::write_bulk_raw(&mut write_buf, &val);
         }
         None => {
@@ -4254,6 +4461,13 @@ async fn handle_block_stream_read(
     timeout: std::time::Duration,
 ) -> std::io::Result<()> {
     let now_pre = Instant::now();
+    for key in keys {
+        if let Err(error) = store.try_promote(key.as_bytes(), now_pre) {
+            let mut out = BytesMut::new();
+            resp::write_error(&mut out, &error);
+            return socket.write_all(&out).await;
+        }
+    }
     let resolved_ids: Vec<String> = id_strs
         .iter()
         .enumerate()
@@ -4270,8 +4484,9 @@ async fn handle_block_stream_read(
         .collect();
 
     let (tx, mut rx) = tokio::sync::mpsc::channel::<()>(1);
+    let waiter_id = broker.next_waiter_id();
     for key in keys {
-        broker.register_stream_waiter(key, tx.clone());
+        broker.register_stream_waiter(key, tx.clone(), waiter_id);
     }
     drop(tx);
 
@@ -4297,13 +4512,16 @@ async fn handle_block_stream_read(
             Ok(r) if !r.is_empty() => {
                 write_xread_response(&mut write_buf, &r);
             }
-            _ => {
+            Ok(_) => {
                 resp::write_null_array(&mut write_buf);
             }
+            Err(error) => resp::write_error(&mut write_buf, &error),
         }
     } else {
         resp::write_null_array(&mut write_buf);
     }
+
+    broker.remove_stream_waiters_by_id(keys, waiter_id);
 
     socket.write_all(&write_buf).await
 }
@@ -4365,6 +4583,96 @@ fn handle_eval(
     }
 }
 
+async fn handle_block_lmpop(
+    socket: &mut tokio::net::TcpStream,
+    store: &Arc<Store>,
+    keys: &[String],
+    pop_left: bool,
+    count: usize,
+    timeout: std::time::Duration,
+) -> std::io::Result<()> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    let key_refs: Vec<&[u8]> = keys.iter().map(|k| k.as_bytes()).collect();
+    let mut write_buf = BytesMut::new();
+
+    loop {
+        let now = Instant::now();
+        match cmd::journaled_lmpop(store, &key_refs, pop_left, count, now) {
+            Ok(Some((key, items))) => {
+                resp::write_array_header(&mut write_buf, 2);
+                resp::write_bulk_raw(&mut write_buf, &key);
+                resp::write_array_header(&mut write_buf, items.len());
+                for item in &items {
+                    let decrypted = store
+                        .decrypt_list_element(item.clone())
+                        .unwrap_or_else(|_| item.clone());
+                    resp::write_bulk_raw(&mut write_buf, &decrypted);
+                }
+                return socket.write_all(&write_buf).await;
+            }
+            Ok(None) => {}
+            Err(e) => {
+                resp::write_error(&mut write_buf, &e);
+                return socket.write_all(&write_buf).await;
+            }
+        }
+
+        if tokio::time::Instant::now() >= deadline {
+            resp::write_null_array(&mut write_buf);
+            return socket.write_all(&write_buf).await;
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
+async fn handle_block_zmpop(
+    socket: &mut tokio::net::TcpStream,
+    store: &Arc<Store>,
+    keys: &[String],
+    pop_min: bool,
+    count: usize,
+    timeout: std::time::Duration,
+) -> std::io::Result<()> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    let key_refs: Vec<&[u8]> = keys.iter().map(|k| k.as_bytes()).collect();
+    let mut write_buf = BytesMut::new();
+
+    loop {
+        let now = Instant::now();
+        match cmd::journaled_zmpop(store, &key_refs, pop_min, count, now) {
+            Ok(Some((key, items))) => {
+                resp::write_array_header(&mut write_buf, 2);
+                resp::write_bulk_raw(&mut write_buf, &key);
+                resp::write_array_header(&mut write_buf, items.len());
+                for (member, score) in &items {
+                    resp::write_array_header(&mut write_buf, 2);
+                    resp::write_bulk(&mut write_buf, member);
+                    let score_str = if score.fract() == 0.0 && score.abs() < 1e15 {
+                        format!("{}", *score as i64)
+                    } else {
+                        format!("{score}")
+                    };
+                    resp::write_bulk(&mut write_buf, &score_str);
+                }
+                return socket.write_all(&write_buf).await;
+            }
+            Ok(None) => {}
+            Err(e) => {
+                resp::write_error(&mut write_buf, &e);
+                return socket.write_all(&write_buf).await;
+            }
+        }
+
+        if tokio::time::Instant::now() >= deadline {
+            resp::write_null_array(&mut write_buf);
+            return socket.write_all(&write_buf).await;
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
 async fn handle_block_zpop(
     socket: &mut tokio::net::TcpStream,
     store: &Arc<Store>,
@@ -4377,26 +4685,19 @@ async fn handle_block_zpop(
 
     loop {
         let now = Instant::now();
-        for key in keys {
-            let result = if pop_min {
-                store.zpopmin(key.as_bytes(), 1, now)
-            } else {
-                store.zpopmax(key.as_bytes(), 1, now)
-            };
-            if let Ok(items) = result {
-                if !items.is_empty() {
-                    let (member, score) = &items[0];
-                    resp::write_array_header(&mut write_buf, 3);
-                    resp::write_bulk(&mut write_buf, key);
-                    resp::write_bulk(&mut write_buf, member);
-                    let score_str = if score.fract() == 0.0 && score.abs() < 1e15 {
-                        format!("{}", *score as i64)
-                    } else {
-                        format!("{}", score)
-                    };
-                    resp::write_bulk(&mut write_buf, &score_str);
-                    return socket.write_all(&write_buf).await;
-                }
+        let key_refs: Vec<&[u8]> = keys.iter().map(|key| key.as_bytes()).collect();
+        if let Ok(Some((key, items))) = cmd::journaled_zmpop(store, &key_refs, pop_min, 1, now) {
+            if let Some((member, score)) = items.first() {
+                resp::write_array_header(&mut write_buf, 3);
+                resp::write_bulk_raw(&mut write_buf, &key);
+                resp::write_bulk(&mut write_buf, member);
+                let score_str = if score.fract() == 0.0 && score.abs() < 1e15 {
+                    format!("{}", *score as i64)
+                } else {
+                    format!("{}", score)
+                };
+                resp::write_bulk(&mut write_buf, &score_str);
+                return socket.write_all(&write_buf).await;
             }
         }
 
@@ -4450,17 +4751,31 @@ fn handle_script_op(out: &mut BytesMut, script_engine: &lua::ScriptEngine, args:
 mod tx_tests {
     use super::*;
 
-    fn test_executor() -> (CommandExecutor, CommandSession) {
-        let store = Arc::new(Store::new());
-        let broker = Broker::new();
+    fn executor_for(store: Arc<Store>, broker: Broker) -> CommandExecutor {
         let schema_cache: SharedSchemaCache =
             Arc::new(parking_lot::RwLock::new(tables::SchemaCache::new()));
-        let executor = CommandExecutor::new(
+        CommandExecutor::new(
             store,
             broker,
             Arc::new(lua::ScriptEngine::new()),
             schema_cache,
-        );
+        )
+    }
+
+    fn execute(
+        executor: &CommandExecutor,
+        session: &mut CommandSession,
+        args: &[&[u8]],
+    ) -> BytesMut {
+        let mut out = BytesMut::new();
+        executor.execute_command(args, session, &mut out, Instant::now());
+        out
+    }
+
+    fn test_executor() -> (CommandExecutor, CommandSession) {
+        let store = Arc::new(Store::new());
+        let broker = Broker::new();
+        let executor = executor_for(store, broker);
         (executor, CommandSession::new(false))
     }
 
@@ -4479,15 +4794,24 @@ mod tx_tests {
     fn pubsub_commands_are_rejected_inside_multi() {
         let store = Arc::new(Store::new());
         let broker = Broker::new();
+        let script_engine = lua::ScriptEngine::new();
         let schema_cache: SharedSchemaCache =
             Arc::new(parking_lot::RwLock::new(tables::SchemaCache::new()));
 
-        for command in ["SUBSCRIBE", "UNSUBSCRIBE", "PSUBSCRIBE", "PUNSUBSCRIBE"] {
+        for command in [
+            "SUBSCRIBE",
+            "UNSUBSCRIBE",
+            "PSUBSCRIBE",
+            "PUNSUBSCRIBE",
+            "SAVE",
+            "BGSAVE",
+        ] {
             let mut in_multi = true;
             let mut tx_error = false;
             let mut tx_queue = Vec::new();
             let mut watched = Vec::new();
             let mut authenticated = true;
+            let mut secret_credential = None;
             let mut out = BytesMut::new();
             let args: [&[u8]; 2] = [command.as_bytes(), b"chan"];
 
@@ -4498,8 +4822,10 @@ mod tx_tests {
                 &mut tx_queue,
                 &mut watched,
                 &mut authenticated,
+                &mut secret_credential,
                 &store,
                 &broker,
+                &script_engine,
                 &schema_cache,
                 &mut out,
                 Instant::now(),
@@ -4516,5 +4842,1194 @@ mod tx_tests {
             assert!(tx_error, "{command} should mark the transaction dirty");
             assert!(tx_queue.is_empty(), "{command} should not be queued");
         }
+    }
+
+    #[test]
+    fn exec_hides_intermediate_state_from_other_clients() {
+        let store = Arc::new(Store::new());
+        let broker = Broker::new();
+        store.set(b"left", b"before", None, Instant::now());
+        store.set(b"right", b"before", None, Instant::now());
+
+        let reached_midpoint = Arc::new(std::sync::Barrier::new(2));
+        let release_transaction = Arc::new(std::sync::Barrier::new(2));
+        store.set_exec_after_command_hook(Some({
+            let reached_midpoint = reached_midpoint.clone();
+            let release_transaction = release_transaction.clone();
+            Arc::new(move |index| {
+                if index == 0 {
+                    reached_midpoint.wait();
+                    release_transaction.wait();
+                }
+            })
+        }));
+
+        let writer_store = store.clone();
+        let writer_broker = broker.clone();
+        let writer = std::thread::spawn(move || {
+            let executor = executor_for(writer_store, writer_broker);
+            let mut session = CommandSession::new(false);
+            execute(&executor, &mut session, &[b"MULTI"]);
+            execute(&executor, &mut session, &[b"SET", b"left", b"after"]);
+            execute(&executor, &mut session, &[b"SET", b"right", b"after"]);
+            execute(&executor, &mut session, &[b"EXEC"])
+        });
+
+        reached_midpoint.wait();
+        let reader_store = store.clone();
+        let reader_broker = broker.clone();
+        let (read_tx, read_rx) = std::sync::mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            let executor = executor_for(reader_store, reader_broker);
+            let mut session = CommandSession::new(false);
+            let out = execute(&executor, &mut session, &[b"MGET", b"left", b"right"]);
+            read_tx.send(out).unwrap();
+        });
+
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(
+            matches!(
+                read_rx.try_recv(),
+                Err(std::sync::mpsc::TryRecvError::Empty)
+            ),
+            "reader observed the transaction before EXEC committed"
+        );
+        release_transaction.wait();
+
+        let exec_out = writer.join().unwrap();
+        assert!(String::from_utf8_lossy(&exec_out).starts_with("*2\r\n"));
+        let read_out = read_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        reader.join().unwrap();
+        assert_eq!(&read_out[..], b"*2\r\n$5\r\nafter\r\n$5\r\nafter\r\n");
+        store.set_exec_after_command_hook(None);
+    }
+
+    #[test]
+    fn active_expiry_waits_for_exec_to_finish() {
+        let store = Arc::new(Store::new());
+        let broker = Broker::new();
+        let started = Instant::now();
+        store.set(
+            b"expired",
+            b"value",
+            Some(Duration::from_millis(1)),
+            started,
+        );
+
+        let reached_midpoint = Arc::new(std::sync::Barrier::new(2));
+        let release_transaction = Arc::new(std::sync::Barrier::new(2));
+        store.set_exec_after_command_hook(Some({
+            let reached_midpoint = reached_midpoint.clone();
+            let release_transaction = release_transaction.clone();
+            Arc::new(move |index| {
+                if index == 0 {
+                    reached_midpoint.wait();
+                    release_transaction.wait();
+                }
+            })
+        }));
+
+        let writer = std::thread::spawn({
+            let store = store.clone();
+            let broker = broker.clone();
+            move || {
+                let executor = executor_for(store, broker);
+                let mut session = CommandSession::new(false);
+                execute(&executor, &mut session, &[b"MULTI"]);
+                execute(&executor, &mut session, &[b"SET", b"first", b"one"]);
+                execute(&executor, &mut session, &[b"SET", b"last", b"two"]);
+                execute(&executor, &mut session, &[b"EXEC"])
+            }
+        });
+
+        reached_midpoint.wait();
+        let (expired_tx, expired_rx) = std::sync::mpsc::channel();
+        let expiry = std::thread::spawn({
+            let store = store.clone();
+            move || {
+                store.expire_sweep(started + Duration::from_secs(1));
+                expired_tx.send(()).unwrap();
+            }
+        });
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(
+            matches!(
+                expired_rx.try_recv(),
+                Err(std::sync::mpsc::TryRecvError::Empty)
+            ),
+            "active expiry crossed the EXEC boundary"
+        );
+
+        release_transaction.wait();
+        writer.join().unwrap();
+        expired_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        expiry.join().unwrap();
+        assert!(
+            store
+                .get(b"expired", started + Duration::from_secs(1))
+                .is_none()
+        );
+        assert_eq!(store.get(b"first", Instant::now()).unwrap(), b"one"[..]);
+        assert_eq!(store.get(b"last", Instant::now()).unwrap(), b"two"[..]);
+        store.set_exec_after_command_hook(None);
+    }
+
+    #[test]
+    fn exec_runtime_error_keeps_other_successful_commands() {
+        let (executor, mut session) = test_executor();
+        execute(&executor, &mut session, &[b"SET", b"typed", b"string"]);
+        execute(&executor, &mut session, &[b"MULTI"]);
+        execute(&executor, &mut session, &[b"SET", b"first", b"one"]);
+        execute(&executor, &mut session, &[b"LPUSH", b"typed", b"value"]);
+        execute(&executor, &mut session, &[b"SET", b"last", b"two"]);
+        let out = execute(&executor, &mut session, &[b"EXEC"]);
+        let response = String::from_utf8_lossy(&out);
+        assert!(response.starts_with("*3\r\n"), "{response}");
+        assert!(response.contains("WRONGTYPE"), "{response}");
+        assert_eq!(
+            &execute(&executor, &mut session, &[b"MGET", b"first", b"last"])[..],
+            b"*2\r\n$3\r\none\r\n$3\r\ntwo\r\n"
+        );
+    }
+
+    #[test]
+    fn exec_defers_publish_until_the_transaction_commits() {
+        let store = Arc::new(Store::new());
+        let broker = Broker::new();
+        let mut receiver = broker.subscribe("events");
+        let reached_publish = Arc::new(std::sync::Barrier::new(2));
+        let release_transaction = Arc::new(std::sync::Barrier::new(2));
+        store.set_exec_after_command_hook(Some({
+            let reached_publish = reached_publish.clone();
+            let release_transaction = release_transaction.clone();
+            Arc::new(move |index| {
+                if index == 1 {
+                    reached_publish.wait();
+                    release_transaction.wait();
+                }
+            })
+        }));
+
+        let writer = std::thread::spawn({
+            let store = store.clone();
+            let broker = broker.clone();
+            move || {
+                let executor = executor_for(store, broker);
+                let mut session = CommandSession::new(false);
+                execute(&executor, &mut session, &[b"MULTI"]);
+                execute(&executor, &mut session, &[b"SET", b"first", b"one"]);
+                execute(
+                    &executor,
+                    &mut session,
+                    &[b"PUBLISH", b"events", b"committed"],
+                );
+                execute(&executor, &mut session, &[b"SET", b"last", b"two"]);
+                execute(&executor, &mut session, &[b"EXEC"])
+            }
+        });
+
+        reached_publish.wait();
+        assert!(
+            matches!(
+                receiver.try_recv(),
+                Err(broadcast::error::TryRecvError::Empty)
+            ),
+            "PUBLISH escaped before the transaction committed"
+        );
+        release_transaction.wait();
+        let out = writer.join().unwrap();
+        assert!(String::from_utf8_lossy(&out).contains(":1\r\n"));
+        let message = receiver
+            .try_recv()
+            .expect("committed publish was not delivered");
+        assert_eq!(message.payload, bytes::Bytes::from_static(b"committed"));
+        store.set_exec_after_command_hook(None);
+    }
+
+    #[test]
+    fn list_waiter_registered_mid_exec_receives_committed_push() {
+        let store = Arc::new(Store::new());
+        let broker = Broker::new();
+        let reached_push = Arc::new(std::sync::Barrier::new(2));
+        let release_transaction = Arc::new(std::sync::Barrier::new(2));
+        store.set_exec_after_command_hook(Some({
+            let reached_push = reached_push.clone();
+            let release_transaction = release_transaction.clone();
+            Arc::new(move |index| {
+                if index == 0 {
+                    reached_push.wait();
+                    release_transaction.wait();
+                }
+            })
+        }));
+
+        let writer = std::thread::spawn({
+            let store = store.clone();
+            let broker = broker.clone();
+            move || {
+                let executor = executor_for(store, broker);
+                let mut session = CommandSession::new(false);
+                execute(&executor, &mut session, &[b"MULTI"]);
+                execute(&executor, &mut session, &[b"LPUSH", b"jobs", b"ready"]);
+                execute(&executor, &mut session, &[b"EXEC"])
+            }
+        });
+
+        reached_push.wait();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        broker.register_list_waiter(
+            "jobs",
+            pubsub::BlockedPopRequest {
+                tx,
+                pop_left: false,
+                destination: None,
+                waiter_id: broker.next_waiter_id(),
+            },
+        );
+        assert!(rx.try_recv().is_err(), "list value escaped before commit");
+
+        release_transaction.wait();
+        writer.join().unwrap();
+        let (key, value) = rx
+            .blocking_recv()
+            .expect("committed push was not delivered");
+        assert_eq!(key, "jobs");
+        assert_eq!(value, bytes::Bytes::from_static(b"ready"));
+        store.set_exec_after_command_hook(None);
+    }
+
+    fn persistent_executor(
+        root: &std::path::Path,
+    ) -> (
+        Arc<crate::vendor::lux::ServerConfig>,
+        Arc<Store>,
+        CommandExecutor,
+    ) {
+        let config = Arc::new(crate::vendor::lux::ServerConfig {
+            data_dir: root.to_string_lossy().into_owned(),
+            durability: crate::vendor::lux::DurabilityConfig {
+                policy: crate::vendor::lux::DurabilityPolicy::AlwaysSync,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        let store = Arc::new(Store::new_with_config(config.clone()));
+        let executor = executor_for(store.clone(), Broker::new());
+        (config, store, executor)
+    }
+
+    #[test]
+    fn snapshot_waits_for_exec_and_captures_the_committed_state() {
+        let root = tempfile::tempdir().unwrap();
+        let (config, store, setup_executor) = persistent_executor(root.path());
+        drop(setup_executor);
+
+        let reached_midpoint = Arc::new(std::sync::Barrier::new(2));
+        let release_transaction = Arc::new(std::sync::Barrier::new(2));
+        store.set_exec_after_command_hook(Some({
+            let reached_midpoint = reached_midpoint.clone();
+            let release_transaction = release_transaction.clone();
+            Arc::new(move |index| {
+                if index == 0 {
+                    reached_midpoint.wait();
+                    release_transaction.wait();
+                }
+            })
+        }));
+
+        let writer = std::thread::spawn({
+            let store = store.clone();
+            move || {
+                let executor = executor_for(store, Broker::new());
+                let mut session = CommandSession::new(false);
+                execute(&executor, &mut session, &[b"MULTI"]);
+                execute(&executor, &mut session, &[b"SET", b"first", b"one"]);
+                execute(&executor, &mut session, &[b"SET", b"last", b"two"]);
+                execute(&executor, &mut session, &[b"EXEC"])
+            }
+        });
+
+        reached_midpoint.wait();
+        let (snapshot_tx, snapshot_rx) = std::sync::mpsc::channel();
+        let snapshot = std::thread::spawn({
+            let store = store.clone();
+            move || {
+                snapshot_tx
+                    .send(crate::vendor::lux::snapshot::save_and_truncate_wal_consistent(&store))
+                    .unwrap();
+            }
+        });
+        assert!(
+            snapshot_rx.recv_timeout(Duration::from_millis(50)).is_err(),
+            "snapshot captured an intermediate EXEC state"
+        );
+
+        release_transaction.wait();
+        let output = writer.join().unwrap();
+        assert!(String::from_utf8_lossy(&output).starts_with("*2\r\n"));
+        snapshot_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        snapshot.join().unwrap();
+        store.set_exec_after_command_hook(None);
+        drop(store);
+
+        let recovered = Store::new_with_config(config);
+        crate::vendor::lux::snapshot::load(&recovered).unwrap();
+        recovered.replay_wal(&Broker::new()).unwrap();
+        assert_eq!(recovered.get(b"first", Instant::now()).unwrap(), b"one"[..]);
+        assert_eq!(recovered.get(b"last", Instant::now()).unwrap(), b"two"[..]);
+    }
+
+    #[test]
+    fn failed_exec_wal_append_fails_closed_without_recovering_a_prefix() {
+        let root = tempfile::tempdir().unwrap();
+        let (config, store, executor) = persistent_executor(root.path());
+        let mut session = CommandSession::new(false);
+        execute(&executor, &mut session, &[b"MULTI"]);
+        execute(&executor, &mut session, &[b"SET", b"first", b"one"]);
+        execute(&executor, &mut session, &[b"SET", b"last", b"two"]);
+        store.inject_journal_failures(1);
+        let out = execute(&executor, &mut session, &[b"EXEC"]);
+        assert!(
+            String::from_utf8_lossy(&out).contains("WAL append failed"),
+            "{}",
+            String::from_utf8_lossy(&out)
+        );
+        let out = execute(&executor, &mut session, &[b"GET", b"first"]);
+        assert!(
+            String::from_utf8_lossy(&out).contains("database unavailable"),
+            "{}",
+            String::from_utf8_lossy(&out)
+        );
+
+        drop(executor);
+        drop(store);
+        let recovered = Store::new_with_config(config);
+        recovered.replay_wal(&Broker::new()).unwrap();
+        assert!(recovered.get(b"first", Instant::now()).is_none());
+        assert!(recovered.get(b"last", Instant::now()).is_none());
+    }
+
+    #[test]
+    fn truncated_exec_frame_recovers_none_of_the_transaction() {
+        let root = tempfile::tempdir().unwrap();
+        let (config, store, executor) = persistent_executor(root.path());
+        let mut session = CommandSession::new(false);
+        execute(&executor, &mut session, &[b"SET", b"baseline", b"safe"]);
+        let wal_path = config.journal_dir().join("global/wal.lux");
+        let baseline_len = std::fs::metadata(&wal_path).unwrap().len();
+
+        execute(&executor, &mut session, &[b"MULTI"]);
+        execute(&executor, &mut session, &[b"SET", b"first", b"one"]);
+        execute(&executor, &mut session, &[b"SET", b"second", b"two"]);
+        execute(&executor, &mut session, &[b"SET", b"third", b"three"]);
+        let out = execute(&executor, &mut session, &[b"EXEC"]);
+        assert!(String::from_utf8_lossy(&out).starts_with("*3\r\n"));
+        let committed_len = std::fs::metadata(&wal_path).unwrap().len();
+        assert!(committed_len > baseline_len);
+        drop(executor);
+        drop(store);
+
+        let full = Store::new_with_config(config.clone());
+        full.replay_wal(&Broker::new()).unwrap();
+        assert_eq!(full.get(b"first", Instant::now()).unwrap(), b"one"[..]);
+        assert_eq!(full.get(b"third", Instant::now()).unwrap(), b"three"[..]);
+        drop(full);
+
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&wal_path)
+            .unwrap();
+        file.set_len(baseline_len + (committed_len - baseline_len) / 2)
+            .unwrap();
+        drop(file);
+
+        let truncated = Store::new_with_config(config);
+        truncated.replay_wal(&Broker::new()).unwrap();
+        assert_eq!(
+            truncated.get(b"baseline", Instant::now()).unwrap(),
+            b"safe"[..]
+        );
+        assert!(truncated.get(b"first", Instant::now()).is_none());
+        assert!(truncated.get(b"second", Instant::now()).is_none());
+        assert!(truncated.get(b"third", Instant::now()).is_none());
+    }
+
+    #[test]
+    fn exec_runtime_error_recovery_replays_only_successful_commands() {
+        let root = tempfile::tempdir().unwrap();
+        let (config, store, executor) = persistent_executor(root.path());
+        let mut session = CommandSession::new(false);
+        execute(&executor, &mut session, &[b"SET", b"typed", b"string"]);
+        execute(&executor, &mut session, &[b"MULTI"]);
+        execute(&executor, &mut session, &[b"SET", b"first", b"one"]);
+        execute(&executor, &mut session, &[b"LPUSH", b"typed", b"value"]);
+        execute(&executor, &mut session, &[b"SET", b"last", b"two"]);
+        let out = execute(&executor, &mut session, &[b"EXEC"]);
+        assert!(String::from_utf8_lossy(&out).contains("WRONGTYPE"));
+        drop(executor);
+        drop(store);
+
+        let recovered = Store::new_with_config(config);
+        recovered.replay_wal(&Broker::new()).unwrap();
+        assert_eq!(
+            recovered.get(b"typed", Instant::now()).unwrap(),
+            b"string"[..]
+        );
+        assert_eq!(recovered.get(b"first", Instant::now()).unwrap(), b"one"[..]);
+        assert_eq!(recovered.get(b"last", Instant::now()).unwrap(), b"two"[..]);
+    }
+}
+
+#[cfg(any())]
+mod persistence_config_tests {
+    use super::*;
+
+    fn persistent_config(root: &std::path::Path, layout: StorageMode) -> ServerConfig {
+        ServerConfig {
+            data_dir: root.to_string_lossy().into_owned(),
+            storage: StorageConfig {
+                mode: layout,
+                dir: root.join("storage").to_string_lossy().into_owned(),
+            },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn default_policy_durably_acknowledges_each_write() {
+        let config = ServerConfig::default();
+        assert_eq!(config.durability.policy, DurabilityPolicy::AlwaysSync);
+        assert_eq!(config.durability.sync_interval, Duration::from_secs(1));
+    }
+
+    #[test]
+    fn tiered_layout_cannot_claim_ephemeral_durability() {
+        let root = tempfile::tempdir().unwrap();
+        let mut config = persistent_config(root.path(), StorageMode::Tiered);
+        config.durability.policy = DurabilityPolicy::Ephemeral;
+        let error = resolve_and_validate_persistence(&mut config).unwrap_err();
+        assert!(
+            error.to_string().contains("tiered storage requires"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn every_second_interval_is_bounded() {
+        let root = tempfile::tempdir().unwrap();
+        for interval in [Duration::ZERO, Duration::from_millis(1_001)] {
+            let mut config = persistent_config(root.path(), StorageMode::Memory);
+            config.durability.policy = DurabilityPolicy::EverySecond;
+            config.durability.sync_interval = interval;
+            let error = resolve_and_validate_persistence(&mut config).unwrap_err();
+            assert!(error.to_string().contains("1 to 1000 ms"), "{error}");
+        }
+    }
+
+    #[test]
+    fn persistent_layout_changes_refuse_to_hide_existing_state() {
+        let tiered_root = tempfile::tempdir().unwrap();
+        let tiered_shard = tiered_root.path().join("storage/shard_0");
+        std::fs::create_dir_all(&tiered_shard).unwrap();
+        std::fs::write(tiered_shard.join("wal.lux"), b"state").unwrap();
+        let mut memory = persistent_config(tiered_root.path(), StorageMode::Memory);
+        let error = resolve_and_validate_persistence(&mut memory).unwrap_err();
+        assert!(error.to_string().contains("switch to memory"), "{error}");
+
+        let memory_root = tempfile::tempdir().unwrap();
+        let memory_journal = memory_root.path().join("journal/global");
+        std::fs::create_dir_all(&memory_journal).unwrap();
+        std::fs::write(memory_journal.join("wal.lux"), b"state").unwrap();
+        let mut tiered = persistent_config(memory_root.path(), StorageMode::Tiered);
+        let error = resolve_and_validate_persistence(&mut tiered).unwrap_err();
+        assert!(error.to_string().contains("switch to tiered"), "{error}");
+
+        let legacy_root = tempfile::tempdir().unwrap();
+        let legacy_journal = legacy_root.path().join("journal/shard_0");
+        std::fs::create_dir_all(&legacy_journal).unwrap();
+        std::fs::write(legacy_journal.join("wal.lux"), b"state").unwrap();
+        let mut tiered = persistent_config(legacy_root.path(), StorageMode::Tiered);
+        let error = resolve_and_validate_persistence(&mut tiered).unwrap_err();
+        assert!(error.to_string().contains("switch to tiered"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn runtime_storage_error_reaches_the_embedded_caller() {
+        let root = tempfile::tempdir().unwrap();
+        let storage = root.path().join("storage");
+        std::fs::create_dir_all(&storage).unwrap();
+        std::fs::write(storage.join("shard_0"), b"not a directory").unwrap();
+
+        let mut config = persistent_config(root.path(), StorageMode::Tiered);
+        config.enable_resp = false;
+        let error = match run_with_config(config).await {
+            Ok(_) => panic!("invalid storage layout unexpectedly started"),
+            Err(error) => error,
+        };
+        assert_ne!(
+            error.to_string(),
+            "server startup failed before readiness signal"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn persistent_directory_cannot_be_opened_by_two_runtimes() {
+        let root = tempfile::tempdir().unwrap();
+        let mut config = persistent_config(root.path(), StorageMode::Memory);
+        config.enable_resp = false;
+        config.save_interval = Duration::ZERO;
+
+        let first = run_with_config(config.clone()).await.unwrap();
+        let error = match run_with_config(config.clone()).await {
+            Ok(_) => panic!("second runtime unexpectedly acquired the persistent directory"),
+            Err(error) => error,
+        };
+        assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+        assert!(error.to_string().contains("already in use"), "{error}");
+
+        let stale_client = first.client();
+        first.shutdown_and_wait().await.unwrap();
+        run_with_config(config)
+            .await
+            .unwrap()
+            .shutdown_and_wait()
+            .await
+            .unwrap();
+        assert!(
+            stale_client
+                .execute_value("SET", &["after-shutdown", "rejected"])
+                .await
+                .is_err()
+        );
+    }
+}
+
+#[cfg(any())]
+mod shutdown_tests {
+    use super::*;
+
+    async fn wait_for_background_save(store: &Store) -> store::SnapshotStatus {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let status = store.snapshot_status();
+                if !status.phase.in_progress() && status.last_status != "none" {
+                    break status;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("background save did not finish")
+    }
+
+    fn free_port() -> u16 {
+        std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port()
+    }
+
+    fn persistent_embedded_config(root: &std::path::Path) -> ServerConfig {
+        ServerConfig {
+            enable_resp: false,
+            data_dir: root.to_string_lossy().into_owned(),
+            durability: DurabilityConfig {
+                policy: DurabilityPolicy::EverySecond,
+                sync_interval: Duration::from_secs(1),
+            },
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn graceful_shutdown_syncs_acknowledged_every_second_write() {
+        let root = tempfile::tempdir().unwrap();
+        let config = persistent_embedded_config(root.path());
+        let handle = run_with_config(config.clone()).await.unwrap();
+        handle
+            .client()
+            .execute_value("SET", &["shutdown:key", "value"])
+            .await
+            .unwrap();
+
+        assert_eq!(
+            handle
+                .shutdown_and_wait_detailed(Duration::from_secs(2))
+                .await
+                .unwrap(),
+            ShutdownOutcome::Clean
+        );
+
+        let restarted = run_with_config(config).await.unwrap();
+        assert_eq!(
+            restarted
+                .client()
+                .execute_value("GET", &["shutdown:key"])
+                .await
+                .unwrap(),
+            EmbeddedValue::Bulk(bytes::Bytes::from_static(b"value"))
+        );
+        restarted.shutdown_and_wait().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn shutdown_rejects_new_embedded_work() {
+        let root = tempfile::tempdir().unwrap();
+        let handle = run_with_config(ServerConfig {
+            enable_resp: false,
+            data_dir: root.path().to_string_lossy().into_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let client = handle.client();
+
+        handle.shutdown_with_timeout(Duration::from_secs(2));
+        let error = client.execute("PING", &[]).await.unwrap_err();
+        assert!(error.to_string().contains("shutting down"), "{error}");
+        handle.wait().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn drain_timeout_reports_forced_shutdown() {
+        use tokio::io::AsyncWriteExt as _;
+
+        let root = tempfile::tempdir().unwrap();
+        let handle = run_with_config(ServerConfig {
+            port: 0,
+            http_port: 0,
+            data_dir: root.path().to_string_lossy().into_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let mut connection = tokio::net::TcpStream::connect(handle.local_addr().unwrap())
+            .await
+            .unwrap();
+        connection
+            .write_all(b"*3\r\n$5\r\nBLPOP\r\n$5\r\nnever\r\n$2\r\n10\r\n")
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(25)).await;
+
+        assert_eq!(
+            handle
+                .shutdown_and_wait_detailed(Duration::from_millis(50))
+                .await
+                .unwrap(),
+            ShutdownOutcome::Forced
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn idle_http_connection_does_not_block_clean_shutdown() {
+        let root = tempfile::tempdir().unwrap();
+        let http_port = free_port();
+        let handle = run_with_config(ServerConfig {
+            enable_resp: false,
+            http_port,
+            data_dir: root.path().to_string_lossy().into_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let _connection = tokio::net::TcpStream::connect(("127.0.0.1", http_port))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            handle
+                .shutdown_and_wait_detailed(Duration::from_secs(1))
+                .await
+                .unwrap(),
+            ShutdownOutcome::Clean
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn final_sync_failure_is_not_reported_as_clean() {
+        let root = tempfile::tempdir().unwrap();
+        let handle = run_with_config(persistent_embedded_config(root.path()))
+            .await
+            .unwrap();
+        handle.runtime().store.inject_journal_fsync_failures(1);
+
+        let error = handle
+            .shutdown_and_wait_detailed(Duration::from_secs(2))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, ShutdownError::Persistence(_)),
+            "unexpected shutdown error: {error}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn bgsave_is_single_flight_and_retains_post_capture_mutations() {
+        let root = tempfile::tempdir().unwrap();
+        let mut config = persistent_embedded_config(root.path());
+        config.save_interval = Duration::ZERO;
+        let handle = run_with_config(config.clone()).await.unwrap();
+        let client = handle.client();
+        client
+            .execute_value("SET", &["counter", "10"])
+            .await
+            .unwrap();
+
+        let captured = Arc::new(std::sync::Barrier::new(2));
+        let release = Arc::new(std::sync::Barrier::new(2));
+        handle.runtime().store.set_snapshot_after_capture_hook({
+            let captured = captured.clone();
+            let release = release.clone();
+            Arc::new(move || {
+                captured.wait();
+                release.wait();
+            })
+        });
+
+        assert_eq!(
+            client.execute_value("BGSAVE", &[]).await.unwrap(),
+            EmbeddedValue::Simple("Background saving started".to_string())
+        );
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            tokio::task::spawn_blocking(move || captured.wait()),
+        )
+        .await
+        .expect("snapshot did not reach the post-capture boundary")
+        .unwrap();
+
+        for expected in 11..=110 {
+            assert_eq!(
+                client.execute_value("INCR", &["counter"]).await.unwrap(),
+                EmbeddedValue::Int(expected)
+            );
+        }
+        assert_eq!(
+            client.execute_value("PING", &[]).await.unwrap(),
+            EmbeddedValue::Simple("PONG".to_string())
+        );
+        let busy = client.execute_value("BGSAVE", &[]).await.unwrap_err();
+        assert!(busy.to_string().contains("already in progress"), "{busy}");
+
+        let info = client
+            .execute_value("INFO", &["persistence"])
+            .await
+            .unwrap();
+        let EmbeddedValue::Bulk(info) = info else {
+            panic!("expected INFO bulk response");
+        };
+        let info = String::from_utf8_lossy(&info);
+        assert!(info.contains("rdb_bgsave_in_progress:1\r\n"), "{info}");
+        assert!(
+            info.contains("lux_current_bgsave_phase:capturing\r\n"),
+            "{info}"
+        );
+
+        tokio::task::spawn_blocking(move || release.wait())
+            .await
+            .unwrap();
+        let status = wait_for_background_save(&handle.runtime().store).await;
+        assert_eq!(status.last_status, "ok");
+        assert_eq!(status.last_keys, 1);
+        assert!(
+            snapshot::last_save_unix_seconds(&handle.runtime().store)
+                .unwrap()
+                .is_some()
+        );
+
+        handle.shutdown_and_wait().await.unwrap();
+        let restarted = run_with_config(config).await.unwrap();
+        let client = restarted.client();
+        assert_eq!(
+            client.execute_value("GET", &["counter"]).await.unwrap(),
+            EmbeddedValue::Bulk(bytes::Bytes::from_static(b"110"))
+        );
+        restarted.shutdown_and_wait().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn bgsave_failure_is_observable_and_does_not_advance_lastsave() {
+        let root = tempfile::tempdir().unwrap();
+        let mut config = persistent_embedded_config(root.path());
+        config.save_interval = Duration::ZERO;
+        let handle = run_with_config(config).await.unwrap();
+        handle
+            .client()
+            .execute_value("SET", &["preserved", "snapshot"])
+            .await
+            .unwrap();
+        handle.client().execute_value("SAVE", &[]).await.unwrap();
+        let installed_before = std::fs::read(root.path().join("lux.dat")).unwrap();
+        let lastsave_before = handle
+            .client()
+            .execute_value("LASTSAVE", &[])
+            .await
+            .unwrap();
+        handle.runtime().store.inject_snapshot_failures(1);
+
+        handle.client().execute_value("BGSAVE", &[]).await.unwrap();
+        let status = wait_for_background_save(&handle.runtime().store).await;
+        assert_eq!(status.last_status, "err");
+        assert!(status.last_error.is_some());
+        assert_eq!(
+            std::fs::read(root.path().join("lux.dat")).unwrap(),
+            installed_before,
+            "a failed BGSAVE replaced the installed snapshot"
+        );
+
+        let info = handle
+            .client()
+            .execute_value("INFO", &["persistence"])
+            .await
+            .unwrap();
+        let EmbeddedValue::Bulk(info) = info else {
+            panic!("expected INFO bulk response");
+        };
+        let info = String::from_utf8_lossy(&info);
+        assert!(info.contains("rdb_last_bgsave_status:err\r\n"), "{info}");
+        assert!(info.contains("lux_last_bgsave_error:"), "{info}");
+        assert!(!info.contains("lux_last_bgsave_error:\r\n"), "{info}");
+        assert_eq!(
+            handle
+                .client()
+                .execute_value("LASTSAVE", &[])
+                .await
+                .unwrap(),
+            lastsave_before
+        );
+        handle.shutdown_and_wait().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn shutdown_waits_for_an_active_snapshot_before_final_sync() {
+        let root = tempfile::tempdir().unwrap();
+        let mut config = persistent_embedded_config(root.path());
+        config.save_interval = Duration::ZERO;
+        let handle = run_with_config(config.clone()).await.unwrap();
+        handle
+            .client()
+            .execute_value("SET", &["before_shutdown", "durable"])
+            .await
+            .unwrap();
+
+        let captured = Arc::new(std::sync::Barrier::new(2));
+        let release = Arc::new(std::sync::Barrier::new(2));
+        handle.runtime().store.set_snapshot_after_capture_hook({
+            let captured = captured.clone();
+            let release = release.clone();
+            Arc::new(move || {
+                captured.wait();
+                release.wait();
+            })
+        });
+        handle.client().execute_value("BGSAVE", &[]).await.unwrap();
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            tokio::task::spawn_blocking(move || captured.wait()),
+        )
+        .await
+        .expect("snapshot did not reach the post-capture boundary")
+        .unwrap();
+
+        let shutdown = tokio::spawn(async move {
+            handle
+                .shutdown_and_wait_detailed(Duration::from_secs(2))
+                .await
+        });
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        assert!(
+            !shutdown.is_finished(),
+            "shutdown returned while the snapshot thread was still active"
+        );
+        tokio::task::spawn_blocking(move || release.wait())
+            .await
+            .unwrap();
+        assert_eq!(shutdown.await.unwrap().unwrap(), ShutdownOutcome::Clean);
+
+        let restarted = run_with_config(config).await.unwrap();
+        assert_eq!(
+            restarted
+                .client()
+                .execute_value("GET", &["before_shutdown"])
+                .await
+                .unwrap(),
+            EmbeddedValue::Bulk(bytes::Bytes::from_static(b"durable"))
+        );
+        restarted.shutdown_and_wait().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn scheduled_snapshots_use_the_background_worker() {
+        let root = tempfile::tempdir().unwrap();
+        let mut config = persistent_embedded_config(root.path());
+        config.save_interval = Duration::from_millis(25);
+        let handle = run_with_config(config.clone()).await.unwrap();
+        handle
+            .client()
+            .execute_value("SET", &["scheduled", "durable"])
+            .await
+            .unwrap();
+
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let status = handle.runtime().store.snapshot_status();
+                if status.last_status == "ok" && status.last_keys == 1 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("scheduled snapshot did not complete");
+        handle.shutdown_and_wait().await.unwrap();
+
+        let restarted = run_with_config(config).await.unwrap();
+        assert_eq!(
+            restarted
+                .client()
+                .execute_value("GET", &["scheduled"])
+                .await
+                .unwrap(),
+            EmbeddedValue::Bulk(bytes::Bytes::from_static(b"durable"))
+        );
+        restarted.shutdown_and_wait().await.unwrap();
+    }
+
+    #[test]
+    fn persistent_auth_requires_a_recoverable_encryption_configuration() {
+        let root = tempfile::tempdir().unwrap();
+        let mut config = persistent_embedded_config(root.path());
+        config.auth.enabled = true;
+
+        let error = validate_encryption_config(&config).unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("persistent Auth requires"), "{message}");
+        assert!(message.contains("LUX_ENC_AUTO_INIT"), "{message}");
+        assert!(message.contains("ENC REWRAP"), "{message}");
+
+        config.encryption.auto_init = true;
+        assert!(validate_encryption_config(&config).is_ok());
+
+        config.encryption.state_path = Some(String::new());
+        let error = validate_encryption_config(&config).unwrap_err();
+        assert!(error.to_string().contains("ephemeral keyring"), "{error}");
+    }
+
+    #[test]
+    fn seal_rotation_failure_names_the_previous_seal_recovery_path() {
+        let root = tempfile::tempdir().unwrap();
+        let old_seal = [7u8; 32];
+        let initial = EncryptionConfig {
+            auto_init: true,
+            seal_secret: Some(old_seal),
+            ..Default::default()
+        };
+        crate::vendor::lux::encryption::EncryptionKeyring::open(
+            &initial,
+            root.path().to_str().unwrap(),
+        )
+        .unwrap();
+
+        let mut config = persistent_embedded_config(root.path());
+        config.auth.enabled = true;
+        config.encryption.seal_secret = Some([8u8; 32]);
+        let error = validate_encryption_config(&config).unwrap_err();
+        assert!(
+            error.to_string().contains("LUX_ENC_SEAL_KEY_PREVIOUS"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ephemeral_auth_warns_and_refuses_plaintext_snapshots() {
+        let root = tempfile::tempdir().unwrap();
+        let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let captured = events.clone();
+        let config = ServerConfig {
+            data_dir: root.path().to_string_lossy().into_owned(),
+            enable_resp: false,
+            durability: DurabilityConfig {
+                policy: DurabilityPolicy::Ephemeral,
+                ..DurabilityConfig::default()
+            },
+            auth: AuthConfig {
+                enabled: true,
+                ..AuthConfig::default()
+            },
+            on_warn: Some(std::sync::Arc::new(move |event| {
+                captured.lock().unwrap().push(event);
+            })),
+            ..ServerConfig::default()
+        };
+
+        let handle = run_with_config(config).await.unwrap();
+        assert_eq!(
+            auth::secret_storage_health(&handle.runtime.store).status,
+            auth::AuthSecretStorageStatus::Degraded
+        );
+        assert!(
+            events
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|event| matches!(event, ServerWarnEvent::AuthSecretStorageDegraded))
+        );
+        let error = snapshot::save_and_truncate_wal_consistent(&handle.runtime.store).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(error.to_string().contains("restart"));
+
+        handle
+            .runtime
+            .store
+            .encryption()
+            .init(Some("late-auth-key"))
+            .unwrap();
+        assert!(handle.runtime.store.encryption().has_active_key());
+        assert_eq!(
+            auth::secret_storage_health(&handle.runtime.store).status,
+            auth::AuthSecretStorageStatus::Degraded,
+            "initializing encryption cannot retroactively migrate Auth rows"
+        );
+        let error = snapshot::save_and_truncate_wal_consistent(&handle.runtime.store).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(error.to_string().contains("restart"));
+        handle.shutdown_and_wait().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn persistent_auth_missing_key_fails_before_readiness() {
+        let root = tempfile::tempdir().unwrap();
+        let mut config = persistent_embedded_config(root.path());
+        config.enable_resp = false;
+        config.auth.enabled = true;
+        let error = match run_with_config(config).await {
+            Ok(handle) => {
+                handle.shutdown_and_wait().await.unwrap();
+                panic!("persistent Auth unexpectedly reached readiness")
+            }
+            Err(error) => error,
+        };
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(
+            error.to_string().contains("Auth secret storage is locked"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn missing_prior_data_key_fails_restart_with_rotation_guidance() {
+        fn configure_key(config: &mut ServerConfig, id: &str, secret: &[u8]) {
+            config.encryption = EncryptionConfig {
+                active_key_id: Some(id.to_string()),
+                keys: vec![EncryptionKeyConfig {
+                    id: id.to_string(),
+                    secret: secret.to_vec(),
+                    decrypt_only: false,
+                }],
+                ..Default::default()
+            };
+        }
+
+        let root = tempfile::tempdir().unwrap();
+        let mut first = persistent_embedded_config(root.path());
+        first.enable_resp = false;
+        first.save_interval = Duration::ZERO;
+        first.auth.enabled = true;
+        configure_key(&mut first, "original", b"original-auth-data-key");
+        let handle = run_with_config(first).await.unwrap();
+        handle.shutdown_and_wait().await.unwrap();
+
+        let mut rotated = persistent_embedded_config(root.path());
+        rotated.enable_resp = false;
+        rotated.save_interval = Duration::ZERO;
+        rotated.auth.enabled = true;
+        configure_key(&mut rotated, "replacement", b"replacement-auth-data-key");
+        let error = match run_with_config(rotated).await {
+            Ok(handle) => {
+                handle.shutdown_and_wait().await.unwrap();
+                panic!("restart unexpectedly discarded the prior data-key requirement")
+            }
+            Err(error) => error,
+        };
+        let message = error.to_string();
+        assert!(
+            message.contains("auth secret storage is locked"),
+            "{message}"
+        );
+        assert!(message.contains("retain prior data keys"), "{message}");
+        assert!(message.contains("ENC REWRAP"), "{message}");
+    }
+}
+
+#[cfg(any())]
+mod listener_security_tests {
+    use super::*;
+
+    /// A public-interface config with no credentials at all.
+    fn public_config() -> ServerConfig {
+        ServerConfig {
+            bind_host: "0.0.0.0".to_string(),
+            enable_resp: true,
+            http_port: 8080,
+            password: String::new(),
+            require_auth: false,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn refuses_public_listener_with_no_credentials() {
+        assert!(validate_listener_security(&public_config()).is_err());
+    }
+
+    #[test]
+    fn allows_public_listener_with_a_password() {
+        let mut config = public_config();
+        config.password = "s3cret".to_string();
+        config.require_auth = true;
+        assert!(validate_listener_security(&config).is_ok());
+    }
+
+    /// The key-only shape the credential model moves towards: a secret key and
+    /// no password. Judging this by the password alone would refuse to boot a
+    /// perfectly authenticated engine.
+    #[test]
+    fn allows_public_listener_with_only_a_secret_key() {
+        let mut config = public_config();
+        config.auth.initial_secret_key = Some("lux_sec_listener".to_string());
+        assert!(
+            validate_listener_security(&config).is_ok(),
+            "a secret key is a credential; key-only engines must be able to bind"
+        );
+    }
+
+    /// Publishable keys cannot use RESP, so a publishable-only engine really is
+    /// unauthenticated there and must still be refused.
+    #[test]
+    fn refuses_public_resp_listener_with_only_a_publishable_key() {
+        let mut config = public_config();
+        config.auth.initial_publishable_key = Some("lux_pub_listener".to_string());
+        assert!(validate_listener_security(&config).is_err());
+
+        // HTTP alone is fine: publishable is a real credential there.
+        config.enable_resp = false;
+        assert!(validate_listener_security(&config).is_ok());
+    }
+
+    #[test]
+    fn loopback_and_explicit_opt_out_still_bypass_the_check() {
+        let mut config = public_config();
+        config.bind_host = "127.0.0.1".to_string();
+        assert!(validate_listener_security(&config).is_ok());
+
+        let mut config = public_config();
+        config.allow_insecure_no_auth = true;
+        assert!(validate_listener_security(&config).is_ok());
     }
 }
