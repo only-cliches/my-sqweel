@@ -41,12 +41,19 @@ pub(super) fn eval_json_query(
     };
     let document = eval_json_document(first, data, last_insert_id)?;
     let Some(path_arg) = args.get(1) else {
-        return Ok(document);
+        return match document {
+            Value::Array(_) | Value::Object(_) => json_extract_text_value(document),
+            _ => Ok(Value::Null),
+        };
     };
     let path = json_scalar_to_string(&eval_scalar_text(path_arg, data, last_insert_id)?);
-    Ok(json_extract_path(&document, &path)
-        .map(mark_json_nulls)
-        .unwrap_or(Value::Null))
+    let Some(value) = json_extract_path(&document, &path) else {
+        return Ok(Value::Null);
+    };
+    match value {
+        Value::Array(_) | Value::Object(_) => json_extract_text_value(value),
+        _ => Ok(Value::Null),
+    }
 }
 
 pub(super) fn json_text_value(value: Value) -> Result<Value> {

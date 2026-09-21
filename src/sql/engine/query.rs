@@ -1824,7 +1824,7 @@ impl RawEngine {
                     "INTERVAL_FUNC" => MysqlColumnType::Integer,
                     "CONV" | "MAKE_SET" | "FORMAT" | "QUOTE" => MysqlColumnType::VarChar,
                     "JSON_DEPTH" | "JSON_LENGTH" => MysqlColumnType::Integer,
-                    "JSON_PRETTY" => {
+                    "JSON_PRETTY" | "JSON_QUERY" => {
                         let argument = function_arguments(function)
                             .ok()
                             .and_then(|arguments| arguments.into_iter().next().flatten())
