@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "id": "alter_drop_columns_snapshot",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "df7cb/pg_dirtyread",
+      "commit": "7cd9a62b0d5a260e68da46c42b375033811a207c",
+      "path": "sql/dirtyread.sql",
+      "url": "https://github.com/df7cb/pg_dirtyread/blob/7cd9a62b0d5a260e68da46c42b375033811a207c/sql/dirtyread.sql",
+      "sha256": "5ba4ca6afecdb68c41990e43156c5fa0660f4b522be95a874afc4603b2d87d0d",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "sql/dirtyread.sql:69",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A PostgreSQL ALTER TABLE statement drops several obsolete columns in one command by repeating DROP COLUMN clauses.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored snapshot-retention migration. One ALTER TABLE command removes two obsolete columns while retaining the primary key and live snapshot fields; the schema and row values are newly authored and no PostgreSQL-only options are copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "alter-table",
+    "drop-column",
+    "multiple-drop-clauses",
+    "schema-mutation",
+    "row-preservation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Snapshot rows retain snapshot_id, snapshot_label, and retained_count after obsolete_debug and obsolete_checksum are removed. Both rows must survive the schema mutation unchanged.",
+  "determinism_notes": "Snapshot IDs are unique and fixed; the post-DDL SELECT uses primary-key ordering and no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE snapshot_registry (snapshot_id INT PRIMARY KEY, snapshot_label VARCHAR(32) NOT NULL, obsolete_debug VARCHAR(64) NULL, obsolete_checksum VARCHAR(64) NULL, retained_count INT NOT NULL)",
+    "INSERT INTO snapshot_registry VALUES (801, 'morning', 'debug-a', 'checksum-a', 12), (802, 'evening', 'debug-b', 'checksum-b', 18)"
+  ],
+  "steps": [
+    {
+      "sql": "ALTER TABLE snapshot_registry DROP COLUMN obsolete_debug, DROP COLUMN obsolete_checksum"
+    },
+    {
+      "sql": "SELECT * FROM snapshot_registry ORDER BY snapshot_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT * FROM snapshot_registry ORDER BY snapshot_id",
+      "ordered": true
+    }
+  ]
+}
