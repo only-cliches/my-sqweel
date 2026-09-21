@@ -143,6 +143,42 @@ pub(super) fn eval_make_date(
     };
     Ok(Value::String(date.to_string()))
 }
+pub(super) fn eval_make_time(
+    hour_arg: Option<&String>,
+    minute_arg: Option<&String>,
+    second_arg: Option<&String>,
+    data: &Map<String, Value>,
+    last_insert_id: u64,
+) -> Result<Value> {
+    let hour = hour_arg
+        .map(|arg| eval_scalar_text(arg, data, last_insert_id))
+        .transpose()?
+        .and_then(|value| value_to_i64(&value));
+    let minute = minute_arg
+        .map(|arg| eval_scalar_text(arg, data, last_insert_id))
+        .transpose()?
+        .and_then(|value| value_to_i64(&value));
+    let second = second_arg
+        .map(|arg| eval_scalar_text(arg, data, last_insert_id))
+        .transpose()?
+        .and_then(|value| value_to_i64(&value));
+    let (Some(hour), Some(minute), Some(second)) = (hour, minute, second) else {
+        return Ok(Value::Null);
+    };
+    if !(0..60).contains(&minute) || !(0..60).contains(&second) {
+        return Ok(Value::Null);
+    }
+    let sign = if hour < 0 { -1_i64 } else { 1_i64 };
+    let magnitude = hour.unsigned_abs();
+    let total_seconds = if magnitude > 838 {
+        838_i64 * 3_600 + 59 * 60 + 59
+    } else {
+        magnitude as i64 * 3_600 + minute * 60 + second
+    };
+    Ok(Value::String(format_mysql_duration(Duration::seconds(
+        total_seconds * sign,
+    ))))
+}
 
 pub(super) fn eval_add_sub_time(
     datetime_arg: Option<&String>,

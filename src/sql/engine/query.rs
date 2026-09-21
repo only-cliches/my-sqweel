@@ -1701,9 +1701,8 @@ impl RawEngine {
                     "CURRENT_DATE" | "CURDATE" | "DATE" | "FROM_DAYS" | "LAST_DAY" | "MAKEDATE" => {
                         MysqlColumnType::Date
                     }
-                    "CURRENT_TIME" | "CURTIME" | "TIME" | "SEC_TO_TIME" | "TIMEDIFF" => {
-                        MysqlColumnType::Time
-                    }
+                    "CURRENT_TIME" | "CURTIME" | "TIME" | "SEC_TO_TIME" | "TIMEDIFF"
+                    | "MAKETIME" => MysqlColumnType::Time,
                     "NOW" | "CURRENT_TIMESTAMP" | "FROM_UNIXTIME" => MysqlColumnType::DateTime,
                     "DATE_ADD" | "DATE_SUB" | "ADDDATE" | "SUBDATE" => MysqlColumnType::DateTime,
                     "TIMESTAMPADD" => {

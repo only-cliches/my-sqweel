@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "maketime_slot_components",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "bpbpublications/MySQL-Cookbook",
+      "commit": "a1bf69c06ab8b4ac124eed9603fc5447e0842d32",
+      "path": "Chapter 07/select_maketime.sql",
+      "url": "https://github.com/bpbpublications/MySQL-Cookbook/blob/a1bf69c06ab8b4ac124eed9603fc5447e0842d32/Chapter%2007/select_maketime.sql",
+      "sha256": "c0b9775cfd3a6b86e39933f27b38e96cca2c0cace5dea6a564edac01c1446ebf",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Chapter 07/select_maketime.sql:1",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL scalar query constructs a TIME value from hour, minute, and second components with MAKETIME.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored slot-component audit. Fixed normal, extended-hour, invalid-hour, and NULL component rows exercise MAKETIME's TIME construction and NULL behavior; the source literal and purpose are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["maketime", "time-components", "extended-hour", "invalid-input", "null-propagation", "deterministic-order"],
+  "fixture_notes": "Rows cover ordinary morning and evening times, a 25-hour duration, a negative hour, and a missing hour. MariaDB's TIME range permits both extended and negative hour values; a missing component returns NULL.",
+  "determinism_notes": "Slot IDs and component values are fixed, and output is ordered by the primary key with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE slot_components (slot_id INT PRIMARY KEY, slot_hour INT NULL, slot_minute INT NULL, slot_second INT NULL)",
+    "INSERT INTO slot_components VALUES (601, 8, 5, 9), (602, 20, 25, 59), (603, 25, 0, 0), (604, -1, 0, 5), (605, NULL, 12, 0)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT slot_id, slot_hour, slot_minute, slot_second, MAKETIME(slot_hour, slot_minute, slot_second) AS slot_time, TIME_TO_SEC(MAKETIME(slot_hour, slot_minute, slot_second)) AS total_seconds, CASE WHEN MAKETIME(slot_hour, slot_minute, slot_second) IS NULL THEN 'invalid-or-missing' WHEN slot_hour >= 24 THEN 'extended-duration' ELSE 'ordinary-time' END AS time_class FROM slot_components ORDER BY slot_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT slot_id, slot_hour, slot_minute, slot_second FROM slot_components ORDER BY slot_id",
+      "ordered": true
+    }
+  ]
+}

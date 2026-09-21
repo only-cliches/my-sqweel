@@ -3785,6 +3785,7 @@ pub(super) fn eval_function_text(
         "ADDTIME" => eval_add_sub_time(args.first(), args.get(1), data, last_insert_id, 1),
         "SUBTIME" => eval_add_sub_time(args.first(), args.get(1), data, last_insert_id, -1),
         "TIMEDIFF" => eval_time_diff(args.first(), args.get(1), data, last_insert_id),
+        "MAKETIME" => eval_make_time(args.first(), args.get(1), args.get(2), data, last_insert_id),
         "SEC_TO_TIME" => {
             let value = args
                 .first()
