@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "json_quote_annotation_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "antlr/grammars-v4",
+      "commit": "e356c2fb6dbd60ce4346841f6a2e5578014fadb4",
+      "path": "sql/mariadb/examples/fast/dml_select.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/e356c2fb6dbd60ce4346841f6a2e5578014fadb4/sql/mariadb/examples/fast/dml_select.sql",
+      "sha256": "b9128ffb5b50bea79c534bc24a127d9d626fd2d21be8cb0a45deafd8d6c84f79",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/mariadb/examples/fast/dml_select.sql:140",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB scalar expression applies JSON_QUOTE to strings containing JSON-significant punctuation and to the literal text null.",
+      "mysql_mariadb_translation": "Reauthored as an annotation audit over new text and JSON columns. The report quotes fixed messages with quotes and backslashes, quotes a stored JSON document as text, and preserves SQL NULL propagation without copying source literals, schema, or query text."
+    },
+    "independently_authored": true
+  },
+  "features": ["json-quote", "escape-sequences", "json-column", "sql-null-propagation", "deterministic-order"],
+  "fixture_notes": "Annotation 4401 contains quotes and a backslash, annotation 4402 contains a JSON document with punctuation, and annotation 4403 has NULL text. JSON_QUOTE outputs are selected directly to preserve escaping and metadata behavior.",
+  "determinism_notes": "Rows use fixed annotation IDs and the report orders by the primary key. There are no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE annotation_samples (annotation_id INT PRIMARY KEY, message_text VARCHAR(96) NULL, payload JSON NOT NULL)",
+    "INSERT INTO annotation_samples VALUES (4401, 'She said \"ready\\now\"', '{\"state\":\"ready\",\"count\":2}'), (4402, 'plain status', '{\"state\":\"held\",\"count\":0}'), (4403, NULL, '{\"state\":\"queued\"}')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT annotation_id, JSON_QUOTE(message_text) AS quoted_message, JSON_QUOTE(payload) AS quoted_payload, JSON_QUOTE(NULL) AS quoted_null FROM annotation_samples ORDER BY annotation_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT annotation_id FROM annotation_samples ORDER BY annotation_id",
+      "ordered": true
+    }
+  ]
+}

@@ -1905,6 +1905,25 @@ impl RawEngine {
                             MysqlColumnType::VarChar
                         }
                     }
+                    "JSON_QUOTE" => {
+                        let argument = function_arguments(function)
+                            .ok()
+                            .and_then(|arguments| arguments.into_iter().next().flatten())
+                            .map(|argument| {
+                                self.expression_metadata(
+                                    select,
+                                    &argument,
+                                    String::new(),
+                                    first_row,
+                                )
+                                .column_type
+                            });
+                        if argument == Some(MysqlColumnType::Json) {
+                            MysqlColumnType::LongBlob
+                        } else {
+                            MysqlColumnType::VarChar
+                        }
+                    }
                     "JSON_UNQUOTE" => MysqlColumnType::LongBlob,
                     "JSON_KEYS" => {
                         let argument = function_arguments(function)

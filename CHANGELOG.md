@@ -228,6 +228,8 @@ All notable changes to MySqweel will be documented in this file.
 - Added the minimized GitHub-attributed `JSON_ARRAY_INSERT` direct-column metadata regression; MariaDB 10.11.7 and MySqweel now agree on inserted JSON values and metadata across repeated fresh differential runs.
 - Added GitHub-attributed `JSON_MERGE_PRESERVE` coverage from [antlr/grammars-v4](https://github.com/antlr/grammars-v4/blob/e356c2fb6dbd60ce4346841f6a2e5578014fadb4/sql/mariadb/examples/fast/dml_select.sql#L152) for an independently authored inventory reconciliation audit combining JSON-column object collisions, array concatenation, scalar autowrapping, and deterministic ordered output; fixed `JSON_MERGE_PRESERVE` result metadata to match MariaDB 10.11.7's `MYSQL_TYPE_LONG_BLOB`.
 - Added the minimized GitHub-attributed `JSON_MERGE_PRESERVE` direct-column metadata regression; MariaDB 10.11.7 and MySqweel now agree on preserved JSON values and metadata across repeated fresh differential runs.
+- Added GitHub-attributed `JSON_QUOTE` coverage from [antlr/grammars-v4](https://github.com/antlr/grammars-v4/blob/e356c2fb6dbd60ce4346841f6a2e5578014fadb4/sql/mariadb/examples/fast/dml_select.sql#L140) for an independently authored annotation audit combining JSON-significant string escaping, JSON-column quoting, SQL NULL propagation, and deterministic ordered output; fixed argument-sensitive `JSON_QUOTE` metadata to match MariaDB 10.11.7 (`MYSQL_TYPE_LONG_BLOB` for direct JSON inputs and `MYSQL_TYPE_VAR_STRING` otherwise).
+- Added the minimized GitHub-attributed `JSON_QUOTE` direct-column metadata regression; MariaDB 10.11.7 and MySqweel now agree on quoted JSON values and metadata across repeated fresh differential runs.
 
 ### Upstream corpus coverage
 
