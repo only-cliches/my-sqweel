@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "json_keys_role_usage",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "HTTPArchive/almanac.httparchive.org",
+      "commit": "e835299e6d9f6cc66188064c5d566006d493f521",
+      "path": "sql/2025/accessibility/common_aria_role.sql",
+      "url": "https://github.com/HTTPArchive/almanac.httparchive.org/blob/e835299e6d9f6cc66188064c5d566006d493f521/sql/2025/accessibility/common_aria_role.sql",
+      "sha256": "17d93093301306aafd0090ef4e056adfe37f66aed0c483bad65c5ddc8dfc87e1",
+      "source_dialect": "bigquery"
+    },
+    "inspiration": {
+      "source_location": "sql/2025/accessibility/common_aria_role.sql:45-50",
+      "source_dialect": "bigquery",
+      "observed_pattern": "A JSON analytics query expands the object keys returned by JSON_KEYS to analyze the names present in a nested usage-and-count object.",
+      "mysql_mariadb_translation": "Retained JSON_KEYS object-key extraction and added JSON_LENGTH plus JSON_EXTRACT projections for observable key counts and first-key labels. The fixture uses a new role-usage registry, fixed documents, labels, and ordered report instead of copying the analytics schema, source data, or UNNEST syntax."
+    },
+    "independently_authored": true
+  },
+  "features": ["json-keys", "json-object-key-extraction", "json-length", "json-path-extraction", "deterministic-order"],
+  "fixture_notes": "Each registry row stores a JSON object whose keys represent observed interface roles. The report exposes the JSON key array, its size, and its first key; all objects are non-empty so first-key extraction is deterministic.",
+  "determinism_notes": "Role object literals, labels, and ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE role_usage_registry (usage_id INT PRIMARY KEY, label VARCHAR(20) NOT NULL, role_counts JSON NOT NULL)",
+    "INSERT INTO role_usage_registry VALUES (21, 'navigation', '{\"button\":12,\"navigation\":5,\"search\":2}'), (22, 'dialog', '{\"alert\":3,\"dialog\":7}'), (23, 'form', '{\"checkbox\":4,\"textbox\":9,\"listbox\":1}')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT usage_id, label, JSON_KEYS(role_counts) AS role_keys, JSON_LENGTH(JSON_KEYS(role_counts)) AS role_count, JSON_UNQUOTE(JSON_EXTRACT(JSON_KEYS(role_counts), '$[0]')) AS first_role FROM role_usage_registry ORDER BY usage_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT usage_id, label, JSON_TYPE(role_counts) AS document_type, JSON_LENGTH(role_counts) AS stored_key_count FROM role_usage_registry ORDER BY usage_id",
+      "ordered": true
+    }
+  ]
+}

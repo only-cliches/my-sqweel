@@ -1714,6 +1714,25 @@ impl RawEngine {
                     "CONV" | "MAKE_SET" | "FORMAT" | "QUOTE" => MysqlColumnType::VarChar,
                     "JSON_LENGTH" => MysqlColumnType::Integer,
                     "JSON_UNQUOTE" => MysqlColumnType::LongBlob,
+                    "JSON_KEYS" => {
+                        let argument = function_arguments(function)
+                            .ok()
+                            .and_then(|arguments| arguments.into_iter().next().flatten())
+                            .map(|argument| {
+                                self.expression_metadata(
+                                    select,
+                                    &argument,
+                                    String::new(),
+                                    first_row,
+                                )
+                                .column_type
+                            });
+                        if argument == Some(MysqlColumnType::Json) {
+                            MysqlColumnType::LongBlob
+                        } else {
+                            MysqlColumnType::VarChar
+                        }
+                    }
                     "JSON_CONTAINS_PATH" => MysqlColumnType::Integer,
                     "JSON_OVERLAPS" => MysqlColumnType::Integer,
                     "JSON_ARRAYAGG" | "JSON_OBJECTAGG" => MysqlColumnType::Blob,
@@ -1722,7 +1741,6 @@ impl RawEngine {
                     | "JSON_ARRAY_INSERT"
                     | "JSON_EXTRACT"
                     | "JSON_INSERT"
-                    | "JSON_KEYS"
                     | "JSON_MERGE"
                     | "JSON_MERGE_PATCH"
                     | "JSON_MERGE_PRESERVE"

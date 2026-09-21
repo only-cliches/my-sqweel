@@ -248,7 +248,7 @@ features = ["derive"]
 
 [dependencies.serde_json]
 version = "1.0"
-
+features = ["preserve_order"]
 [dependencies.sha1_smol]
 version = "1"
 

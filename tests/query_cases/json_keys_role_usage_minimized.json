@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "id": "json_keys_role_usage_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "HTTPArchive/almanac.httparchive.org",
+      "commit": "e835299e6d9f6cc66188064c5d566006d493f521",
+      "path": "sql/2025/accessibility/common_aria_role.sql",
+      "url": "https://github.com/HTTPArchive/almanac.httparchive.org/blob/e835299e6d9f6cc66188064c5d566006d493f521/sql/2025/accessibility/common_aria_role.sql",
+      "sha256": "17d93093301306aafd0090ef4e056adfe37f66aed0c483bad65c5ddc8dfc87e1",
+      "source_dialect": "bigquery"
+    },
+    "inspiration": {
+      "source_location": "sql/2025/accessibility/common_aria_role.sql:45-50",
+      "source_dialect": "bigquery",
+      "observed_pattern": "A scalar JSON_KEYS expression exposes the names present in a JSON object.",
+      "mysql_mariadb_translation": "Reduced to one independently authored JSON_KEYS scalar projection over a fixed object, removing JSON table setup, JSON_LENGTH, ordering, and analytics grouping while retaining the result-type contract."
+    },
+    "independently_authored": true,
+    "minimized_from": "json_keys_role_usage"
+  },
+  "features": ["json-keys", "minimized-regression"],
+  "fixture_notes": "The fixed object has two keys; the scalar projection isolates JSON_KEYS result metadata and key serialization.",
+  "determinism_notes": "The JSON object literal is fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT JSON_KEYS('{\"beta\":2,\"alpha\":1}') AS role_keys",
+      "ordered": true
+    }
+  ]
+}

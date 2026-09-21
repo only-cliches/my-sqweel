@@ -505,9 +505,12 @@ pub(super) fn eval_json_keys(
     let Some(object) = value.as_object() else {
         return Ok(Value::Null);
     };
-    json_text_value(Value::Array(
-        object.keys().cloned().map(Value::String).collect(),
-    ))
+    let keys = object
+        .keys()
+        .map(|key| serde_json::to_string(key).unwrap_or_default())
+        .collect::<Vec<_>>()
+        .join(", ");
+    Ok(Value::String(format!("[{keys}]")))
 }
 
 pub(super) fn eval_json_contains_path(
