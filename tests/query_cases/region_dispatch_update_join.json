@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "id": "region_dispatch_update_join",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "caceresvalenciagiovanni-web/Dockerizando-una-base-de-datos-con-scripts-de-Python-y-DDL",
+      "commit": "fbf5dd7b0715a9ea04534340be43c8ba1ca5b264",
+      "path": "dml.sql",
+      "url": "https://github.com/caceresvalenciagiovanni-web/Dockerizando-una-base-de-datos-con-scripts-de-Python-y-DDL/blob/fbf5dd7b0715a9ea04534340be43c8ba1ca5b264/dml.sql",
+      "sha256": "35288fb5b87a81c579016fd40cdafff6f07beec29d50f91cf763fd9f3d3d9a9a",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "dml.sql:198-205",
+      "source_dialect": "postgresql",
+      "observed_pattern": "An UPDATE selects target rows through two joined lookup tables and changes only targets in a particular lookup category.",
+      "mysql_mariadb_translation": "Translated PostgreSQL UPDATE ... FROM into MySQL/MariaDB UPDATE with two INNER JOIN clauses. The independently authored fixture also assigns a deterministic lane from the joined region priority and filters scheduled tasks by an active region code; all schema, rows, labels, and operational meaning are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["update-join", "chained-inner-joins", "joined-filter", "case-assignment", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "Tasks 101 and 104 are scheduled in active NORTH regions and become cancelled with priority or standard hold lanes. Task 102 is in SOUTH, task 103 is already completed, and task 105 has no depot, so they remain unchanged. The lookup tables are checked to prove only the target table is mutated.",
+  "determinism_notes": "Each task maps to at most one depot and one region through primary-key joins; fixed IDs and ordered final reads avoid clocks, randomness, sleeps, and concurrent schedules.",
+  "setup": [
+    "CREATE TABLE service_regions (region_id INT PRIMARY KEY, region_code VARCHAR(16) NOT NULL, active TINYINT NOT NULL, priority_level INT NOT NULL)",
+    "CREATE TABLE depots (depot_id INT PRIMARY KEY, region_id INT NOT NULL, depot_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE shipment_tasks (task_id INT PRIMARY KEY, depot_id INT NOT NULL, task_state VARCHAR(16) NOT NULL, dispatch_lane VARCHAR(24) NOT NULL)",
+    "INSERT INTO service_regions VALUES (10, 'NORTH', 1, 1), (20, 'SOUTH', 1, 2), (30, 'NORTH', 1, 3), (40, 'NORTH', 0, 1)",
+    "INSERT INTO depots VALUES (1, 10, 'North Hub'), (2, 20, 'South Hub'), (3, 30, 'North Annex'), (4, 40, 'Closed Hub')",
+    "INSERT INTO shipment_tasks VALUES (101, 1, 'scheduled', 'standard'), (102, 2, 'scheduled', 'standard'), (103, 3, 'completed', 'express'), (104, 3, 'scheduled', 'standard'), (105, 99, 'scheduled', 'standard')"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE shipment_tasks AS t INNER JOIN depots AS d ON d.depot_id = t.depot_id INNER JOIN service_regions AS r ON r.region_id = d.region_id SET t.task_state = 'cancelled', t.dispatch_lane = CASE WHEN r.priority_level = 1 THEN 'priority-hold' ELSE 'regional-hold' END WHERE r.region_code = 'NORTH' AND r.active = 1 AND t.task_state = 'scheduled'"
+    },
+    {
+      "sql": "SELECT task_id, depot_id, task_state, dispatch_lane FROM shipment_tasks ORDER BY task_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT region_id, region_code, active, priority_level FROM service_regions ORDER BY region_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT depot_id, region_id, depot_name FROM depots ORDER BY depot_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT task_id, depot_id, task_state, dispatch_lane FROM shipment_tasks ORDER BY task_id",
+      "ordered": true
+    }
+  ]
+}
