@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "seat_run_window_groups",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "debabratabar/ankit-bansal-sql-playlist",
+      "commit": "8ead89de02f5a9d3d607c504b4790616684aef35",
+      "path": "Q35.sql",
+      "url": "https://github.com/debabratabar/ankit-bansal-sql-playlist/blob/8ead89de02f5a9d3d607c504b4790616684aef35/Q35.sql",
+      "sha256": "27ca33a582563186372ed2eaac5ebbcbc7670837d2f5162924697287625ee69d",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Q35.sql:1-33, movie seating CTE using ROW_NUMBER() and COUNT() OVER (PARTITION BY ...)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A seating report numbers available seats, derives a constant gap key from the seat number and row number, then uses a partitioned window count to identify consecutive free runs.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored auditorium inventory with hall IDs, numeric seat positions, and fixed occupancy flags. The source movie table and rows are not copied; the report uses deterministic seat ordering and adds window MIN/MAX boundaries for each qualifying run."
+    },
+    "independently_authored": true
+  },
+  "features": ["cte", "row-number", "window-count", "window-min", "window-max", "partition-by", "distinct", "deterministic-order"],
+  "fixture_notes": "Hall 1 has two free runs of length three at seats 2-4 and 6-8. Hall 2 has a short run at seats 1-2 and one qualifying run of length four at seats 4-7. Occupied seats must not enter any run.",
+  "determinism_notes": "Each hall and seat position is unique, every ROW_NUMBER window orders by seat_no, and the final report orders by hall and first seat. There are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE auditorium_seats (hall_id INT NOT NULL, seat_no INT NOT NULL, occupied INT NOT NULL, PRIMARY KEY (hall_id, seat_no))",
+    "INSERT INTO auditorium_seats VALUES (1, 1, 1), (1, 2, 0), (1, 3, 0), (1, 4, 0), (1, 5, 1), (1, 6, 0), (1, 7, 0), (1, 8, 0), (2, 1, 0), (2, 2, 0), (2, 3, 1), (2, 4, 0), (2, 5, 0), (2, 6, 0), (2, 7, 0)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH numbered_free AS (SELECT hall_id, seat_no, ROW_NUMBER() OVER (PARTITION BY hall_id ORDER BY seat_no) AS free_position FROM auditorium_seats WHERE occupied = 0), grouped_free AS (SELECT hall_id, seat_no, seat_no - free_position AS run_key FROM numbered_free), run_stats AS (SELECT hall_id, seat_no, run_key, COUNT(*) OVER (PARTITION BY hall_id, run_key) AS run_length, MIN(seat_no) OVER (PARTITION BY hall_id, run_key) AS first_seat, MAX(seat_no) OVER (PARTITION BY hall_id, run_key) AS last_seat FROM grouped_free), qualified_runs AS (SELECT DISTINCT hall_id, run_key, run_length, first_seat, last_seat FROM run_stats WHERE run_length >= 3) SELECT hall_id, first_seat, last_seat, run_length FROM qualified_runs ORDER BY hall_id, first_seat",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT hall_id, seat_no, occupied FROM auditorium_seats ORDER BY hall_id, seat_no",
+      "ordered": true
+    }
+  ]
+}

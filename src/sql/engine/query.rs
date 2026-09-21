@@ -1506,6 +1506,10 @@ impl RawEngine {
                     .map(|name| name.value.to_ascii_uppercase())
                     .unwrap_or_default();
                 metadata.column_type = match name.as_str() {
+                    "CRC32" => {
+                        metadata.unsigned = true;
+                        MysqlColumnType::BigInt
+                    }
                     "COUNT" | "ROW_NUMBER" | "RANK" | "DENSE_RANK" | "NTILE" => {
                         metadata.unsigned = true;
                         MysqlColumnType::BigInt
@@ -1563,6 +1567,26 @@ impl RawEngine {
                             MysqlColumnType::BigInt
                         } else {
                             MysqlColumnType::Decimal
+                        }
+                    }
+                    "MIN" | "MAX" => {
+                        let argument = function_arguments(function)
+                            .ok()
+                            .and_then(|arguments| arguments.into_iter().next().flatten())
+                            .map(|argument| {
+                                self.expression_metadata(
+                                    select,
+                                    &argument,
+                                    String::new(),
+                                    first_row,
+                                )
+                            });
+                        if let Some(input) = argument {
+                            metadata.decimals = input.decimals;
+                            metadata.unsigned = input.unsigned;
+                            input.column_type
+                        } else {
+                            metadata.column_type
                         }
                     }
                     "AVG" | "SUM" | "STD" | "STDDEV" | "STDDEV_POP" | "STDDEV_SAMP" | "VAR_POP"

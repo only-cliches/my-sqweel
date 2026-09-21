@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "seat_run_window_metadata_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "debabratabar/ankit-bansal-sql-playlist",
+      "commit": "8ead89de02f5a9d3d607c504b4790616684aef35",
+      "path": "Q35.sql",
+      "url": "https://github.com/debabratabar/ankit-bansal-sql-playlist/blob/8ead89de02f5a9d3d607c504b4790616684aef35/Q35.sql",
+      "sha256": "27ca33a582563186372ed2eaac5ebbcbc7670837d2f5162924697287625ee69d",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Q35.sql:1-33, partitioned COUNT window over seat groups",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A partitioned window aggregate preserves integer detail columns while calculating group boundaries and group sizes on every row.",
+      "mysql_mariadb_translation": "Reduced to one independently authored integer table and partitioned MIN, MAX, and COUNT windows. The seating schema, values, and CTE chain are removed so the case isolates MariaDB integer metadata for window aggregates.",
+      "minimized_from": "seat_run_window_groups"
+    },
+    "independently_authored": true
+  },
+  "features": ["window-min", "window-max", "window-count", "partition-by", "metadata", "deterministic-order"],
+  "fixture_notes": "Two fixed groups exercise MIN/MAX over INT input and COUNT over the same partition. The expected MariaDB metadata distinguishes LONG results from LONGLONG count results.",
+  "determinism_notes": "Rows have fixed IDs and group labels; the final result is ordered by group and row ID. There are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE seat_window_values (value_id INT NOT NULL PRIMARY KEY, group_id INT NOT NULL, seat_no INT NOT NULL)",
+    "INSERT INTO seat_window_values VALUES (1, 10, 4), (2, 10, 7), (3, 20, 2), (4, 20, 9)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT value_id, group_id, MIN(seat_no) OVER (PARTITION BY group_id) AS first_seat, MAX(seat_no) OVER (PARTITION BY group_id) AS last_seat, COUNT(*) OVER (PARTITION BY group_id) AS group_size FROM seat_window_values ORDER BY group_id, value_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
