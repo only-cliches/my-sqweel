@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "id": "json_depth_audit_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "antlr/grammars-v4",
+      "commit": "e356c2fb6dbd60ce4346841f6a2e5578014fadb4",
+      "path": "sql/mariadb/examples/fast/dml_select.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/e356c2fb6dbd60ce4346841f6a2e5578014fadb4/sql/mariadb/examples/fast/dml_select.sql",
+      "sha256": "b9128ffb5b50bea79c534bc24a127d9d626fd2d21be8cb0a45deafd8d6c84f79",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/mariadb/examples/fast/dml_select.sql:157",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB SELECT calls JSON_DEPTH on a JSON document and exposes the integer nesting depth.",
+      "mysql_mariadb_translation": "Reduced to one independently authored nested JSON literal and one scalar JSON_DEPTH projection. The table, JSON_ARRAY wrapper, NULL row, and report labels are removed so the integer result metadata contract is isolated."
+    },
+    "independently_authored": true,
+    "minimized_from": "json_depth_audit"
+  },
+  "features": ["json-depth", "metadata-regression"],
+  "fixture_notes": "The fixed nested document has depth 4; the scalar result must retain MariaDB's MYSQL_TYPE_LONG metadata.",
+  "determinism_notes": "The JSON literal is fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT JSON_DEPTH('{\"a\":[1,{\"b\":2}]}') AS document_depth",
+      "ordered": true
+    }
+  ]
+}

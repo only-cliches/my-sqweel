@@ -1823,7 +1823,7 @@ impl RawEngine {
                     | "SECOND" | "MICROSECOND" => MysqlColumnType::Integer,
                     "INTERVAL_FUNC" => MysqlColumnType::Integer,
                     "CONV" | "MAKE_SET" | "FORMAT" | "QUOTE" => MysqlColumnType::VarChar,
-                    "JSON_LENGTH" => MysqlColumnType::Integer,
+                    "JSON_DEPTH" | "JSON_LENGTH" => MysqlColumnType::Integer,
                     "JSON_UNQUOTE" => MysqlColumnType::LongBlob,
                     "JSON_KEYS" => {
                         let argument = function_arguments(function)

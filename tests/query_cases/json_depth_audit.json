@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "json_depth_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "antlr/grammars-v4",
+      "commit": "e356c2fb6dbd60ce4346841f6a2e5578014fadb4",
+      "path": "sql/mariadb/examples/fast/dml_select.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/e356c2fb6dbd60ce4346841f6a2e5578014fadb4/sql/mariadb/examples/fast/dml_select.sql",
+      "sha256": "b9128ffb5b50bea79c534bc24a127d9d626fd2d21be8cb0a45deafd8d6c84f79",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/mariadb/examples/fast/dml_select.sql:157",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB SELECT calls JSON_DEPTH on scalar, array, and object JSON documents to measure their maximum nesting depth.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored document-depth audit over fixed JSON column values. The report measures original documents and documents wrapped in a one-level JSON array, covering object, nested-array, empty-array, and SQL NULL inputs without copying the source literals or query."
+    },
+    "independently_authored": true
+  },
+  "features": ["json-depth", "json-array-wrapping", "nested-json", "null-propagation", "deterministic-order"],
+  "fixture_notes": "Document 401 is a shallow object, 402 contains an array with a nested object, 403 is an empty array, and 404 is SQL NULL. Wrapping each value in JSON_ARRAY adds one document level while preserving NULL as a JSON null element.",
+  "determinism_notes": "Document IDs and JSON values are fixed and ordered by the primary key; the audit contains no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE document_depth_audit (document_id INT PRIMARY KEY, document_label VARCHAR(24) NOT NULL, document_value JSON NULL)",
+    "INSERT INTO document_depth_audit VALUES (401, 'shallow object', '{\"a\":1}'), (402, 'nested payload', '{\"a\":[1,{\"b\":2}]}'), (403, 'empty array', '[]'), (404, 'missing payload', NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT document_id, document_label, JSON_DEPTH(document_value) AS original_depth, JSON_DEPTH(JSON_ARRAY(document_value)) AS wrapped_depth FROM document_depth_audit ORDER BY document_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT document_id, document_label, document_value FROM document_depth_audit ORDER BY document_id",
+      "ordered": true
+    }
+  ]
+}
