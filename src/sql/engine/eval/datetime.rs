@@ -179,6 +179,19 @@ pub(super) fn eval_make_time(
         total_seconds * sign,
     ))))
 }
+fn period_to_month_index(period: i64) -> Option<i64> {
+    let period_year = period / 100;
+    let year = if period >= 100_000 {
+        period_year
+    } else if period_year < 70 {
+        2_000 + period_year
+    } else {
+        1_900 + period_year
+    };
+    year.checked_mul(12)?
+        .checked_add(period.rem_euclid(100) - 1)
+}
+
 pub(super) fn eval_period_add(
     period_arg: Option<&String>,
     months_arg: Option<&String>,
@@ -196,19 +209,8 @@ pub(super) fn eval_period_add(
     let (Some(period), Some(months)) = (period, months) else {
         return Ok(Value::Null);
     };
-    let period_year = period / 100;
-    let year = if period >= 100_000 {
-        period_year
-    } else if period_year < 70 {
-        2_000 + period_year
-    } else {
-        1_900 + period_year
-    };
-    let month = period.rem_euclid(100);
-    let Some(total_months) = year
-        .checked_mul(12)
-        .and_then(|value| value.checked_add(month - 1))
-        .and_then(|value| value.checked_add(months))
+    let Some(total_months) =
+        period_to_month_index(period).and_then(|value| value.checked_add(months))
     else {
         return Ok(Value::Null);
     };
@@ -217,6 +219,30 @@ pub(super) fn eval_period_add(
     Ok(Value::Number(Number::from(
         result_year * 100 + result_month,
     )))
+}
+pub(super) fn eval_period_diff(
+    left_arg: Option<&String>,
+    right_arg: Option<&String>,
+    data: &Map<String, Value>,
+    last_insert_id: u64,
+) -> Result<Value> {
+    let left = left_arg
+        .map(|arg| eval_scalar_text(arg, data, last_insert_id))
+        .transpose()?
+        .and_then(|value| value_to_i64(&value));
+    let right = right_arg
+        .map(|arg| eval_scalar_text(arg, data, last_insert_id))
+        .transpose()?
+        .and_then(|value| value_to_i64(&value));
+    let (Some(left), Some(right)) = (left, right) else {
+        return Ok(Value::Null);
+    };
+    let Some(difference) = period_to_month_index(left)
+        .and_then(|left| period_to_month_index(right).and_then(|right| left.checked_sub(right)))
+    else {
+        return Ok(Value::Null);
+    };
+    Ok(Value::Number(Number::from(difference)))
 }
 
 pub(super) fn eval_add_sub_time(

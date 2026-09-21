@@ -3685,6 +3685,7 @@ pub(super) fn eval_function_text(
         "STR_TO_DATE" => eval_str_to_date(args.first(), args.get(1), data, last_insert_id),
         "MAKEDATE" => eval_make_date(args.first(), args.get(1), data, last_insert_id),
         "PERIOD_ADD" => eval_period_add(args.first(), args.get(1), data, last_insert_id),
+        "PERIOD_DIFF" => eval_period_diff(args.first(), args.get(1), data, last_insert_id),
         "LAST_DAY" => eval_last_day(args.first(), data, last_insert_id),
         "GET_FORMAT" => {
             let kind = args

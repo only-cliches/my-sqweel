@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "id": "period_diff_adjacent_credits_min",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "walkccc/LeetCode",
+      "commit": "9b85aa15e086d0b5dc1ead7184bca547942e6ff6",
+      "path": "solutions/1843. Suspicious Bank Accounts/1843.sql",
+      "url": "https://github.com/walkccc/LeetCode/blob/9b85aa15e086d0b5dc1ead7184bca547942e6ff6/solutions/1843.%20Suspicious%20Bank%20Accounts/1843.sql",
+      "sha256": "017440d56ed086ed35699cf1693a4cd88e12fa6332f4aaa4af0e0b44850368b0",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "solutions/1843. Suspicious Bank Accounts/1843.sql:1-19",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL CTE aggregates monthly account activity, then self-joins the monthly result and uses PERIOD_DIFF to retain consecutive months.",
+      "mysql_mariadb_translation": "Reduced to one independently authored PERIOD_DIFF scalar projection, isolating function evaluation and integer metadata from the original CTE, grouping, and self-join."
+    },
+    "independently_authored": true,
+    "minimized_from": "period_diff_adjacent_credits"
+  },
+  "features": ["period-diff", "minimized-regression"],
+  "fixture_notes": "Two fixed YYYYMM literals isolate the one-month difference result 1 and its integer metadata.",
+  "determinism_notes": "The scalar periods are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT PERIOD_DIFF(202401, 202312) AS month_gap",
+      "ordered": true
+    }
+  ]
+}

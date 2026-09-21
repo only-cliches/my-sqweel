@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "period_diff_adjacent_credits",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "walkccc/LeetCode",
+      "commit": "9b85aa15e086d0b5dc1ead7184bca547942e6ff6",
+      "path": "solutions/1843. Suspicious Bank Accounts/1843.sql",
+      "url": "https://github.com/walkccc/LeetCode/blob/9b85aa15e086d0b5dc1ead7184bca547942e6ff6/solutions/1843.%20Suspicious%20Bank%20Accounts/1843.sql",
+      "sha256": "017440d56ed086ed35699cf1693a4cd88e12fa6332f4aaa4af0e0b44850368b0",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "solutions/1843. Suspicious Bank Accounts/1843.sql:1-19",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL CTE aggregates monthly account activity, then self-joins the monthly result and uses PERIOD_DIFF to retain consecutive months.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored credit-threshold audit. Fixed YYYYMM periods, grouped credit totals, a HAVING threshold, and a self-join identify adjacent qualifying months; account names, values, and reporting purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["period-diff", "cte", "grouping", "having", "self-join", "year-boundary", "deterministic-order"],
+  "fixture_notes": "Account 11 has qualifying December 2023 and January 2024 credit months, exposing a year boundary. Account 12 has a two-month gap, and account 13 has a below-threshold first month; neither produces an adjacent-month result.",
+  "determinism_notes": "Account IDs and period codes are fixed, grouped output has explicit account/period ordering, and no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE credit_entries (entry_id INT PRIMARY KEY, account_id INT NOT NULL, period_code INT NOT NULL, entry_kind VARCHAR(16) NOT NULL, amount DECIMAL(10,2) NOT NULL)",
+    "INSERT INTO credit_entries VALUES (801, 11, 202312, 'credit', 700.00), (802, 11, 202312, 'credit', 500.00), (803, 11, 202401, 'credit', 1300.00), (804, 11, 202402, 'debit', 900.00), (805, 12, 202401, 'credit', 1800.00), (806, 12, 202403, 'credit', 1900.00), (807, 13, 202401, 'credit', 900.00), (808, 13, 202402, 'credit', 2000.00)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH qualifying_months AS (SELECT account_id, period_code, SUM(amount) AS monthly_credit FROM credit_entries WHERE entry_kind = 'credit' GROUP BY account_id, period_code HAVING SUM(amount) > 1000) SELECT current_month.account_id, current_month.period_code AS first_period, next_month.period_code AS next_period, PERIOD_DIFF(next_month.period_code, current_month.period_code) AS month_gap FROM qualifying_months current_month INNER JOIN qualifying_months next_month ON next_month.account_id = current_month.account_id WHERE PERIOD_DIFF(next_month.period_code, current_month.period_code) = 1 ORDER BY current_month.account_id, current_month.period_code",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT entry_id, account_id, period_code, entry_kind, amount FROM credit_entries ORDER BY entry_id",
+      "ordered": true
+    }
+  ]
+}
