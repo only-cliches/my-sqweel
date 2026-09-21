@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "id": "replace_into_routes",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "jpalanco/alienvault-ossim",
+      "commit": "a1a449d0cf487f9eafe6e907d1acd55a85973523",
+      "path": "os-sim/include/upgrades/5.2.3_mysql.sql",
+      "url": "https://github.com/jpalanco/alienvault-ossim/blob/a1a449d0cf487f9eafe6e907d1acd55a85973523/os-sim/include/upgrades/5.2.3_mysql.sql",
+      "sha256": "e77d7e37cf153c7dd2316908eb6f89c640b6f2452bd23002e95858cab22a406c",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "os-sim/include/upgrades/5.2.3_mysql.sql:3-5",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL migration uses REPLACE INTO to refresh keyed configuration rows while preserving the table's unique-key identity rules.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored route-directory refresh. One REPLACE statement exercises a primary-key conflict and a new row, while another exercises a secondary unique-key conflict; final reads verify that conflicting rows are replaced rather than updated in place. The source schema, identifiers, values, and operational purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "replace-into",
+    "primary-key-conflict",
+    "secondary-unique-conflict",
+    "replacement-semantics",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Route 501 is replaced through its primary key, route 503 is inserted, and route 504 replaces route 502 through the unique route code. The final state must contain routes 501, 503, and 504 with the incoming replacement values; route 502 must be gone.",
+  "determinism_notes": "Route IDs, unique codes, labels, and priorities are fixed; every final read is ordered by the unique route ID. There are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE route_directory (route_id INT PRIMARY KEY, route_code VARCHAR(16) NOT NULL UNIQUE, destination VARCHAR(32) NOT NULL, retry_limit INT NOT NULL, route_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO route_directory VALUES (501, 'north', 'queue-a', 3, 'ready'), (502, 'south', 'queue-b', 5, 'paused')"
+  ],
+  "steps": [
+    {
+      "sql": "REPLACE INTO route_directory (route_id, route_code, destination, retry_limit, route_state) VALUES (501, 'north', 'queue-a-v2', 1, 'requeued'), (503, 'west', 'queue-c', 2, 'ready')"
+    },
+    {
+      "sql": "REPLACE INTO route_directory (route_id, route_code, destination, retry_limit, route_state) VALUES (504, 'south', 'queue-d', 4, 'rerouted')"
+    },
+    {
+      "sql": "SELECT route_id, route_code, destination, retry_limit, route_state FROM route_directory ORDER BY route_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT route_id, route_code, destination, retry_limit, route_state FROM route_directory ORDER BY route_id",
+      "ordered": true
+    }
+  ]
+}
