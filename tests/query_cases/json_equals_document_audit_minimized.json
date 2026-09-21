@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "id": "json_equals_document_audit_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "json_equals_document_audit",
+    "source": {
+      "kind": "github",
+      "repository": "mayhemheroes/teleport",
+      "commit": "dfc17799b3f5ad655e1d83922883409fd522bd5e",
+      "path": "lib/srv/db/mysql/sql/mariadb_activate_user.sql",
+      "url": "https://github.com/mayhemheroes/teleport/blob/dfc17799b3f5ad655e1d83922883409fd522bd5e/lib/srv/db/mysql/sql/mariadb_activate_user.sql",
+      "sha256": "e59333681bdaa4a13acf8816a6293afda735246e009128e0901d6decd94d89a0",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "lib/srv/db/mysql/sql/mariadb_activate_user.sql:28",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB procedure uses JSON_EQUALS to compare JSON documents and branch on the resulting boolean value.",
+      "mysql_mariadb_translation": "Reduced to one deterministic JSON-column comparison so result metadata and object-key-insensitive equality can be isolated without the source procedure."
+    },
+    "independently_authored": true
+  },
+  "features": ["json-equals", "json-column", "object-order-insensitivity", "metadata-regression", "deterministic-order"],
+  "fixture_notes": "The two JSON documents contain the same object members in reverse order; equality should be one with MariaDB integer metadata.",
+  "determinism_notes": "The single fixed row is selected by its primary key; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE equality_probe (probe_id INT PRIMARY KEY, left_document JSON NOT NULL, right_document JSON NOT NULL)",
+    "INSERT INTO equality_probe VALUES (1, '{\"beta\":2,\"alpha\":1}', '{\"alpha\":1,\"beta\":2}')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT probe_id, JSON_EQUALS(left_document, right_document) AS documents_equal FROM equality_probe ORDER BY probe_id",
+      "ordered": true
+    }
+  ]
+}

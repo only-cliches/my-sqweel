@@ -1901,7 +1901,7 @@ impl RawEngine {
                             MysqlColumnType::VarChar
                         }
                     }
-                    "JSON_CONTAINS" | "JSON_CONTAINS_PATH" | "JSON_VALID" => {
+                    "JSON_CONTAINS" | "JSON_CONTAINS_PATH" | "JSON_VALID" | "JSON_EQUALS" => {
                         MysqlColumnType::Integer
                     }
                     "JSON_OVERLAPS" => MysqlColumnType::Integer,

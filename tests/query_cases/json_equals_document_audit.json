@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "json_equals_document_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "mayhemheroes/teleport",
+      "commit": "dfc17799b3f5ad655e1d83922883409fd522bd5e",
+      "path": "lib/srv/db/mysql/sql/mariadb_activate_user.sql",
+      "url": "https://github.com/mayhemheroes/teleport/blob/dfc17799b3f5ad655e1d83922883409fd522bd5e/lib/srv/db/mysql/sql/mariadb_activate_user.sql",
+      "sha256": "e59333681bdaa4a13acf8816a6293afda735246e009128e0901d6decd94d89a0",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "lib/srv/db/mysql/sql/mariadb_activate_user.sql:28",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB role-activation procedure compares two JSON role arrays with JSON_EQUALS before deciding whether active sessions can be reused.",
+      "mysql_mariadb_translation": "Reauthored as a deterministic document-equality audit over independently authored JSON documents. The fixture covers object-key order independence, nested extraction, array order sensitivity, scalar type differences, and SQL NULL propagation without importing the source procedure or schema."
+    },
+    "independently_authored": true
+  },
+  "features": ["json-equals", "json-extract", "nested-json", "object-order-insensitivity", "array-order-sensitivity", "null-propagation", "deterministic-order"],
+  "fixture_notes": "Rows compare reordered objects, nested objects, arrays with reversed order, a numeric/string mismatch, and SQL NULL operands. JSON_EQUALS should ignore object-key order, preserve array order, distinguish scalar types, and return NULL for SQL NULL arguments.",
+  "determinism_notes": "Case IDs are fixed and ordered by the primary key; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE json_equality_probe (case_id INT PRIMARY KEY, case_label VARCHAR(32) NOT NULL, left_document JSON NULL, right_document JSON NULL)",
+    "INSERT INTO json_equality_probe VALUES (2101, 'reordered objects', '{\"beta\":2,\"alpha\":1}', '{\"alpha\":1,\"beta\":2}'), (2102, 'nested objects', '{\"profile\":{\"zone\":\"west\",\"tier\":3}}', '{\"profile\":{\"tier\":3,\"zone\":\"west\"}}'), (2103, 'array order', '[1,2,3]', '[3,2,1]'), (2104, 'scalar type', '{\"value\":7}', '{\"value\":\"7\"}'), (2105, 'sql null left', NULL, '{\"value\":7}'), (2106, 'sql null right', '{\"value\":7}', NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT case_id, case_label, JSON_EQUALS(left_document, right_document) AS documents_equal, JSON_EQUALS(JSON_EXTRACT(left_document, '$.profile'), JSON_EXTRACT(right_document, '$.profile')) AS profiles_equal FROM json_equality_probe ORDER BY case_id",
+      "ordered": true
+    }
+  ]
+}
