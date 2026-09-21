@@ -781,17 +781,23 @@ pub(super) fn eval_json_value(
     if value == Value::Null {
         return Ok(Value::Null);
     }
-    let Some(returning) = returning else {
-        return Ok(Value::String(json_scalar_to_string(&value)));
-    };
-    let returning = returning.trim().to_ascii_uppercase();
-    if returning == "JSON" {
-        return json_text_value(value);
+    if let Some(returning) = returning {
+        let returning = returning.trim().to_ascii_uppercase();
+        if returning == "JSON" {
+            return json_text_value(value);
+        }
+        if returning.contains("CHAR") || returning.contains("TEXT") {
+            return Ok(Value::String(json_value_scalar_to_string(&value)));
+        }
+        return cast_json_value(value, &returning);
     }
-    if returning.contains("CHAR") || returning.contains("TEXT") {
-        return Ok(Value::String(json_scalar_to_string(&value)));
+    Ok(Value::String(json_value_scalar_to_string(&value)))
+}
+fn json_value_scalar_to_string(value: &Value) -> String {
+    match value {
+        Value::Bool(value) => if *value { "1" } else { "0" }.to_string(),
+        _ => json_scalar_to_string(value),
     }
-    cast_json_value(value, &returning)
 }
 
 fn split_json_value_path(arg: &str) -> (String, Option<String>) {

@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "json_value_profile_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "gravitational/teleport",
+      "commit": "1283425b60ec5f60d509ba4c791183d452923ff7",
+      "path": "lib/srv/db/mysql/sql/mariadb_activate_user.sql",
+      "url": "https://github.com/gravitational/teleport/blob/1283425b60ec5f60d509ba4c791183d452923ff7/lib/srv/db/mysql/sql/mariadb_activate_user.sql",
+      "sha256": "17d5ac3fef2a16ae150daef634b219ab6884adedf5b57c310a541b79a0e95a88",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "lib/srv/db/mysql/sql/mariadb_activate_user.sql:8",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB account-provisioning procedure uses JSON_VALUE to extract a scalar attribute from a JSON document by path.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored profile-document audit. JSON_VALUE extracts nested text, numeric, boolean, explicit JSON-null, and missing-path scalars from fixed JSON column documents; procedures, account metadata, dynamic SQL, and source values are excluded."
+    },
+    "independently_authored": true
+  },
+  "features": ["json-value", "nested-json-path", "scalar-extraction", "missing-path", "json-null", "deterministic-order"],
+  "fixture_notes": "Profile 1101 has name, score, and active fields; profile 1102 has an explicit JSON null score and a false flag; profile 1103 omits score and active. JSON_VALUE must return scalar text and SQL NULL for JSON null, missing, and non-scalar paths.",
+  "determinism_notes": "Profile IDs and JSON documents are fixed and ordered by the primary key; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE profile_documents (profile_id INT PRIMARY KEY, profile_label VARCHAR(24) NOT NULL, document JSON NOT NULL)",
+    "INSERT INTO profile_documents VALUES (1101, 'complete', '{\"profile\":{\"name\":\"Ada\",\"score\":42,\"active\":true}}'), (1102, 'nullable', '{\"profile\":{\"name\":\"Bjarne\",\"score\":null,\"active\":false}}'), (1103, 'partial', '{\"profile\":{\"name\":\"Cora\",\"tags\":[\"ops\",\"db\"]}}')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT profile_id, profile_label, JSON_VALUE(document, '$.profile.name') AS profile_name, JSON_VALUE(document, '$.profile.score') AS profile_score, JSON_VALUE(document, '$.profile.active') AS active_flag, JSON_VALUE(document, '$.profile.tags') AS tags_scalar, JSON_VALUE(document, '$.profile.missing') AS missing_value FROM profile_documents ORDER BY profile_id",
+      "ordered": true
+    }
+  ]
+}

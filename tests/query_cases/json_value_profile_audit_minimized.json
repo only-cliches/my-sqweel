@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "id": "json_value_profile_audit_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "json_value_profile_audit",
+    "source": {
+      "kind": "github",
+      "repository": "gravitational/teleport",
+      "commit": "1283425b60ec5f60d509ba4c791183d452923ff7",
+      "path": "lib/srv/db/mysql/sql/mariadb_activate_user.sql",
+      "url": "https://github.com/gravitational/teleport/blob/1283425b60ec5f60d509ba4c791183d452923ff7/lib/srv/db/mysql/sql/mariadb_activate_user.sql",
+      "sha256": "17d5ac3fef2a16ae150daef634b219ab6884adedf5b57c310a541b79a0e95a88",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "lib/srv/db/mysql/sql/mariadb_activate_user.sql:8",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB procedure extracts a boolean JSON attribute with JSON_VALUE.",
+      "mysql_mariadb_translation": "Reduced to one independently authored scalar JSON_VALUE projection over a fixed object; procedure control flow, table state, and unrelated paths are removed while boolean rendering and result metadata remain observable."
+    },
+    "independently_authored": true,
+    "minimized_from": "json_value_profile_audit"
+  },
+  "features": ["json-value", "boolean-scalar", "metadata-regression", "deterministic-order"],
+  "fixture_notes": "The fixed JSON object contains false; MariaDB returns its JSON_VALUE scalar as 0 with LONG_BLOB metadata.",
+  "determinism_notes": "The JSON literal and path are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT JSON_VALUE('{\"active\":false}', '$.active') AS active_flag",
+      "ordered": true
+    }
+  ]
+}
