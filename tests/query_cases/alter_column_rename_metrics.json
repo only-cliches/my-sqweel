@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "id": "alter_column_rename_metrics",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "PX4/pyulog",
+      "commit": "ffbe3755d903e93797a89fb4fce26e0c0420a42f",
+      "path": "pyulog/sql/pyulog.4.sql",
+      "url": "https://github.com/PX4/pyulog/blob/ffbe3755d903e93797a89fb4fce26e0c0420a42f/pyulog/sql/pyulog.4.sql",
+      "sha256": "5ef799c035131a87035c10904f817825409cd9b53d4d36dc98de8ebc20e249c2",
+      "source_dialect": "sqlite"
+    },
+    "inspiration": {
+      "source_location": "pyulog/sql/pyulog.4.sql:8-10",
+      "source_dialect": "sqlite",
+      "observed_pattern": "A SQLite migration renames an existing timestamp column, adds a replacement integer column, and backfills it with an explicit cast.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored sensor-metric migration. A legacy text reading column is renamed, a typed replacement column is added, fixed values are backfilled with CAST, and an ordered projection verifies the migrated rows. SQLite transaction and pragma statements, the source schema, names, and telemetry purpose are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "alter-column-rename",
+    "add-column",
+    "cast-backfill",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Metrics 601 and 602 begin with textual legacy readings. RENAME COLUMN preserves the legacy values, the new integer column is added, and UPDATE CAST backfills both rows before the final read.",
+  "determinism_notes": "Metric IDs and legacy values are fixed; the final projection is ordered by the unique metric ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE sensor_metrics (metric_id INT PRIMARY KEY, legacy_reading VARCHAR(16) NOT NULL, metric_kind VARCHAR(16) NOT NULL)",
+    "INSERT INTO sensor_metrics VALUES (601, '407', 'temperature'), (602, '512', 'pressure')"
+  ],
+  "steps": [
+    {
+      "sql": "ALTER TABLE sensor_metrics RENAME COLUMN legacy_reading TO reading_text",
+      "ordered": true
+    },
+    {
+      "sql": "ALTER TABLE sensor_metrics ADD COLUMN reading_value INT NULL",
+      "ordered": true
+    },
+    {
+      "sql": "UPDATE sensor_metrics SET reading_value = CAST(reading_text AS SIGNED)",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT metric_id, metric_kind, reading_text, reading_value FROM sensor_metrics ORDER BY metric_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT metric_id, metric_kind, reading_text, reading_value FROM sensor_metrics ORDER BY metric_id",
+      "ordered": true
+    }
+  ]
+}
