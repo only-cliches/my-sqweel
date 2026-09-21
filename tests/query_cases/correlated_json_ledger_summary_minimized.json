@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "id": "correlated_json_ledger_summary_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "adamcharnock/django-hordak",
+      "commit": "de63cba9cafc3cec8a6140205637956165704728",
+      "path": "hordak/migrations/0048_hordak_transaction_view.mysql.sql",
+      "url": "https://github.com/adamcharnock/django-hordak/blob/de63cba9cafc3cec8a6140205637956165704728/hordak/migrations/0048_hordak_transaction_view.mysql.sql",
+      "sha256": "e528b2045000764b4996bec27e3b96a5d98700fd2b4b3f814c66cde53f5fab21",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "hordak/migrations/0048_hordak_transaction_view.mysql.sql:3-27",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A scalar correlated subquery aggregates child values with JSON_ARRAYAGG for the current parent row.",
+      "mysql_mariadb_translation": "Reduced to one independently authored ledger run, one child label, and one correlated JSON_ARRAYAGG projection; the source view and accounting schema are removed while the correlated aggregate metadata contract remains."
+    },
+    "independently_authored": true,
+    "minimized_from": "correlated_json_ledger_summary"
+  },
+  "features": ["correlated-subquery", "json-arrayagg", "metadata-regression", "deterministic-order"],
+  "fixture_notes": "One fixed run has one matching child label, which is sufficient to expose MariaDB's JSON_ARRAYAGG BLOB metadata through a scalar correlated subquery.",
+  "determinism_notes": "The run ID and label are fixed and output is ordered by the primary key; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE mini_runs (run_id INT PRIMARY KEY)",
+    "CREATE TABLE mini_entries (entry_id INT PRIMARY KEY, run_id INT NOT NULL, label VARCHAR(32) NOT NULL)",
+    "INSERT INTO mini_runs VALUES (601)",
+    "INSERT INTO mini_entries VALUES (7001, 601, 'cash')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT r.run_id, (SELECT JSON_ARRAYAGG(e.label) FROM mini_entries e WHERE e.run_id = r.run_id) AS labels FROM mini_runs r ORDER BY r.run_id",
+      "ordered": true
+    }
+  ]
+}

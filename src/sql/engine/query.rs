@@ -1896,6 +1896,16 @@ impl RawEngine {
                     _ => metadata.column_type,
                 };
             }
+            Expr::Subquery(query) => {
+                if let Some(subquery_metadata) = self.scalar_subquery_metadata(&query.body) {
+                    metadata.column_type = subquery_metadata.column_type;
+                    metadata.nullable = subquery_metadata.nullable;
+                    metadata.unsigned = subquery_metadata.unsigned;
+                    metadata.decimals = subquery_metadata.decimals;
+                    metadata.character_set = subquery_metadata.character_set;
+                    metadata.collation = subquery_metadata.collation;
+                }
+            }
             Expr::Trim { expr, .. } => {
                 let nested = self.expression_metadata(select, expr, String::new(), first_row);
                 metadata.column_type = nested.column_type;
@@ -2176,6 +2186,24 @@ impl RawEngine {
             .position(|alias| alias.name.value.eq_ignore_ascii_case(column))?;
         let inner_expr = values.rows.first()?.get(index)?;
         Some(self.expression_metadata(outer_select, inner_expr, column.to_string(), first_row))
+    }
+
+    fn scalar_subquery_metadata(&self, body: &SetExpr) -> Option<ColumnMetadata> {
+        match body {
+            SetExpr::Query(query) => self.scalar_subquery_metadata(&query.body),
+            SetExpr::Select(select) => {
+                let item = select.projection.first()?;
+                let (expr, name) = match item {
+                    SelectItem::UnnamedExpr(expr) => (expr, projection_output_column_name(expr)),
+                    SelectItem::ExprWithAlias { expr, alias } => (expr, alias.value.clone()),
+                    SelectItem::Wildcard(_) | SelectItem::QualifiedWildcard(_, _) => return None,
+                };
+                Some(self.expression_metadata(select, expr, name, None))
+            }
+            SetExpr::SetOperation { left, .. } => self.scalar_subquery_metadata(left),
+            SetExpr::Values(_) => None,
+            _ => None,
+        }
     }
 
     /// Resolve a plain column reference that names a derived-table (subquery

@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "id": "correlated_json_ledger_summary",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "adamcharnock/django-hordak",
+      "commit": "de63cba9cafc3cec8a6140205637956165704728",
+      "path": "hordak/migrations/0048_hordak_transaction_view.mysql.sql",
+      "url": "https://github.com/adamcharnock/django-hordak/blob/de63cba9cafc3cec8a6140205637956165704728/hordak/migrations/0048_hordak_transaction_view.mysql.sql",
+      "sha256": "e528b2045000764b4996bec27e3b96a5d98700fd2b4b3f814c66cde53f5fab21",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "hordak/migrations/0048_hordak_transaction_view.mysql.sql:3-27",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A transaction view projects each parent row while correlated scalar subqueries aggregate positive and negative child rows into JSON arrays, with another correlated aggregate deriving distinct currency information.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored billing-run ledger summary. Correlated subqueries join fixed ledger entries to account labels, JSON_ARRAYAGG reports positive and negative account names, and COUNT(DISTINCT) reports currencies used by each run; the source view, tables, names, values, and accounting purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["correlated-subquery", "json-arrayagg", "conditional-child-aggregation", "count-distinct", "inner-join", "null-propagation", "grouping", "deterministic-order"],
+  "fixture_notes": "Run 501 has one positive USD entry and one negative EUR entry, run 502 has one positive USD entry and no negative entry, and run 503 has no entries. Each JSON aggregate therefore has a single deterministic account label or SQL NULL, while currency counts are 2, 1, and 0.",
+  "determinism_notes": "Run IDs, entry IDs, account labels, amounts, currencies, and ordering are fixed; each polarity has at most one matching row per run, with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE billing_runs (run_id INT PRIMARY KEY, run_label VARCHAR(32) NOT NULL)",
+    "CREATE TABLE billing_accounts (account_id INT PRIMARY KEY, account_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE billing_entries (entry_id INT PRIMARY KEY, run_id INT NOT NULL, account_id INT NOT NULL, amount_cents INT NOT NULL, currency_code VARCHAR(3) NOT NULL)",
+    "INSERT INTO billing_runs VALUES (501, 'settlement'), (502, 'refund'), (503, 'empty')",
+    "INSERT INTO billing_accounts VALUES (11, 'cash'), (12, 'card')",
+    "INSERT INTO billing_entries VALUES (9001, 501, 11, 1250, 'USD'), (9002, 501, 12, -300, 'EUR'), (9003, 502, 11, 900, 'USD')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT r.run_id, (SELECT JSON_ARRAYAGG(a.account_name) FROM billing_entries e INNER JOIN billing_accounts a ON a.account_id = e.account_id WHERE e.run_id = r.run_id AND e.amount_cents > 0) AS credit_accounts, (SELECT JSON_ARRAYAGG(a.account_name) FROM billing_entries e INNER JOIN billing_accounts a ON a.account_id = e.account_id WHERE e.run_id = r.run_id AND e.amount_cents < 0) AS debit_accounts, (SELECT COUNT(DISTINCT e.currency_code) FROM billing_entries e WHERE e.run_id = r.run_id) AS currency_count FROM billing_runs r GROUP BY r.run_id ORDER BY r.run_id",
+      "ordered": true
+    }
+  ]
+}
