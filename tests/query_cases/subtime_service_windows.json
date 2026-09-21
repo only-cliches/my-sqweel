@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "id": "subtime_service_windows",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "jjang1129/back-end-workspace",
+      "commit": "03ac2070b7fd471f5289374c5d696ba3358bb4ce",
+      "path": "1_MySQL/03_SELECT_FUCTION.sql",
+      "url": "https://github.com/jjang1129/back-end-workspace/blob/03ac2070b7fd471f5289374c5d696ba3358bb4ce/1_MySQL/03_SELECT_FUCTION.sql",
+      "sha256": "e2dea13d0d5761a0877b4066d7d5ee2fd405cf38a56034ccd1be58402e98e634",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "1_MySQL/03_SELECT_FUCTION.sql:205-218",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL date-function example subtracts a fixed time string with SUBTIME from a current temporal value.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored service-window audit. Fixed DATETIME and TIME values subtract crossing-midnight and same-day durations, while a NULL source verifies null propagation; the source clock, table, values, labels, and application purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["subtime", "datetime-subtraction", "time-subtraction", "cross-midnight", "null-propagation", "deterministic-order"],
+  "fixture_notes": "Window 501 subtracts 2 hours 30 minutes across midnight, window 502 subtracts a same-day 15 minute 45 second offset, and window 503 preserves SQL NULL through SUBTIME. A scalar TIME projection confirms time-only subtraction independently of DATETIME values.",
+  "determinism_notes": "Window IDs, temporal values, offset literals, and ordering are fixed with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE service_windows_subtime (window_id INT PRIMARY KEY, window_label VARCHAR(32) NOT NULL, starts_at DATETIME NULL, slot_time TIME NULL)",
+    "INSERT INTO service_windows_subtime VALUES (501, 'overnight', '2026-04-01 01:00:00', '01:00:00'), (502, 'daytime', '2026-04-01 12:15:45', '12:15:45'), (503, 'unassigned', NULL, NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT window_id, window_label, starts_at, SUBTIME(starts_at, '02:30:00') AS prior_start, SUBTIME(starts_at, '00:15:45') AS short_prior_start, SUBTIME(slot_time, '01:00:00') AS prior_slot FROM service_windows_subtime ORDER BY window_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT SUBTIME('03:30:00', '01:15:00') AS time_difference",
+      "ordered": true
+    }
+  ]
+}

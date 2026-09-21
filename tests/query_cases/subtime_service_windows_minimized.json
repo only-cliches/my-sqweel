@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "subtime_service_windows_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "jjang1129/back-end-workspace",
+      "commit": "03ac2070b7fd471f5289374c5d696ba3358bb4ce",
+      "path": "1_MySQL/03_SELECT_FUCTION.sql",
+      "url": "https://github.com/jjang1129/back-end-workspace/blob/03ac2070b7fd471f5289374c5d696ba3358bb4ce/1_MySQL/03_SELECT_FUCTION.sql",
+      "sha256": "e2dea13d0d5761a0877b4066d7d5ee2fd405cf38a56034ccd1be58402e98e634",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "1_MySQL/03_SELECT_FUCTION.sql:205-218",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "SUBTIME returns a temporal value after subtracting a time interval from a temporal expression.",
+      "mysql_mariadb_translation": "Reduced to fixed DATETIME and TIME columns plus one string-literal call so MariaDB's argument-sensitive DATETIME, TIME, and string metadata remains observable."
+    },
+    "independently_authored": true
+  },
+  "features": ["subtime", "metadata", "datetime-input", "time-input", "literal-input", "deterministic-order"],
+  "fixture_notes": "The single row isolates SUBTIME result metadata for DATETIME-column, TIME-column, and time-literal inputs.",
+  "determinism_notes": "All temporal values and offsets are fixed; the one result row has no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE mini_subtime (sample_id INT PRIMARY KEY, datetime_value DATETIME NOT NULL, time_value TIME NOT NULL)",
+    "INSERT INTO mini_subtime VALUES (1, '2026-04-01 01:00:00', '01:00:00')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT SUBTIME(datetime_value, '02:30:00') AS datetime_result, SUBTIME(time_value, '00:30:00') AS time_result, SUBTIME('03:30:00', '01:15:00') AS literal_result FROM mini_subtime",
+      "ordered": true
+    }
+  ]
+}

@@ -1703,6 +1703,34 @@ impl RawEngine {
                     }
                     "CURRENT_TIME" | "CURTIME" | "TIME" | "SEC_TO_TIME" | "TIMEDIFF"
                     | "MAKETIME" => MysqlColumnType::Time,
+                    "ADDTIME" | "SUBTIME" => {
+                        let first_argument = function_arguments(function)
+                            .ok()
+                            .and_then(|arguments| arguments.into_iter().next().flatten());
+                        let first_argument_type = first_argument.as_ref().map(|argument| {
+                            self.expression_metadata(select, argument, String::new(), first_row)
+                                .column_type
+                        });
+                        match first_argument_type {
+                            Some(
+                                MysqlColumnType::Date
+                                | MysqlColumnType::DateTime
+                                | MysqlColumnType::Timestamp,
+                            ) => MysqlColumnType::DateTime,
+                            Some(MysqlColumnType::Time) => MysqlColumnType::Time,
+                            _ if matches!(
+                                first_argument,
+                                Some(Expr::Value(
+                                    SqlValue::SingleQuotedString(_)
+                                        | SqlValue::DoubleQuotedString(_)
+                                ))
+                            ) =>
+                            {
+                                MysqlColumnType::Char
+                            }
+                            _ => MysqlColumnType::VarChar,
+                        }
+                    }
                     "NOW" | "CURRENT_TIMESTAMP" | "FROM_UNIXTIME" => MysqlColumnType::DateTime,
                     "DATE_ADD" | "DATE_SUB" | "ADDDATE" | "SUBDATE" => MysqlColumnType::DateTime,
                     "TIMESTAMPADD" => {
