@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "shift_overlap_pairs",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "sarthakmandal237/SQL-AdventureWorks-Database",
+      "commit": "9f3fc33a429b70bbdbd634422e5d4e5b260c256a",
+      "path": "Week3.sql",
+      "url": "https://github.com/sarthakmandal237/SQL-AdventureWorks-Database/blob/9f3fc33a429b70bbdbd634422e5d4e5b260c256a/Week3.sql",
+      "sha256": "87b540adb692c9a54e6afede425b58ccce0275ed948ce0bced502f5f79973b1a",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Week3.sql:5-18",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A common table expression self-joins dated records with an ordered identifier pair and inclusive start/end predicates to find overlapping intervals.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored shift-conflict report. Shifts are paired only within the same team, the inclusive boundary rule retains a zero-minute handoff, and CASE plus TIMESTAMPDIFF classifies ordinary overlaps versus touching shifts. The table, rows, labels, and scheduling purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "cte",
+    "self-join",
+    "interval-overlap",
+    "inclusive-boundary",
+    "case-expression",
+    "timestampdiff",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Shifts 1 and 2 overlap for 30 minutes, shifts 2 and 3 touch at an inclusive endpoint, shift 2 and shift 6 overlap for 30 minutes, and the different-team shift must not pair.",
+  "determinism_notes": "All timestamps and team labels are fixed, each pair is ordered by the unique shift IDs, and the report uses no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE team_shifts (shift_id INT PRIMARY KEY, team_code VARCHAR(10) NOT NULL, starts_at DATETIME NOT NULL, ends_at DATETIME NOT NULL)",
+    "INSERT INTO team_shifts VALUES (1, 'A', '2024-05-06 08:00:00', '2024-05-06 10:00:00'), (2, 'A', '2024-05-06 09:30:00', '2024-05-06 11:00:00'), (3, 'A', '2024-05-06 11:00:00', '2024-05-06 12:00:00'), (4, 'A', '2024-05-06 12:30:00', '2024-05-06 13:30:00'), (5, 'B', '2024-05-06 09:00:00', '2024-05-06 10:00:00'), (6, 'A', '2024-05-06 10:15:00', '2024-05-06 10:45:00')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH overlap_pairs AS (SELECT first_shift.shift_id AS first_shift_id, second_shift.shift_id AS second_shift_id, CASE WHEN first_shift.ends_at = second_shift.starts_at OR second_shift.ends_at = first_shift.starts_at THEN 'touching' ELSE 'overlapping' END AS relation, TIMESTAMPDIFF(MINUTE, CASE WHEN first_shift.starts_at > second_shift.starts_at THEN first_shift.starts_at ELSE second_shift.starts_at END, CASE WHEN first_shift.ends_at < second_shift.ends_at THEN first_shift.ends_at ELSE second_shift.ends_at END) AS overlap_minutes FROM team_shifts first_shift JOIN team_shifts second_shift ON first_shift.team_code = second_shift.team_code AND first_shift.shift_id < second_shift.shift_id AND first_shift.ends_at >= second_shift.starts_at AND first_shift.starts_at <= second_shift.ends_at) SELECT first_shift_id, second_shift_id, relation, overlap_minutes FROM overlap_pairs ORDER BY first_shift_id, second_shift_id",
+      "ordered": true
+    }
+  ]
+}
