@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "product_sales_using_summary",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "JaxonRailey/mysql-stored-procedure-trigger-function-view",
+      "commit": "a767944b87ae57b18eea250c60171afb4bd198b8",
+      "path": "dump.sql",
+      "url": "https://github.com/JaxonRailey/mysql-stored-procedure-trigger-function-view/blob/a767944b87ae57b18eea250c60171afb4bd198b8/dump.sql",
+      "sha256": "320459eb001c029995ac582aea9ac79b0bde3e4daf4e6b41294f372a684b2a64",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "dump.sql:101",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL join uses USING on a shared key column so the common key is exposed once while related rows are combined.",
+      "mysql_mariadb_translation": "Reauthored as an independent product-sales summary. Products are left joined to sales with USING(product_id), grouped by the coalesced key and product label, and zero-sales products are retained through COALESCE; the source tables, names, values, and reporting purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "join-using",
+    "left-join",
+    "grouping",
+    "null-preserving-aggregate",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Product 10 has two sales rows totaling 7 units, product 20 has one sale totaling 4 units, and product 30 has no sales and must remain with zero units. USING(product_id) must expose one shared product_id column in the grouped result.",
+  "determinism_notes": "Product IDs and labels are fixed, the aggregate groups by the unique product key and label, and the final result is ordered by product_id with no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE dispatch_products (product_id INT PRIMARY KEY, product_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE dispatch_sales (sale_id INT PRIMARY KEY, product_id INT NOT NULL, quantity INT NOT NULL)",
+    "INSERT INTO dispatch_products VALUES (10, 'North kit'), (20, 'South kit'), (30, 'Reserve kit')",
+    "INSERT INTO dispatch_sales VALUES (1001, 10, 3), (1002, 10, 4), (1003, 20, 4)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT product_id, product_name, COALESCE(SUM(quantity), 0) AS units_sold FROM dispatch_products LEFT JOIN dispatch_sales USING (product_id) GROUP BY product_id, product_name ORDER BY product_id",
+      "ordered": true
+    }
+  ]
+}
