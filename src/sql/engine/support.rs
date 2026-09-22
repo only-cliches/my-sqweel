@@ -154,6 +154,8 @@ impl Visitor for SupportValidator {
             | Expr::IsNotUnknown(_)
             | Expr::InList { .. }
             | Expr::InSubquery { .. }
+            | Expr::AnyOp { .. }
+            | Expr::AllOp { .. }
             | Expr::Between { .. }
             | Expr::BinaryOp { .. }
             | Expr::Like { .. }

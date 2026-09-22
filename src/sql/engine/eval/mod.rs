@@ -2473,6 +2473,27 @@ pub(super) fn eval_in_values(value: Value, candidates: Vec<Value>, negated: bool
         result
     }
 }
+pub(super) fn eval_quantified_values(
+    left: Value,
+    op: &BinaryOperator,
+    candidates: Vec<Value>,
+    all: bool,
+) -> Result<Value> {
+    let mut saw_unknown = false;
+    for candidate in candidates {
+        match sql_truth(&eval_binary_values(left.clone(), op, candidate)?) {
+            SqlTruth::True if !all => return Ok(Value::Bool(true)),
+            SqlTruth::False if all => return Ok(Value::Bool(false)),
+            SqlTruth::Unknown => saw_unknown = true,
+            SqlTruth::True | SqlTruth::False => {}
+        }
+    }
+    if saw_unknown {
+        Ok(Value::Null)
+    } else {
+        Ok(Value::Bool(all))
+    }
+}
 
 pub(super) fn eval_between_values(value: Value, low: Value, high: Value, negated: bool) -> Value {
     eval_between_values_with_hint(value, low, high, negated, None)

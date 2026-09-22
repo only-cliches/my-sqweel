@@ -2164,6 +2164,9 @@ impl RawEngine {
                     metadata.decimals = left_metadata.decimals.max(right_metadata.decimals);
                 }
             }
+            Expr::AnyOp { .. } | Expr::AllOp { .. } => {
+                metadata.column_type = MysqlColumnType::Integer;
+            }
             _ => {}
         }
         for window in window_exprs(expr) {
@@ -3466,6 +3469,41 @@ impl RawEngine {
                     .map(|row| projected_row_value(row, &result.columns))
                     .collect();
                 Ok(eval_in_values(value, candidates, *negated))
+            }
+            Expr::AnyOp {
+                left,
+                compare_op,
+                right,
+                ..
+            } => {
+                let Expr::Subquery(subquery) = right.as_ref() else {
+                    return Err(anyhow!("quantified comparison requires a subquery"));
+                };
+                let left = self.eval_expr_ctx(left, data, last_insert_id)?;
+                let result = self.eval_subquery_for_context(subquery, data)?;
+                let candidates = result
+                    .rows
+                    .iter()
+                    .map(|row| projected_row_value(row, &result.columns))
+                    .collect();
+                eval_quantified_values(left, compare_op, candidates, false)
+            }
+            Expr::AllOp {
+                left,
+                compare_op,
+                right,
+            } => {
+                let Expr::Subquery(subquery) = right.as_ref() else {
+                    return Err(anyhow!("quantified comparison requires a subquery"));
+                };
+                let left = self.eval_expr_ctx(left, data, last_insert_id)?;
+                let result = self.eval_subquery_for_context(subquery, data)?;
+                let candidates = result
+                    .rows
+                    .iter()
+                    .map(|row| projected_row_value(row, &result.columns))
+                    .collect();
+                eval_quantified_values(left, compare_op, candidates, true)
             }
             Expr::Nested(expr) => self.eval_expr_ctx(expr, data, last_insert_id),
             Expr::UnaryOp { op, expr } if op.to_string() == "-" => {
@@ -7705,7 +7743,9 @@ fn validate_expr_columns(expr: &Expr, scope: &ColumnScope) -> Result<()> {
             }
             Ok(())
         }
-        Expr::InSubquery { expr, .. } => validate_expr_columns(expr, scope),
+        Expr::InSubquery { expr, .. }
+        | Expr::AnyOp { left: expr, .. }
+        | Expr::AllOp { left: expr, .. } => validate_expr_columns(expr, scope),
         Expr::Between {
             expr, low, high, ..
         } => {

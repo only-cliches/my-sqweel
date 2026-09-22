@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "quantified_subquery_quote_bands",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "AnalystBuilder/MySQL-for-Data-Analytics",
+      "commit": "c59cd755da64fcd83047d84f2ff01f3fefe72644",
+      "path": "7.3 Any and All Statements.sql",
+      "url": "https://github.com/AnalystBuilder/MySQL-for-Data-Analytics/blob/c59cd755da64fcd83047d84f2ff01f3fefe72644/7.3%20Any%20and%20All%20Statements.sql",
+      "sha256": "4a4cc58aaa091f1e4cc90fe97ee6587e7906f6042718c3cbc4724ce07a74d2f4",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "7.3 Any and All Statements.sql:24-39",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A row-level numeric expression is compared with every value and with at least one value from a filtered subquery through the quantified ALL and ANY operators.",
+      "mysql_mariadb_translation": "Reauthored as an independent carrier-quote band report. Fixed quote amounts are compared against a separate anchor carrier's prices with > ALL and >= ANY, while an explicit NULL branch preserves missing quote semantics; the source tables, values, aliases, and ordering purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "quantified-subquery",
+    "all-comparison",
+    "any-comparison",
+    "case-classification",
+    "null-branch",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Anchor quotes are 120 and 180 cents. Quote 204 exceeds every anchor, quotes 202 and 203 reach at least one anchor, quote 201 is below all anchors, and quote 205 has a NULL amount that must be classified as missing without entering either comparison.",
+  "determinism_notes": "Quote IDs and amounts are fixed, the anchor carrier is selected by a fixed label, and the report is ordered by the unique quote ID. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE carrier_quotes (quote_id INT PRIMARY KEY, carrier_code VARCHAR(16) NOT NULL, quote_amount INT NULL)",
+    "INSERT INTO carrier_quotes VALUES (101, 'anchor', 120), (102, 'anchor', 180), (201, 'candidate', 100), (202, 'candidate', 120), (203, 'candidate', 160), (204, 'candidate', 200), (205, 'candidate', NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT quote_id, quote_amount, CASE WHEN quote_amount IS NULL THEN 'missing' WHEN quote_amount > ALL (SELECT anchor.quote_amount FROM carrier_quotes anchor WHERE anchor.carrier_code = 'anchor') THEN 'above_all' WHEN quote_amount >= ANY (SELECT anchor.quote_amount FROM carrier_quotes anchor WHERE anchor.carrier_code = 'anchor') THEN 'at_or_above_any' ELSE 'below_all' END AS quote_band FROM carrier_quotes WHERE carrier_code = 'candidate' ORDER BY quote_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT quote_id, carrier_code, quote_amount FROM carrier_quotes ORDER BY quote_id",
+      "ordered": true
+    }
+  ]
+}

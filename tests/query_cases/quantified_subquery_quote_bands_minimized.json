@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "quantified_subquery_quote_bands_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "AnalystBuilder/MySQL-for-Data-Analytics",
+      "commit": "c59cd755da64fcd83047d84f2ff01f3fefe72644",
+      "path": "7.3 Any and All Statements.sql",
+      "url": "https://github.com/AnalystBuilder/MySQL-for-Data-Analytics/blob/c59cd755da64fcd83047d84f2ff01f3fefe72644/7.3%20Any%20and%20All%20Statements.sql",
+      "sha256": "4a4cc58aaa091f1e4cc90fe97ee6587e7906f6042718c3cbc4724ce07a74d2f4",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "7.3 Any and All Statements.sql:24-29",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A scalar value is compared with every row from a filtered subquery through the quantified ALL operator.",
+      "mysql_mariadb_translation": "Reduced to an independently authored quote table with two fixed anchor amounts and two candidates. One > ALL projection isolates quantified-subquery evaluation from the original report's CASE, NULL branch, and second ANY comparison."
+    },
+    "independently_authored": true,
+    "minimized_from": "quantified_subquery_quote_bands"
+  },
+  "features": [
+    "quantified-subquery",
+    "all-comparison",
+    "minimized-regression",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Candidate 203 exceeds both anchor amounts and candidate 204 does not; the ordered result isolates the ALL comparison's true and false branches.",
+  "determinism_notes": "IDs and amounts are fixed, the anchor role is selected by a fixed label, and output is ordered by the unique row ID. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE quantified_min (row_id INT PRIMARY KEY, row_kind VARCHAR(16) NOT NULL, amount INT NOT NULL)",
+    "INSERT INTO quantified_min VALUES (101, 'anchor', 120), (102, 'anchor', 180), (203, 'candidate', 200), (204, 'candidate', 100)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT row_id, amount, amount > ALL (SELECT anchor.amount FROM quantified_min anchor WHERE anchor.row_kind = 'anchor') AS exceeds_all FROM quantified_min WHERE row_kind = 'candidate' ORDER BY row_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT row_id, row_kind, amount FROM quantified_min ORDER BY row_id",
+      "ordered": true
+    }
+  ]
+}
