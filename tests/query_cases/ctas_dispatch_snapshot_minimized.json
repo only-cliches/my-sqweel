@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "ctas_dispatch_snapshot_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "ctas_dispatch_snapshot",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "ddl/create-table/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/ddl/create-table/mysql.sql",
+      "sha256": "c2916621ac3461dca54b0fc2238fc33cf72516028f0c82321ae67c3e4b9be683",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "ddl/create-table/mysql.sql:247-251",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A CREATE TABLE AS SELECT materializes an integer source column into a new table, exposing the created column metadata on a later read.",
+      "mysql_mariadb_translation": "Minimized from the dispatch snapshot to one INT source column and one filtered row. The independent table and values remain new while the CTAS metadata path is isolated from CASE expressions, text columns, and multiple rows."
+    },
+    "independently_authored": true,
+    "minimized_from": "ctas_dispatch_snapshot"
+  },
+  "features": [
+    "create-table-as-select",
+    "integer-column-metadata",
+    "minimized-regression"
+  ],
+  "fixture_notes": "The source value 701 is an INT column. CTAS copies one qualifying row, and the later SELECT must report MYSQL_TYPE_LONG rather than widening the column to MYSQL_TYPE_LONGLONG.",
+  "determinism_notes": "The single fixed row and column define a deterministic CTAS result with no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE mini_ctas_source (item_id INT PRIMARY KEY, eligible TINYINT NOT NULL)",
+    "INSERT INTO mini_ctas_source VALUES (701, 1)"
+  ],
+  "steps": [
+    {
+      "sql": "CREATE TABLE mini_ctas AS SELECT item_id FROM mini_ctas_source WHERE eligible = 1",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT item_id FROM mini_ctas ORDER BY item_id",
+      "ordered": true
+    }
+  ]
+}

@@ -68,12 +68,14 @@ impl RawEngine {
             schema.columns.insert(
                 column.clone(),
                 ColumnHint {
-                    sql_type: Some(inferred_sql_type(value)),
+                    sql_type: Some(inferred_sql_type_from_metadata(
+                        result.column_metadata.get(index),
+                        value,
+                    )),
                     nullable: Some(value.is_none_or(Value::is_null)),
                     ..ColumnHint::default()
                 },
             );
-            let _ = index;
         }
         schema.temporary = temporary;
         schema.updated_at = Some(Utc::now());
@@ -633,6 +635,40 @@ impl RawEngine {
         self.persist_auto_inc()?;
         Ok(QueryResult::default())
     }
+}
+fn inferred_sql_type_from_metadata(
+    metadata: Option<&ColumnMetadata>,
+    value: Option<&Value>,
+) -> String {
+    let Some(metadata) = metadata else {
+        return inferred_sql_type(value);
+    };
+    match metadata.column_type {
+        MysqlColumnType::Null => "TEXT",
+        MysqlColumnType::TinyInt => "TINYINT",
+        MysqlColumnType::SmallInt => "SMALLINT",
+        MysqlColumnType::Integer => "INT",
+        MysqlColumnType::BigInt => "BIGINT",
+        MysqlColumnType::Float => "FLOAT",
+        MysqlColumnType::Double => "DOUBLE",
+        MysqlColumnType::Decimal => "DECIMAL",
+        MysqlColumnType::Date => "DATE",
+        MysqlColumnType::Time => "TIME",
+        MysqlColumnType::DateTime => "DATETIME",
+        MysqlColumnType::Timestamp => "TIMESTAMP",
+        MysqlColumnType::Year => "YEAR",
+        MysqlColumnType::Char => "CHAR",
+        MysqlColumnType::VarChar => "VARCHAR",
+        MysqlColumnType::Text => "TEXT",
+        MysqlColumnType::Binary => "BINARY",
+        MysqlColumnType::VarBinary => "VARBINARY",
+        MysqlColumnType::Blob => "BLOB",
+        MysqlColumnType::MediumBlob => "MEDIUMBLOB",
+        MysqlColumnType::LongBlob => "LONGBLOB",
+        MysqlColumnType::Json => "JSON",
+        MysqlColumnType::Bit => "BIT",
+    }
+    .to_string()
 }
 
 fn inferred_sql_type(value: Option<&Value>) -> String {

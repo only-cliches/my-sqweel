@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "ctas_dispatch_snapshot",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "ddl/create-table/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/ddl/create-table/mysql.sql",
+      "sha256": "c2916621ac3461dca54b0fc2238fc33cf72516028f0c82321ae67c3e4b9be683",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "ddl/create-table/mysql.sql:247-251",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL CREATE TABLE AS SELECT statement materializes filtered source rows into a new table while copying the selected column definitions and data.",
+      "mysql_mariadb_translation": "Reauthored as a dispatch snapshot. A source table stores parcel rows, and CTAS materializes only ready parcels with a computed declared-value band; the resulting table is read back in deterministic order. The source schema, names, values, and operational purpose are new, and no source indexes or constraints are relied upon in the snapshot."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "create-table-as-select",
+    "filtered-materialization",
+    "computed-column",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Ready parcels 501 and 503 are copied into dispatch_snapshot; parcel 502 is held and parcel 504 is cancelled. The computed value_band classifies 501 as premium and 503 as standard. CTAS must create and populate the destination in one statement.",
+  "determinism_notes": "Parcel IDs and source values are fixed; the CTAS source filter and CASE expression are deterministic, and the snapshot read is ordered by the unique parcel ID. There are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE parcel_queue (parcel_id INT PRIMARY KEY, parcel_code VARCHAR(16) NOT NULL, parcel_state VARCHAR(16) NOT NULL, declared_value INT NOT NULL)",
+    "INSERT INTO parcel_queue VALUES (501, 'PX-501', 'ready', 900), (502, 'PX-502', 'held', 700), (503, 'PX-503', 'ready', 120), (504, 'PX-504', 'cancelled', 1500)"
+  ],
+  "steps": [
+    {
+      "sql": "CREATE TABLE dispatch_snapshot AS SELECT parcel_id, parcel_code, declared_value, CASE WHEN declared_value >= 500 THEN 'premium' ELSE 'standard' END AS value_band FROM parcel_queue WHERE parcel_state = 'ready'",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT parcel_id, parcel_code, declared_value, value_band FROM dispatch_snapshot ORDER BY parcel_id",
+      "ordered": true
+    }
+  ]
+}
