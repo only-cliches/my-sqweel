@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "id": "staged_author_merge",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "PROFESSOR-DJ/DBMS_Backend",
+      "commit": "24c903dfcb81d61838d5a4f74b30448e72272309",
+      "path": "scripts/merge_duplicate_authors_mysql.sql",
+      "url": "https://github.com/PROFESSOR-DJ/DBMS_Backend/blob/24c903dfcb81d61838d5a4f74b30448e72272309/scripts/merge_duplicate_authors_mysql.sql",
+      "sha256": "cf947a7f3b3aa17eb7c0d1eae9cc01fea5c07bd37c27a15a63993a5ecb110cc9",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "scripts/merge_duplicate_authors_mysql.sql:10-39",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped temporary CTAS selects a bounded duplicate batch, UPDATE IGNORE rewrites references through a joined staging table, a joined DELETE removes now-unreferenced duplicates, and the staging table is dropped.",
+      "mysql_mariadb_translation": "Reauthored as a scholarly-author merge. Duplicate names are staged with a grouped HAVING query and deterministic LIMIT; paper links move to the lowest author ID, conflicting duplicate links are skipped by UPDATE IGNORE, unreferenced duplicates are removed, and the temporary batch is dropped. The source schema, rows, identifiers, and domain meaning are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "temporary-table-ctas",
+    "grouped-having",
+    "order-by-limit",
+    "update-ignore-join",
+    "joined-delete",
+    "unique-conflict",
+    "drop-temporary-table",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Authors 11 and 12 share Ada's name. Link 1002 moves from duplicate 12 to keeper 11; link 1003 already has both author links, so its conflicting duplicate remains. Authors 13 and 14 share Babbage's name, and link 1004 moves cleanly so duplicate 14 is deleted.",
+  "determinism_notes": "Author IDs define keepers and batch order; the temporary grouped source uses ORDER BY author_id with a fixed LIMIT, and final author/link reads use primary-key ordering. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE scholarly_authors (author_id INT PRIMARY KEY, author_name VARCHAR(48) NOT NULL)",
+    "CREATE TABLE paper_authors (link_id INT PRIMARY KEY, paper_id INT NOT NULL, author_id INT NOT NULL, CONSTRAINT uq_paper_author UNIQUE (paper_id, author_id), CONSTRAINT fk_paper_author_author FOREIGN KEY (author_id) REFERENCES scholarly_authors (author_id))",
+    "INSERT INTO scholarly_authors VALUES (11, 'Ada'), (12, 'Ada'), (13, 'Babbage'), (14, 'Babbage'), (15, 'Curie')",
+    "INSERT INTO paper_authors VALUES (1001, 501, 11), (1002, 502, 12), (1003, 503, 11), (1004, 503, 12), (1005, 504, 14)"
+  ],
+  "steps": [
+    {
+      "sql": "CREATE TEMPORARY TABLE author_merge_batch AS SELECT a.author_id AS duplicate_author_id, keepers.keep_author_id FROM scholarly_authors a JOIN (SELECT MIN(author_id) AS keep_author_id, author_name FROM scholarly_authors WHERE author_name IS NOT NULL AND TRIM(author_name) <> '' GROUP BY author_name HAVING COUNT(*) > 1) keepers ON keepers.author_name = a.author_name WHERE a.author_id <> keepers.keep_author_id ORDER BY a.author_id LIMIT 10",
+      "ordered": true
+    },
+    {
+      "sql": "UPDATE IGNORE paper_authors pa JOIN author_merge_batch batch ON batch.duplicate_author_id = pa.author_id SET pa.author_id = batch.keep_author_id",
+      "ordered": true
+    },
+    {
+      "sql": "DELETE a FROM scholarly_authors a JOIN author_merge_batch batch ON batch.duplicate_author_id = a.author_id LEFT JOIN paper_authors pa ON pa.author_id = a.author_id WHERE pa.author_id IS NULL",
+      "ordered": true
+    },
+    {
+      "sql": "DROP TEMPORARY TABLE author_merge_batch",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT author_id, author_name FROM scholarly_authors ORDER BY author_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT link_id, paper_id, author_id FROM paper_authors ORDER BY link_id",
+      "ordered": true
+    }
+  ]
+}

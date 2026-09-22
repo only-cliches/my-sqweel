@@ -920,6 +920,13 @@ impl RawEngine {
                     .find_conflict_keys(&table_name, &new_key, &updated_data, &conflict_rows)
                     .is_empty()
                 {
+                    // MariaDB reports a joined UPDATE IGNORE row that was
+                    // skipped for a unique conflict as affected, even though
+                    // the target row remains unchanged. Single-table
+                    // UPDATE IGNORE reports only changed rows.
+                    if !table.joins.is_empty() {
+                        updated += 1;
+                    }
                     // UPDATE IGNORE leaves rows that would violate a unique
                     // constraint unchanged instead of aborting the statement.
                     next_rows.insert(old_key.clone(), current_row.clone());

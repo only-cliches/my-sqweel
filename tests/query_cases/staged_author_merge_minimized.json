@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "id": "staged_author_merge_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "PROFESSOR-DJ/DBMS_Backend",
+      "commit": "24c903dfcb81d61838d5a4f74b30448e72272309",
+      "path": "scripts/merge_duplicate_authors_mysql.sql",
+      "url": "https://github.com/PROFESSOR-DJ/DBMS_Backend/blob/24c903dfcb81d61838d5a4f74b30448e72272309/scripts/merge_duplicate_authors_mysql.sql",
+      "sha256": "cf947a7f3b3aa17eb7c0d1eae9cc01fea5c07bd37c27a15a63993a5ecb110cc9",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "scripts/merge_duplicate_authors_mysql.sql:25-29",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A joined UPDATE IGNORE rewrites duplicate references and suppresses a unique-key conflict without aborting the statement.",
+      "mysql_mariadb_translation": "Reduced to two mapping rows and one duplicate target: one joined row moves to its keeper and a second joined row conflicts with an existing keeper link. The temporary staging, grouping, deletion, and domain-specific schema are removed so affected-row accounting is isolated."
+    },
+    "independently_authored": true,
+    "minimized_from": "staged_author_merge"
+  },
+  "features": [
+    "update-ignore-join",
+    "unique-conflict",
+    "affected-rows",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Link 1 moves from author 2 to author 1. Link 2 already has author 1 for the same paper, so the joined UPDATE IGNORE must preserve it while still reporting MariaDB's matched-row count.",
+  "determinism_notes": "Link IDs and mapping rows are fixed, the join has one mapping row, and the final read is ordered by link ID with no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE merge_links (link_id INT PRIMARY KEY, paper_id INT NOT NULL, author_id INT NOT NULL, CONSTRAINT uq_merge_link UNIQUE (paper_id, author_id))",
+    "CREATE TABLE merge_map (duplicate_author_id INT PRIMARY KEY, keep_author_id INT NOT NULL)",
+    "INSERT INTO merge_links VALUES (1, 700, 2), (2, 700, 1)",
+    "INSERT INTO merge_map VALUES (2, 1)"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE IGNORE merge_links l JOIN merge_map m ON m.duplicate_author_id = l.author_id SET l.author_id = m.keep_author_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT link_id, paper_id, author_id FROM merge_links ORDER BY link_id",
+      "ordered": true
+    }
+  ]
+}
