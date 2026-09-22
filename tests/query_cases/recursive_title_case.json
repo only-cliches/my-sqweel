@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "recursive_title_case",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "epoyraz/leetcode",
+      "commit": "e22bea9c3262f65340517975eff2e640522231b5",
+      "path": "solutions/3711.sql",
+      "url": "https://github.com/epoyraz/leetcode/blob/e22bea9c3262f65340517975eff2e640522231b5/solutions/3711.sql",
+      "sha256": "924c28a56c7a38794bec9a862a2136c7dc2ea3ffc5baaef031f86a5f93e9cf69",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "solutions/3711.sql:1-51",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A recursive CTE expands each input string into one row per character, carries the preceding character, conditionally changes letter case at token boundaries, and reassembles each string with ordered GROUP_CONCAT.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored title-normalization report. A recursive positions CTE scans fixed snippet text, a character CTE exposes the preceding character, CASE uses REGEXP plus UPPER/LOWER at punctuation boundaries, and ordered GROUP_CONCAT rebuilds each normalized title. The source schema, values, aliases, and application purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "recursive-cte",
+    "union-all",
+    "character-expansion",
+    "substring",
+    "char-length",
+    "regexp",
+    "upper",
+    "lower",
+    "group-concat",
+    "ordered-aggregate",
+    "case",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Snippet 101 starts with letters and contains a hyphen plus digits before a new word; snippet 102 starts with digits and uses punctuation before its next word. Each alphabetic token's first character is uppercased and later letters are lowercased, while digits and punctuation remain unchanged.",
+  "determinism_notes": "Snippet IDs, source text, recursive positions, character ordering, and final ordering are fixed; there are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE title_snippets (snippet_id INT PRIMARY KEY, raw_text VARCHAR(255) NOT NULL)",
+    "INSERT INTO title_snippets VALUES (101, 'alpha BETA-42 gamma'), (102, '9lEVEL!NEXT phase')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH RECURSIVE positions AS (SELECT snippet_id, raw_text, 1 AS pos, CHAR_LENGTH(raw_text) AS text_len FROM title_snippets UNION ALL SELECT snippet_id, raw_text, pos + 1, text_len FROM positions WHERE pos < text_len), chars AS (SELECT snippet_id, raw_text, pos, SUBSTRING(raw_text, pos, 1) AS ch, CASE WHEN pos = 1 THEN NULL ELSE SUBSTRING(raw_text, pos - 1, 1) END AS prev_ch FROM positions) SELECT snippet_id, raw_text, GROUP_CONCAT(CASE WHEN pos = 1 OR (prev_ch NOT REGEXP '[A-Za-z]' AND ch REGEXP '[A-Za-z]') THEN UPPER(ch) ELSE LOWER(ch) END ORDER BY pos SEPARATOR '') AS normalized_text FROM chars GROUP BY snippet_id, raw_text ORDER BY snippet_id",
+      "ordered": true
+    }
+  ]
+}
