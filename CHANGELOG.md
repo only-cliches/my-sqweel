@@ -413,6 +413,7 @@ All notable changes to MySqweel will be documented in this file.
 - Added GitHub-attributed staged duplicate-author merge coverage from [PROFESSOR-DJ/DBMS_Backend](https://github.com/PROFESSOR-DJ/DBMS_Backend/blob/24c903dfcb81d61838d5a4f74b30448e72272309/scripts/merge_duplicate_authors_mysql.sql#L10-L39) for an independently authored temporary grouped-CTAS batch combining `HAVING`, ordered `LIMIT`, `UPDATE IGNORE` joins, joined cleanup, and deterministic final-state checks; the original differential exposed joined `UPDATE IGNORE` affected-row drift.
 - Added the minimized joined `UPDATE IGNORE` unique-conflict regression and fixed affected-row accounting so MariaDB's skipped-conflict count matches MySqweel; repeated MariaDB 10.11.7/MySqweel differential runs now match for both original and minimized cases.
 - Parked the GitHub-attributed `LOCK IN SHARE MODE` candidate from [wenshao/sql-dialects](https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/advanced/locking/mysql.sql#L20-L24) because MySqweel explicitly rejects locking clauses other than plain `FOR UPDATE` without locking semantics; no fixture was retained.
+- Added an independently authored `FORCE INDEX (PRIMARY)` filtered inventory-read fixture inspired by [antlr/grammars-v4](https://github.com/antlr/grammars-v4/blob/7e08234262d2a7c58557d74f2cb8ce90c72d356f/sql/mysql/Oracle/examples/dml_select.sql#L221-L225); repeated MariaDB 10.11.7 baselines and MySqweel differential runs match byte-for-byte.
 
 ## 0.4.1 Aug 13, 2026
 

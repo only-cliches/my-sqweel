@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "forced_index_inventory",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "antlr/grammars-v4",
+      "commit": "7e08234262d2a7c58557d74f2cb8ce90c72d356f",
+      "path": "sql/mysql/Oracle/examples/dml_select.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/7e08234262d2a7c58557d74f2cb8ce90c72d356f/sql/mysql/Oracle/examples/dml_select.sql",
+      "sha256": "e64c03f67dddb82c3c8131aa3ac0899bedc3ae60d51661d2850218511767fb3a",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/mysql/Oracle/examples/dml_select.sql:221-225",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL read uses an index hint, including FORCE INDEX (PRIMARY), while applying filtering and deterministic ordering.",
+      "mysql_mariadb_translation": "Reauthored as a warehouse-bin inventory read. FORCE INDEX (PRIMARY) accompanies an open-bin filter and primary-key ordering; the source table, columns, rows, and inventory meaning are new. The hint is a compatibility directive and does not change the selected rows."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "force-index",
+    "primary-index-hint",
+    "filtered-select",
+    "order-by",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Bins 101 and 103 are open and returned in primary-key order; bin 102 is closed and excluded, while bin 104 has a NULL note but remains eligible. FORCE INDEX (PRIMARY) must not alter filtering or ordering semantics.",
+  "determinism_notes": "Bin IDs and states are fixed, the primary key defines the hinted access path and final order, and there are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE warehouse_bins (bin_id INT PRIMARY KEY, bin_state VARCHAR(12) NOT NULL, bin_note VARCHAR(32) NULL, INDEX idx_bin_state (bin_state))",
+    "INSERT INTO warehouse_bins VALUES (101, 'open', 'north'), (102, 'closed', 'hold'), (103, 'open', 'south'), (104, 'open', NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT bin_id, bin_state, bin_note FROM warehouse_bins FORCE INDEX (PRIMARY) WHERE bin_state = 'open' ORDER BY bin_id",
+      "ordered": true
+    }
+  ]
+}
