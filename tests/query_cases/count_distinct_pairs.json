@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "count_distinct_pairs",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "striver619/db",
+      "commit": "918ce0e4618268d87d2d051466b448869c1c7098",
+      "path": "mysql/mysql-learn.sql",
+      "url": "https://github.com/striver619/db/blob/918ce0e4618268d87d2d051466b448869c1c7098/mysql/mysql-learn.sql",
+      "sha256": "ef20ef838fe720fb24e7939bf24d2bf9065adec9ec41a24d7e9c4e1bedc26c69",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "mysql/mysql-learn.sql:846-850",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL query counts distinct combinations of two columns with COUNT(DISTINCT first_name, last_name).",
+      "mysql_mariadb_translation": "Reauthored as a regional contact-pair report. Each region counts unique last-name and first-name pairs, duplicate assignments collapse, and rows with a NULL component are excluded by MariaDB's composite DISTINCT aggregate semantics; the source table, names, rows, and purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "count-distinct-multiple-expressions",
+    "composite-distinctness",
+    "null-aggregate-input",
+    "group-by",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Region 4 has two identical Rivera/Ana pairs and one Rivera/Luis pair, so its count is 2; a NULL first name is ignored. Region 8 has one Chen/Mei pair repeated twice and one Patel/Noor pair, so its count is 2.",
+  "determinism_notes": "Region IDs and contact IDs are fixed and the grouped result is ordered by the unique region ID. Duplicate pairs and NULL components are deliberate; there are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE regional_contacts (contact_id INT PRIMARY KEY, region_id INT NOT NULL, first_name VARCHAR(32) NULL, last_name VARCHAR(32) NOT NULL)",
+    "INSERT INTO regional_contacts VALUES (401, 4, 'Ana', 'Rivera'), (402, 4, 'Ana', 'Rivera'), (403, 4, 'Luis', 'Rivera'), (404, 4, NULL, 'Rivera'), (801, 8, 'Mei', 'Chen'), (802, 8, 'Mei', 'Chen'), (803, 8, 'Noor', 'Patel')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT region_id, COUNT(DISTINCT last_name, first_name) AS unique_name_pairs FROM regional_contacts GROUP BY region_id ORDER BY region_id",
+      "ordered": true
+    }
+  ]
+}
