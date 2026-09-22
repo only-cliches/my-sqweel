@@ -408,6 +408,7 @@ All notable changes to MySqweel will be documented in this file.
 - Matched MariaDB's `ON DUPLICATE KEY UPDATE` insert-ID behavior by returning the existing row's auto-increment value when an update resolves a unique-key conflict.
 - Matched MariaDB insert-ID metadata when an `INSERT` explicitly supplies the value of an auto-increment column.
 - Changed MariaDB parity comparisons to collect value mismatches through the full scenario and report them together, instead of stopping at the first mismatch.
+- Added GitHub-attributed self-join gap-detection coverage from [wenshao/sql-dialects](https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/scenarios/gap-detection/mysql.sql#L93-L104) for an independently authored parcel-scan sequence audit combining correlated `NOT EXISTS`, a scalar `MIN` successor lookup, maximum-ID bounding, and deterministic gap ordering; MariaDB 10.11.7 and MySqweel matched across repeated fresh baseline and differential runs without a source fix.
 
 ## 0.4.1 Aug 13, 2026
 

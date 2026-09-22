@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "self_join_gap_report",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "scenarios/gap-detection/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/scenarios/gap-detection/mysql.sql",
+      "sha256": "5bef89cd19b284c92ee4ce19007598a7ee9ae67c171631a80f6b6d48fe8a94fb",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "scenarios/gap-detection/mysql.sql:93-104",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A self-join gap query identifies rows without an immediate successor using correlated NOT EXISTS, then uses a scalar MIN subquery to close each gap before the maximum identifier.",
+      "mysql_mariadb_translation": "Reauthored as an independent parcel-scan sequence audit. Missing scan IDs become deterministic gap ranges, while the source table, identifiers, labels, and operational meaning are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "self-join",
+    "correlated-not-exists",
+    "scalar-subquery",
+    "min-aggregate",
+    "gap-detection",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Scan IDs 100, 101, 104, 105, and 109 produce gaps 102-103 and 106-108. The final scan is excluded because it is the maximum observed identifier and has no later range to bound.",
+  "determinism_notes": "Scan IDs and labels are fixed; each gap uses the next greater scan ID and output is ordered by gap start with no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE parcel_scans (scan_id INT PRIMARY KEY, scan_label VARCHAR(32) NOT NULL)",
+    "INSERT INTO parcel_scans VALUES (100, 'manifest'), (101, 'loaded'), (104, 'departed'), (105, 'border'), (109, 'delivered')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT s.scan_id + 1 AS gap_start, (SELECT MIN(n.scan_id) FROM parcel_scans n WHERE n.scan_id > s.scan_id) - 1 AS gap_end FROM parcel_scans s WHERE NOT EXISTS (SELECT 1 FROM parcel_scans p WHERE p.scan_id = s.scan_id + 1) AND s.scan_id < (SELECT MAX(m.scan_id) FROM parcel_scans m) ORDER BY gap_start",
+      "ordered": true
+    }
+  ]
+}
