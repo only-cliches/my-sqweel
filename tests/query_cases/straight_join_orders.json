@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "straight_join_orders",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "vinsidious/sqlriver",
+      "commit": "2f886fbfcd8f8a4d19de43ae8dee1013a3f29405",
+      "path": "website/examples/mysql.sql",
+      "url": "https://github.com/vinsidious/sqlriver/blob/2f886fbfcd8f8a4d19de43ae8dee1013a3f29405/website/examples/mysql.sql",
+      "sha256": "9593cf448acee53c24b0efa44b663b9475db396f6b223188829087a2d178cbf8",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "website/examples/mysql.sql:63-65",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL SELECT uses the STRAIGHT_JOIN modifier with an inner join, filtering, descending ordering, and a bounded result set.",
+      "mysql_mariadb_translation": "Reauthored as a dispatch-order report. STRAIGHT_JOIN reads fixed route and parcel rows, filters active routes, and returns the highest-value parcels in deterministic value and ID order; the source schema, labels, values, and operational context are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "straight-join",
+    "inner-join",
+    "filtered-select",
+    "order-by-limit",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Route 3 is inactive and excluded. Active route parcels are ordered by declared value descending with parcel ID as the tie-breaker; LIMIT 3 keeps parcels 204, 202, and 201 while parcel 203 is outside the page.",
+  "determinism_notes": "Route IDs and parcel IDs are unique, the ordering uses value plus parcel ID, and the limit is fixed. The optimizer hint must not alter selected rows; there are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE dispatch_routes (route_id INT PRIMARY KEY, route_code VARCHAR(16) NOT NULL, active TINYINT NOT NULL)",
+    "CREATE TABLE dispatch_parcels (parcel_id INT PRIMARY KEY, route_id INT NOT NULL, declared_value INT NOT NULL, parcel_code VARCHAR(16) NOT NULL)",
+    "INSERT INTO dispatch_routes VALUES (1, 'north', 1), (2, 'south', 1), (3, 'retired', 0)",
+    "INSERT INTO dispatch_parcels VALUES (201, 1, 90, 'N-01'), (202, 2, 140, 'S-02'), (203, 1, 60, 'N-03'), (204, 2, 140, 'S-04'), (205, 3, 999, 'R-05')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT STRAIGHT_JOIN r.route_code, p.parcel_id, p.declared_value, p.parcel_code FROM dispatch_routes r INNER JOIN dispatch_parcels p ON p.route_id = r.route_id WHERE r.active = 1 ORDER BY p.declared_value DESC, p.parcel_id ASC LIMIT 3",
+      "ordered": true
+    }
+  ]
+}
