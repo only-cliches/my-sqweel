@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "delete_subquery_batch_guard",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Mostafaessam7/Examination-System-Database",
+      "commit": "d3edf63c6da1de605f771c9b902461c6b3431b05",
+      "path": "update.sql",
+      "url": "https://github.com/Mostafaessam7/Examination-System-Database/blob/d3edf63c6da1de605f771c9b902461c6b3431b05/update.sql",
+      "sha256": "7de91007830117f6e3a19b8aa33c115788145dd2d7e9ce0c5f75f79f884a83d1",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "update.sql:168-184, trigger trg_PreventExamDeletion",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A guarded DELETE selects target rows through an IN subquery over a transition-row relation after checking that no dependent rows block deletion.",
+      "mysql_mariadb_translation": "Reauthored as an independent shipment-batch cleanup. Batches are selected through a child-item IN subquery when they contain void items, while a correlated NOT EXISTS guard preserves batches that still contain active items; the trigger transition relation, source tables, names, and application labels are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "delete-in-subquery",
+    "correlated-not-exists",
+    "dependent-row-guard",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Batch 41 has only void items and is deleted; batch 42 has a void item but also an active item and remains; batch 43 has no void item and remains; batch 44 has a void item and is deleted. The final item rows remain unchanged so the deletion predicate's parent selection is observable.",
+  "determinism_notes": "Batch and item IDs, states, and predicates are fixed; final parent and child reads are ordered by primary keys with no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE shipment_batches (batch_id INT PRIMARY KEY, batch_code VARCHAR(16) NOT NULL, batch_state VARCHAR(16) NOT NULL)",
+    "CREATE TABLE shipment_items (item_id INT PRIMARY KEY, batch_id INT NOT NULL, item_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO shipment_batches VALUES (41, 'B-041', 'queued'), (42, 'B-042', 'queued'), (43, 'B-043', 'queued'), (44, 'B-044', 'queued')",
+    "INSERT INTO shipment_items VALUES (401, 41, 'void'), (402, 42, 'void'), (403, 42, 'active'), (404, 43, 'active'), (405, 44, 'void')"
+  ],
+  "steps": [
+    {
+      "sql": "DELETE FROM shipment_batches WHERE batch_id IN (SELECT batch_id FROM shipment_items WHERE item_state = 'void') AND NOT EXISTS (SELECT 1 FROM shipment_items active_item WHERE active_item.batch_id = shipment_batches.batch_id AND active_item.item_state = 'active')",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT batch_id, batch_code, batch_state FROM shipment_batches ORDER BY batch_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT item_id, batch_id, item_state FROM shipment_items ORDER BY item_id",
+      "ordered": true
+    }
+  ]
+}
