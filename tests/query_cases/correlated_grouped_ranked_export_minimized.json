@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "correlated_grouped_ranked_export_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "CDLUC3/dmptool-migration",
+      "commit": "ea41f5e9a482ae4a431b62fb5c707f26535bd3ff",
+      "path": "models/migration/questions.sql",
+      "url": "https://github.com/CDLUC3/dmptool-migration/blob/ea41f5e9a482ae4a431b62fb5c707f26535bd3ff/models/migration/questions.sql",
+      "sha256": "64c55f37d51e02d68f3290f85b1111a54ded1dc2aae97a8025b37f08f39c9acd",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "models/migration/questions.sql:53-114",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped export combines global and partitioned ROW_NUMBER values with an ordered GROUP_CONCAT projection.",
+      "mysql_mariadb_translation": "Minimized to three independent grouped rows with one ordered GROUP_CONCAT value per row, retaining both global and partitioned ranking windows while removing correlated notes, CASE branches, and multi-option data."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "row-number",
+    "partitioned-window",
+    "group-concat",
+    "ordered-aggregate",
+    "grouping",
+    "metadata-regression",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Three fixed rows produce global positions 1, 2, and 3; collection 10 contains the first two rows and collection 20 contains the third. Each grouped value is a single ordered label, isolating window values and GROUP_CONCAT metadata.",
+  "determinism_notes": "IDs, collection partitions, labels, window orderings, aggregate orderings, and final order are fixed; there are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE ranked_labels (label_id INT PRIMARY KEY, collection_id INT NOT NULL, label VARCHAR(32) NOT NULL)",
+    "INSERT INTO ranked_labels VALUES (101, 10, 'red'), (102, 10, 'blue'), (201, 20, 'primary')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT ROW_NUMBER() OVER (ORDER BY r.label_id) AS export_id, r.label_id, r.collection_id, ROW_NUMBER() OVER (PARTITION BY r.collection_id ORDER BY r.label_id) AS collection_position, CONCAT('[', GROUP_CONCAT(r.label ORDER BY r.label_id SEPARATOR ','), ']') AS labels FROM ranked_labels r GROUP BY r.label_id, r.collection_id, r.label ORDER BY r.label_id",
+      "ordered": true
+    }
+  ]
+}

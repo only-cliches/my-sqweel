@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "id": "correlated_grouped_ranked_export",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "CDLUC3/dmptool-migration",
+      "commit": "ea41f5e9a482ae4a431b62fb5c707f26535bd3ff",
+      "path": "models/migration/questions.sql",
+      "url": "https://github.com/CDLUC3/dmptool-migration/blob/ea41f5e9a482ae4a431b62fb5c707f26535bd3ff/models/migration/questions.sql",
+      "sha256": "64c55f37d51e02d68f3290f85b1111a54ded1dc2aae97a8025b37f08f39c9acd",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "models/migration/questions.sql:53-114",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped export projects global and partitioned ROW_NUMBER values, uses correlated scalar GROUP_CONCAT subqueries for child text, and conditionally builds an ordered GROUP_CONCAT summary from grouped option rows.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored training-card export. Fixed cards are ranked globally and within their collection, correlated notes are concatenated in note order, and choice options are serialized with an ordered GROUP_CONCAT inside a CASE expression. The source templates, schema, values, aliases, and migration purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "row-number",
+    "partitioned-window",
+    "correlated-subquery",
+    "group-concat",
+    "ordered-aggregate",
+    "case",
+    "concat",
+    "trim",
+    "left-join",
+    "grouping",
+    "null-propagation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Cards 101 and 102 share collection 10 and receive collection positions 1 and 2; card 201 starts collection 20 at position 1. Choice cards serialize their ordered options, while the text card has no options and returns NULL for the option summary. Notes are concatenated by note ID rather than insertion order.",
+  "determinism_notes": "Card IDs, collection IDs, positions, option numbers, note IDs, window orderings, aggregate orderings, and final order are fixed; there are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE training_cards (card_id INT PRIMARY KEY, collection_id INT NOT NULL, position_no INT NOT NULL, card_kind VARCHAR(16) NOT NULL, prompt_text VARCHAR(128) NOT NULL)",
+    "CREATE TABLE card_notes (note_id INT PRIMARY KEY, card_id INT NOT NULL, note_text VARCHAR(128) NOT NULL)",
+    "CREATE TABLE card_options (option_id INT PRIMARY KEY, card_id INT NOT NULL, option_no INT NOT NULL, option_label VARCHAR(64) NOT NULL, is_default TINYINT NOT NULL)",
+    "INSERT INTO training_cards VALUES (101, 10, 2, 'choice', '  Preferred color?  '), (102, 10, 5, 'text', '  Explain the issue  '), (201, 20, 1, 'choice', 'Choose an owner')",
+    "INSERT INTO card_notes VALUES (1002, 101, 'Select one answer'), (1001, 101, 'Shown to new users'), (1003, 102, 'Long-form response'), (2001, 201, 'Use the assigned team')",
+    "INSERT INTO card_options VALUES (1012, 101, 2, 'blue', 1), (1011, 101, 1, 'red', 0), (2012, 201, 2, 'backup', 0), (2011, 201, 1, 'primary', 1)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT ROW_NUMBER() OVER (ORDER BY c.card_id) AS export_id, c.card_id, c.collection_id, TRIM(c.prompt_text) AS prompt_text, (SELECT GROUP_CONCAT(TRIM(n.note_text) ORDER BY n.note_id SEPARATOR '|') FROM card_notes n WHERE n.card_id = c.card_id) AS notes, ROW_NUMBER() OVER (PARTITION BY c.collection_id ORDER BY c.position_no, c.card_id) AS collection_position, CASE WHEN c.card_kind = 'choice' THEN CONCAT('[', GROUP_CONCAT(CONCAT(o.option_label, '=', CASE WHEN o.is_default = 1 THEN 'Y' ELSE 'N' END) ORDER BY o.option_no SEPARATOR ','), ']') ELSE NULL END AS option_summary FROM training_cards c LEFT JOIN card_options o ON o.card_id = c.card_id GROUP BY c.card_id, c.collection_id, c.position_no, c.card_kind, c.prompt_text ORDER BY c.card_id",
+      "ordered": true
+    }
+  ]
+}

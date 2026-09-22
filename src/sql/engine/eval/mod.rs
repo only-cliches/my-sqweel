@@ -527,23 +527,21 @@ pub(super) fn aggregate_select_result(
         }
         // Window items were deferred from projection: their values are
         // cached above, so resolve them now under their output keys.
-        for ((row, context), (item, key)) in output
-            .iter_mut()
-            .zip(contexts.iter())
-            .zip(select.projection.iter().zip(item_keys.iter()))
-        {
-            let Some(key) = key else {
-                continue;
-            };
-            let expr = match item {
-                SelectItem::UnnamedExpr(expr) | SelectItem::ExprWithAlias { expr, .. } => expr,
-                _ => continue,
-            };
-            if !expr_has_window(expr) {
-                continue;
+        for (row, context) in output.iter_mut().zip(contexts.iter()) {
+            for (item, key) in select.projection.iter().zip(item_keys.iter()) {
+                let Some(key) = key else {
+                    continue;
+                };
+                let expr = match item {
+                    SelectItem::UnnamedExpr(expr) | SelectItem::ExprWithAlias { expr, .. } => expr,
+                    _ => continue,
+                };
+                if !expr_has_window(expr) {
+                    continue;
+                }
+                let value = eval(expr, context, last_insert_id)?;
+                row.insert(key.clone(), value);
             }
-            let value = eval(expr, context, last_insert_id)?;
-            row.insert(key.clone(), value);
         }
     }
 

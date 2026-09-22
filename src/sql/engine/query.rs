@@ -1490,6 +1490,19 @@ impl RawEngine {
                             .unwrap_or_default();
                     }
                 }
+                if branch_metadata
+                    .iter()
+                    .any(|branch| matches!(branch.column_type, MysqlColumnType::LongBlob))
+                {
+                    metadata.column_type = MysqlColumnType::LongBlob;
+                } else if branch_metadata.iter().any(|branch| {
+                    matches!(
+                        branch.column_type,
+                        MysqlColumnType::Blob | MysqlColumnType::MediumBlob | MysqlColumnType::Json
+                    )
+                }) {
+                    metadata.column_type = MysqlColumnType::MediumBlob;
+                }
             }
 
             Expr::Cast { data_type, .. } => {
@@ -1525,6 +1538,41 @@ impl RawEngine {
                     "COUNT" | "ROW_NUMBER" | "RANK" | "DENSE_RANK" | "NTILE" => {
                         metadata.unsigned = true;
                         MysqlColumnType::BigInt
+                    }
+                    "CONCAT" | "CONCAT_WS" => {
+                        let argument_types = function_arguments(function)
+                            .unwrap_or_default()
+                            .into_iter()
+                            .flatten()
+                            .map(|argument| {
+                                self.expression_metadata(
+                                    select,
+                                    &argument,
+                                    String::new(),
+                                    first_row,
+                                )
+                                .column_type
+                            })
+                            .collect::<Vec<_>>();
+                        if argument_types
+                            .iter()
+                            .any(|column_type| matches!(column_type, MysqlColumnType::LongBlob))
+                        {
+                            MysqlColumnType::LongBlob
+                        } else if argument_types.iter().any(|column_type| {
+                            matches!(
+                                column_type,
+                                MysqlColumnType::Blob
+                                    | MysqlColumnType::MediumBlob
+                                    | MysqlColumnType::Json
+                            )
+                        }) {
+                            // MariaDB widens CONCAT results that consume a
+                            // GROUP_CONCAT BLOB to MEDIUM_BLOB.
+                            MysqlColumnType::MediumBlob
+                        } else {
+                            metadata.column_type
+                        }
                     }
                     "GROUP_CONCAT" => MysqlColumnType::Blob,
                     "SUBSTRING_INDEX" => {
