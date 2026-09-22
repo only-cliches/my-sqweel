@@ -1574,6 +1574,7 @@ impl RawEngine {
                             metadata.column_type
                         }
                     }
+                    "REPEAT" => MysqlColumnType::LongBlob,
                     "GROUP_CONCAT" => MysqlColumnType::Blob,
                     "SUBSTRING_INDEX" => {
                         let argument = function_arguments(function)

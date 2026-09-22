@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "id": "recursive_hierarchy_formatting_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "scenarios/hierarchical-query/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/scenarios/hierarchical-query/mysql.sql",
+      "sha256": "c2245c2147c08e488f3fc75dda56d245e5e16f5f35f02ccb8c28f1d341db47fb",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "scenarios/hierarchical-query/mysql.sql:29-75",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "The hierarchical report formats recursive depth with REPEAT and projects the resulting string value.",
+      "mysql_mariadb_translation": "Reduced to a three-row recursive depth relation and one REPEAT projection, removing the source table, path construction, joins, and hierarchy labels while retaining the metadata mismatch.",
+      "minimized_from": "recursive_hierarchy_formatting"
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "recursive-cte",
+    "repeat",
+    "metadata-regression",
+    "minimized-regression"
+  ],
+  "fixture_notes": "The recursive depth relation emits depths 0, 1, and 2. REPEAT must return an empty marker followed by two and four copies of the fixed token.",
+  "determinism_notes": "All recursive bounds and literals are fixed; there are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "WITH RECURSIVE depths(depth) AS (SELECT 0 UNION ALL SELECT depth + 1 FROM depths WHERE depth < 2) SELECT REPEAT('ab', depth) AS marker FROM depths ORDER BY depth",
+      "ordered": true
+    }
+  ]
+}

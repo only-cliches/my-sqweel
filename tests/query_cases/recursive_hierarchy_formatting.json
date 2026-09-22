@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "recursive_hierarchy_formatting",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "scenarios/hierarchical-query/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/scenarios/hierarchical-query/mysql.sql",
+      "sha256": "c2245c2147c08e488f3fc75dda56d245e5e16f5f35f02ccb8c28f1d341db47fb",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "scenarios/hierarchical-query/mysql.sql:29-75",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A recursive CTE walks a parent-child hierarchy, accumulates a path and depth, then uses zero-padded identifiers for deterministic depth-first ordering and REPEAT-based indentation.",
+      "mysql_mariadb_translation": "Reauthored as an independent project-component tree. The recursive relation builds breadcrumb text and a zero-padded sort path, while the final report formats depth with REPEAT and excludes an unreachable orphan node; the source schema, names, values, and organization domain are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "recursive-cte",
+    "recursive-self-join",
+    "hierarchy-path",
+    "depth-first-order",
+    "lpad",
+    "repeat",
+    "concat",
+    "cast",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Component 401 is the root. Components 410 and 420 are direct children; 411 is nested below 410 and 421/422 are nested below 420. Component 499 points at a missing parent and must be excluded by the rooted traversal. Zero-padded sort paths keep each subtree contiguous and numeric IDs in lexical order.",
+  "determinism_notes": "Node IDs, parent links, names, depth formatting, and final sort paths are fixed; the recursive query has no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE project_components (component_id INT PRIMARY KEY, component_name VARCHAR(64) NOT NULL, parent_component_id INT NULL, component_kind VARCHAR(16) NOT NULL)",
+    "INSERT INTO project_components VALUES (401, 'Platform', NULL, 'root'), (410, 'API', 401, 'service'), (420, 'Web', 401, 'service'), (411, 'Auth', 410, 'module'), (421, 'Checkout', 420, 'module'), (422, 'Search', 420, 'module'), (499, 'Orphan', 999, 'module')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH RECURSIVE component_tree AS (SELECT component_id, component_name, parent_component_id, 0 AS depth, CAST(LPAD(component_id, 5, '0') AS CHAR(1000)) AS sort_path, CAST(component_name AS CHAR(1000)) AS breadcrumb FROM project_components WHERE parent_component_id IS NULL UNION ALL SELECT c.component_id, c.component_name, c.parent_component_id, t.depth + 1, CONCAT(t.sort_path, '/', LPAD(c.component_id, 5, '0')), CONCAT(t.breadcrumb, ' / ', c.component_name) FROM project_components c JOIN component_tree t ON c.parent_component_id = t.component_id) SELECT component_id, CONCAT(REPEAT('  ', depth), component_name) AS display_name, depth, breadcrumb FROM component_tree ORDER BY sort_path",
+      "ordered": true
+    }
+  ]
+}
