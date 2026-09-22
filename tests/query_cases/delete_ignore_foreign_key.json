@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "id": "delete_ignore_foreign_key",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "dml/delete/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/dml/delete/mysql.sql",
+      "sha256": "819df13ca105e3e6b09eaf4d39108e014491b5b37a53ef5a0d2ea69a6d63b510",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "dml/delete/mysql.sql:15-35",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL DELETE IGNORE statement removes eligible rows while suppressing row-level constraint failures instead of aborting the whole deletion.",
+      "mysql_mariadb_translation": "Reauthored as a warehouse-zone retirement operation. DELETE IGNORE attempts to remove three parent zones in deterministic order; a referenced zone remains while unreferenced zones are deleted, and the child allocation remains intact. The source table, rows, identifiers, and operational meaning are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "delete-ignore",
+    "foreign-key-conflict",
+    "partial-mutation",
+    "order-by-limit",
+    "final-state-check",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Zones 41 and 43 have no allocations and are deleted; zone 42 is referenced by allocation 9002 and must remain when DELETE IGNORE encounters the foreign-key conflict. The ordered LIMIT covers all three candidates in one deterministic statement.",
+  "determinism_notes": "Zone IDs and allocation rows are fixed, the deletion is ordered by the primary key, and final reads are ordered by primary keys with no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE warehouse_zones (zone_id INT PRIMARY KEY, zone_name VARCHAR(24) NOT NULL)",
+    "CREATE TABLE zone_allocations (allocation_id INT PRIMARY KEY, zone_id INT NOT NULL, CONSTRAINT fk_zone_allocations_zone FOREIGN KEY (zone_id) REFERENCES warehouse_zones (zone_id))",
+    "INSERT INTO warehouse_zones VALUES (41, 'north-rack'), (42, 'cold-store'), (43, 'south-rack')",
+    "INSERT INTO zone_allocations VALUES (9002, 42)"
+  ],
+  "steps": [
+    {
+      "sql": "DELETE IGNORE FROM warehouse_zones WHERE zone_id IN (41, 42, 43) ORDER BY zone_id LIMIT 3",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT zone_id, zone_name FROM warehouse_zones ORDER BY zone_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT allocation_id, zone_id FROM zone_allocations ORDER BY allocation_id",
+      "ordered": true
+    }
+  ]
+}
