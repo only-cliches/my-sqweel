@@ -1401,9 +1401,12 @@ impl RawEngine {
                     if_not_exists,
                     temporary,
                     query,
+                    like,
                     ..
                 } = create;
-                if let Some(query) = query {
+                if let Some(source) = like {
+                    self.create_table_like(name, source, if_not_exists, temporary)
+                } else if let Some(query) = query {
                     self.create_table_as_select(
                         name,
                         columns,

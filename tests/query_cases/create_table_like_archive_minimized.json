@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "id": "create_table_like_archive_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "create_table_like_archive",
+    "source": {
+      "kind": "github",
+      "repository": "DataLinkDC/dinky",
+      "commit": "63b5a5aa2438a4c30efd1067da8aedf844951143",
+      "path": "script/sql/dinky-mysql.sql",
+      "url": "https://github.com/DataLinkDC/dinky/blob/63b5a5aa2438a4c30efd1067da8aedf844951143/script/sql/dinky-mysql.sql",
+      "sha256": "a0196e96dc23e80c96b8fd054d80ffb17d205cfdf44a98f7997233d9329f736d",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "script/sql/dinky-mysql.sql:1174-1179",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "CREATE TABLE ... LIKE must copy a source column into a new destination table before a later insert can address that copied column.",
+      "mysql_mariadb_translation": "Minimized from the archive case to one independently authored INT primary-key column and one inserted row. The table names, value, and operational context remain new while the schema-copy path is isolated from text columns, filters, and repeated rows."
+    },
+    "independently_authored": true,
+    "minimized_from": "create_table_like_archive"
+  },
+  "features": [
+    "create-table-like",
+    "schema-copy",
+    "minimized-regression"
+  ],
+  "fixture_notes": "The source has one INT primary-key column. CREATE TABLE LIKE must copy item_id so the destination insert and ordered read succeed.",
+  "determinism_notes": "One fixed schema and row define a deterministic result with no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE mini_like_source (item_id INT PRIMARY KEY)",
+    "INSERT INTO mini_like_source VALUES (811)"
+  ],
+  "steps": [
+    {
+      "sql": "CREATE TABLE mini_like_archive LIKE mini_like_source",
+      "ordered": false
+    },
+    {
+      "sql": "INSERT INTO mini_like_archive SELECT item_id FROM mini_like_source",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT item_id FROM mini_like_archive ORDER BY item_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT item_id FROM mini_like_source ORDER BY item_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT item_id FROM mini_like_archive ORDER BY item_id",
+      "ordered": true
+    }
+  ]
+}

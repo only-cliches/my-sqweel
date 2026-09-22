@@ -140,6 +140,37 @@ impl RawEngine {
         Ok(QueryResult::default())
     }
 
+    pub(super) fn create_table_like(
+        &self,
+        name: ObjectName,
+        source: ObjectName,
+        if_not_exists: bool,
+        temporary: bool,
+    ) -> Result<QueryResult> {
+        let table = object_name(&name)?;
+        if self.mysql_strict() && self.schemas.contains_key(&table) {
+            if if_not_exists {
+                return Ok(QueryResult::default());
+            }
+            return Err(anyhow!("table '{table}' already exists"));
+        }
+
+        let source_table = object_name(&source)?;
+        let mut schema = self
+            .schemas
+            .get(&source_table)
+            .map(|schema| schema.clone())
+            .ok_or_else(|| anyhow!("unknown table: {source_table}"))?;
+        schema.table = table.clone();
+        schema.temporary = temporary;
+        schema.updated_at = Some(Utc::now());
+        self.schemas.insert(table.clone(), schema.into());
+        self.rows.insert(table.clone(), BTreeMap::new().into());
+        self.rebuild_indexes(&table);
+        self.persist_schema(&table)?;
+        Ok(QueryResult::default())
+    }
+
     pub(super) fn alter_table(
         &self,
         name: ObjectName,
