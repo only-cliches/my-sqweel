@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "recursive_insert_cycle_seed",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "postgrespro/aqo",
+      "commit": "4a7fcd7291a8c4209c9102d1736f9f754d311cf2",
+      "path": "sql/cleanup_bgworker.sql",
+      "url": "https://github.com/postgrespro/aqo/blob/4a7fcd7291a8c4209c9102d1736f9f754d311cf2/sql/cleanup_bgworker.sql",
+      "sha256": "b2e6cdf278759e1fb896687f4adcd3e7b1599a8f0f0607ed3e4295ab99e72120",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/cleanup_bgworker.sql:1-8",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A recursive CTE generates a bounded sequence and feeds its rows directly into an INSERT ... SELECT statement.",
+      "mysql_mariadb_translation": "Reauthored as an independent billing-cycle seed. A recursive counter computes cumulative units, then inserts formatted cycle rows into a target table; source extensions, table names, values, and background-worker behavior are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "recursive-cte",
+    "recursive-insert",
+    "insert-select",
+    "arithmetic",
+    "concat",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The recursive seed creates cycles 1 through 4 with cumulative units 7, 15, 24, and 34. The final read verifies every inserted row and its formatted label; no pre-existing rows are overwritten.",
+  "determinism_notes": "The recursion bound, increments, labels, and final primary-key order are fixed; there are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE billing_cycles (cycle_no INT PRIMARY KEY, cycle_label VARCHAR(32) NOT NULL, accumulated_units INT NOT NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO billing_cycles (cycle_no, cycle_label, accumulated_units) WITH RECURSIVE cycle_seed(cycle_no, accumulated_units) AS (SELECT 1, 7 UNION ALL SELECT cycle_no + 1, accumulated_units + cycle_no + 1 FROM cycle_seed WHERE cycle_no < 4) SELECT cycle_no, CONCAT('cycle-', cycle_no), accumulated_units FROM cycle_seed"
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT cycle_no, cycle_label, accumulated_units FROM billing_cycles ORDER BY cycle_no",
+      "ordered": true
+    }
+  ]
+}
