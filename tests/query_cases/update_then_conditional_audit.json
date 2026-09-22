@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "id": "update_then_conditional_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "gianni321/invoice_app",
+      "commit": "5fbfae8d2f21932573cde4cbb5a98079719690d0",
+      "path": "backend/migrations-mysql/004_invoice_status_update.sql",
+      "url": "https://github.com/gianni321/invoice_app/blob/5fbfae8d2f21932573cde4cbb5a98079719690d0/backend/migrations-mysql/004_invoice_status_update.sql",
+      "sha256": "55114d31f47d34458cc4df0e684a489a060de48cbed72abdf4c0ba8b16e154bf",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "backend/migrations-mysql/004_invoice_status_update.sql:7-14",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A migration updates rows matching an old status, then conditionally inserts one audit record through INSERT ... SELECT guarded by a correlated EXISTS check over the post-update state.",
+      "mysql_mariadb_translation": "Reauthored as an independent shipment-state migration. Pending shipments become submitted, and one fixed audit row is inserted only when the updated state exists; table names, statuses, identifiers, and migration message are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "update",
+    "insert-select",
+    "where-exists",
+    "post-update-state",
+    "conditional-insert",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Shipments 701 and 703 move from pending to submitted; shipment 702 is already paid. The guarded INSERT must create exactly one audit row because submitted state exists after the update.",
+  "determinism_notes": "Shipment and audit IDs, status transitions, and final read ordering are fixed; there are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE shipment_states (shipment_id INT PRIMARY KEY, shipment_status VARCHAR(16) NOT NULL)",
+    "CREATE TABLE shipment_audit (audit_id INT PRIMARY KEY, audit_action VARCHAR(32) NOT NULL, audit_detail VARCHAR(128) NOT NULL)",
+    "INSERT INTO shipment_states VALUES (701, 'pending'), (702, 'paid'), (703, 'pending')"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE shipment_states SET shipment_status = 'submitted' WHERE shipment_status = 'pending'"
+    },
+    {
+      "sql": "INSERT INTO shipment_audit (audit_id, audit_action, audit_detail) SELECT 8801, 'STATUS_MIGRATION', 'pending shipments became submitted' WHERE EXISTS (SELECT 1 FROM shipment_states WHERE shipment_status = 'submitted')"
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT shipment_id, shipment_status FROM shipment_states ORDER BY shipment_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT audit_id, audit_action, audit_detail FROM shipment_audit ORDER BY audit_id",
+      "ordered": true
+    }
+  ]
+}
