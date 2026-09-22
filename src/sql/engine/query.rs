@@ -1527,6 +1527,35 @@ impl RawEngine {
                         MysqlColumnType::BigInt
                     }
                     "GROUP_CONCAT" => MysqlColumnType::Blob,
+                    "SUBSTRING_INDEX" => {
+                        let argument = function_arguments(function)
+                            .ok()
+                            .and_then(|arguments| arguments.into_iter().next().flatten())
+                            .map(|argument| {
+                                self.expression_metadata(
+                                    select,
+                                    &argument,
+                                    String::new(),
+                                    first_row,
+                                )
+                            });
+                        if let Some(argument) = argument {
+                            metadata.nullable = argument.nullable;
+                            metadata.unsigned = argument.unsigned;
+                            metadata.decimals = argument.decimals;
+                            metadata.character_set = argument.character_set.clone();
+                            metadata.collation = argument.collation.clone();
+                            // MariaDB widens GROUP_CONCAT's BLOB result when
+                            // SUBSTRING_INDEX consumes it.
+                            if argument.column_type == MysqlColumnType::Blob {
+                                MysqlColumnType::MediumBlob
+                            } else {
+                                argument.column_type
+                            }
+                        } else {
+                            metadata.column_type
+                        }
+                    }
                     "REGEXP_REPLACE" => MysqlColumnType::LongBlob,
                     "REGEXP_SUBSTR" => MysqlColumnType::VarChar,
                     "REGEXP_INSTR" => MysqlColumnType::Integer,

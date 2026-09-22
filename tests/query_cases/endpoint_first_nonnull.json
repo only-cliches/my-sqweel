@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "endpoint_first_nonnull",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "PostgREST/postgrest-openapi",
+      "commit": "a7089ac42895ff5a699e28939ac5819fdd677e2b",
+      "path": "sql/servers.sql",
+      "url": "https://github.com/PostgREST/postgrest-openapi/blob/a7089ac42895ff5a699e28939ac5819fdd677e2b/sql/servers.sql",
+      "sha256": "66eae6fc56b63a9d5e93dd3cc488ab2d46478b3741d6d160b346a846a9d5292a",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "sql/servers.sql:65-77",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A CTE orders candidate rows by priority, then a grouped aggregate selects the first non-NULL value independently for each nullable field within every key.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored endpoint fallback report. MariaDB-compatible ordered GROUP_CONCAT plus SUBSTRING_INDEX replaces PostgreSQL filtered ARRAY_AGG, preserving highest-priority non-NULL URL and description values independently and returning NULL for groups with no usable value. Arrays, JSONB, routines, and the source schema are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "cte",
+    "group-concat",
+    "conditional-aggregate",
+    "first-non-null-per-group",
+    "substring-index",
+    "null",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The alpha group takes its URL from its highest-priority candidate but its description from the next candidate because the first description is NULL; beta skips a NULL URL and retains its only description; gamma has no non-NULL values and must return NULL for both projections.",
+  "determinism_notes": "Candidate priorities and IDs are fixed; each ordered GROUP_CONCAT uses priority descending and candidate ID ascending, endpoint values contain no separator character, and the grouped report is ordered by the unique endpoint key. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE endpoint_candidates (candidate_id INT PRIMARY KEY, endpoint_key VARCHAR(16) NOT NULL, priority INT NOT NULL, endpoint_url VARCHAR(64) NULL, endpoint_description VARCHAR(64) NULL)",
+    "INSERT INTO endpoint_candidates VALUES (1, 'alpha', 30, 'https://alpha-primary', NULL), (2, 'alpha', 20, NULL, 'Alpha regional fallback'), (3, 'alpha', 10, 'https://alpha-backup', 'Alpha backup'), (4, 'beta', 20, NULL, NULL), (5, 'beta', 10, 'https://beta-backup', 'Beta backup'), (6, 'gamma', 40, NULL, NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH prioritized_endpoints AS (SELECT candidate_id, endpoint_key, priority, endpoint_url, endpoint_description FROM endpoint_candidates) SELECT endpoint_key, SUBSTRING_INDEX(GROUP_CONCAT(CASE WHEN endpoint_url IS NOT NULL THEN endpoint_url END ORDER BY priority DESC, candidate_id ASC SEPARATOR '|'), '|', 1) AS chosen_url, SUBSTRING_INDEX(GROUP_CONCAT(CASE WHEN endpoint_description IS NOT NULL THEN endpoint_description END ORDER BY priority DESC, candidate_id ASC SEPARATOR '|'), '|', 1) AS chosen_description FROM prioritized_endpoints GROUP BY endpoint_key ORDER BY endpoint_key",
+      "ordered": true
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "id": "endpoint_first_nonnull_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "endpoint_first_nonnull",
+    "source": {
+      "kind": "github",
+      "repository": "PostgREST/postgrest-openapi",
+      "commit": "a7089ac42895ff5a699e28939ac5819fdd677e2b",
+      "path": "sql/servers.sql",
+      "url": "https://github.com/PostgREST/postgrest-openapi/blob/a7089ac42895ff5a699e28939ac5819fdd677e2b/sql/servers.sql",
+      "sha256": "66eae6fc56b63a9d5e93dd3cc488ab2d46478b3741d6d160b346a846a9d5292a",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "sql/servers.sql:69-72",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A filtered ordered aggregate is wrapped by a first-value extraction to expose one preferred non-NULL text value.",
+      "mysql_mariadb_translation": "Reduced to one independently authored scalar SUBSTRING_INDEX over an ordered GROUP_CONCAT, isolating MariaDB's MEDIUM_BLOB metadata for the nested aggregate result while removing grouping, multiple fields, and endpoint rows."
+    },
+    "independently_authored": true
+  },
+  "features": ["group-concat", "substring-index", "nested-string-metadata", "deterministic-order"],
+  "fixture_notes": "Two fixed labels make the ordered aggregate nonempty; SUBSTRING_INDEX must return the higher-ranked label with MariaDB's MEDIUM_BLOB metadata.",
+  "determinism_notes": "The rank order is unique and fixed, with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE endpoint_labels (label_id INT PRIMARY KEY, label VARCHAR(32) NOT NULL, rank_value INT NOT NULL)",
+    "INSERT INTO endpoint_labels VALUES (1, 'fallback', 10), (2, 'primary', 20)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT SUBSTRING_INDEX(GROUP_CONCAT(label ORDER BY rank_value DESC SEPARATOR '|'), '|', 1) AS first_label FROM endpoint_labels",
+      "ordered": true
+    }
+  ]
+}
