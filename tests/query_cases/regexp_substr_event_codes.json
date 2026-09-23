@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "regexp_substr_event_codes",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "functions/string-functions/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/functions/string-functions/mysql.sql",
+      "sha256": "579d216a9bec0a4d380ee6f63483e595bb412f873ed757454e3719095f9c9421",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "functions/string-functions/mysql.sql:166-170",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL string-function example extracts a matching numeric token with REGEXP_SUBSTR alongside replacement, position, and predicate regex functions.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored event-code audit. REGEXP_SUBSTR extracts the first ticket token from fixed messages, while a final projection combines the extracted token with NULL and no-match cases. The source literals, schema, identifiers, and comparison table are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "regexp-substr",
+    "regular-expression-extraction",
+    "null-propagation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Messages contain one ticket token, two tokens, no token, and NULL. REGEXP_SUBSTR must return only the first two-letter ticket code with digits and preserve NULL for no input or no match.",
+  "determinism_notes": "Message IDs, text literals, pattern, and ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE event_messages (message_id INT PRIMARY KEY, message_text VARCHAR(160) NULL)",
+    "INSERT INTO event_messages (message_id, message_text) VALUES (11, 'Deploy ticket AB-204 is queued'), (12, 'Escalation XY-9 then fallback ZZ-81'), (13, 'Routine heartbeat only'), (14, NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT message_id, message_text, REGEXP_SUBSTR(message_text, '[A-Z]{2}-[0-9]+') AS ticket_token FROM event_messages ORDER BY message_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT message_id, COALESCE(REGEXP_SUBSTR(message_text, '[A-Z]{2}-[0-9]+'), 'none') AS first_ticket FROM event_messages ORDER BY message_id",
+      "ordered": true
+    }
+  ]
+}

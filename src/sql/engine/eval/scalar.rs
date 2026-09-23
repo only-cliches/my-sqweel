@@ -765,7 +765,7 @@ pub(super) fn eval_regexp_substr_values(values: &[Value]) -> Result<Value> {
     Ok(regex
         .find(&subject)
         .map(|matched| Value::String(matched.as_str().to_string()))
-        .unwrap_or(Value::Null))
+        .unwrap_or_else(|| Value::String(String::new())))
 }
 pub(super) fn eval_regexp_instr_values(values: &[Value]) -> Result<Value> {
     let [subject, pattern] = values else {
