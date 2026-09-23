@@ -190,6 +190,7 @@ impl RawEngine {
         {
             return self.rename_table(&table, &object_name(table_name)?);
         }
+        let mut rows_affected = 0;
         let mut schema = self
             .schemas
             .get(&table)
@@ -203,9 +204,17 @@ impl RawEngine {
             });
         for op in operations {
             let row_action = alter_row_action(&op);
+            let reports_rows_affected = alter_operation_reports_rows_affected(&op);
             self.apply_alter_operation(&table, &mut schema, op)?;
             if let Some(row_action) = row_action {
                 self.apply_alter_row_action(&table, row_action)?;
+            }
+            if reports_rows_affected {
+                rows_affected = self
+                    .rows
+                    .get(&table)
+                    .map(|rows| rows.len() as u64)
+                    .unwrap_or(0);
             }
         }
 
@@ -232,7 +241,10 @@ impl RawEngine {
         self.rows.entry(table.clone()).or_default();
         self.rebuild_indexes(&table);
         self.persist_schema(&table)?;
-        Ok(QueryResult::default())
+        Ok(QueryResult {
+            rows_affected,
+            ..QueryResult::default()
+        })
     }
 
     fn apply_alter_row_action(&self, table: &str, action: AlterRowAction) -> Result<()> {
@@ -701,6 +713,15 @@ fn inferred_sql_type(value: Option<&Value>) -> String {
 
 enum AlterRowAction {
     Rename { old: String, new: String },
+}
+
+fn alter_operation_reports_rows_affected(op: &sqlparser::ast::AlterTableOperation) -> bool {
+    matches!(
+        op,
+        sqlparser::ast::AlterTableOperation::AddConstraint(
+            sqlparser::ast::TableConstraint::ForeignKey { .. }
+        )
+    )
 }
 
 fn alter_row_action(op: &sqlparser::ast::AlterTableOperation) -> Option<AlterRowAction> {

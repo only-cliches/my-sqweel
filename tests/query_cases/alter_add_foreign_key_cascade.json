@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "id": "alter_add_foreign_key_cascade",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "DVBProject/DVB-I-Reference-CSR",
+      "commit": "0bf0821f4797536df0a11ed46b4b16096ebaf84e",
+      "path": "db.sql",
+      "url": "https://github.com/DVBProject/DVB-I-Reference-CSR/blob/0bf0821f4797536df0a11ed46b4b16096ebaf84e/db.sql",
+      "sha256": "4e18a3a786c0c359a254d48c96795a828c89d234fdd810057a465b3128beb1ab",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "db.sql:153-154",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL/MariaDB schema migration adds a named foreign-key constraint with ON DELETE CASCADE after the tables already exist.",
+      "mysql_mariadb_translation": "Reauthored as a shipment manifest migration. An existing manifest_items table receives a named foreign key after its tables and valid rows are created; deleting a manifest then cascades only its items while preserving items for other manifests. The source schema, names, values, and application purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["alter-table", "add-foreign-key", "named-constraint", "on-delete-cascade", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "Manifest 7001 has two items and manifest 7002 has one. Adding the foreign key succeeds with existing valid rows; deleting manifest 7001 removes only its items, leaving manifest 7002 and its item.",
+  "determinism_notes": "All manifest and item IDs are fixed and final reads use primary-key ordering. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE shipping_manifests (manifest_id INT PRIMARY KEY, destination_code VARCHAR(16) NOT NULL)",
+    "CREATE TABLE manifest_items (item_id INT PRIMARY KEY, manifest_id INT NOT NULL, package_code VARCHAR(16) NOT NULL)",
+    "INSERT INTO shipping_manifests VALUES (7001, 'NORTH'), (7002, 'SOUTH')",
+    "INSERT INTO manifest_items VALUES (8101, 7001, 'PK-A'), (8102, 7001, 'PK-B'), (8201, 7002, 'PK-C')"
+  ],
+  "steps": [
+    {
+      "sql": "ALTER TABLE manifest_items ADD CONSTRAINT fk_manifest_items_manifest FOREIGN KEY (manifest_id) REFERENCES shipping_manifests (manifest_id) ON DELETE CASCADE"
+    },
+    {
+      "sql": "DELETE FROM shipping_manifests WHERE manifest_id = 7001"
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT manifest_id, destination_code FROM shipping_manifests ORDER BY manifest_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT item_id, manifest_id, package_code FROM manifest_items ORDER BY item_id",
+      "ordered": true
+    }
+  ]
+}
