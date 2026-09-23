@@ -107,6 +107,7 @@ impl Visitor for SupportValidator {
                         | "FIRST_VALUE"
                         | "LAST_VALUE"
                         | "NTH_VALUE"
+                        | "MEDIAN"
                         | "COUNT"
                         | "SUM"
                         | "AVG"
@@ -114,6 +115,7 @@ impl Visitor for SupportValidator {
                         | "MAX"
                         | "STD"
                         | "STDDEV"
+                        | "STDDEV_SAMP"
                 ) {
                     ControlFlow::Continue(())
                 } else {

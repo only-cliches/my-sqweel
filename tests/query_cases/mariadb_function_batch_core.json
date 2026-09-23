@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "id": "mariadb_function_batch_core",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "functions/math-functions/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/functions/math-functions/mysql.sql",
+      "sha256": "1ae89c2cf88cff05a89ab492839fdca54fe4bda6144020df3d6e6e389aa455c7",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "functions/math-functions/mysql.sql",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "MariaDB exposes a broad scalar function surface spanning trigonometry, radix conversion, character conversion, checksums, null-control aliases, and date arithmetic.",
+      "mysql_mariadb_translation": "Reauthored as deterministic scalar probes for MySqweel's embeddable query engine. Fixed literals cover numeric domains, UTF-8 byte length, null branches, ISO week numbering, month-end clamping, date formatting, and epoch-second conversion; no source SQL, schema, or data was copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["mariadb-function-catalog", "trigonometry", "radix-conversion", "checksum", "null-aliases", "date-arithmetic", "deterministic-order"],
+  "fixture_notes": "Each statement isolates one function or a small compositional pair. Constants are selected so MariaDB's numeric, string, NULL, date, and UTF-8 byte semantics remain observable.",
+  "determinism_notes": "Only fixed literals are used; no clocks, randomness, sleeps, filesystem access, or concurrent connections.",
+  "setup": [],
+  "steps": [
+    {"sql": "SELECT ACOS(1) AS acos_one, ASIN(1) AS asin_one, ATAN(1) AS atan_one, ATAN2(1, 1) AS atan2_one", "ordered": true},
+    {"sql": "SELECT BIN(10) AS binary_ten, OCT(10) AS octal_ten, CHR(65) AS letter", "ordered": true},
+    {"sql": "SELECT COS(0) AS cosine_zero, COT(1) AS cotangent_one, SIN(0) AS sine_zero, TAN(0) AS tangent_zero", "ordered": true},
+    {"sql": "SELECT CRC32C('x') AS castagnoli_x, DEGREES(PI()) AS degrees_pi, RADIANS(180) AS radians_180", "ordered": true},
+    {"sql": "SELECT LENGTHB('é') AS utf8_bytes, NVL(NULL, 5) AS nvl_value, NVL2(NULL, 1, 2) AS nvl2_value", "ordered": true},
+    {"sql": "SELECT ADD_MONTHS('2020-01-31', 1) AS month_end, TO_CHAR('2020-01-02', 'YYYY-MM-DD') AS formatted_date", "ordered": true},
+    {"sql": "SELECT TO_SECONDS('2020-01-02') AS epoch_seconds, WEEK('2020-01-05', 3) AS iso_week", "ordered": true},
+    {"sql": "SELECT TRIM_ORACLE(' x ') AS trim_alias, SUBSTR_ORACLE('abcd', 2, 2) AS substr_alias, LPAD_ORACLE('x', 3, '0') AS lpad_alias, RPAD_ORACLE('x', 3, '0') AS rpad_alias", "ordered": true},
+    {"sql": "SELECT LTRIM_ORACLE(' x') AS ltrim_alias, RTRIM_ORACLE('x ') AS rtrim_alias, REPLACE_ORACLE('abc', 'b', 'X') AS replace_alias, CONCAT_OPERATOR_ORACLE('a', 'b') AS concat_alias", "ordered": true},
+    {"sql": "SELECT SESSION_USER() AS session_user_alias, SYSTEM_USER() AS system_user_alias", "ordered": true}
+  ]
+}

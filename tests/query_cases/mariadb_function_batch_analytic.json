@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "mariadb_function_batch_analytic",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "functions/aggregate/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/functions/aggregate/mysql.sql",
+      "sha256": "0160718d9ccf135c9938eaf3879a37c672cd171e68065046c953d55e95a33425",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "functions/aggregate/mysql.sql",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "MariaDB provides statistical aggregate and analytic functions over ordered numeric values, including sample standard deviation and median.",
+      "mysql_mariadb_translation": "Reauthored as a fixed measurement series. MEDIAN and STDDEV_SAMP run as window functions over three non-NULL readings plus one NULL reading; the row ID ordering makes repeated output deterministic and the NULL row verifies omission from numeric statistics."
+    },
+    "independently_authored": true
+  },
+  "features": ["median-window", "stddev-samp-window", "null-omission", "deterministic-order"],
+  "fixture_notes": "Each input row receives the same median and sample standard deviation over the complete window. The NULL reading is excluded from both calculations.",
+  "determinism_notes": "IDs and decimal readings are fixed and ordered; no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE measurement_series (reading_id INT PRIMARY KEY, reading DECIMAL(10,2))",
+    "INSERT INTO measurement_series VALUES (1, 1.00), (2, 3.00), (3, 5.00), (4, NULL)"
+  ],
+  "steps": [
+    {"sql": "SELECT reading_id, MEDIAN(reading) OVER () AS median_reading, STDDEV_SAMP(reading) OVER () AS sample_spread FROM measurement_series ORDER BY reading_id", "ordered": true}
+  ],
+  "checks": [
+    {"sql": "SELECT reading_id, reading FROM measurement_series ORDER BY reading_id", "ordered": true}
+  ]
+}

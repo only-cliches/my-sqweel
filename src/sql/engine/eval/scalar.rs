@@ -103,6 +103,25 @@ pub(super) fn eval_unary_number(
         Ok(Value::Null)
     }
 }
+pub(super) fn eval_binary_number(
+    left_arg: Option<&String>,
+    right_arg: Option<&String>,
+    data: &Map<String, Value>,
+    last_insert_id: u64,
+    f: impl FnOnce(f64, f64) -> f64,
+) -> Result<Value> {
+    let left = eval_arg(left_arg, data, last_insert_id)?;
+    let right = eval_arg(right_arg, data, last_insert_id)?;
+    if left == Value::Null || right == Value::Null {
+        return Ok(Value::Null);
+    }
+    let out = f(json_to_f64_lossy(&left)?, json_to_f64_lossy(&right)?);
+    if out.is_finite() {
+        Ok(number_from_f64(out))
+    } else {
+        Ok(Value::Null)
+    }
+}
 
 pub(super) fn eval_log(
     first_arg: Option<&String>,
@@ -963,4 +982,90 @@ fn soundex_code(character: char) -> char {
         'R' => '6',
         _ => '0',
     }
+}
+pub(super) fn eval_crc32c(
+    arg: Option<&String>,
+    data: &Map<String, Value>,
+    last_insert_id: u64,
+) -> Result<Value> {
+    let value = eval_arg(arg, data, last_insert_id)?;
+    if value == Value::Null {
+        return Ok(Value::Null);
+    }
+    let mut crc = !0_u32;
+    for byte in json_scalar_to_string(&value).as_bytes() {
+        crc ^= u32::from(*byte);
+        for _ in 0..8 {
+            crc = if crc & 1 != 0 {
+                (crc >> 1) ^ 0x82f6_3b78
+            } else {
+                crc >> 1
+            };
+        }
+    }
+    Ok(Value::Number(Number::from(u64::from(!crc))))
+}
+
+pub(super) fn eval_bin_or_oct(
+    arg: Option<&String>,
+    data: &Map<String, Value>,
+    last_insert_id: u64,
+    radix: u32,
+) -> Result<Value> {
+    let value = eval_arg(arg, data, last_insert_id)?;
+    if value == Value::Null {
+        return Ok(Value::Null);
+    }
+    let integer = value_to_i64(&value).unwrap_or(0);
+    let unsigned = integer as u64;
+    let digits = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    let mut rendered = if unsigned == 0 {
+        "0".to_string()
+    } else {
+        let mut out = Vec::new();
+        let mut value = unsigned;
+        while value > 0 {
+            out.push(digits[(value % u64::from(radix)) as usize] as char);
+            value /= u64::from(radix);
+        }
+        out.into_iter().rev().collect()
+    };
+    if integer < 0 {
+        rendered = format!("-{rendered}");
+    }
+    Ok(Value::String(rendered))
+}
+
+pub(super) fn eval_chr(
+    args: &[String],
+    data: &Map<String, Value>,
+    last_insert_id: u64,
+) -> Result<Value> {
+    let mut output = String::new();
+    for arg in args {
+        let value = eval_scalar_text(arg, data, last_insert_id)?;
+        if value != Value::Null {
+            output.push((json_to_f64_lossy(&value)? as u8) as char);
+        }
+    }
+    Ok(Value::String(output))
+}
+
+pub(super) fn eval_nvl2(
+    first_arg: Option<&String>,
+    second_arg: Option<&String>,
+    third_arg: Option<&String>,
+    data: &Map<String, Value>,
+    last_insert_id: u64,
+) -> Result<Value> {
+    let first = eval_arg(first_arg, data, last_insert_id)?;
+    eval_arg(
+        if first == Value::Null {
+            third_arg
+        } else {
+            second_arg
+        },
+        data,
+        last_insert_id,
+    )
 }

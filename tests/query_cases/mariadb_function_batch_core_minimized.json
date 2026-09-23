@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "mariadb_function_batch_core_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source_fixture": "mariadb_function_batch_core",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "functions/math-functions/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/functions/math-functions/mysql.sql",
+      "sha256": "1ae89c2cf88cff05a89ab492839fdca54fe4bda6144020df3d6e6e389aa455c7",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "functions/math-functions/mysql.sql",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "MariaDB's Castagnoli CRC32C function returns an unsigned integer checksum.",
+      "mysql_mariadb_translation": "Reduced the original function batch to one fixed literal so checksum value and unsigned integer metadata remain directly observable."
+    },
+    "independently_authored": true
+  },
+  "features": ["crc32c", "unsigned-integer-metadata", "minimized-regression"],
+  "fixture_notes": "This is the minimized regression for CRC32C's unsigned wire value and integer metadata.",
+  "determinism_notes": "Only the fixed literal 'x' is used.",
+  "setup": [],
+  "steps": [
+    {"sql": "SELECT CRC32C('x') AS castagnoli_x", "ordered": true}
+  ]
+}

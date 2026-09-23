@@ -43,6 +43,7 @@ mod datetime;
 mod json;
 mod scalar;
 
+mod function_catalog;
 pub(crate) fn soundex_text(value: &str) -> String {
     scalar::mysql_soundex(value)
 }
@@ -3725,6 +3726,10 @@ pub(super) fn eval_function_text(
         "DATE_SUB" | "SUBDATE" => {
             eval_date_add_sub(args.first(), args.get(1), data, last_insert_id, -1)
         }
+        "ADD_MONTHS" => eval_add_months(args.first(), args.get(1), data, last_insert_id),
+        "TO_CHAR" => eval_to_char(args.first(), args.get(1), data, last_insert_id),
+        "WEEK" => eval_week(args.first(), args.get(1), data, last_insert_id),
+        "TO_SECONDS" => eval_to_seconds(args.first(), data, last_insert_id),
         "STR_TO_DATE" => eval_str_to_date(args.first(), args.get(1), data, last_insert_id),
         "MAKEDATE" => eval_make_date(args.first(), args.get(1), data, last_insert_id),
         "PERIOD_ADD" => eval_period_add(args.first(), args.get(1), data, last_insert_id),
@@ -3892,6 +3897,22 @@ pub(super) fn eval_function_text(
             }
             Ok(Value::Null)
         }
+        "NVL" => {
+            let first = args
+                .first()
+                .map(|arg| eval_scalar_text(arg, data, last_insert_id))
+                .transpose()?
+                .unwrap_or(Value::Null);
+            if first != Value::Null {
+                Ok(first)
+            } else {
+                args.get(1)
+                    .map(|arg| eval_scalar_text(arg, data, last_insert_id))
+                    .transpose()
+                    .map(|value| value.unwrap_or(Value::Null))
+            }
+        }
+        "NVL2" => eval_nvl2(args.first(), args.get(1), args.get(2), data, last_insert_id),
         "IFNULL" => {
             let first = args
                 .first()
@@ -3922,6 +3943,7 @@ pub(super) fn eval_function_text(
                 .transpose()
                 .map(|value| value.unwrap_or(Value::Null))
         }
+        "SESSION_USER" | "SYSTEM_USER" => Ok(Value::String("root@".to_string())),
         "INTERVAL_FUNC" => {
             let value = args
                 .first()
@@ -3967,7 +3989,7 @@ pub(super) fn eval_function_text(
                 Ok(left)
             }
         }
-        "CONCAT" => {
+        "CONCAT" | "CONCAT_OPERATOR_ORACLE" => {
             let mut out = String::new();
             for arg in args {
                 let value = eval_scalar_text(&arg, data, last_insert_id)?;
@@ -4017,7 +4039,7 @@ pub(super) fn eval_function_text(
         "UPPER" | "UCASE" => eval_unary_string(args.first(), data, last_insert_id, |value| {
             value.to_ascii_uppercase()
         }),
-        "TRIM" => eval_unary_string(args.first(), data, last_insert_id, |value| {
+        "TRIM" | "TRIM_ORACLE" => eval_unary_string(args.first(), data, last_insert_id, |value| {
             value.trim().to_string()
         }),
         "LENGTH" | "OCTET_LENGTH" => {
@@ -4168,6 +4190,35 @@ pub(super) fn eval_function_text(
             }
             Ok(Value::String(out))
         }
+        "ACOS" => eval_unary_number(args.first(), data, last_insert_id, f64::acos),
+        "ASIN" => eval_unary_number(args.first(), data, last_insert_id, f64::asin),
+        "ATAN" => eval_unary_number(args.first(), data, last_insert_id, f64::atan),
+        "COS" => eval_unary_number(args.first(), data, last_insert_id, f64::cos),
+        "COT" => eval_unary_number(args.first(), data, last_insert_id, |value| {
+            1.0 / value.tan()
+        }),
+        "SIN" => eval_unary_number(args.first(), data, last_insert_id, f64::sin),
+        "TAN" => eval_unary_number(args.first(), data, last_insert_id, f64::tan),
+        "DEGREES" => eval_unary_number(args.first(), data, last_insert_id, f64::to_degrees),
+        "RADIANS" => eval_unary_number(args.first(), data, last_insert_id, f64::to_radians),
+        "ATAN2" => eval_binary_number(args.first(), args.get(1), data, last_insert_id, f64::atan2),
+        "PI" => Ok(number_from_f64(std::f64::consts::PI)),
+        "BIN" => eval_bin_or_oct(args.first(), data, last_insert_id, 2),
+        "OCT" => eval_bin_or_oct(args.first(), data, last_insert_id, 8),
+        "CHR" => eval_chr(args.as_slice(), data, last_insert_id),
+        "CRC32C" => eval_crc32c(args.first(), data, last_insert_id),
+        "LENGTHB" => {
+            let value = args
+                .first()
+                .map(|arg| eval_scalar_text(arg, data, last_insert_id))
+                .transpose()?
+                .unwrap_or(Value::Null);
+            Ok(if value == Value::Null {
+                Value::Null
+            } else {
+                Value::Number(Number::from(json_scalar_to_string(&value).len() as u64))
+            })
+        }
         "ABS" => {
             let value = args
                 .first()
@@ -4232,7 +4283,7 @@ pub(super) fn eval_function_text(
         "MICROSECOND" => eval_datetime_component(args.first(), data, last_insert_id, "MICROSECOND"),
         "DAYNAME" => eval_datetime_name(args.first(), data, last_insert_id, DateNamePart::Day),
         "MONTHNAME" => eval_datetime_name(args.first(), data, last_insert_id, DateNamePart::Month),
-        "SUBSTRING" | "SUBSTR" | "MID" => {
+        "SUBSTRING" | "SUBSTR" | "MID" | "SUBSTR_ORACLE" => {
             let s = args
                 .first()
                 .map(|arg| eval_scalar_text(arg, data, last_insert_id))
@@ -4250,15 +4301,19 @@ pub(super) fn eval_function_text(
         }
         "SUBSTRING_INDEX" => eval_substring_index(args.as_slice(), data, last_insert_id),
         "INSERT" => eval_insert_string(args.as_slice(), data, last_insert_id),
-        "LTRIM" => eval_unary_string(args.first(), data, last_insert_id, |value| {
-            value.trim_start().to_string()
-        }),
-        "RTRIM" => eval_unary_string(args.first(), data, last_insert_id, |value| {
-            value.trim_end().to_string()
-        }),
+        "LTRIM" | "LTRIM_ORACLE" => {
+            eval_unary_string(args.first(), data, last_insert_id, |value| {
+                value.trim_start().to_string()
+            })
+        }
+        "RTRIM" | "RTRIM_ORACLE" => {
+            eval_unary_string(args.first(), data, last_insert_id, |value| {
+                value.trim_end().to_string()
+            })
+        }
         "LEFT" => eval_left_right(args.first(), args.get(1), data, last_insert_id, false),
         "RIGHT" => eval_left_right(args.first(), args.get(1), data, last_insert_id, true),
-        "LPAD" => eval_pad(
+        "LPAD" | "LPAD_ORACLE" => eval_pad(
             args.first(),
             args.get(1),
             args.get(2),
@@ -4266,7 +4321,7 @@ pub(super) fn eval_function_text(
             last_insert_id,
             false,
         ),
-        "RPAD" => eval_pad(
+        "RPAD" | "RPAD_ORACLE" => eval_pad(
             args.first(),
             args.get(1),
             args.get(2),
@@ -4409,7 +4464,7 @@ pub(super) fn eval_function_text(
                 ))
             }
         }
-        "REPLACE" => {
+        "REPLACE" | "REPLACE_ORACLE" => {
             let s = args
                 .first()
                 .map(|arg| eval_scalar_text(arg, data, last_insert_id))

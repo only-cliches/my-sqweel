@@ -206,6 +206,146 @@ pub(super) fn eval_to_days(
         date.signed_duration_since(epoch).num_days() + 366,
     )))
 }
+pub(super) fn eval_add_months(
+    date_arg: Option<&String>,
+    months_arg: Option<&String>,
+    data: &Map<String, Value>,
+    last_insert_id: u64,
+) -> Result<Value> {
+    let value = date_arg
+        .map(|arg| eval_scalar_text(arg, data, last_insert_id))
+        .transpose()?
+        .unwrap_or(Value::Null);
+    let months = months_arg
+        .map(|arg| eval_scalar_text(arg, data, last_insert_id))
+        .transpose()?
+        .and_then(|value| value_to_i64(&value))
+        .unwrap_or(0);
+    if value == Value::Null {
+        return Ok(Value::Null);
+    }
+    let Some(datetime) = parse_mysql_datetime_value(&value) else {
+        return Ok(Value::Null);
+    };
+    let month_index = i64::from(datetime.year()) * 12 + i64::from(datetime.month0()) + months;
+    let year = month_index.div_euclid(12);
+    let month = month_index.rem_euclid(12) as u32 + 1;
+    let day = datetime.day().min(days_in_month(year, month));
+    let preserve_time = json_scalar_to_string(&value).contains(':');
+    Ok(NaiveDate::from_ymd_opt(year as i32, month, day)
+        .map(|date| date.and_time(datetime.time()))
+        .map(|value| {
+            if preserve_time {
+                Value::String(value.to_string())
+            } else {
+                Value::String(value.date().to_string())
+            }
+        })
+        .unwrap_or(Value::Null))
+}
+
+fn days_in_month(year: i64, month: u32) -> u32 {
+    let next = if month == 12 {
+        NaiveDate::from_ymd_opt((year + 1) as i32, 1, 1)
+    } else {
+        NaiveDate::from_ymd_opt(year as i32, month + 1, 1)
+    };
+    next.and_then(|date| date.pred_opt())
+        .map(|date| date.day())
+        .unwrap_or(0)
+}
+
+pub(super) fn eval_to_seconds(
+    date_arg: Option<&String>,
+    data: &Map<String, Value>,
+    last_insert_id: u64,
+) -> Result<Value> {
+    let value = date_arg
+        .map(|arg| eval_scalar_text(arg, data, last_insert_id))
+        .transpose()?
+        .unwrap_or(Value::Null);
+    if value == Value::Null {
+        return Ok(Value::Null);
+    }
+    let Some(datetime) = parse_mysql_datetime_value(&value) else {
+        return Ok(Value::Null);
+    };
+    let days = i64::from(datetime.date().num_days_from_ce()) + 365;
+    let time = i64::from(datetime.time().num_seconds_from_midnight());
+    Ok(Value::Number(Number::from(days * 86_400 + time)))
+}
+
+pub(super) fn eval_week(
+    date_arg: Option<&String>,
+    mode_arg: Option<&String>,
+    data: &Map<String, Value>,
+    last_insert_id: u64,
+) -> Result<Value> {
+    let value = date_arg
+        .map(|arg| eval_scalar_text(arg, data, last_insert_id))
+        .transpose()?
+        .unwrap_or(Value::Null);
+    if value == Value::Null {
+        return Ok(Value::Null);
+    }
+    let mode = mode_arg
+        .map(|arg| eval_scalar_text(arg, data, last_insert_id))
+        .transpose()?
+        .and_then(|value| value_to_i64(&value))
+        .unwrap_or(0);
+    let Some(datetime) = parse_mysql_datetime_value(&value) else {
+        return Ok(Value::Null);
+    };
+    let week = if mode == 3 {
+        datetime.date().iso_week().week()
+    } else {
+        datetime.date().iso_week().week()
+    };
+    Ok(Value::Number(Number::from(week)))
+}
+
+pub(super) fn eval_to_char(
+    value_arg: Option<&String>,
+    format_arg: Option<&String>,
+    data: &Map<String, Value>,
+    last_insert_id: u64,
+) -> Result<Value> {
+    let value = value_arg
+        .map(|arg| eval_scalar_text(arg, data, last_insert_id))
+        .transpose()?
+        .unwrap_or(Value::Null);
+    let format = format_arg
+        .map(|arg| eval_scalar_text(arg, data, last_insert_id))
+        .transpose()?
+        .unwrap_or(Value::String("YYYY-MM-DD".to_string()));
+    if value == Value::Null || format == Value::Null {
+        return Ok(Value::Null);
+    }
+    let Some(datetime) = parse_mysql_datetime_value(&value) else {
+        return Ok(Value::String(json_scalar_to_string(&value)));
+    };
+    let mut output = json_scalar_to_string(&format);
+    for (token, replacement) in [
+        ("YYYY", datetime.format("%Y").to_string()),
+        ("HH24", datetime.format("%H").to_string()),
+        ("HH12", datetime.format("%I").to_string()),
+        (
+            "MONTH",
+            datetime.format("%B").to_string().to_ascii_uppercase(),
+        ),
+        (
+            "MON",
+            datetime.format("%b").to_string().to_ascii_uppercase(),
+        ),
+        ("MM", datetime.format("%m").to_string()),
+        ("DD", datetime.format("%d").to_string()),
+        ("MI", datetime.format("%M").to_string()),
+        ("SS", datetime.format("%S").to_string()),
+    ] {
+        output = output.replace(token, &replacement);
+    }
+    Ok(Value::String(output))
+}
 pub(super) fn eval_make_date(
     year_arg: Option<&String>,
     day_arg: Option<&String>,

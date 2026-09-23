@@ -1113,7 +1113,8 @@ impl RawEngine {
                     .transpose()
                     .map(|value| value.unwrap_or(Value::Null))
             }
-            "COUNT" | "SUM" | "AVG" | "MIN" | "MAX" | "STD" | "STDDEV" => {
+            "COUNT" | "SUM" | "AVG" | "MIN" | "MAX" | "STD" | "STDDEV" | "STDDEV_SAMP"
+            | "MEDIAN" => {
                 let mut aggregate_values = Vec::new();
                 for index in frame_rows {
                     let value = if arguments.is_empty()
@@ -1159,8 +1160,28 @@ impl RawEngine {
                         .into_iter()
                         .max_by(compare_json_values)
                         .unwrap_or(Value::Null)),
-                    "STD" | "STDDEV" => {
+                    "MEDIAN" => {
                         if aggregate_values.is_empty() {
+                            Ok(Value::Null)
+                        } else {
+                            let mut numbers = aggregate_values
+                                .iter()
+                                .map(json_to_f64_lossy)
+                                .collect::<Result<Vec<_>>>()?;
+                            numbers.sort_by(f64::total_cmp);
+                            let middle = numbers.len() / 2;
+                            let value = if numbers.len() % 2 == 0 {
+                                (numbers[middle - 1] + numbers[middle]) / 2.0
+                            } else {
+                                numbers[middle]
+                            };
+                            Ok(number_from_f64(value))
+                        }
+                    }
+                    "STD" | "STDDEV" | "STDDEV_SAMP" => {
+                        if aggregate_values.is_empty()
+                            || (function == "STDDEV_SAMP" && aggregate_values.len() < 2)
+                        {
                             Ok(Value::Null)
                         } else {
                             let numbers = aggregate_values
@@ -1168,13 +1189,20 @@ impl RawEngine {
                                 .map(json_to_f64_lossy)
                                 .collect::<Result<Vec<_>>>()?;
                             let mean = numbers.iter().sum::<f64>() / numbers.len() as f64;
+                            let divisor = if function == "STDDEV_SAMP" {
+                                (numbers.len() - 1) as f64
+                            } else {
+                                numbers.len() as f64
+                            };
                             let variance = numbers
                                 .iter()
                                 .map(|value| (value - mean).powi(2))
                                 .sum::<f64>()
-                                / numbers.len() as f64;
-                            let value = variance.sqrt();
-                            Ok(number_from_f64(round_aggregate(value, &aggregate_values)))
+                                / divisor;
+                            Ok(number_from_f64(round_aggregate(
+                                variance.sqrt(),
+                                &aggregate_values,
+                            )))
                         }
                     }
                     _ => unreachable!(),
@@ -1579,6 +1607,10 @@ impl RawEngine {
                         metadata.unsigned = true;
                         MysqlColumnType::BigInt
                     }
+                    "CRC32C" => {
+                        metadata.unsigned = true;
+                        MysqlColumnType::Integer
+                    }
                     "COUNT" | "ROW_NUMBER" | "RANK" | "DENSE_RANK" | "NTILE" => {
                         metadata.unsigned = true;
                         MysqlColumnType::BigInt
@@ -1729,12 +1761,7 @@ impl RawEngine {
                         }
                     }
                     "AVG" | "SUM" | "STD" | "STDDEV" | "STDDEV_POP" | "STDDEV_SAMP" | "VAR_POP"
-                    | "VAR_SAMP" | "VARIANCE" => {
-                        // MariaDB 10.11.7 aggregate output types: SUM over an
-                        // exact input (INT, DECIMAL) returns DECIMAL carrying
-                        // the argument's scale (INT has scale 0); AVG widens
-                        // that scale by four; STD/STDDEV, STDDEV_SAMP, VAR_POP,
-                        // VAR_SAMP, and any floating input yield DOUBLE.
+                    | "VAR_SAMP" | "VARIANCE" | "MEDIAN" => {
                         let argument = function_arguments(function)
                             .ok()
                             .and_then(|arguments| arguments.into_iter().next().flatten())
@@ -1746,74 +1773,79 @@ impl RawEngine {
                                     first_row,
                                 )
                             });
-                        match argument {
-                            Some(input)
-                                if matches!(
-                                    input.column_type,
-                                    MysqlColumnType::TinyInt
-                                        | MysqlColumnType::SmallInt
-                                        | MysqlColumnType::Integer
-                                        | MysqlColumnType::BigInt
-                                        | MysqlColumnType::Decimal
-                                ) =>
-                            {
-                                match name.as_str() {
-                                    "SUM" => {
-                                        metadata.decimals = input.decimals;
-                                        MysqlColumnType::Decimal
-                                    }
-                                    "AVG" => {
-                                        metadata.decimals = input.decimals.saturating_add(4);
-                                        MysqlColumnType::Decimal
-                                    }
-                                    "STDDEV_POP" | "STDDEV_SAMP" => {
-                                        metadata.decimals = input.decimals.saturating_add(4);
-                                        MysqlColumnType::Double
-                                    }
-                                    "VAR_POP" | "VAR_SAMP" | "VARIANCE" => {
-                                        metadata.decimals = input.decimals.saturating_add(4);
-                                        MysqlColumnType::Double
-                                    }
-                                    _ => {
-                                        metadata.decimals = 4;
-                                        MysqlColumnType::Double
+                        if name == "MEDIAN" {
+                            metadata.decimals = 10;
+                            MysqlColumnType::Double
+                        } else {
+                            match argument {
+                                Some(input)
+                                    if matches!(
+                                        input.column_type,
+                                        MysqlColumnType::TinyInt
+                                            | MysqlColumnType::SmallInt
+                                            | MysqlColumnType::Integer
+                                            | MysqlColumnType::BigInt
+                                            | MysqlColumnType::Decimal
+                                    ) =>
+                                {
+                                    match name.as_str() {
+                                        "SUM" => {
+                                            metadata.decimals = input.decimals;
+                                            MysqlColumnType::Decimal
+                                        }
+                                        "AVG" => {
+                                            metadata.decimals = input.decimals.saturating_add(4);
+                                            MysqlColumnType::Decimal
+                                        }
+                                        "STDDEV_POP" | "STDDEV_SAMP" => {
+                                            metadata.decimals = input.decimals.saturating_add(4);
+                                            MysqlColumnType::Double
+                                        }
+                                        "VAR_POP" | "VAR_SAMP" | "VARIANCE" => {
+                                            metadata.decimals = input.decimals.saturating_add(4);
+                                            MysqlColumnType::Double
+                                        }
+                                        _ => {
+                                            metadata.decimals = 4;
+                                            MysqlColumnType::Double
+                                        }
                                     }
                                 }
-                            }
-                            Some(input)
-                                if matches!(
-                                    input.column_type,
-                                    MysqlColumnType::Float | MysqlColumnType::Double
+                                Some(input)
+                                    if matches!(
+                                        input.column_type,
+                                        MysqlColumnType::Float | MysqlColumnType::Double
+                                    ) =>
+                                {
+                                    metadata.decimals =
+                                        if matches!(name.as_str(), "STDDEV_POP" | "STDDEV_SAMP") {
+                                            6
+                                        } else {
+                                            0
+                                        };
+                                    MysqlColumnType::Double
+                                }
+                                _ if matches!(
+                                    name.as_str(),
+                                    "STDDEV_POP" | "STDDEV_SAMP" | "VAR_SAMP"
                                 ) =>
-                            {
-                                metadata.decimals =
-                                    if matches!(name.as_str(), "STDDEV_POP" | "STDDEV_SAMP") {
-                                        6
-                                    } else {
-                                        0
-                                    };
-                                MysqlColumnType::Double
-                            }
-                            _ if matches!(
-                                name.as_str(),
-                                "STDDEV_POP" | "STDDEV_SAMP" | "VAR_SAMP"
-                            ) =>
-                            {
-                                metadata.decimals = 6;
-                                MysqlColumnType::Double
-                            }
-                            _ if matches!(name.as_str(), "VAR_POP" | "VARIANCE") => {
-                                metadata.decimals = 6;
-                                MysqlColumnType::Double
-                            }
-                            _ => {
-                                metadata.decimals =
-                                    if matches!(name.as_str(), "AVG" | "STD" | "STDDEV") {
-                                        4
-                                    } else {
-                                        0
-                                    };
-                                MysqlColumnType::Decimal
+                                {
+                                    metadata.decimals = 6;
+                                    MysqlColumnType::Double
+                                }
+                                _ if matches!(name.as_str(), "VAR_POP" | "VARIANCE") => {
+                                    metadata.decimals = 6;
+                                    MysqlColumnType::Double
+                                }
+                                _ => {
+                                    metadata.decimals =
+                                        if matches!(name.as_str(), "AVG" | "STD" | "STDDEV") {
+                                            4
+                                        } else {
+                                            0
+                                        };
+                                    MysqlColumnType::Decimal
+                                }
                             }
                         }
                     }
@@ -1955,6 +1987,12 @@ impl RawEngine {
                             _ => MysqlColumnType::Char,
                         }
                     }
+                    "ACOS" | "ASIN" | "ATAN" | "ATAN2" | "COS" | "COT" | "DEGREES" | "PI"
+                    | "RADIANS" | "SIN" | "TAN" => MysqlColumnType::Double,
+                    "BIN" | "CHR" | "OCT" | "TO_CHAR" => MysqlColumnType::VarChar,
+                    "LENGTHB" | "WEEK" => MysqlColumnType::Integer,
+                    "TO_SECONDS" => MysqlColumnType::BigInt,
+                    "ADD_MONTHS" => MysqlColumnType::Char,
                     "FIELD" | "FIND_IN_SET" | "BIT_COUNT" | "INSTR" | "PERIOD_ADD"
                     | "PERIOD_DIFF" | "TO_DAYS" => MysqlColumnType::Integer,
                     "YEAR" | "MONTH" | "DAY" | "DAYOFMONTH" | "DAYOFWEEK" | "WEEKDAY"
@@ -2102,10 +2140,9 @@ impl RawEngine {
                     "LENGTH" | "OCTET_LENGTH" | "CHAR_LENGTH" | "CHARACTER_LENGTH" => {
                         MysqlColumnType::Integer
                     }
-                    "STRCMP" | "ISNULL" => MysqlColumnType::Integer,
+                    "STRCMP" | "ISNULL" | "DATEDIFF" => MysqlColumnType::Integer,
                     "TIMESTAMPDIFF" => MysqlColumnType::BigInt,
-                    "DATEDIFF" => MysqlColumnType::Integer,
-                    "COALESCE" | "IFNULL" => self.widest_function_argument_type(
+                    "COALESCE" | "IFNULL" | "NVL" | "NVL2" => self.widest_function_argument_type(
                         function,
                         select,
                         first_row,
