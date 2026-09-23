@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "id": "alter_change_rekey_registry",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "resiprocate/resiprocate",
+      "commit": "563a4216b0d582762d5fef805d411076e9194a34",
+      "path": "repro/upgrade_mysql_reprodb.sql",
+      "url": "https://github.com/resiprocate/resiprocate/blob/563a4216b0d582762d5fef805d411076e9194a34/repro/upgrade_mysql_reprodb.sql",
+      "sha256": "1dfc682e0f2a65274e1958fd621ff63556566a9be60c6e7e00f500746bf79627",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "repro/upgrade_mysql_reprodb.sql:7-13",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL upgrade combines new columns, CHANGE COLUMN type normalization, primary-key replacement, and a new unique index in ALTER TABLE operations.",
+      "mysql_mariadb_translation": "Reauthored as a customer-handle registry migration. One ALTER adds an account identifier and canonical handle, changes the display-name width, then a second ALTER replaces the legacy primary key with the new identifier and adds a unique handle index; fixed backfills and a post-migration insert verify the resulting keys."
+    },
+    "independently_authored": true
+  },
+  "features": ["alter-table", "change-column", "multi-operation-alter", "primary-key-rekey", "unique-index", "deterministic-order"],
+  "fixture_notes": "The two legacy handles are backfilled with fixed account IDs and canonical values before the primary key is rekeyed. The later handle insert exercises the new primary key and unique index while preserving both migrated rows.",
+  "determinism_notes": "All IDs, names, type widths, backfill predicates, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE customer_handles (handle VARCHAR(16) PRIMARY KEY, display_name VARCHAR(32) NOT NULL, region_code CHAR(2) NOT NULL)",
+    "INSERT INTO customer_handles VALUES ('alpha', 'Alpha Team', 'US'), ('bravo', 'Bravo Team', 'EU')"
+  ],
+  "steps": [
+    {
+      "sql": "ALTER TABLE customer_handles ADD COLUMN account_id INT NULL FIRST, ADD COLUMN canonical_handle VARCHAR(24) NULL AFTER handle, CHANGE COLUMN display_name display_name VARCHAR(48) NOT NULL",
+      "ordered": false
+    },
+    {
+      "sql": "UPDATE customer_handles SET account_id = CASE handle WHEN 'alpha' THEN 901 WHEN 'bravo' THEN 902 END, canonical_handle = LOWER(handle)",
+      "ordered": false
+    },
+    {
+      "sql": "ALTER TABLE customer_handles DROP PRIMARY KEY, ADD PRIMARY KEY (account_id), ADD UNIQUE INDEX uq_customer_handle (handle)",
+      "ordered": false
+    },
+    {
+      "sql": "INSERT INTO customer_handles (account_id, handle, canonical_handle, display_name, region_code) VALUES (903, 'charlie', 'charlie', 'Charlie Team', 'AP')",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT account_id, handle, canonical_handle, display_name, region_code FROM customer_handles ORDER BY account_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT COUNT(*) AS handle_count FROM customer_handles WHERE canonical_handle IS NOT NULL",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT COUNT(*) AS us_handle_count FROM customer_handles WHERE region_code = 'US'",
+      "ordered": true
+    }
+  ]
+}
