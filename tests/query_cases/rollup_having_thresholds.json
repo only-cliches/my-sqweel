@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "rollup_having_thresholds",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "AnandRajBind/Web_developement_2025",
+      "commit": "bdd51e31b327f440ce70328d6bad6c5d27724fe2",
+      "path": "SQL/group by & Having.sql",
+      "url": "https://github.com/AnandRajBind/Web_developement_2025/blob/bdd51e31b327f440ce70328d6bad6c5d27724fe2/SQL/group%20by%20%26%20Having.sql",
+      "sha256": "cbbc565d011ac4654379f241b9946bcc352cbc3c07e68bc1aaaa01de4a0fc0b6",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "SQL/group by & Having.sql:7-10",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A filtered grouped aggregate uses GROUP BY ... WITH ROLLUP and applies a HAVING predicate to the detail rows, subtotals, and grand total produced by the rollup.",
+      "mysql_mariadb_translation": "Reauthored as a regional channel-pricing report. A WHERE filter selects active quote rows, GROUP BY region and channel WITH ROLLUP creates detail, regional subtotal, and grand-total rows, and HAVING AVG(unit_price) >= 50 retains only qualifying rollup levels. The source schema, names, values, and reporting purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["group-by-rollup", "having", "where", "aggregate", "null-subtotals", "deterministic-content"],
+  "fixture_notes": "Each region has active channel quotes, while one inactive quote is excluded before grouping. The average-price threshold keeps north retail, the north subtotal, both south details, the south subtotal, and the grand total; lower-priced east rows and north online are removed by HAVING. NULL grouping columns identify rollup levels.",
+  "determinism_notes": "All IDs, prices, active flags, and threshold literals are fixed. Rollup presentation order is not assumed, so the aggregate result is compared unordered; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE regional_quotes (quote_id INT PRIMARY KEY, region_code VARCHAR(16) NOT NULL, channel_code VARCHAR(16) NOT NULL, unit_price INT NOT NULL, active TINYINT NOT NULL)",
+    "INSERT INTO regional_quotes VALUES (1, 'north', 'retail', 60, 1), (2, 'north', 'online', 40, 1), (3, 'north', 'online', 99, 0), (4, 'south', 'retail', 80, 1), (5, 'south', 'online', 55, 1), (6, 'east', 'retail', 20, 1)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT region_code, channel_code, AVG(unit_price) AS average_price, COUNT(*) AS quote_count FROM regional_quotes WHERE active = 1 GROUP BY region_code, channel_code WITH ROLLUP HAVING AVG(unit_price) >= 50",
+      "ordered": false
+    }
+  ]
+}
