@@ -263,6 +263,24 @@ impl RawEngine {
                             .unwrap_or(Value::Null);
                         data.insert(col.clone(), value);
                     }
+                    for (idx, item) in select.projection.iter().enumerate() {
+                        let expr = match item {
+                            SelectItem::UnnamedExpr(expr)
+                            | SelectItem::ExprWithAlias { expr, .. } => expr,
+                            SelectItem::Wildcard(_) | SelectItem::QualifiedWildcard(_, _) => {
+                                continue;
+                            }
+                        };
+                        let Some(name) = user_variable_assignment_name(expr) else {
+                            continue;
+                        };
+                        if let Some(value) = source_keys
+                            .get(idx)
+                            .and_then(|source_key| row.get(source_key))
+                        {
+                            data.insert(format!("@{name}"), value.clone());
+                        }
+                    }
                     if !source_contexts.is_empty()
                         && let Some(source) = source_contexts.iter().find(|source| {
                             source_columns.iter().all(|column| {
@@ -443,8 +461,11 @@ impl RawEngine {
                     let original_data = existing.data.clone();
                     let mut existing_context = existing.data.clone();
                     add_qualified_columns(&mut existing_context, table, &existing.data);
+                    for entry in &self.user_variables {
+                        existing_context.insert(format!("@{}", entry.key()), entry.value().clone());
+                    }
                     for (column, value) in &data {
-                        if column.contains('.') {
+                        if column.contains('.') || column.starts_with('@') {
                             existing_context.insert(column.clone(), value.clone());
                         }
                     }
@@ -551,7 +572,7 @@ impl RawEngine {
                 }
             }
 
-            data.retain(|column, _| !column.contains('.'));
+            data.retain(|column, _| !column.contains('.') && !column.starts_with('@'));
             let stored = StoredRow::new(table.to_string(), row_id, data);
             table_rows.insert(key.clone(), stored);
             let stored = &table_rows[&key];
@@ -1610,7 +1631,7 @@ impl RawEngine {
         };
         if self.mysql_strict() {
             for column in data.keys() {
-                if column.contains('.') {
+                if column.contains('.') || column.starts_with('@') {
                     continue;
                 }
                 if !schema
@@ -2579,4 +2600,28 @@ fn order_column_hint_from_schema(
         .columns
         .iter()
         .find_map(|(known, hint)| known.eq_ignore_ascii_case(column).then(|| hint.clone()))
+}
+fn user_variable_assignment_name(expr: &Expr) -> Option<String> {
+    let Expr::Function(function) = expr else {
+        return None;
+    };
+    if !function
+        .name
+        .0
+        .last()
+        .is_some_and(|name| name.value.eq_ignore_ascii_case("USER_VAR_ASSIGN"))
+    {
+        return None;
+    }
+    let FunctionArguments::List(arguments) = &function.args else {
+        return None;
+    };
+    let FunctionArg::Unnamed(FunctionArgExpr::Expr(
+        Expr::Value(SqlValue::SingleQuotedString(name))
+        | Expr::Value(SqlValue::DoubleQuotedString(name)),
+    )) = arguments.args.first()?
+    else {
+        return None;
+    };
+    Some(name.trim_start_matches('@').to_ascii_lowercase())
 }

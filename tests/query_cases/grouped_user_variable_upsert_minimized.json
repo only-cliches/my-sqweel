@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "id": "grouped_user_variable_upsert_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "meob/my2Collector",
+      "commit": "2b230cc88bd56f1b834413694c21c3b6e929b36b",
+      "path": "my2.sql",
+      "url": "https://github.com/meob/my2Collector/blob/2b230cc88bd56f1b834413694c21c3b6e929b36b/my2.sql",
+      "sha256": "de901f7b068a4a968e6d9a0e8d8b1af684ae4c2273c9490656ac4bbb668e51e4",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "my2.sql:75-80, 138-144",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL/MariaDB INSERT ... SELECT assigns a source value to a connection-scoped user variable, then an ON DUPLICATE KEY UPDATE expression consumes that current value.",
+      "mysql_mariadb_translation": "Reduced to one existing target row, one incoming duplicate, and one incoming insert. The minimized statement keeps only insert-select, a user-variable assignment, and duplicate-key addition; source maintenance procedures and aggregate grouping are removed."
+    },
+    "independently_authored": true,
+    "minimized_from": "grouped_user_variable_upsert"
+  },
+  "features": [
+    "insert-select",
+    "user-variables",
+    "on-duplicate-key-update",
+    "duplicate-addition",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Target 1 starts at 10 and receives 5 from the incoming source; target 2 is inserted with 7. The incoming source is unchanged.",
+  "determinism_notes": "IDs and amounts are fixed and final rows are ordered by target ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE incoming_amounts (source_id INT PRIMARY KEY, target_id INT NOT NULL, amount INT NOT NULL)",
+    "CREATE TABLE target_totals (target_id INT PRIMARY KEY, total_amount INT NOT NULL)",
+    "INSERT INTO incoming_amounts VALUES (101, 1, 5), (102, 2, 7)",
+    "INSERT INTO target_totals VALUES (1, 10)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO target_totals (target_id, total_amount) SELECT target_id, @incoming_amount := amount FROM incoming_amounts ORDER BY source_id ON DUPLICATE KEY UPDATE total_amount = total_amount + @incoming_amount"
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT source_id, target_id, amount FROM incoming_amounts ORDER BY source_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT target_id, total_amount FROM target_totals ORDER BY target_id",
+      "ordered": true
+    }
+  ]
+}

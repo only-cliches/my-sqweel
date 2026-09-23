@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "id": "grouped_user_variable_upsert",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "meob/my2Collector",
+      "commit": "2b230cc88bd56f1b834413694c21c3b6e929b36b",
+      "path": "my2.sql",
+      "url": "https://github.com/meob/my2Collector/blob/2b230cc88bd56f1b834413694c21c3b6e929b36b/my2.sql",
+      "sha256": "de901f7b068a4a968e6d9a0e8d8b1af684ae4c2273c9490656ac4bbb668e51e4",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "my2.sql:75-80, 138-144",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL/MariaDB maintenance procedure inserts grouped aggregate rows with INSERT ... SELECT and uses connection-scoped user variables in the SELECT projection so the ON DUPLICATE KEY UPDATE clause can add the current group's aggregate values to an existing rollup.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored project-quota rollup. A grouped event stream assigns each project's SUM result to a user variable while inserting new project rows; duplicate projects add that current-group aggregate to their totals. The source procedure, information-schema reads, schema, names, and rows are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "insert-select",
+    "grouping",
+    "user-variables",
+    "on-duplicate-key-update",
+    "aggregate-rollup",
+    "duplicate-addition",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Project 10 already has 100 units, then receives a grouped batch totaling 10; project 20 is inserted with three units; project 30 is inserted with zero units. The event stream remains unchanged.",
+  "determinism_notes": "Event IDs, project IDs, and values are fixed; grouped output is checked by project ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE quota_events (event_id INT PRIMARY KEY, project_id INT NOT NULL, units INT NOT NULL)",
+    "CREATE TABLE project_quota (project_id INT PRIMARY KEY, total_units INT NOT NULL)",
+    "INSERT INTO quota_events VALUES (1, 10, 4), (2, 10, 6), (3, 20, 3), (4, 30, 0)",
+    "INSERT INTO project_quota VALUES (10, 100)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO project_quota (project_id, total_units) SELECT project_id, @batch_units := COALESCE(SUM(units), 0) FROM quota_events GROUP BY project_id ON DUPLICATE KEY UPDATE total_units = total_units + @batch_units"
+    },
+    {
+      "sql": "SELECT project_id, total_units FROM project_quota ORDER BY project_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT event_id, project_id, units FROM quota_events ORDER BY event_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT project_id, total_units FROM project_quota ORDER BY project_id",
+      "ordered": true
+    }
+  ]
+}

@@ -6,7 +6,18 @@ use sqlparser::parser::Parser;
 
 pub fn parse(sql: &str) -> Result<Vec<Statement>, sqlparser::parser::ParserError> {
     let parser_sql = rewrite_mysql_compound_intervals(sql);
-    match Parser::parse_sql(&MySqlDialect {}, &parser_sql) {
+    let rewritten_assignments = if parser_sql.contains(":=")
+        && !parser_sql
+            .trim_start()
+            .to_ascii_uppercase()
+            .starts_with("SET ")
+    {
+        rewrite_user_variable_assignments(&parser_sql)
+    } else {
+        None
+    };
+    let parse_sql = rewritten_assignments.as_deref().unwrap_or(&parser_sql);
+    match Parser::parse_sql(&MySqlDialect {}, parse_sql) {
         Ok(statements) => Ok(statements),
         Err(err) => {
             if let Some(rewritten) = rewrite_user_variable_assignments(&parser_sql)
@@ -170,6 +181,27 @@ fn rewrite_user_variable_assignments(sql: &str) -> Option<String> {
                             && bytes
                                 .get(index..index + 4)
                                 .is_some_and(|slice| slice.eq_ignore_ascii_case(b" AS "))
+                        {
+                            break;
+                        } else if depth == 0
+                            && [
+                                " FROM ",
+                                " WHERE ",
+                                " GROUP BY ",
+                                " HAVING ",
+                                " ORDER BY ",
+                                " LIMIT ",
+                                " ON DUPLICATE KEY UPDATE ",
+                                " RETURNING ",
+                            ]
+                            .iter()
+                            .any(|keyword| {
+                                bytes
+                                    .get(index..index + keyword.len())
+                                    .is_some_and(|slice| {
+                                        slice.eq_ignore_ascii_case(keyword.as_bytes())
+                                    })
+                            })
                         {
                             break;
                         }

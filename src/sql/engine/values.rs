@@ -5,6 +5,24 @@ pub(super) fn eval_insert_update_value(
     existing: &Map<String, Value>,
     incoming: &Map<String, Value>,
 ) -> Result<Value> {
+    let user_variable = match expr {
+        Expr::Identifier(identifier) if identifier.value.starts_with('@') => {
+            Some(identifier.value.as_str())
+        }
+        Expr::CompoundIdentifier(parts) if parts.len() == 1 && parts[0].value.starts_with('@') => {
+            Some(parts[0].value.as_str())
+        }
+        _ => None,
+    };
+    if let Some(user_variable) = user_variable {
+        return Ok(existing
+            .iter()
+            .find_map(|(name, value)| {
+                name.eq_ignore_ascii_case(user_variable)
+                    .then_some(value.clone())
+            })
+            .unwrap_or(Value::Null));
+    }
     if let Some(value) = incoming_value_expr(expr, incoming)? {
         return Ok(value);
     }
