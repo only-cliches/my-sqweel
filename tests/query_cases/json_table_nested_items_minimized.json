@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "id": "json_table_nested_items_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "felipebz/zpa",
+      "commit": "5b8b89deb245ed2a5a3a93831b8dfd256eff5fc9",
+      "path": "zpa-checks/src/integrationTest/resources/sources/oracle-database_23/sqlrf/JSON_TABLE-14.sql",
+      "url": "https://github.com/felipebz/zpa/blob/5b8b89deb245ed2a5a3a93831b8dfd256eff5fc9/zpa-checks/src/integrationTest/resources/sources/oracle-database_23/sqlrf/JSON_TABLE-14.sql",
+      "sha256": "cd1e0ceb214059187333b89a3705c65f694e499ec99c86ad4b0047bdd601b64b",
+      "source_dialect": "oracle"
+    },
+    "inspiration": {
+      "source_location": "JSON_TABLE-14.sql:3-11",
+      "source_dialect": "oracle",
+      "observed_pattern": "A JSON_TABLE NESTED PATH expands child objects into multiple rows while repeating a parent scalar column.",
+      "mysql_mariadb_translation": "Reduced to one independently authored shipment object with two item objects. The minimized query isolates nested child-row expansion, parent-value repetition, and typed child projection."
+    },
+    "independently_authored": true,
+    "minimized_from": "json_table_nested_items"
+  },
+  "features": [
+    "json-table",
+    "nested-json-table-path",
+    "array-expansion",
+    "parent-value-repetition",
+    "deterministic-order"
+  ],
+  "fixture_notes": "One shipment contains two fixed items, so NESTED PATH must emit two rows with the same shipment code and distinct typed quantities.",
+  "determinism_notes": "The JSON document and item order are fixed, and output is ordered by SKU with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT jt.shipment_code, jt.sku, jt.quantity FROM JSON_TABLE('{\"shipment\":\"S-900\",\"items\":[{\"sku\":\"A-1\",\"quantity\":2},{\"sku\":\"B-7\",\"quantity\":3}]}', '$' COLUMNS (shipment_code VARCHAR(16) PATH '$.shipment', NESTED PATH '$.items[*]' COLUMNS (sku VARCHAR(16) PATH '$.sku', quantity INT PATH '$.quantity'))) AS jt ORDER BY jt.sku",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}

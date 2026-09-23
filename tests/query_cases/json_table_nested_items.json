@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "id": "json_table_nested_items",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "felipebz/zpa",
+      "commit": "5b8b89deb245ed2a5a3a93831b8dfd256eff5fc9",
+      "path": "zpa-checks/src/integrationTest/resources/sources/oracle-database_23/sqlrf/JSON_TABLE-14.sql",
+      "url": "https://github.com/felipebz/zpa/blob/5b8b89deb245ed2a5a3a93831b8dfd256eff5fc9/zpa-checks/src/integrationTest/resources/sources/oracle-database_23/sqlrf/JSON_TABLE-14.sql",
+      "sha256": "cd1e0ceb214059187333b89a3705c65f694e499ec99c86ad4b0047bdd601b64b",
+      "source_dialect": "oracle"
+    },
+    "inspiration": {
+      "source_location": "JSON_TABLE-14.sql:3-11",
+      "source_dialect": "oracle",
+      "observed_pattern": "A JSON_TABLE root projection is combined with a NESTED PATH expansion so one source document produces one relational row for each nested child object while repeating the parent identifier.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored shipment-item report. A JSON array of shipment objects expands each nested items array into typed SKU and quantity rows while repeating the shipment code; Oracle table and column names, JSON values, and reporting purpose are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "json-table",
+    "nested-json-table-path",
+    "typed-json-columns",
+    "array-expansion",
+    "parent-value-repetition",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Shipment S-101 has two items and S-102 has one, so the nested path must emit three rows while repeating each shipment code. Item quantities are typed integers and output is ordered by shipment then SKU.",
+  "determinism_notes": "The JSON document is a fixed literal with fixed array order and the final ORDER BY shipment code and SKU is total; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT jt.shipment_code, jt.sku, jt.quantity FROM JSON_TABLE('[{\"shipment\":\"S-101\",\"items\":[{\"sku\":\"A-1\",\"quantity\":2},{\"sku\":\"B-7\",\"quantity\":1}]},{\"shipment\":\"S-102\",\"items\":[{\"sku\":\"C-3\",\"quantity\":4}]}]', '$[*]' COLUMNS (shipment_code VARCHAR(16) PATH '$.shipment', NESTED PATH '$.items[*]' COLUMNS (sku VARCHAR(16) PATH '$.sku', quantity INT PATH '$.quantity'))) AS jt ORDER BY jt.shipment_code, jt.sku",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}

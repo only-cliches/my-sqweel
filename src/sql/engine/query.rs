@@ -3103,15 +3103,16 @@ impl RawEngine {
         let roots = json_extract_matches(&document, &path);
         let mut rows = Vec::new();
         for (ordinal, root) in roots.iter().enumerate() {
-            let mut row = Map::new();
-            materialize_json_table_columns(columns, root, ordinal + 1, &mut row)?;
-            rows.push(qualified_factor_row(
-                &row,
-                alias
-                    .map(|alias| alias.name.value.as_str())
-                    .unwrap_or("json_table"),
-                None,
-            ));
+            let materialized_rows = materialize_json_table_rows(columns, root, ordinal + 1)?;
+            for row in materialized_rows {
+                rows.push(qualified_factor_row(
+                    &row,
+                    alias
+                        .map(|alias| alias.name.value.as_str())
+                        .unwrap_or("json_table"),
+                    None,
+                ));
+            }
         }
         let null_row = columns
             .iter()
@@ -5874,19 +5875,21 @@ fn json_table_column_names(column: &sqlparser::ast::JsonTableColumn) -> Vec<Stri
     }
 }
 
-fn materialize_json_table_columns(
+fn materialize_json_table_rows(
     columns: &[sqlparser::ast::JsonTableColumn],
     root: &Value,
     ordinal: usize,
-    row: &mut Map<String, Value>,
-) -> Result<()> {
+) -> Result<Vec<Map<String, Value>>> {
+    let mut rows = vec![Map::new()];
     for column in columns {
         match column {
             sqlparser::ast::JsonTableColumn::ForOrdinality(name) => {
-                row.insert(
-                    name.value.clone(),
-                    Value::Number(Number::from(ordinal as u64)),
-                );
+                for row in &mut rows {
+                    row.insert(
+                        name.value.clone(),
+                        Value::Number(Number::from(ordinal as u64)),
+                    );
+                }
             }
             sqlparser::ast::JsonTableColumn::Named(column) => {
                 let path = unquote_sql_string(&column.path.to_string())
@@ -5905,14 +5908,50 @@ fn materialize_json_table_columns(
                 } else {
                     cast_json_value(value, &column.r#type.to_string())?
                 };
-                row.insert(column.name.value.clone(), value);
+                for row in &mut rows {
+                    row.insert(column.name.value.clone(), value.clone());
+                }
             }
-            sqlparser::ast::JsonTableColumn::Nested(_) => {
-                return Err(anyhow!("nested JSON_TABLE columns are not supported yet"));
+            sqlparser::ast::JsonTableColumn::Nested(column) => {
+                let path = unquote_sql_string(&column.path.to_string())
+                    .unwrap_or_else(|| column.path.to_string().trim_matches('"').to_string());
+                let nested_roots = json_extract_matches(root, &path);
+                let mut expanded = Vec::new();
+                if nested_roots.is_empty() {
+                    for mut row in rows {
+                        materialize_json_table_null_columns(&column.columns, &mut row);
+                        expanded.push(row);
+                    }
+                } else {
+                    for row in rows {
+                        for (nested_ordinal, nested_root) in nested_roots.iter().enumerate() {
+                            let nested_rows = materialize_json_table_rows(
+                                &column.columns,
+                                nested_root,
+                                nested_ordinal + 1,
+                            )?;
+                            for nested_row in nested_rows {
+                                let mut combined = row.clone();
+                                combined.extend(nested_row);
+                                expanded.push(combined);
+                            }
+                        }
+                    }
+                }
+                rows = expanded;
             }
         }
     }
-    Ok(())
+    Ok(rows)
+}
+
+fn materialize_json_table_null_columns(
+    columns: &[sqlparser::ast::JsonTableColumn],
+    row: &mut Map<String, Value>,
+) {
+    for name in columns.iter().flat_map(json_table_column_names) {
+        row.insert(name, Value::Null);
+    }
 }
 
 fn explain_select_tables(select: &Select, tables: &mut Vec<(String, Option<String>)>) {
