@@ -945,6 +945,8 @@ fn mysql_error_kind(message: &str) -> ErrorKind {
     let message = message.to_ascii_lowercase();
     if message.contains("transaction snapshot changed") {
         ErrorKind::ER_LOCK_DEADLOCK
+    } else if message.contains("cannot execute statement in a read only transaction") {
+        ErrorKind::ER_CANT_EXECUTE_IN_READ_ONLY_TRANSACTION
     } else if message.contains("lock wait timeout") {
         ErrorKind::ER_LOCK_WAIT_TIMEOUT
     } else if message.contains("administrative command denied")
@@ -2289,6 +2291,7 @@ mod tests {
                 1227,
             ),
             ("transaction snapshot changed; retry transaction", 1213),
+            ("Cannot execute statement in a READ ONLY transaction", 1792),
             ("Select command denied for database 'shard_a'", 1142),
             ("access denied for database 'shard_b'", 1044),
             (

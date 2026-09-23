@@ -19,7 +19,8 @@ use sqlparser::ast::{
     Assignment, BinaryOperator, DateTimeField, Expr, FunctionArg, FunctionArgExpr,
     FunctionArgumentClause, FunctionArguments, GroupByExpr, Ident, Join, JoinConstraint,
     JoinOperator, ObjectName, Offset, OnInsert, OrderByExpr, Query, Select, SelectItem, SetExpr,
-    Statement, TableConstraint, TableFactor, TableWithJoins, Value as SqlValue,
+    Statement, TableConstraint, TableFactor, TableWithJoins, TransactionAccessMode,
+    TransactionMode, Value as SqlValue,
 };
 
 use crate::model::StoredRow;

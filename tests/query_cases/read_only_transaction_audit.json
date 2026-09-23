@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "id": "read_only_transaction_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "advanced/transactions/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/advanced/transactions/mysql.sql",
+      "sha256": "609ee05b4509ed9a042cff1a8162b7dd8d2f92ecfe468fcbb00a4c4b3afdf732",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "advanced/transactions/mysql.sql:39",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL transaction can be declared READ ONLY before a consistent read, preventing subsequent writes in that transaction.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored audit-ledger read snapshot. A fixed ledger is read inside START TRANSACTION READ ONLY, an attempted append must fail, and the committed final read verifies that the ledger was unchanged. The source schema, rows, labels, and reporting purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["read-only-transaction", "transaction-error", "rollback-safety", "deterministic-order"],
+  "fixture_notes": "The read-only transaction sees two ledger rows. The attempted third row must fail with MariaDB's read-only transaction error, and COMMIT must leave only the original rows.",
+  "determinism_notes": "Ledger IDs, labels, amounts, and ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE audit_ledger (entry_id INT PRIMARY KEY, entry_label VARCHAR(32) NOT NULL, amount INT NOT NULL)",
+    "INSERT INTO audit_ledger VALUES (101, 'opening', 40), (102, 'adjustment', -5)"
+  ],
+  "steps": [
+    {"sql": "START TRANSACTION READ ONLY", "ordered": false},
+    {"sql": "SELECT entry_id, entry_label, amount FROM audit_ledger ORDER BY entry_id", "ordered": true},
+    {"sql": "INSERT INTO audit_ledger VALUES (103, 'blocked', 12)", "expect_error": true},
+    {"sql": "COMMIT", "ordered": false},
+    {"sql": "SELECT entry_id, entry_label, amount FROM audit_ledger ORDER BY entry_id", "ordered": true}
+  ],
+  "checks": [
+    {"sql": "SELECT entry_id, entry_label, amount FROM audit_ledger ORDER BY entry_id", "ordered": true}
+  ]
+}

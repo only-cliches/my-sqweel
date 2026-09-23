@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "id": "read_only_transaction_audit_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "advanced/transactions/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/advanced/transactions/mysql.sql",
+      "sha256": "609ee05b4509ed9a042cff1a8162b7dd8d2f92ecfe468fcbb00a4c4b3afdf732",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "advanced/transactions/mysql.sql:39",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A READ ONLY transaction rejects a write before commit.",
+      "mysql_mariadb_translation": "Reduced to one independently authored row, one START TRANSACTION READ ONLY statement, one blocked insert, and one final count so read-only enforcement is isolated from reporting columns and multiple rows."
+    },
+    "independently_authored": true,
+    "minimized_from": "read_only_transaction_audit"
+  },
+  "features": ["read-only-transaction", "transaction-error", "minimized-regression", "deterministic-order"],
+  "fixture_notes": "The single existing row must survive the blocked insert unchanged.",
+  "determinism_notes": "The row ID and count are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE mini_audit (entry_id INT PRIMARY KEY, amount INT NOT NULL)",
+    "INSERT INTO mini_audit VALUES (201, 9)"
+  ],
+  "steps": [
+    {"sql": "START TRANSACTION READ ONLY", "ordered": false},
+    {"sql": "INSERT INTO mini_audit VALUES (202, 4)", "expect_error": true},
+    {"sql": "COMMIT", "ordered": false},
+    {"sql": "SELECT COUNT(*) AS remaining_entries FROM mini_audit", "ordered": true}
+  ],
+  "checks": [
+    {"sql": "SELECT COUNT(*) AS remaining_entries FROM mini_audit", "ordered": true}
+  ]
+}

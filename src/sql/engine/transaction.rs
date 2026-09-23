@@ -59,6 +59,7 @@ pub struct EngineSession {
     identity: Identity,
     transaction: Option<(Option<WriterLease>, Committed)>,
     transaction_read: bool,
+    transaction_read_only: bool,
     observed_tables: Option<BTreeSet<String>>,
     observed_columns: BTreeMap<String, Option<BTreeSet<String>>>,
     savepoints: Vec<(String, Committed)>,
@@ -392,6 +393,7 @@ impl EngineSession {
             identity,
             transaction: None,
             transaction_read: false,
+            transaction_read_only: false,
             observed_tables: Some(BTreeSet::new()),
             observed_columns: BTreeMap::new(),
             savepoints: Vec::new(),
@@ -747,7 +749,7 @@ impl EngineSession {
             .check_database(&self.identity, &self.database)?;
         self.transaction = Some((None, state));
         self.transaction_read = false;
-        self.observed_tables = Some(BTreeSet::new());
+        self.transaction_read_only = false;
         self.observed_columns.clear();
         Ok(())
     }
@@ -756,11 +758,15 @@ impl EngineSession {
             self.shared.publish_database(&self.database, state)?;
             drop(lease);
         }
+        self.transaction_read = false;
+        self.transaction_read_only = false;
         self.savepoints.clear();
         Ok(())
     }
     fn rollback(&mut self) {
         self.transaction = None;
+        self.transaction_read = false;
+        self.transaction_read_only = false;
         self.savepoints.clear();
     }
     fn execute(&mut self, sql: &str, normalize: bool, emit: bool) -> Result<Vec<QueryResult>> {
@@ -913,12 +919,24 @@ impl EngineSession {
                     continue;
                 }
                 Some(Statement::StartTransaction { modes, .. }) => {
-                    if !modes.is_empty() {
+                    let read_only = modes.iter().any(|mode| {
+                        matches!(
+                            mode,
+                            TransactionMode::AccessMode(TransactionAccessMode::ReadOnly)
+                        )
+                    });
+                    if modes.iter().any(|mode| {
+                        !matches!(
+                            mode,
+                            TransactionMode::AccessMode(TransactionAccessMode::ReadOnly)
+                        )
+                    }) {
                         return Err(anyhow!(
                             "transaction modes are not supported; use REPEATABLE READ"
                         ));
                     }
                     self.begin()?;
+                    self.transaction_read_only = read_only;
                 }
                 Some(Statement::Commit { chain }) => {
                     self.commit()?;
@@ -1147,6 +1165,11 @@ impl EngineSession {
                             | Statement::ShowStatus { .. }
                     )
                 );
+            if !read && self.transaction_read_only {
+                return Err(anyhow!(
+                    "Cannot execute statement in a READ ONLY transaction"
+                ));
+            }
             let lease = if !read
                 && !self
                     .transaction
