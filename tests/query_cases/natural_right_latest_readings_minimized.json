@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "id": "natural_right_latest_readings_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "Museum-Barberini/Barberini-Analytics",
+      "commit": "24de6ee7e7125c6b484b10e0ca223d4680f33c31",
+      "path": "scripts/migrations/migration_056.sql",
+      "url": "https://github.com/Museum-Barberini/Barberini-Analytics/blob/24de6ee7e7125c6b484b10e0ca223d4680f33c31/scripts/migrations/migration_056.sql",
+      "sha256": "d701b6923cbc00cead2e12cad9654651e281724f3e099afefaf5a04760d69a80",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "scripts/migrations/migration_056.sql:11-31",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "NATURAL RIGHT JOIN exposes shared key columns as one unqualified result column while preserving unmatched rows from the right relation.",
+      "mysql_mariadb_translation": "Reduced to one matching row and one right-only row across two independently authored tables. The minimized statement removes latest-per-group aggregation and isolates the unqualified shared-key projection and right-side NULL extension."
+    },
+    "independently_authored": true,
+    "minimized_from": "natural_right_latest_readings"
+  },
+  "features": [
+    "natural-right-join",
+    "unqualified-shared-column",
+    "right-preservation",
+    "null-preservation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Catalog device 11 matches one reading; catalog device 22 has no reading and must remain with a non-NULL shared device_id and NULL reading value. The query must not expose a NULL shared key for the preserved right row.",
+  "determinism_notes": "Device IDs and values are fixed, and output is ordered by the unique catalog device ID with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE reading_snapshot (device_id INT NOT NULL, reading INT NOT NULL)",
+    "CREATE TABLE device_catalog (device_id INT PRIMARY KEY, device_name VARCHAR(32) NOT NULL)",
+    "INSERT INTO reading_snapshot VALUES (11, 21)",
+    "INSERT INTO device_catalog VALUES (11, 'north-gauge'), (22, 'west-gauge')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT device_id, device_name, reading FROM reading_snapshot NATURAL RIGHT JOIN device_catalog ORDER BY device_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT device_id, device_name FROM device_catalog ORDER BY device_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT device_id, reading FROM reading_snapshot ORDER BY device_id",
+      "ordered": true
+    }
+  ]
+}

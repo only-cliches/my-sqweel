@@ -2944,7 +2944,14 @@ impl RawEngine {
             ) {
                 for (matched, right_row) in matched_right.into_iter().zip(&right.rows) {
                     if !matched {
-                        next.push(merge_join_rows(&current_nulls, right_row));
+                        let preserved = if join_is_natural(&join.join_operator)
+                            || join_using_columns(&join.join_operator).is_some()
+                        {
+                            merge_join_rows_with_shared_columns(&current_nulls, right_row)
+                        } else {
+                            merge_join_rows(&current_nulls, right_row)
+                        };
+                        next.push(preserved);
                     }
                 }
             }
@@ -7021,6 +7028,20 @@ fn merge_join_rows(left: &Map<String, Value>, right: &Map<String, Value>) -> Map
         combined
             .entry(column.clone())
             .or_insert_with(|| value.clone());
+    }
+    combined
+}
+
+fn merge_join_rows_with_shared_columns(
+    left: &Map<String, Value>,
+    right: &Map<String, Value>,
+) -> Map<String, Value> {
+    let mut combined = merge_join_rows(left, right);
+    for (column, value) in right {
+        if !column.contains('.') && left.get(column) == Some(&Value::Null) && value != &Value::Null
+        {
+            combined.insert(column.clone(), value.clone());
+        }
     }
     combined
 }

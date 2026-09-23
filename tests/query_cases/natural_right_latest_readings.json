@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "id": "natural_right_latest_readings",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Museum-Barberini/Barberini-Analytics",
+      "commit": "24de6ee7e7125c6b484b10e0ca223d4680f33c31",
+      "path": "scripts/migrations/migration_056.sql",
+      "url": "https://github.com/Museum-Barberini/Barberini-Analytics/blob/24de6ee7e7125c6b484b10e0ca223d4680f33c31/scripts/migrations/migration_056.sql",
+      "sha256": "d701b6923cbc00cead2e12cad9654651e281724f3e099afefaf5a04760d69a80",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "scripts/migrations/migration_056.sql:11-31",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A latest-row derived relation uses NATURAL JOIN on a shared key and timestamp, then NATURAL RIGHT JOIN preserves catalog rows that have no matching latest record.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored sensor catalog report. A derived relation selects each device's latest reading timestamp, NATURAL JOIN recovers its reading payload, and NATURAL RIGHT JOIN preserves a catalog device with no readings. The source view, schema, names, values, and reporting purpose are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "natural-join",
+    "natural-right-join",
+    "latest-per-group",
+    "derived-aggregate",
+    "right-preservation",
+    "null-preservation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Device 11 has two readings and must expose only its latest value; device 22 has one reading; device 33 has no readings and must remain with NULL reading fields; device 44 is an orphan reading and must not appear in the catalog report.",
+  "determinism_notes": "Device IDs, reading timestamps, and values are fixed. The latest relation has one row per device and final output is ordered by the unique catalog device ID; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE sensor_catalog (device_id INT PRIMARY KEY, device_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE sensor_readings (reading_id INT PRIMARY KEY, device_id INT NOT NULL, measured_on DATETIME NOT NULL, reading INT NOT NULL)",
+    "INSERT INTO sensor_catalog VALUES (11, 'north-gauge'), (22, 'south-gauge'), (33, 'west-gauge')",
+    "INSERT INTO sensor_readings VALUES (101, 11, '2026-04-01 08:00:00', 18), (102, 11, '2026-04-02 08:00:00', 21), (201, 22, '2026-04-01 09:30:00', 7), (401, 44, '2026-04-03 10:00:00', 99)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT device_id, device_name, measured_on, reading FROM sensor_readings NATURAL JOIN (SELECT device_id, MAX(measured_on) AS measured_on FROM sensor_readings GROUP BY device_id) AS latest NATURAL RIGHT JOIN sensor_catalog ORDER BY device_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT device_id, device_name FROM sensor_catalog ORDER BY device_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT reading_id, device_id, measured_on, reading FROM sensor_readings ORDER BY reading_id",
+      "ordered": true
+    }
+  ]
+}
