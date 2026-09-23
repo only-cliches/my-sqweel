@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "package_state_monotonic_upsert_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "package_state_monotonic_upsert",
+    "source": {
+      "kind": "github",
+      "repository": "singlestore-labs/singlestore-logistics-sim",
+      "commit": "4951682fecb0fc86f1956f0c6dcddc3a723e3c4",
+      "path": "schema.sql",
+      "url": "https://github.com/singlestore-labs/singlestore-logistics-sim/blob/4951682fecb0fc86f1956f0c6dcddc3a723e3c4/schema.sql",
+      "sha256": "590e6a4b248b82fb5157d4a5189aff9c45889e0bffe139242481f47fef692712",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "schema.sql:172-196, process_transitions package-state upsert",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A duplicate-key update compares an incoming checkpoint with the current row and conditionally assigns several fields in one multi-column upsert.",
+      "mysql_mariadb_translation": "Reduced to one parcel row and one newer checkpoint so MariaDB's left-to-right duplicate-update assignment semantics are observable without the larger parcel ledger.",
+      "independently_authored": true
+    },
+    "minimized_from": "package_state_monotonic_upsert"
+  },
+  "features": [
+    "conditional-upsert",
+    "values-in-update",
+    "left-to-right-assignment",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The existing parcel checkpoint advances from 5 to 7, but MariaDB leaves later fields at their prior values because the first assignment changes the value used by subsequent guards.",
+  "determinism_notes": "One fixed parcel row and one fixed checkpoint use literal identifiers, timestamps, and values; the final read is primary-key ordered and has no clocks or concurrency.",
+  "setup": [
+    "CREATE TABLE parcel_state_min (parcel_id VARCHAR(16) PRIMARY KEY, checkpoint_seq INT NOT NULL, location_code VARCHAR(16) NOT NULL, next_location_code VARCHAR(16) NULL, recorded_at DATETIME NOT NULL, state_kind VARCHAR(16) NOT NULL)",
+    "INSERT INTO parcel_state_min VALUES ('P-100', 5, 'HUB-A', 'HUB-B', '2025-03-01 08:00:00', 'in_transit')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO parcel_state_min (parcel_id, checkpoint_seq, location_code, next_location_code, recorded_at, state_kind) VALUES ('P-100', 7, 'HUB-B', 'HUB-C', '2025-03-01 10:00:00', 'in_transit') ON DUPLICATE KEY UPDATE checkpoint_seq = IF(VALUES(checkpoint_seq) > parcel_state_min.checkpoint_seq, VALUES(checkpoint_seq), parcel_state_min.checkpoint_seq), location_code = IF(VALUES(checkpoint_seq) > parcel_state_min.checkpoint_seq, VALUES(location_code), parcel_state_min.location_code), next_location_code = IF(VALUES(checkpoint_seq) > parcel_state_min.checkpoint_seq, VALUES(next_location_code), parcel_state_min.next_location_code), recorded_at = IF(VALUES(checkpoint_seq) > parcel_state_min.checkpoint_seq, VALUES(recorded_at), parcel_state_min.recorded_at), state_kind = IF(VALUES(checkpoint_seq) > parcel_state_min.checkpoint_seq, VALUES(state_kind), parcel_state_min.state_kind)"
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT parcel_id, checkpoint_seq, location_code, next_location_code, recorded_at, state_kind FROM parcel_state_min ORDER BY parcel_id",
+      "ordered": true
+    }
+  ]
+}

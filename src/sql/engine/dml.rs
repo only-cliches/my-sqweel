@@ -452,7 +452,16 @@ impl RawEngine {
                         let col = assignment_target_name(assignment);
                         let value =
                             eval_insert_update_value(&assignment.value, &existing_context, &data)?;
-                        existing.data.insert(col, value);
+                        existing.data.insert(col.clone(), value.clone());
+                        existing_context.insert(col.clone(), value.clone());
+                        let qualified_columns = existing_context
+                            .keys()
+                            .filter(|key| key.rsplit('.').next() == Some(col.as_str()))
+                            .cloned()
+                            .collect::<Vec<_>>();
+                        for qualified_column in qualified_columns {
+                            existing_context.insert(qualified_column, value.clone());
+                        }
                     }
                     self.apply_defaults(table, &mut existing.data)?;
                     if returning {

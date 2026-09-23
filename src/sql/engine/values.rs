@@ -150,6 +150,14 @@ pub(super) fn eval_insert_update_value(
                 None => Ok(Value::Null),
             }
         }
+        Expr::Function(function) => {
+            if let Some(result) = eval_function_expr_fast(function, |argument| {
+                eval_insert_update_value(argument, existing, incoming)
+            }) {
+                return result;
+            }
+            eval_expr(expr, existing, 0)
+        }
         _ => eval_expr(expr, existing, 0),
     }
 }

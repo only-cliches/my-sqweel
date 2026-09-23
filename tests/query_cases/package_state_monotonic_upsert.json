@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "package_state_monotonic_upsert",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "singlestore-labs/singlestore-logistics-sim",
+      "commit": "4951682fecb0fc86f1956f0c6dcddc3a723e3c4",
+      "path": "schema.sql",
+      "url": "https://github.com/singlestore-labs/singlestore-logistics-sim/blob/4951682fecb0fc86f1956f0c6dcddc3a723e3c4/schema.sql",
+      "sha256": "590e6a4b248b82fb5157d4a5189aff9c45889e0bffe139242481f47fef692712",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "schema.sql:172-196, process_transitions package-state upsert",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A package-state ingestion path uses a multi-row INSERT ... ON DUPLICATE KEY UPDATE and IF(VALUES(seq) > existing.seq, ...) guards so late events cannot overwrite a newer state.",
+      "mysql_mariadb_translation": "Reauthored as an independent parcel checkpoint ledger. One multi-row upsert advances an existing parcel only for a higher checkpoint sequence, preserves an older row when a stale checkpoint arrives, and inserts a previously unseen parcel. SingleStore pipelines, procedures, and logistics schema are intentionally omitted.",
+      "independently_authored": true
+    }
+  },
+  "features": [
+    "multi-row-upsert",
+    "conditional-upsert",
+    "values-in-update",
+    "monotonic-state",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Parcel P-100 starts at checkpoint 5 and must advance to 7; a stale checkpoint 1 for P-200 must not change its checkpoint 2 state; P-300 is inserted by the same upsert.",
+  "determinism_notes": "All parcel identifiers, sequences, locations, timestamps, and states are fixed. Final reads use parcel-key ordering; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE parcel_states (parcel_id VARCHAR(16) PRIMARY KEY, checkpoint_seq INT NOT NULL, location_code VARCHAR(16) NOT NULL, next_location_code VARCHAR(16) NULL, recorded_at DATETIME NOT NULL, state_kind VARCHAR(16) NOT NULL)",
+    "INSERT INTO parcel_states VALUES ('P-100', 5, 'HUB-A', 'HUB-B', '2025-03-01 08:00:00', 'in_transit'), ('P-200', 2, 'HUB-C', NULL, '2025-03-01 09:00:00', 'at_rest')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO parcel_states (parcel_id, checkpoint_seq, location_code, next_location_code, recorded_at, state_kind) VALUES ('P-100', 7, 'HUB-B', 'HUB-C', '2025-03-01 10:00:00', 'in_transit'), ('P-200', 1, 'HUB-X', 'HUB-Y', '2025-02-28 23:00:00', 'in_transit'), ('P-300', 1, 'HUB-D', NULL, '2025-03-01 11:00:00', 'at_rest') ON DUPLICATE KEY UPDATE checkpoint_seq = IF(VALUES(checkpoint_seq) > parcel_states.checkpoint_seq, VALUES(checkpoint_seq), parcel_states.checkpoint_seq), location_code = IF(VALUES(checkpoint_seq) > parcel_states.checkpoint_seq, VALUES(location_code), parcel_states.location_code), next_location_code = IF(VALUES(checkpoint_seq) > parcel_states.checkpoint_seq, VALUES(next_location_code), parcel_states.next_location_code), recorded_at = IF(VALUES(checkpoint_seq) > parcel_states.checkpoint_seq, VALUES(recorded_at), parcel_states.recorded_at), state_kind = IF(VALUES(checkpoint_seq) > parcel_states.checkpoint_seq, VALUES(state_kind), parcel_states.state_kind)"
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT parcel_id, checkpoint_seq, location_code, next_location_code, recorded_at, state_kind FROM parcel_states ORDER BY parcel_id",
+      "ordered": true
+    }
+  ]
+}
