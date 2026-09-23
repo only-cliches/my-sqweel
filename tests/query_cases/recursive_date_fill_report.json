@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "recursive_date_fill_report",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "query/cte/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/query/cte/mysql.sql",
+      "sha256": "3d119466a5e2ff93dba4df11c83944f748a451aefc037fe3cfab17feea4fb5f5",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "query/cte/mysql.sql:74-83",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A recursive date CTE generates a bounded day sequence, then a LEFT JOIN and grouped COALESCE(COUNT(...), 0) fill report dates with no matching orders.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored shipment-day report. A recursive CTE generates four fixed dates, a LEFT JOIN aggregates shipment units and counts, and COALESCE fills the missing day with zero. The source schema, dates, identifiers, measures, and reporting purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "recursive-cte",
+    "date-add",
+    "left-join",
+    "grouped-aggregate",
+    "coalesce-zero-fill",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The report spans 2026-06-01 through 2026-06-04. Shipments exist on June 1 and June 3 only, so June 2 and June 4 exercise zero-fill behavior; June 3 has two rows to exercise aggregation.",
+  "determinism_notes": "All dates, shipment rows, intervals, and ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE shipment_events (event_id INT PRIMARY KEY, shipped_on DATE NOT NULL, units INT NOT NULL)",
+    "INSERT INTO shipment_events (event_id, shipped_on, units) VALUES (1, '2026-06-01', 3), (2, '2026-06-03', 5), (3, '2026-06-03', 2)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH RECURSIVE report_days (day_date) AS (SELECT CAST('2026-06-01' AS DATE) UNION ALL SELECT DATE_ADD(day_date, INTERVAL 1 DAY) FROM report_days WHERE day_date < '2026-06-04') SELECT report_days.day_date, COALESCE(SUM(shipment_events.units), 0) AS shipped_units, COUNT(shipment_events.event_id) AS shipment_count FROM report_days LEFT JOIN shipment_events ON shipment_events.shipped_on = report_days.day_date GROUP BY report_days.day_date ORDER BY report_days.day_date",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT event_id, shipped_on, units FROM shipment_events ORDER BY event_id",
+      "ordered": true
+    }
+  ]
+}
