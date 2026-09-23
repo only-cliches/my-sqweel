@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "id": "alter_add_columns_idempotent",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "joezxh/graphiti-java",
+      "commit": "272c2e0c762df0d3316e44c94824ce28ebd926ef",
+      "path": "sql/migrations/v004_episode_type_column_rename_mysql.sql",
+      "url": "https://github.com/joezxh/graphiti-java/blob/272c2e0c762df0d3316e44c94824ce28ebd926ef/sql/migrations/v004_episode_type_column_rename_mysql.sql",
+      "sha256": "0b5b9cb45fbbb43c3e3d0504d6dac43c3a5e7d85597aa3fbe5544360918fcc95",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/migrations/v004_episode_type_column_rename_mysql.sql:13-19",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL migration adds several columns conditionally in one ALTER TABLE and then backfills them from legacy columns with guarded UPDATE statements.",
+      "mysql_mariadb_translation": "Reauthored as an incident-classification migration. One ALTER adds three new nullable/defaulted columns, the same ALTER is repeated for idempotence, and guarded updates copy legacy classification values; the source table, columns, labels, comments, and transaction wrapper are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["alter-add-column-if-not-exists", "multi-column-alter", "guarded-backfill", "idempotent-ddl", "deterministic-order"],
+  "fixture_notes": "Incident 601 copies all three legacy values, incident 602 copies only the non-NULL legacy kind and stage while retaining the default review marker, and incident 603 has no legacy values and retains defaults. Repeating the multi-column ALTER must preserve the migrated rows.",
+  "determinism_notes": "All IDs, legacy values, defaults, and update predicates are fixed; final reads and metadata use deterministic ordering with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE incident_classes (incident_id INT PRIMARY KEY, legacy_kind VARCHAR(16) NULL, legacy_stage INT NULL, legacy_review TINYINT NOT NULL DEFAULT 0)",
+    "INSERT INTO incident_classes VALUES (601, 'billing', 3, 1), (602, 'network', 2, 0), (603, NULL, NULL, 0)"
+  ],
+  "steps": [
+    {
+      "sql": "ALTER TABLE incident_classes ADD COLUMN IF NOT EXISTS process_kind VARCHAR(16) DEFAULT NULL, ADD COLUMN IF NOT EXISTS stage_no INT DEFAULT NULL, ADD COLUMN IF NOT EXISTS review_marker TINYINT DEFAULT 0",
+      "ordered": false
+    },
+    {
+      "sql": "ALTER TABLE incident_classes ADD COLUMN IF NOT EXISTS process_kind VARCHAR(16) DEFAULT NULL, ADD COLUMN IF NOT EXISTS stage_no INT DEFAULT NULL, ADD COLUMN IF NOT EXISTS review_marker TINYINT DEFAULT 0",
+      "ordered": false
+    },
+    {
+      "sql": "UPDATE incident_classes SET process_kind = legacy_kind WHERE process_kind IS NULL AND legacy_kind IS NOT NULL",
+      "ordered": false
+    },
+    {
+      "sql": "UPDATE incident_classes SET stage_no = legacy_stage WHERE stage_no IS NULL AND legacy_stage IS NOT NULL",
+      "ordered": false
+    },
+    {
+      "sql": "UPDATE incident_classes SET review_marker = legacy_review WHERE review_marker = 0 AND legacy_review = 1",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT incident_id, process_kind, stage_no, review_marker FROM incident_classes ORDER BY incident_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT COUNT(*) AS populated_process_kinds FROM incident_classes WHERE process_kind IS NOT NULL",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT COUNT(*) AS reviewed_incidents FROM incident_classes WHERE review_marker = 1",
+      "ordered": true
+    }
+  ]
+}

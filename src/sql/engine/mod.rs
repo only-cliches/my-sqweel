@@ -1119,6 +1119,7 @@ impl RawEngine {
         parse_sql = rewrite_parenthesized_union_branch(&parse_sql);
         parse_sql = rewrite_straight_join(&parse_sql);
         parse_sql = rewrite_alter_drop_foreign_key(&parse_sql);
+        parse_sql = rewrite_alter_add_column_if_not_exists(&parse_sql);
         parse_sql = rewrite_parenthesized_alter_columns(&parse_sql);
         parse_sql = rewrite_named_unique_constraints(&parse_sql);
         parse_sql = strip_index_comments(&parse_sql);
@@ -1826,6 +1827,10 @@ impl RawEngine {
             return Ok(Some(QueryResult::default()));
         }
         let upper = trimmed.to_ascii_uppercase();
+        if let Some(result) = self.execute_alter_add_column_if_not_exists_compat(trimmed)? {
+            return Ok(Some(result));
+        }
+
         self.capture_index_comment(trimmed);
         if upper.starts_with("SET STATEMENT ") {
             if let Some(for_at) = find_top_level_keyword(&upper, "FOR") {
@@ -4126,6 +4131,75 @@ impl RawEngine {
             ..QueryResult::default()
         }
     }
+    fn execute_alter_add_column_if_not_exists_compat(
+        &self,
+        sql: &str,
+    ) -> Result<Option<QueryResult>> {
+        let upper = sql.to_ascii_uppercase();
+        if !upper.starts_with("ALTER TABLE ") || !upper.contains("ADD COLUMN IF NOT EXISTS") {
+            return Ok(None);
+        }
+        let remainder = &sql["ALTER TABLE ".len()..];
+        let remainder_upper = &upper["ALTER TABLE ".len()..];
+        let operation_marker = "ADD COLUMN IF NOT EXISTS";
+        let Some(first_operation) = find_top_level_keyword(remainder_upper, operation_marker)
+        else {
+            return Ok(None);
+        };
+        let table_text = remainder[..first_operation].trim();
+        if table_text.is_empty() {
+            return Ok(None);
+        }
+        let operation_starts = std::iter::successors(Some(first_operation), |start| {
+            let next_start = *start + operation_marker.len();
+            find_top_level_keyword(&remainder_upper[next_start..], operation_marker)
+                .map(|offset| next_start + offset)
+        })
+        .collect::<Vec<_>>();
+        let mut normalized_operations = Vec::new();
+        for (index, start) in operation_starts.iter().enumerate() {
+            let end = operation_starts
+                .get(index + 1)
+                .copied()
+                .unwrap_or(remainder.len());
+            let definition = remainder[*start + operation_marker.len()..end]
+                .trim()
+                .trim_end_matches(',')
+                .trim();
+            if definition.is_empty() {
+                return Ok(None);
+            }
+            let normalized = format!("ALTER TABLE {table_text} ADD COLUMN {definition}");
+            let statement = super::parse(&normalized)?
+                .into_iter()
+                .next()
+                .ok_or_else(|| anyhow!("missing ALTER TABLE statement"))?;
+            let Statement::AlterTable {
+                name, operations, ..
+            } = statement
+            else {
+                return Ok(None);
+            };
+            let Some(sqlparser::ast::AlterTableOperation::AddColumn { column_def, .. }) =
+                operations.into_iter().next()
+            else {
+                return Ok(None);
+            };
+            let table = object_name(&name)?;
+            if self
+                .schemas
+                .get(&table)
+                .is_some_and(|schema| schema.columns.contains_key(&column_def.name.value))
+            {
+                continue;
+            }
+            normalized_operations.push(normalized);
+        }
+        for normalized in normalized_operations {
+            self.execute_sql_internal(&normalized, &normalized, false, false)?;
+        }
+        Ok(Some(QueryResult::default()))
+    }
 }
 
 fn preserve_select_result_headers(sql: &str, result: &mut QueryResult) {
@@ -4541,6 +4615,25 @@ fn rewrite_alter_drop_foreign_key(sql: &str) -> String {
         let start = cursor + relative;
         rewritten.push_str(&sql[cursor..start]);
         rewritten.push_str("DROP CONSTRAINT");
+        cursor = start + needle.len();
+        changed = true;
+    }
+    if !changed {
+        return sql.to_string();
+    }
+    rewritten.push_str(&sql[cursor..]);
+    rewritten
+}
+fn rewrite_alter_add_column_if_not_exists(sql: &str) -> String {
+    let upper = sql.to_ascii_uppercase();
+    let needle = "ADD COLUMN IF NOT EXISTS";
+    let mut rewritten = String::with_capacity(sql.len());
+    let mut cursor = 0;
+    let mut changed = false;
+    while let Some(relative) = upper[cursor..].find(needle) {
+        let start = cursor + relative;
+        rewritten.push_str(&sql[cursor..start]);
+        rewritten.push_str("ADD COLUMN");
         cursor = start + needle.len();
         changed = true;
     }

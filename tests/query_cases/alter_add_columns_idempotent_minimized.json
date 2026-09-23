@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "alter_add_columns_idempotent_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "joezxh/graphiti-java",
+      "commit": "272c2e0c762df0d3316e44c94824ce28ebd926ef",
+      "path": "sql/migrations/v004_episode_type_column_rename_mysql.sql",
+      "url": "https://github.com/joezxh/graphiti-java/blob/272c2e0c762df0d3316e44c94824ce28ebd926ef/sql/migrations/v004_episode_type_column_rename_mysql.sql",
+      "sha256": "0b5b9cb45fbbb43c3e3d0504d6dac43c3a5e7d85597aa3fbe5544360918fcc95",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/migrations/v004_episode_type_column_rename_mysql.sql:13-19",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL migration adds a column conditionally and backfills it from a legacy column with a NULL guard.",
+      "mysql_mariadb_translation": "Minimized to one incident row, one legacy column, one ADD COLUMN IF NOT EXISTS, one repeated idempotent DDL statement, and one guarded backfill."
+    },
+    "independently_authored": true
+  },
+  "features": ["alter-add-column-if-not-exists", "guarded-backfill", "idempotent-ddl", "deterministic-order"],
+  "fixture_notes": "The new process_kind column is added twice without changing the table, then receives the legacy kind only when it is NULL.",
+  "determinism_notes": "One fixed row and one ordered final read isolate conditional column creation and guarded backfill; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE incident_class_min (incident_id INT PRIMARY KEY, legacy_kind VARCHAR(16) NULL)",
+    "INSERT INTO incident_class_min VALUES (601, 'billing')"
+  ],
+  "steps": [
+    {
+      "sql": "ALTER TABLE incident_class_min ADD COLUMN IF NOT EXISTS process_kind VARCHAR(16) DEFAULT NULL",
+      "ordered": false
+    },
+    {
+      "sql": "ALTER TABLE incident_class_min ADD COLUMN IF NOT EXISTS process_kind VARCHAR(16) DEFAULT NULL",
+      "ordered": false
+    },
+    {
+      "sql": "UPDATE incident_class_min SET process_kind = legacy_kind WHERE process_kind IS NULL AND legacy_kind IS NOT NULL",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT incident_id, legacy_kind, process_kind FROM incident_class_min ORDER BY incident_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT COUNT(*) AS process_kind_rows FROM incident_class_min WHERE process_kind IS NOT NULL",
+      "ordered": true
+    }
+  ]
+}
