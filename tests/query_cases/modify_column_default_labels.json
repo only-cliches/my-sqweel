@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "id": "modify_column_default_labels",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "HubSpot/Singularity",
+      "commit": "15688f486fc9286878eff40b51789c88bd6899d5",
+      "path": "mysql/migrations.sql",
+      "url": "https://github.com/HubSpot/Singularity/blob/15688f486fc9286878eff40b51789c88bd6899d5/mysql/migrations.sql",
+      "sha256": "2a61f77fc536e8fcb4cca07d077f86c54eafb676388ee30e29b3122f1ca64aab",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "mysql/migrations.sql:113-116",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL schema migration modifies an existing column's declared type and default while preserving the table's existing rows.",
+      "mysql_mariadb_translation": "Reauthored as a shipment-label registry. ALTER TABLE ... MODIFY COLUMN widens a required label code and installs a default; existing labels remain unchanged and a later insert omitting the modified column exposes the new default. The source schema, names, values, and migration history are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["alter-table", "modify-column", "column-default", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "Labels 1 and 2 are created before the schema change and must retain their codes. Label 3 omits label_code after MODIFY COLUMN and must receive the new default value.",
+  "determinism_notes": "All identifiers and values are fixed; the final read is ordered by the primary key. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE shipment_labels (label_id INT PRIMARY KEY, label_code VARCHAR(16) NOT NULL, priority INT NOT NULL)",
+    "INSERT INTO shipment_labels VALUES (1, 'alpha', 10), (2, 'beta', 20)"
+  ],
+  "steps": [
+    {"sql": "ALTER TABLE shipment_labels MODIFY COLUMN label_code VARCHAR(24) NOT NULL DEFAULT 'unassigned'"},
+    {"sql": "INSERT INTO shipment_labels (label_id, priority) VALUES (3, 30)"}
+  ],
+  "checks": [
+    {"sql": "SELECT label_id, label_code, priority FROM shipment_labels ORDER BY label_id", "ordered": true}
+  ]
+}

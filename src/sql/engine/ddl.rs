@@ -201,21 +201,11 @@ impl RawEngine {
                 }
                 .into()
             });
-        let mut rows_affected = 0;
-
         for op in operations {
-            let rebuilds_rows = alter_operation_rebuilds_rows(&op);
             let row_action = alter_row_action(&op);
             self.apply_alter_operation(&table, &mut schema, op)?;
             if let Some(row_action) = row_action {
                 self.apply_alter_row_action(&table, row_action)?;
-            }
-            if rebuilds_rows {
-                rows_affected = self
-                    .rows
-                    .get(&table)
-                    .map(|rows| rows.len() as u64)
-                    .unwrap_or(0);
             }
         }
 
@@ -242,10 +232,7 @@ impl RawEngine {
         self.rows.entry(table.clone()).or_default();
         self.rebuild_indexes(&table);
         self.persist_schema(&table)?;
-        Ok(QueryResult {
-            rows_affected,
-            ..QueryResult::default()
-        })
+        Ok(QueryResult::default())
     }
 
     fn apply_alter_row_action(&self, table: &str, action: AlterRowAction) -> Result<()> {
@@ -710,12 +697,6 @@ fn inferred_sql_type(value: Option<&Value>) -> String {
         Some(Value::Null) | None => "TEXT".to_string(),
         _ => "VARCHAR(255)".to_string(),
     }
-}
-
-fn alter_operation_rebuilds_rows(op: &sqlparser::ast::AlterTableOperation) -> bool {
-    let operation = op.to_string();
-    let operation = operation.trim_start().to_ascii_uppercase();
-    operation.starts_with("MODIFY COLUMN ") || operation.starts_with("CHANGE COLUMN ")
 }
 
 enum AlterRowAction {

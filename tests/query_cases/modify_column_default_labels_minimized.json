@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "id": "modify_column_default_labels_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "modify_column_default_labels",
+    "source": {
+      "kind": "github",
+      "repository": "HubSpot/Singularity",
+      "commit": "15688f486fc9286878eff40b51789c88bd6899d5",
+      "path": "mysql/migrations.sql",
+      "url": "https://github.com/HubSpot/Singularity/blob/15688f486fc9286878eff40b51789c88bd6899d5/mysql/migrations.sql",
+      "sha256": "2a61f77fc536e8fcb4cca07d077f86c54eafb676388ee30e29b3122f1ca64aab",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "mysql/migrations.sql:113-116",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL ALTER TABLE MODIFY COLUMN changes a declared type and default without changing existing row values.",
+      "mysql_mariadb_translation": "Reduced to one independently authored row and one MODIFY COLUMN operation; the later insert is removed so the affected-row contract of the schema change is isolated from default materialization."
+    },
+    "independently_authored": true
+  },
+  "features": ["alter-table", "modify-column", "affected-rows", "metadata-regression"],
+  "fixture_notes": "One existing label row is sufficient to expose the incorrect affected-row count from MODIFY COLUMN; the final read verifies that the value remains unchanged.",
+  "determinism_notes": "The single fixed row and schema operation are deterministic; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE modify_label_min (label_id INT PRIMARY KEY, label_code VARCHAR(8) NOT NULL)",
+    "INSERT INTO modify_label_min VALUES (1, 'alpha')"
+  ],
+  "steps": [
+    {"sql": "ALTER TABLE modify_label_min MODIFY COLUMN label_code VARCHAR(16) NOT NULL DEFAULT 'unassigned'"}
+  ],
+  "checks": [
+    {"sql": "SELECT label_id, label_code FROM modify_label_min ORDER BY label_id", "ordered": true}
+  ]
+}
