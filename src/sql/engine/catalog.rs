@@ -600,9 +600,14 @@ pub(super) fn parse_session_statement(sql: &str) -> Result<Vec<Statement>> {
             "ALTER TABLE {table} SET TBLPROPERTIES ('auto_increment' = '{next}')"
         ))?);
     }
-
     if let Ok(statements) = crate::sql::parse(sql) {
         return Ok(statements);
+    }
+    let parser_sql = super::rewrite_delete_returning_order_limit_for_parser(sql);
+    if parser_sql != sql {
+        if let Ok(statements) = crate::sql::parse(&parser_sql) {
+            return Ok(statements);
+        }
     }
     let text = sql.trim().trim_end_matches(';').trim();
     let upper = text.to_ascii_uppercase();

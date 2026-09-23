@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "delete_returning_ordered_batch_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "delete_returning_ordered_batch",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "dml/delete/mariadb.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/dml/delete/mariadb.sql",
+      "sha256": "aa7830557327e39d0dc82e81530db58ba8560018bc303bc63cd790b863bbbdb0",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "dml/delete/mariadb.sql:13-15 and 21-24",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "MariaDB combines deterministic ORDER BY/LIMIT deletion with a RETURNING projection that exposes the directly deleted rows.",
+      "mysql_mariadb_translation": "Reduced to three expired queue rows, one returned deleted row, and the two source columns needed to preserve ordering and returning semantics.",
+      "independently_authored": true,
+      "minimized_from": "delete_returning_ordered_batch"
+    }
+  },
+  "features": [
+    "delete-returning",
+    "delete-order-by-limit",
+    "deterministic-order",
+    "minimized-regression"
+  ],
+  "fixture_notes": "The highest-retry expired job is deleted and returned; the lower-retry job and active job remain.",
+  "determinism_notes": "Fixed integer IDs and retry counts provide a total ordering without clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE job_queue_min (job_id INT PRIMARY KEY, retry_count INT NOT NULL, job_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO job_queue_min VALUES (801, 2, 'expired'), (802, 5, 'expired'), (803, 9, 'active')"
+  ],
+  "steps": [
+    {
+      "sql": "DELETE FROM job_queue_min WHERE job_state = 'expired' ORDER BY retry_count DESC, job_id ASC LIMIT 1 RETURNING job_id, retry_count",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT job_id, retry_count, job_state FROM job_queue_min ORDER BY job_id",
+      "ordered": true
+    }
+  ]
+}

@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "delete_returning_ordered_batch",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "dml/delete/mariadb.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/dml/delete/mariadb.sql",
+      "sha256": "aa7830557327e39d0dc82e81530db58ba8560018bc303bc63cd790b863bbbdb0",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "dml/delete/mariadb.sql:13-15 and 21-24",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "MariaDB combines deterministic ORDER BY/LIMIT deletion with a RETURNING projection that exposes the directly deleted rows.",
+      "mysql_mariadb_translation": "Reauthored as an expired-job queue purge. Four expired jobs are ranked by retry count descending and job ID ascending; only the first two are deleted and returned, while active and lower-ranked expired jobs remain for the final-state check. The source's users table and identifiers are not copied.",
+      "independently_authored": true
+    }
+  },
+  "features": [
+    "delete-returning",
+    "delete-order-by-limit",
+    "multi-column-ordering",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Expired jobs 702 and 704 are selected by retry priority and tie-breaking job ID; expired job 701 remains because of LIMIT, and active job 703 is never eligible.",
+  "determinism_notes": "Job IDs, states, retry counts, and queue labels are fixed. The delete ordering is total because job_id breaks retry-count ties; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE job_queue (job_id INT PRIMARY KEY, queue_name VARCHAR(24) NOT NULL, retry_count INT NOT NULL, job_state VARCHAR(16) NOT NULL, payload VARCHAR(64) NOT NULL)",
+    "INSERT INTO job_queue VALUES (701, 'email', 2, 'expired', 'digest-a'), (702, 'email', 5, 'expired', 'digest-b'), (703, 'email', 9, 'active', 'digest-c'), (704, 'sms', 5, 'expired', 'alert-a'), (705, 'sms', 1, 'expired', 'alert-b')"
+  ],
+  "steps": [
+    {
+      "sql": "DELETE FROM job_queue WHERE job_state = 'expired' ORDER BY retry_count DESC, job_id ASC LIMIT 2 RETURNING job_id, queue_name, retry_count, payload",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT job_id, queue_name, retry_count, job_state, payload FROM job_queue ORDER BY job_id",
+      "ordered": true
+    }
+  ]
+}

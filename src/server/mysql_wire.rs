@@ -706,7 +706,9 @@ impl Backend {
         if let Some(results) = self.handle_external_account_operation(query)? {
             return Ok(results);
         }
-        let results = self.session.execute_sql_for_wire(query)?;
+        let parser_query =
+            crate::sql::engine::rewrite_delete_returning_order_limit_for_parser(query);
+        let results = self.session.execute_sql_for_wire(&parser_query)?;
         let trimmed = query.trim().trim_end_matches(';').trim();
         if trimmed.to_ascii_uppercase().starts_with("SET ") {
             self.apply_set_statement(&trimmed[4..]);

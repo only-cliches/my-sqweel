@@ -1127,6 +1127,7 @@ impl RawEngine {
         parse_sql = rewrite_alter_rename_syntax(&parse_sql);
         parse_sql = rewrite_alter_comment_quotes(&parse_sql);
         parse_sql = rewrite_delete_wildcard_targets(&parse_sql);
+        parse_sql = rewrite_delete_returning_order_limit_for_parser(&parse_sql);
         parse_sql = parse_sql.replace(" SRID 0", "").replace(" srid 0", "");
         let statement_upper = raw.trim_start().to_ascii_uppercase();
         if statement_upper.starts_with("ALTER TABLE") {
@@ -5259,6 +5260,38 @@ fn rewrite_delete_wildcard_targets(sql: &str) -> String {
         return sql.to_string();
     }
     format!("DELETE {}{}", targets.replace(".*", ""), &sql[from_at..])
+}
+
+pub(crate) fn rewrite_delete_returning_order_limit_for_parser(sql: &str) -> String {
+    let trimmed = sql.trim_start();
+    let upper = trimmed.to_ascii_uppercase();
+    if !upper.starts_with("DELETE ") {
+        return sql.to_string();
+    }
+
+    let Some(returning_at) = find_top_level_keyword(&upper, "RETURNING") else {
+        return sql.to_string();
+    };
+    let suffix_at = [
+        find_top_level_keyword(&upper, "ORDER BY"),
+        find_top_level_keyword(&upper, "LIMIT"),
+    ]
+    .into_iter()
+    .flatten()
+    .min();
+    let Some(suffix_at) = suffix_at else {
+        return sql.to_string();
+    };
+    if returning_at <= suffix_at {
+        return sql.to_string();
+    }
+
+    format!(
+        "{} {} {}",
+        trimmed[..suffix_at].trim_end(),
+        trimmed[returning_at..].trim(),
+        trimmed[suffix_at..returning_at].trim()
+    )
 }
 
 fn duplicate_insert_column(sql: &str) -> Option<String> {
