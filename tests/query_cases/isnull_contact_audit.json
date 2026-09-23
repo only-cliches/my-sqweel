@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "isnull_contact_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "AlternC/AlternC",
+      "commit": "b21ce3d2638d825d396be218a867baf4ac7d79ca",
+      "path": "install/mysql.sql",
+      "url": "https://github.com/AlternC/AlternC/blob/b21ce3d2638d825d396be218a867baf4ac7d79ca/install/mysql.sql",
+      "sha256": "f1f68ce707717d64369ff153c70fbf50777d34f01a1f0db3fb869e0691ccd199",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "install/mysql.sql:631-634",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL view uses ISNULL on an optional identifier before concatenating a fallback string, distinguishing missing values from present values inside a larger projection.",
+      "mysql_mariadb_translation": "Reauthored as a contact audit that projects ISNULL's integer predicate result, classifies NULL versus present values, and applies the same fallback before concatenation; source views, schema, identifiers, and strings are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["isnull-function", "null-predicate", "null-fallback", "concat", "case-classification", "deterministic-order"],
+  "fixture_notes": "Contact 201 has a phone extension, contact 202 has a NULL extension, and contact 203 has an empty extension; ISNULL must distinguish only the NULL value while the fallback projection keeps the audit label deterministic.",
+  "determinism_notes": "Contact IDs, names, extensions, and ordering are fixed; the report uses no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE contact_extension_audit (contact_id INT PRIMARY KEY, contact_label VARCHAR(16) NOT NULL, extension_code VARCHAR(16) NULL)",
+    "INSERT INTO contact_extension_audit VALUES (201, 'desk', 'x410'), (202, 'mobile', NULL), (203, 'empty', '')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT contact_id, contact_label, ISNULL(extension_code) AS extension_missing, CASE WHEN ISNULL(extension_code) = 1 THEN 'missing' ELSE 'present' END AS extension_state, CONCAT(contact_label, ':', IFNULL(extension_code, 'unassigned')) AS routing_label FROM contact_extension_audit ORDER BY contact_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT contact_id, contact_label, extension_code FROM contact_extension_audit ORDER BY contact_id",
+      "ordered": true
+    }
+  ]
+}

@@ -3438,6 +3438,14 @@ where
                     .map(|value| value.unwrap_or(Value::Null))
             }
         })()),
+        "ISNULL" => Some((|| {
+            let value = args
+                .first()
+                .map(|arg| eval_arg(arg))
+                .transpose()?
+                .unwrap_or(Value::Null);
+            Ok(Value::Number(Number::from((value == Value::Null) as u8)))
+        })()),
         "ELT" => Some((|| {
             let index = args
                 .first()

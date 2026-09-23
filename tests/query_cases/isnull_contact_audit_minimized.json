@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "isnull_contact_audit_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "AlternC/AlternC",
+      "commit": "b21ce3d2638d825d396be218a867baf4ac7d79ca",
+      "path": "install/mysql.sql",
+      "url": "https://github.com/AlternC/AlternC/blob/b21ce3d2638d825d396be218a867baf4ac7d79ca/install/mysql.sql",
+      "sha256": "f1f68ce707717d64369ff153c70fbf50777d34f01a1f0db3fb869e0691ccd199",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "install/mysql.sql:631-634",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "ISNULL distinguishes a missing nullable value inside a MySQL projection.",
+      "mysql_mariadb_translation": "Reduced to one independently authored nullable-value table and a single ISNULL projection, removing the source view, joins, concatenation, and application-specific identifiers."
+    },
+    "independently_authored": true,
+    "minimized_from": "isnull_contact_audit"
+  },
+  "features": ["isnull-function", "null-predicate", "integer-metadata", "deterministic-order"],
+  "fixture_notes": "The fixed two-row table isolates ISNULL's distinction between one SQL NULL and one present value.",
+  "determinism_notes": "Row IDs and values are fixed and output is ordered by the primary key; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE isnull_min (row_id INT PRIMARY KEY, nullable_value VARCHAR(16) NULL)",
+    "INSERT INTO isnull_min VALUES (1, NULL), (2, 'ready')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT row_id, ISNULL(nullable_value) AS is_missing FROM isnull_min ORDER BY row_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}

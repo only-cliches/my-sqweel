@@ -306,6 +306,9 @@ All notable changes to MySqweel will be documented in this file.
 - Restore native MTR baseline prerequisites in CI: official helper procedures, pinned timezone data, Performance Schema instrumentation, and socket-based `root@localhost` authentication. Keep MTR's empty-password test account confined to disposable services with loopback-only published ports; retain password authentication for feature parity.
 - Classify nested-include mysqltest SQL diagnostics without misreporting unsupported SQL or wrong error codes as infrastructure failures. Keep startup failures and incomplete runs gating, and avoid nondeterministic TCP fallback when MTR's external feature probe receives socket options.
 
+- Added GitHub-attributed `ISNULL` coverage based on [AlternC/AlternC](https://github.com/AlternC/AlternC/blob/b21ce3d2638d825d396be218a867baf4ac7d79ca/install/mysql.sql#L631-L634), with NULL/present/empty-value classification, integer predicate metadata, fallback concatenation, and deterministic ordering; fixed `ISNULL` evaluation and MariaDB-compatible integer metadata, with repeated MariaDB 10.11.7 and MySqweel runs now matching.
+- Added the minimized GitHub-attributed `ISNULL` regression; MariaDB 10.11.7 and MySqweel now agree on NULL predicate results across repeated fresh differential runs.
+
 ## 0.4.4 Sep 9, 2026
 
 ### Transactions and persistence
