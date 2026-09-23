@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "update_self_join_dimension_history_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "update_self_join_dimension_history",
+    "source": {
+      "kind": "github",
+      "repository": "shreejit04/etl-processing",
+      "commit": "ba1b33f069def5fecaa9c742a896260498f67576",
+      "path": "update.sql",
+      "url": "https://github.com/shreejit04/etl-processing/blob/ba1b33f069def5fecaa9c742a896260498f67576/update.sql",
+      "sha256": "bd28c3d2dcb42ca7d2185184e32574733c86acf3c470ce9367d998bd78c0c2ff",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "update.sql:68-76",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A type-2 dimension migration updates an older current row through a self-join when a newer version exists for the same business key.",
+      "mysql_mariadb_translation": "Reduced to two fixed product versions so one self-join update must close the older row and leave the newer row current.",
+      "independently_authored": true
+    }
+  },
+  "features": ["update-self-join", "versioned-history", "minimized-regression", "dml-final-state"],
+  "fixture_notes": "The older version is current before the update and must become archived with a fixed validity boundary; the newer version remains current.",
+  "determinism_notes": "Fixed IDs and dates, one matching newer row, and ordered final reads avoid clocks, randomness, sleeps, and concurrency.",
+  "setup": [
+    "CREATE TABLE price_history_min (version_id INT PRIMARY KEY, product_id INT NOT NULL, product_label VARCHAR(32) NOT NULL, price DECIMAL(8,2) NOT NULL, valid_from DATE NOT NULL, valid_until DATE NULL, current_status CHAR(1) NOT NULL)",
+    "INSERT INTO price_history_min VALUES (7001, 700, 'Travel Mug', 12.00, '2025-04-01', NULL, 'C'), (7002, 700, 'Travel Mug', 13.50, '2025-05-01', NULL, 'C')"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE price_history_min AS older, price_history_min AS newer SET older.valid_until = '2025-04-30', older.current_status = 'N' WHERE older.product_id = newer.product_id AND newer.valid_from > older.valid_from AND older.current_status = 'C'"
+    },
+    {
+      "sql": "SELECT version_id, product_id, price, valid_from, valid_until, current_status FROM price_history_min ORDER BY version_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT version_id, product_id, price, valid_from, valid_until, current_status FROM price_history_min ORDER BY version_id",
+      "ordered": true
+    }
+  ]
+}

@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "update_self_join_dimension_history",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "shreejit04/etl-processing",
+      "commit": "ba1b33f069def5fecaa9c742a896260498f67576",
+      "path": "update.sql",
+      "url": "https://github.com/shreejit04/etl-processing/blob/ba1b33f069def5fecaa9c742a896260498f67576/update.sql",
+      "sha256": "bd28c3d2dcb42ca7d2185184e32574733c86acf3c470ce9367d998bd78c0c2ff",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "update.sql:68-76",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A type-2 dimension migration updates older current rows through a self-join when a newer version exists for the same business key, closing the old validity window and marking it non-current.",
+      "mysql_mariadb_translation": "Reauthored as a fixed-date product-price history migration. A self-join identifies superseded current versions, assigns their deterministic prior-day validity boundary, and marks them archived; all table names, rows, dates, and domain labels are new.",
+      "independently_authored": true
+    }
+  },
+  "features": ["update-self-join", "versioned-history", "date-boundary", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "Product 100 has three versions, so only its first version is superseded and the latest remains current. Product 200 has one current version, while product 300 has an already archived version and one current version with no newer row; neither receives an unintended update.",
+  "determinism_notes": "All validity dates, identifiers, statuses, and prices are fixed. The self-join compares only primary business/version keys, and ordered final reads avoid clocks, randomness, sleeps, and concurrent schedules.",
+  "setup": [
+    "CREATE TABLE price_history (version_id INT PRIMARY KEY, product_id INT NOT NULL, product_label VARCHAR(32) NOT NULL, price DECIMAL(8,2) NOT NULL, valid_from DATE NOT NULL, valid_until DATE NULL, current_status CHAR(1) NOT NULL)",
+    "INSERT INTO price_history VALUES (1001, 100, 'Desk Lamp', 19.90, '2025-01-01', NULL, 'C'), (1002, 100, 'Desk Lamp', 21.90, '2025-02-01', NULL, 'C'), (1003, 100, 'Desk Lamp', 23.90, '2025-03-01', NULL, 'C'), (2001, 200, 'Wall Clock', 31.50, '2025-01-15', NULL, 'C'), (3001, 300, 'Floor Fan', 44.00, '2025-01-05', '2025-01-31', 'N'), (3002, 300, 'Floor Fan', 47.00, '2025-02-01', NULL, 'C')"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE price_history AS older, price_history AS newer SET older.valid_until = '2025-02-28', older.current_status = 'N' WHERE older.product_id = newer.product_id AND newer.valid_from > older.valid_from AND older.current_status = 'C'"
+    },
+    {
+      "sql": "SELECT version_id, product_id, product_label, price, valid_from, valid_until, current_status FROM price_history ORDER BY version_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT product_id, COUNT(*) AS version_count FROM price_history GROUP BY product_id ORDER BY product_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT version_id, product_id, product_label, price, valid_from, valid_until, current_status FROM price_history ORDER BY version_id",
+      "ordered": true
+    }
+  ]
+}

@@ -1253,7 +1253,9 @@ impl RawEngine {
                 .replace("ADD FULLTEXT KEY", "ADD KEY")
                 .replace("add fulltext key", "add key");
         }
-        rewrite_group_by_with_rollup(&rewrite_update_order_limit_for_parser(&parse_sql))
+        let parse_sql = rewrite_update_order_limit_for_parser(&parse_sql);
+        let parse_sql = rewrite_update_comma_join_for_parser(&parse_sql);
+        rewrite_group_by_with_rollup(&parse_sql)
     }
 
     fn rewrite_insert_target(&self, sql: &str) -> String {
@@ -4357,6 +4359,61 @@ fn rewrite_update_order_limit_for_parser(sql: &str) -> String {
         return sql.to_string();
     };
     sql[..suffix_at].trim_end().to_string()
+}
+fn rewrite_update_comma_join_for_parser(sql: &str) -> String {
+    let trimmed = sql.trim();
+    let upper = trimmed.to_ascii_uppercase();
+    if !upper.starts_with("UPDATE ") {
+        return sql.to_string();
+    }
+    let Some(set_at) = find_top_level_keyword(&upper, "SET") else {
+        return sql.to_string();
+    };
+    let target = trimmed["UPDATE ".len()..set_at].trim();
+    let Some(comma_at) = find_top_level_comma(target) else {
+        return sql.to_string();
+    };
+    let (left, right) = target.split_at(comma_at);
+    let right = &right[1..];
+    let assignments = &trimmed[set_at + "SET".len()..];
+    let assignments_upper = assignments.to_ascii_uppercase();
+    let where_at = find_top_level_keyword(&assignments_upper, "WHERE");
+    let (assignments, where_clause) = where_at.map_or((assignments.trim(), ""), |offset| {
+        (assignments[..offset].trim(), assignments[offset..].trim())
+    });
+    let rewritten = format!(
+        "UPDATE {} INNER JOIN {} ON TRUE SET {}{}",
+        left.trim(),
+        right.trim(),
+        assignments,
+        if where_clause.is_empty() {
+            String::new()
+        } else {
+            format!(" {where_clause}")
+        }
+    );
+    rewritten
+}
+
+fn find_top_level_comma(sql: &str) -> Option<usize> {
+    let bytes = sql.as_bytes();
+    let mut depth = 0usize;
+    let mut quote = None;
+    for (index, byte) in bytes.iter().copied().enumerate() {
+        let character = byte as char;
+        match quote {
+            Some(current) if character == current => quote = None,
+            Some(_) => {}
+            None => match character {
+                '\'' | '"' | '`' => quote = Some(character),
+                '(' => depth += 1,
+                ')' => depth = depth.saturating_sub(1),
+                ',' if depth == 0 => return Some(index),
+                _ => {}
+            },
+        }
+    }
+    None
 }
 
 fn find_top_level_keyword(sql: &str, keyword: &str) -> Option<usize> {
