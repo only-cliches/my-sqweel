@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "to_days_service_windows_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "jOOQ/sakila",
+      "commit": "e089a5b1ec9af0df7a9c6a5d47d49fa1736a4e84",
+      "path": "mysql-sakila-db/mysql-sakila-schema.sql",
+      "url": "https://github.com/jOOQ/sakila/blob/e089a5b1ec9af0df7a9c6a5d47d49fa1736a4e84/mysql-sakila-db/mysql-sakila-schema.sql",
+      "sha256": "f2c41c3bf6d6c239941b4f98fb37afad21f6be12b82bf586202529a793ccc2ee",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "mysql-sakila-db/mysql-sakila-schema.sql:532-536",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL expression subtracts TO_DAYS values to calculate elapsed calendar days.",
+      "mysql_mariadb_translation": "Minimized independently authored scalar regression with one date pair and a TO_DAYS subtraction. It removes grouping, IFNULL, conditional aggregation, table setup, and source joins while retaining the MariaDB integer metadata that exposed the mismatch."
+    },
+    "independently_authored": true,
+    "minimized_from": "to_days_service_windows"
+  },
+  "features": [
+    "to-days",
+    "date-difference",
+    "minimized-regression"
+  ],
+  "fixture_notes": "One fixed closed date and opening date isolate TO_DAYS subtraction and its integer result metadata.",
+  "determinism_notes": "The two date literals and scalar expression are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT TO_DAYS('2026-02-07') - TO_DAYS('2026-02-01') AS elapsed_days",
+      "ordered": true
+    }
+  ]
+}

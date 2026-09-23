@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "to_days_service_windows",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "jOOQ/sakila",
+      "commit": "e089a5b1ec9af0df7a9c6a5d47d49fa1736a4e84",
+      "path": "mysql-sakila-db/mysql-sakila-schema.sql",
+      "url": "https://github.com/jOOQ/sakila/blob/e089a5b1ec9af0df7a9c6a5d47d49fa1736a4e84/mysql-sakila-db/mysql-sakila-schema.sql",
+      "sha256": "f2c41c3bf6d6c239941b4f98fb37afad21f6be12b82bf586202529a793ccc2ee",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "mysql-sakila-db/mysql-sakila-schema.sql:532-536",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL report computes elapsed rental days by subtracting TO_DAYS values, then aggregates conditional overdue amounts with IF and IFNULL.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored service-window audit. TO_DAYS computes elapsed calendar days for closed and open windows, while a grouped IFNULL/SUM/IF/GREATEST expression totals days beyond each account's grace period. The source tables, procedure, joins, identifiers, literals, and rental-domain purpose are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "to-days",
+    "date-difference",
+    "conditional-aggregate",
+    "ifnull",
+    "greatest",
+    "null-propagation",
+    "grouping",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Account 7 has one closed window three days beyond grace and one open window; account 8 has a closed window shorter than grace. The row projection exposes elapsed-day NULL behavior, and the grouped total counts only closed excess days.",
+  "determinism_notes": "Dates, grace periods, IDs, and grouping order are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE service_windows (window_id INT PRIMARY KEY, account_id INT NOT NULL, opened_on DATE NOT NULL, closed_on DATE NULL, grace_days INT NOT NULL)",
+    "INSERT INTO service_windows (window_id, account_id, opened_on, closed_on, grace_days) VALUES (201, 7, '2026-02-01', '2026-02-07', 3), (202, 7, '2026-02-10', NULL, 2), (203, 8, '2026-03-01', '2026-03-02', 5)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT window_id, account_id, TO_DAYS(closed_on) - TO_DAYS(opened_on) AS elapsed_days, CASE WHEN closed_on IS NULL THEN 'open' ELSE 'closed' END AS window_state FROM service_windows ORDER BY window_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT account_id, IFNULL(SUM(IF(closed_on IS NULL, 0, GREATEST((TO_DAYS(closed_on) - TO_DAYS(opened_on)) - grace_days, 0))), 0) AS overdue_days FROM service_windows GROUP BY account_id ORDER BY account_id",
+      "ordered": true
+    }
+  ]
+}

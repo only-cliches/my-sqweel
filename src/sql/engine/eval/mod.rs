@@ -3760,6 +3760,7 @@ pub(super) fn eval_function_text(
             };
             Ok(Value::String(format.to_string()))
         }
+        "TO_DAYS" => eval_to_days(args.first(), data, last_insert_id),
         "FROM_DAYS" => {
             let value = args
                 .first()

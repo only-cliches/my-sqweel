@@ -1912,7 +1912,7 @@ impl RawEngine {
                         }
                     }
                     "FIELD" | "FIND_IN_SET" | "BIT_COUNT" | "INSTR" | "PERIOD_ADD"
-                    | "PERIOD_DIFF" => MysqlColumnType::Integer,
+                    | "PERIOD_DIFF" | "TO_DAYS" => MysqlColumnType::Integer,
                     "YEAR" | "MONTH" | "DAY" | "DAYOFMONTH" | "DAYOFWEEK" | "WEEKDAY"
                     | "DAYOFYEAR" | "YEARWEEK" | "WEEKOFYEAR" | "QUARTER" | "HOUR" | "MINUTE"
                     | "SECOND" | "MICROSECOND" => MysqlColumnType::Integer,
@@ -2156,11 +2156,22 @@ impl RawEngine {
                     self.expression_metadata(select, right, String::new(), first_row);
                 let rank = numeric_type_rank(left_metadata.column_type)
                     .max(numeric_type_rank(right_metadata.column_type));
-                metadata.column_type = match rank {
-                    1 => MysqlColumnType::BigInt,
-                    2 => MysqlColumnType::Decimal,
-                    3 => MysqlColumnType::Double,
-                    _ => metadata.column_type,
+                let is_to_days = |expr: &Expr| {
+                    matches!(expr, Expr::Function(function)
+                    if function.name.0.last().is_some_and(|name| {
+                        name.value.eq_ignore_ascii_case("TO_DAYS")
+                    }))
+                };
+                let to_days_difference = is_to_days(left) && is_to_days(right);
+                metadata.column_type = if to_days_difference {
+                    MysqlColumnType::Integer
+                } else {
+                    match rank {
+                        1 => MysqlColumnType::BigInt,
+                        2 => MysqlColumnType::Decimal,
+                        3 => MysqlColumnType::Double,
+                        _ => metadata.column_type,
+                    }
                 };
                 if metadata.column_type == MysqlColumnType::Decimal {
                     metadata.decimals = left_metadata.decimals.max(right_metadata.decimals);

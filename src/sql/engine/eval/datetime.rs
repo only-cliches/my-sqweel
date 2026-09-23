@@ -185,6 +185,27 @@ pub(super) fn eval_date_diff(
         left.date().signed_duration_since(right.date()).num_days(),
     )))
 }
+
+pub(super) fn eval_to_days(
+    value_arg: Option<&String>,
+    data: &Map<String, Value>,
+    last_insert_id: u64,
+) -> Result<Value> {
+    let value = value_arg
+        .map(|arg| eval_scalar_text(arg, data, last_insert_id))
+        .transpose()?
+        .unwrap_or(Value::Null);
+    if value == Value::Null {
+        return Ok(Value::Null);
+    }
+    let Some(date) = parse_mysql_datetime_value(&value).map(|datetime| datetime.date()) else {
+        return Ok(Value::Null);
+    };
+    let epoch = NaiveDate::from_ymd_opt(1, 1, 1).expect("year one is a valid date");
+    Ok(Value::Number(Number::from(
+        date.signed_duration_since(epoch).num_days() + 366,
+    )))
+}
 pub(super) fn eval_make_date(
     year_arg: Option<&String>,
     day_arg: Option<&String>,
