@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "id": "phonetic_label_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/2416.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/2416.sql",
+      "sha256": "bc96ed60836ea60361597fd4c60bb9f6a7528e047a705ffc2a7c5e1ac9db362a",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/docker/fuzz_root/mysql_initlib/2416.sql:86-90",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL regression query compares string literals with SOUNDS LIKE and includes matching, nonmatching, and NULL operands to exercise phonetic comparison and three-valued results.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored phonetic-label audit using MariaDB's equivalent SOUNDEX equality expression. Fixed candidate/reference pairs cover matching names, a nonmatch, and a NULL candidate; a grouped summary counts matching and comparable pairs per batch so phonetic comparison is evaluated over table columns and aggregate expressions. The source fuzz values, schema, and query purpose are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["sounds-like", "soundex", "null-propagation", "grouped-aggregate", "deterministic-order"],
+  "fixture_notes": "Batch 11 contains Smith/Smyth as one match, Jones/Smith as one nonmatch, and a NULL candidate; batch 22 contains Robert/Rupert and Ashcraft/Ashcroft matches plus Miller/Walker as a nonmatch. SUM ignores the NULL comparison while COUNT(expression) counts only comparable pairs.",
+  "determinism_notes": "All probe IDs, batch IDs, names, and ordering are fixed; both projections order by unique probe or batch IDs. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE phonetic_probes (probe_id INT PRIMARY KEY, batch_id INT NOT NULL, candidate VARCHAR(32) NULL, reference_name VARCHAR(32) NOT NULL)",
+    "INSERT INTO phonetic_probes VALUES (301, 11, 'Smith', 'Smyth'), (302, 11, 'Jones', 'Smith'), (303, 11, NULL, 'Smith'), (401, 22, 'Robert', 'Rupert'), (402, 22, 'Miller', 'Walker'), (403, 22, 'Ashcraft', 'Ashcroft')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT probe_id, candidate, reference_name, SOUNDEX(candidate) = SOUNDEX(reference_name) AS phonetic_match FROM phonetic_probes ORDER BY probe_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT batch_id, SUM(SOUNDEX(candidate) = SOUNDEX(reference_name)) AS matching_pairs, COUNT(SOUNDEX(candidate) = SOUNDEX(reference_name)) AS comparable_pairs FROM phonetic_probes GROUP BY batch_id ORDER BY batch_id",
+      "ordered": true
+    }
+  ]
+}

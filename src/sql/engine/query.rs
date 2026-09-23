@@ -1520,6 +1520,22 @@ impl RawEngine {
                 metadata.column_type = MysqlColumnType::Decimal;
                 metadata.decimals = argument.decimals;
             }
+            Expr::BinaryOp {
+                op:
+                    BinaryOperator::Eq
+                    | BinaryOperator::NotEq
+                    | BinaryOperator::Gt
+                    | BinaryOperator::Lt
+                    | BinaryOperator::GtEq
+                    | BinaryOperator::LtEq
+                    | BinaryOperator::Spaceship
+                    | BinaryOperator::And
+                    | BinaryOperator::Or
+                    | BinaryOperator::Xor,
+                ..
+            } => {
+                metadata.column_type = MysqlColumnType::Integer;
+            }
             Expr::RLike { .. } => {
                 metadata.column_type = MysqlColumnType::Integer;
             }

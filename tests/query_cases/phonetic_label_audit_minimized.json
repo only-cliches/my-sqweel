@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "id": "phonetic_label_audit_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/2416.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/2416.sql",
+      "sha256": "bc96ed60836ea60361597fd4c60bb9f6a7528e047a705ffc2a7c5e1ac9db362a",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/docker/fuzz_root/mysql_initlib/2416.sql:86-90",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A scalar MySQL regression query uses SOUNDS LIKE for matching, nonmatching, and NULL string operands.",
+      "mysql_mariadb_translation": "Reduced to one independently authored matching scalar SOUNDEX equality expression so MariaDB's integer boolean metadata is isolated from table access, grouping, and multiple probe rows."
+    },
+    "independently_authored": true,
+    "minimized_from": "phonetic_label_audit"
+  },
+  "features": ["sounds-like", "soundex", "minimized-regression", "boolean-metadata"],
+  "fixture_notes": "The fixed Smith/Smyth pair produces one, isolating the equivalent phonetic comparison and LONG result metadata.",
+  "determinism_notes": "The scalar names are fixed and the query has no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT SOUNDEX('Smith') = SOUNDEX('Smyth') AS phonetic_match",
+      "ordered": true
+    }
+  ]
+}
