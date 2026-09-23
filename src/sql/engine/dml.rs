@@ -762,6 +762,50 @@ impl RawEngine {
 
         Ok(())
     }
+    fn normalize_right_join_update(
+        table: TableWithJoins,
+        assignments: &[Assignment],
+    ) -> Result<TableWithJoins> {
+        if table.joins.len() != 1 {
+            return Ok(table);
+        }
+        let join = &table.joins[0];
+        let JoinOperator::RightOuter(constraint) = join.join_operator.clone() else {
+            return Ok(table);
+        };
+        let right_relation = join.relation.clone();
+        let (right_table, right_alias) = table_factor_name_and_alias(&right_relation)?;
+        let targets_right = assignments.iter().any(|assignment| {
+            let parts = assignment
+                .target
+                .to_string()
+                .replace('`', "")
+                .split('.')
+                .map(str::to_ascii_lowercase)
+                .collect::<Vec<_>>();
+            parts.len() >= 2
+                && parts[..parts.len() - 1].iter().any(|qualifier| {
+                    qualifier == &right_table.to_ascii_lowercase()
+                        || right_alias
+                            .as_deref()
+                            .is_some_and(|alias| qualifier == &alias.to_ascii_lowercase())
+                })
+        });
+        if targets_right {
+            return Ok(TableWithJoins {
+                relation: right_relation,
+                joins: vec![Join {
+                    relation: table.relation,
+                    join_operator: JoinOperator::LeftOuter(constraint),
+                    global: false,
+                }],
+            });
+        }
+        let mut normalized = table;
+        normalized.joins[0].join_operator = JoinOperator::LeftOuter(constraint);
+        Ok(normalized)
+    }
+
     pub(super) fn update_rows(
         &self,
         table: TableWithJoins,
@@ -772,6 +816,7 @@ impl RawEngine {
         order_by: Vec<OrderByExpr>,
         limit: Option<Expr>,
     ) -> Result<QueryResult> {
+        let table = Self::normalize_right_join_update(table, &assignments)?;
         if from.is_some() {
             return Err(anyhow!("UPDATE ... FROM is not supported yet"));
         }

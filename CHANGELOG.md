@@ -310,6 +310,8 @@ All notable changes to MySqweel will be documented in this file.
 - Added the minimized GitHub-attributed `ISNULL` regression; MariaDB 10.11.7 and MySqweel now agree on NULL predicate results across repeated fresh differential runs.
 - Added GitHub-attributed `RENAME TABLE` coverage based on [happypeter/haoduoshipin](https://github.com/happypeter/haoduoshipin/blob/3d9155a7c6c082e29c50b11bf15c148e68276fcf/39.md#L54-L58), with a populated dispatch-table archive migration, row preservation, information-schema final-state verification, and deterministic ordering; repeated MariaDB 10.11.7 and MySqweel runs matched without a source fix.
 - Added GitHub-attributed multi-target `DELETE` coverage based on [antlr/grammars-v4](https://github.com/antlr/grammars-v4/blob/7e08234262a7c58557d74f2cb8ce90c72d356f/sql/mariadb/examples/fast/dml_delete.sql#L12-L16), deleting matching shipment and flag rows through one joined statement and verifying retained rows plus deletion counts; repeated MariaDB 10.11.7 and MySqweel runs matched without a source fix.
+- Added GitHub-attributed `RIGHT JOIN` UPDATE coverage based on [CUBRID/cubrid-testcases](https://github.com/CUBRID/cubrid-testcases/blob/4004f1e13bcee2b16ebd4c6d9e9c4eb100f0d3/sql/_19_apricot/_04_multi-table_update/cases/syntax_07.sql#L11-L16), with an unmatched route check updated through the preserved right side and deterministic final-state counts; added the minimized regression for the same joined-DML semantics.
+- Fixed right-joined UPDATE normalization so assignments targeting the preserved right table execute through the equivalent left-joined target order; repeated MariaDB 10.11.7 and MySqweel runs now match for the original and minimized cases.
 
 ## 0.4.4 Sep 9, 2026
 

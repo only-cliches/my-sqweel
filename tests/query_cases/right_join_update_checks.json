@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "id": "right_join_update_checks",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "CUBRID/cubrid-testcases",
+      "commit": "4004f1e13bcee2b16ebd4c6d9e9c4eb100f0d3",
+      "path": "sql/_19_apricot/_04_multi-table_update/cases/syntax_07.sql",
+      "url": "https://github.com/CUBRID/cubrid-testcases/blob/4004f1e13bcee2b16ebd4c6d9e9c4eb100f0d3/sql/_19_apricot/_04_multi-table_update/cases/syntax_07.sql",
+      "sha256": "c8bd34a0a2f443a92626a8d6f8b716d106a076feec044d9f71c1d8a5e5c1ca2c",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/_19_apricot/_04_multi-table_update/cases/syntax_07.sql:11-16",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL-compatible multi-table UPDATE uses RIGHT JOIN and can assign a column from the right-hand joined table.",
+      "mysql_mariadb_translation": "Reauthored as a route-check review update. A RIGHT JOIN selects every check, including a check with no registry row, and raises only low-severity check scores; the source tables, values, and repeated left/right mutation sequence are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["right-join-update", "joined-dml", "unmatched-right-row", "deterministic-order"],
+  "fixture_notes": "The check for route 303 has no registry match but must still be updated because route_checks is on the preserved RIGHT JOIN side. The higher-severity check remains unchanged.",
+  "determinism_notes": "All IDs, severities, labels, and thresholds are fixed; final reads use primary-key ordering and no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE route_registry (route_id INT PRIMARY KEY, route_label VARCHAR(24) NOT NULL)",
+    "CREATE TABLE route_checks (check_id INT PRIMARY KEY, route_id INT NOT NULL, severity INT NOT NULL)",
+    "INSERT INTO route_registry VALUES (301, 'north-loop'), (302, 'south-loop')",
+    "INSERT INTO route_checks VALUES (901, 302, 2), (902, 303, 3), (903, 304, 8)"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE route_registry RIGHT JOIN route_checks ON route_registry.route_id = route_checks.route_id SET route_checks.severity = route_checks.severity + 10 WHERE route_checks.severity < 5",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT route_id, route_label FROM route_registry ORDER BY route_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT check_id, route_id, severity FROM route_checks ORDER BY check_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT COUNT(*) AS elevated_checks FROM route_checks WHERE severity >= 10",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT COUNT(*) AS unmatched_elevated_checks FROM route_checks c LEFT JOIN route_registry r ON r.route_id = c.route_id WHERE r.route_id IS NULL AND c.severity >= 10",
+      "ordered": true
+    }
+  ]
+}

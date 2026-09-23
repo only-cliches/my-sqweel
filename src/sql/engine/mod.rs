@@ -17,9 +17,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Number, Value, json};
 use sqlparser::ast::{
     Assignment, BinaryOperator, DateTimeField, Expr, FunctionArg, FunctionArgExpr,
-    FunctionArgumentClause, FunctionArguments, GroupByExpr, Ident, JoinConstraint, JoinOperator,
-    ObjectName, Offset, OnInsert, OrderByExpr, Query, Select, SelectItem, SetExpr, Statement,
-    TableConstraint, TableFactor, TableWithJoins, Value as SqlValue,
+    FunctionArgumentClause, FunctionArguments, GroupByExpr, Ident, Join, JoinConstraint,
+    JoinOperator, ObjectName, Offset, OnInsert, OrderByExpr, Query, Select, SelectItem, SetExpr,
+    Statement, TableConstraint, TableFactor, TableWithJoins, Value as SqlValue,
 };
 
 use crate::model::StoredRow;
