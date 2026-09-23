@@ -1690,7 +1690,7 @@ impl RawEngine {
                         metadata.unsigned = true;
                         MysqlColumnType::BigInt
                     }
-                    "INET6_ATON" => MysqlColumnType::VarBinary,
+                    "INET6_ATON" | "UNHEX" => MysqlColumnType::VarBinary,
                     "INET6_NTOA" => MysqlColumnType::VarChar,
                     "INET_NTOA" => MysqlColumnType::VarChar,
                     "TO_BASE64" => {

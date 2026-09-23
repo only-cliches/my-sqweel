@@ -512,7 +512,19 @@ impl EngineSession {
         let temporary = RawEngine::new(self.shared.cfg.clone());
         let mut hidden = BTreeSet::new();
         if let Some(previous) = self.temporary_tables.get(&self.database) {
-            hidden.extend(previous.schemas.iter().map(|table| table.key().clone()));
+            for table in &previous.schemas {
+                if raw
+                    .schemas
+                    .get(table.key())
+                    .is_some_and(|schema| !schema.temporary)
+                {
+                    // CREATE OR REPLACE TABLE creates a permanent table behind
+                    // the session's existing temporary table of the same name.
+                    temporary.copy_table_from(previous, table.key());
+                } else {
+                    hidden.insert(table.key().clone());
+                }
+            }
         }
         for table in &raw.schemas {
             if table.temporary {

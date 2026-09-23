@@ -1193,7 +1193,16 @@ fn write_row<W: io::Read + io::Write>(
                 })
                 .map(|value| value as u8)
                 .collect::<Vec<_>>();
-            rw.write_col(bytes.as_slice())?;
+            if definition.colflags.contains(ColumnFlags::BINARY_FLAG) {
+                rw.write_col(bytes.as_slice())?;
+            } else {
+                // Character columns can store latin1 binary literals, but the
+                // result is text; BLOB/BINARY values must retain their bytes.
+                let text = String::from_utf8(bytes).unwrap_or_else(|error| {
+                    error.into_bytes().into_iter().map(char::from).collect()
+                });
+                rw.write_col(text)?;
+            }
             continue;
         }
         match value {

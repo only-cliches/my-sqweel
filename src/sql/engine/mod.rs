@@ -432,6 +432,9 @@ impl ColumnMetadata {
             }
             Some(Value::Number(_)) => MysqlColumnType::Double,
             Some(Value::Array(_) | Value::Object(_)) => MysqlColumnType::Json,
+            Some(Value::String(value)) if value.starts_with(MYSQL_BINARY_SENTINEL) => {
+                MysqlColumnType::VarBinary
+            }
             Some(Value::String(_)) => MysqlColumnType::VarChar,
         };
         Self {
@@ -996,8 +999,6 @@ impl RawEngine {
             _ => return Err(anyhow!("CREATE OR REPLACE TABLE requires a SELECT query")),
         };
         self.replace_table_from_result(&table, result)?;
-        self.user_variables
-            .insert("__mtr_temp_table".to_string(), Value::Bool(true));
         Ok(Some(QueryResult::default()))
     }
 
@@ -1995,12 +1996,6 @@ impl RawEngine {
         }
         if upper.starts_with("ALTER TABLE T4 ADD UNIQUE INDEX (B(1))") {
             return Ok(Some(QueryResult::default()));
-        }
-        if upper.starts_with("ALTER TABLE")
-            && (upper.contains("DISCARD TABLESPACE") || upper.contains("IMPORT TABLESPACE"))
-            && self.user_variables.contains_key("__mtr_temp_table")
-        {
-            return Err(anyhow!("cannot discard temporary table"));
         }
         if upper.starts_with("ALTER TABLE")
             && (upper.contains("DISCARD TABLESPACE") || upper.contains("IMPORT TABLESPACE"))

@@ -223,6 +223,61 @@ fn wire_system_variable_projection_respects_where() {
 }
 
 #[test]
+fn binary_literals_remain_bytes_and_character_columns_return_text() {
+    use mysql::prelude::Queryable;
+    with_wire(|conn| {
+        conn.query_drop("CREATE TABLE latin_text (a VARCHAR(200) CHARACTER SET latin1)")
+            .unwrap();
+        conn.query_drop("INSERT INTO latin_text VALUES (UNHEX('22CA22'))")
+            .unwrap();
+        let text: Option<(String, String)> = conn
+            .query_first("SELECT a, HEX(a) FROM latin_text")
+            .unwrap();
+        assert_eq!(text, Some(("\"Ê\"".into(), "22CA22".into())));
+        let text: Option<String> = conn
+            .exec_first(
+                "SELECT a FROM latin_text WHERE a IS NOT NULL AND ? = 1",
+                (1,),
+            )
+            .unwrap();
+        assert_eq!(text.as_deref(), Some("\"Ê\""));
+        let bytes: Option<Vec<u8>> = conn.query_first("SELECT UNHEX('22CA22')").unwrap();
+        assert_eq!(bytes, Some(vec![0x22, 0xCA, 0x22]));
+        let bytes: Option<Vec<u8>> = conn
+            .exec_first("SELECT ?", (vec![0_u8, 128, 255],))
+            .unwrap();
+        assert_eq!(bytes, Some(vec![0, 128, 255]));
+    });
+}
+
+#[test]
+fn create_or_replace_preserves_a_shadowing_temporary_table() {
+    let engine = Engine::default();
+    let mut session = engine.session();
+    session.execute_sql("CREATE TEMPORARY TABLE t (i INT); CREATE OR REPLACE TABLE t AS SELECT * FROM t; DROP TEMPORARY TABLE t; DROP TABLE t").unwrap();
+    engine
+        .execute_sql("CREATE TABLE t (i INT); INSERT INTO t VALUES (1)")
+        .unwrap();
+    session.execute_sql("CREATE TEMPORARY TABLE t (i INT); INSERT INTO t VALUES (7); CREATE OR REPLACE TABLE t AS SELECT i + 1 AS i FROM t").unwrap();
+    assert_eq!(
+        session.execute_sql("SELECT i FROM t").unwrap()[0].rows[0]["i"],
+        json!(7)
+    );
+    assert_eq!(
+        engine.execute_sql("SELECT i FROM t").unwrap()[0].rows[0]["i"],
+        json!(8)
+    );
+    assert!(!engine.snapshot().schemas["t"].temporary);
+    session.execute_sql("DROP TEMPORARY TABLE t").unwrap();
+    assert_eq!(
+        session.execute_sql("SELECT i FROM t").unwrap()[0].rows[0]["i"],
+        json!(8)
+    );
+    session.execute_sql("DROP TABLE t").unwrap();
+    assert!(engine.execute_sql("SELECT * FROM t").is_err());
+}
+
+#[test]
 fn temporary_tables_shadow_permanent_tables_and_follow_transactions() {
     let engine = Engine::default();
     engine
