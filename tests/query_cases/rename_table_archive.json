@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "rename_table_archive",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "happypeter/haoduoshipin",
+      "commit": "3d9155a7c6c082e29c50b11bf15c148e68276fcf",
+      "path": "39.md",
+      "url": "https://github.com/happypeter/haoduoshipin/blob/3d9155a7c6c082e29c50b11bf15c148e68276fcf/39.md",
+      "sha256": "912620d4ab6da7aefda29068d0633ab7e041cd61997e4bd7cd60e8ac371e64be",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "39.md:54-58",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL DDL sequence renames a table with RENAME TABLE ... TO ... after creating and altering tables.",
+      "mysql_mariadb_translation": "Reauthored as an archive-table migration that renames a populated dispatch table and then verifies preserved rows under the new name; source names, columns, values, and tutorial context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["rename-table", "ddl-final-state", "row-preservation", "deterministic-order"],
+  "fixture_notes": "A populated dispatch queue is renamed after insertion; the final ordered read verifies the table identity changed without losing rows or values.",
+  "determinism_notes": "Table name, row IDs, values, and ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE dispatch_queue (dispatch_id INT PRIMARY KEY, route_code VARCHAR(16) NOT NULL, payload VARCHAR(64) NOT NULL)",
+    "INSERT INTO dispatch_queue VALUES (301, 'NORTH', 'crate-7'), (302, 'SOUTH', 'crate-9')"
+  ],
+  "steps": [
+    {
+      "sql": "RENAME TABLE dispatch_queue TO dispatch_archive",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT dispatch_id, route_code, payload FROM dispatch_archive ORDER BY dispatch_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT table_name FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name IN ('dispatch_queue', 'dispatch_archive') ORDER BY table_name",
+      "ordered": true
+    }
+  ]
+}
