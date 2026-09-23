@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "id": "update_scalar_derived_self_reference",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "dml/update/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/dml/update/mysql.sql",
+      "sha256": "e6a13493e1863b0278c167f5e5869d46a383a2e47a2cb9fc0a840a813dbc43e0",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "dml/update/mysql.sql:49-53",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL UPDATE fills NULL values from a scalar subquery over the same table, wrapping the aggregate source in a derived table to avoid the target-table subquery restriction.",
+      "mysql_mariadb_translation": "Reauthored as a sprint-task priority repair. A derived aggregate computes each team's maximum known priority, and one UPDATE assigns that value only to NULL priorities on the same table; the task schema, values, labels, and repair purpose are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": ["update", "scalar-subquery", "derived-table", "same-table-read", "grouped-aggregate", "null-guard", "deterministic-order"],
+  "fixture_notes": "Tasks 102 and 104 have NULL priorities and receive their team's maximum known priority; existing priorities remain unchanged. The derived-table wrapper is required because the aggregate reads the table being updated.",
+  "determinism_notes": "Team IDs and task IDs are fixed, MAX ignores the NULL rows, and all observations use task_id ordering with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE sprint_tasks (task_id INT PRIMARY KEY, team_id INT NOT NULL, task_name VARCHAR(32) NOT NULL, priority INT NULL)",
+    "INSERT INTO sprint_tasks VALUES (101, 7, 'Design', 2), (102, 7, 'Build', NULL), (103, 7, 'Verify', 4), (104, 8, 'Deploy', NULL), (105, 8, 'Monitor', 6)"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE sprint_tasks SET priority = (SELECT team_priority FROM (SELECT team_id, MAX(priority) AS team_priority FROM sprint_tasks GROUP BY team_id) AS team_priorities WHERE team_priorities.team_id = sprint_tasks.team_id) WHERE priority IS NULL",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT task_id, team_id, task_name, priority FROM sprint_tasks ORDER BY task_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT COUNT(*) AS repaired_task_count FROM sprint_tasks WHERE priority IS NOT NULL AND task_id IN (102, 104)",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT COUNT(*) AS remaining_null_priority_count FROM sprint_tasks WHERE priority IS NULL",
+      "ordered": true
+    }
+  ]
+}
