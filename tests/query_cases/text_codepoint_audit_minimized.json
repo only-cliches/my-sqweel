@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "id": "text_codepoint_audit_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "antlr/grammars-v4",
+      "commit": "7e08234262d2a7c58557d74f2cb8ce90c72d356f",
+      "path": "sql/postgresql/examples/builtin_functions_string.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/7e08234262d2a7c58557d74f2cb8ce90c72d356f/sql/postgresql/examples/builtin_functions_string.sql",
+      "sha256": "1eb21d76bc4f2b1d9567f536c34729f771914b83516b64c39d30152ceba8d597",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "sql/postgresql/examples/builtin_functions_string.sql:17",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A scalar ASCII expression returns the first character's byte value from a text literal.",
+      "mysql_mariadb_translation": "Reduced to independently authored MariaDB ASCII and ORD projections over one fixed multibyte token, isolating first-byte versus leading-character-code behavior and integer wire metadata from table setup and length projections."
+    },
+    "independently_authored": true,
+    "minimized_from": "text_codepoint_audit"
+  },
+  "features": [
+    "ascii",
+    "ord",
+    "multibyte-text",
+    "metadata-regression"
+  ],
+  "fixture_notes": "The fixed éclair literal begins with UTF-8 bytes C3 A9, so ASCII returns 195 while ORD returns 50089; both result columns must retain MariaDB's signed integer metadata.",
+  "determinism_notes": "The scalar literal and expressions are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT ASCII('éclair') AS first_byte, ORD('éclair') AS leading_code",
+      "ordered": true
+    }
+  ]
+}

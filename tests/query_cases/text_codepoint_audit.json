@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "id": "text_codepoint_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "antlr/grammars-v4",
+      "commit": "7e08234262d2a7c58557d74f2cb8ce90c72d356f",
+      "path": "sql/postgresql/examples/builtin_functions_string.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/7e08234262d2a7c58557d74f2cb8ce90c72d356f/sql/postgresql/examples/builtin_functions_string.sql",
+      "sha256": "1eb21d76bc4f2b1d9567f536c34729f771914b83516b64c39d30152ceba8d597",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "sql/postgresql/examples/builtin_functions_string.sql:17",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A PostgreSQL string-function example projects ASCII from a fixed text literal to expose the first character's byte value.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored MariaDB text-code audit. ASCII and ORD expose the first UTF-8 byte and leading multibyte code value, HEX and length functions expose the encoded representation, and fixed empty or NULL tokens exercise boundary propagation. The source literals, schema, rows, and application purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "ascii",
+    "ord",
+    "utf8mb4",
+    "hex-encoding",
+    "character-byte-lengths",
+    "null-propagation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Token 1 is ASCII text, token 2 begins with a multibyte accented character, token 3 is empty, and token 4 is SQL NULL. ASCII and ORD distinguish first-byte and leading-code behavior while HEX, CHAR_LENGTH, and OCTET_LENGTH expose representation boundaries.",
+  "determinism_notes": "All tokens and output ordering are fixed; the table explicitly uses utf8mb4, with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE text_code_samples (sample_id INT PRIMARY KEY, token VARCHAR(32) CHARACTER SET utf8mb4 NULL)",
+    "INSERT INTO text_code_samples (sample_id, token) VALUES (1, 'Alpha'), (2, 'éclair'), (3, ''), (4, NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT sample_id, token, ASCII(token) AS first_byte, ORD(token) AS leading_code, HEX(token) AS token_hex, CHAR_LENGTH(token) AS character_length, OCTET_LENGTH(token) AS byte_length FROM text_code_samples ORDER BY sample_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT sample_id, token FROM text_code_samples ORDER BY sample_id",
+      "ordered": true
+    }
+  ]
+}

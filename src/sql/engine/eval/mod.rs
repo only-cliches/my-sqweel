@@ -4061,7 +4061,8 @@ pub(super) fn eval_function_text(
                 )))
             }
         }
-        "ASCII" | "ORD" => eval_ascii_ord(args.first(), data, last_insert_id),
+        "ASCII" => eval_ascii_ord(args.first(), data, last_insert_id, false),
+        "ORD" => eval_ascii_ord(args.first(), data, last_insert_id, true),
         "STRCMP" => {
             let left = args
                 .first()

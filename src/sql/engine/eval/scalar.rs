@@ -436,15 +436,29 @@ pub(super) fn eval_ascii_ord(
     arg: Option<&String>,
     data: &Map<String, Value>,
     last_insert_id: u64,
+    ord: bool,
 ) -> Result<Value> {
     let value = eval_arg(arg, data, last_insert_id)?;
     if value == Value::Null {
         return Ok(Value::Null);
     }
-    let s = json_scalar_to_string(&value);
-    Ok(Value::Number(Number::from(
-        s.chars().next().map(u32::from).unwrap_or(0),
-    )))
+    let bytes =
+        binary_value_bytes(&value).unwrap_or_else(|| json_scalar_to_string(&value).into_bytes());
+    if !ord {
+        return Ok(Value::Number(Number::from(
+            bytes.first().copied().unwrap_or(0),
+        )));
+    }
+    let width = std::str::from_utf8(&bytes)
+        .ok()
+        .and_then(|text| text.chars().next().map(char::len_utf8))
+        .unwrap_or(1)
+        .min(4);
+    let code = bytes
+        .iter()
+        .take(width)
+        .fold(0_u64, |code, byte| (code << 8) | u64::from(*byte));
+    Ok(Value::Number(Number::from(code)))
 }
 
 pub(super) fn eval_left_right(
