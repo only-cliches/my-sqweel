@@ -309,6 +309,7 @@ All notable changes to MySqweel will be documented in this file.
 - Added GitHub-attributed `ISNULL` coverage based on [AlternC/AlternC](https://github.com/AlternC/AlternC/blob/b21ce3d2638d825d396be218a867baf4ac7d79ca/install/mysql.sql#L631-L634), with NULL/present/empty-value classification, integer predicate metadata, fallback concatenation, and deterministic ordering; fixed `ISNULL` evaluation and MariaDB-compatible integer metadata, with repeated MariaDB 10.11.7 and MySqweel runs now matching.
 - Added the minimized GitHub-attributed `ISNULL` regression; MariaDB 10.11.7 and MySqweel now agree on NULL predicate results across repeated fresh differential runs.
 - Added GitHub-attributed `RENAME TABLE` coverage based on [happypeter/haoduoshipin](https://github.com/happypeter/haoduoshipin/blob/3d9155a7c6c082e29c50b11bf15c148e68276fcf/39.md#L54-L58), with a populated dispatch-table archive migration, row preservation, information-schema final-state verification, and deterministic ordering; repeated MariaDB 10.11.7 and MySqweel runs matched without a source fix.
+- Added GitHub-attributed multi-target `DELETE` coverage based on [antlr/grammars-v4](https://github.com/antlr/grammars-v4/blob/7e08234262a7c58557d74f2cb8ce90c72d356f/sql/mariadb/examples/fast/dml_delete.sql#L12-L16), deleting matching shipment and flag rows through one joined statement and verifying retained rows plus deletion counts; repeated MariaDB 10.11.7 and MySqweel runs matched without a source fix.
 
 ## 0.4.4 Sep 9, 2026
 

@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "id": "multi_target_delete_archive",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "antlr/grammars-v4",
+      "commit": "7e08234262a7c58557d74f2cb8ce90c72d356f",
+      "path": "sql/mariadb/examples/fast/dml_delete.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/7e08234262a7c58557d74f2cb8ce90c72d356f/sql/mariadb/examples/fast/dml_delete.sql",
+      "sha256": "62329095424f65c4213801a8cc24b7525a679590e941b67624790f4efe462ee8",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/mariadb/examples/fast/dml_delete.sql:12-16",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "MariaDB supports multi-target DELETE statements that name more than one joined table as deletion targets.",
+      "mysql_mariadb_translation": "Reauthored as an archive cleanup that removes a closed shipment row and its matching audit flag in one joined DELETE; the grammar examples, table names, identifiers, predicates, and values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["multi-target-delete", "inner-join", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "Only the closed shipment and its matching flag are deletion targets; an open shipment and an unrelated flag remain for the final-state checks.",
+  "determinism_notes": "All identifiers, states, and values are fixed; final reads use primary-key ordering and no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE shipment_archive (shipment_id INT PRIMARY KEY, shipment_state VARCHAR(16) NOT NULL, tracking_code VARCHAR(24) NOT NULL)",
+    "CREATE TABLE shipment_flags (flag_id INT PRIMARY KEY, shipment_id INT NOT NULL, flag_code VARCHAR(16) NOT NULL)",
+    "INSERT INTO shipment_archive VALUES (71, 'closed', 'TRK-71'), (72, 'open', 'TRK-72')",
+    "INSERT INTO shipment_flags VALUES (801, 71, 'PURGE'), (802, 72, 'RETAIN'), (803, 999, 'ORPHAN')"
+  ],
+  "steps": [
+    {
+      "sql": "DELETE shipment_archive, shipment_flags FROM shipment_archive INNER JOIN shipment_flags ON shipment_flags.shipment_id = shipment_archive.shipment_id WHERE shipment_archive.shipment_state = 'closed'",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT shipment_id, shipment_state, tracking_code FROM shipment_archive ORDER BY shipment_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT flag_id, shipment_id, flag_code FROM shipment_flags ORDER BY flag_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT COUNT(*) AS remaining_closed_shipments FROM shipment_archive WHERE shipment_state = 'closed'",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT COUNT(*) AS remaining_purge_flags FROM shipment_flags WHERE flag_code = 'PURGE'",
+      "ordered": true
+    }
+  ]
+}
