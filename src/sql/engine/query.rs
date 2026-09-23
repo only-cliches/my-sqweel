@@ -1539,6 +1539,7 @@ impl RawEngine {
                         metadata.unsigned = true;
                         MysqlColumnType::BigInt
                     }
+                    "GET_LOCK" | "RELEASE_LOCK" => MysqlColumnType::Integer,
                     "CONCAT" | "CONCAT_WS" => {
                         let argument_types = function_arguments(function)
                             .unwrap_or_default()

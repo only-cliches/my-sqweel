@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "advisory_lock_functions_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "advisory_lock_functions",
+    "source": {
+      "kind": "github",
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/692.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/692.sql",
+      "sha256": "bee6a6b6d28bcaaed06efbdec238f9b0633a73311ac00c9f1d8d8a47f9a541be",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/docker/fuzz_root/mysql_initlib/692.sql:5-12",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL session acquires a named advisory lock with GET_LOCK and releases it with RELEASE_LOCK.",
+      "mysql_mariadb_translation": "Reduced to one independently authored GET_LOCK scalar result so its MariaDB integer metadata is isolated from the release operation and source table work."
+    },
+    "independently_authored": true,
+    "minimized_from": "advisory_lock_functions"
+  },
+  "features": ["get-lock", "named-advisory-lock", "scalar-function", "minimized-regression"],
+  "fixture_notes": "The fixed lock name is newly acquired with a zero-second timeout and returns numeric status 1 before the connection releases it during teardown.",
+  "determinism_notes": "One fixed lock name and timeout are used; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT GET_LOCK('mysqweel_coverage_advisory_min', 0) AS acquired",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}

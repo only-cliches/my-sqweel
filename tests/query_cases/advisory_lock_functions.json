@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "advisory_lock_functions",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/692.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/692.sql",
+      "sha256": "bee6a6b6d28bcaaed06efbdec238f9b0633a73311ac00c9f1d8d8a47f9a541be",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/docker/fuzz_root/mysql_initlib/692.sql:5-12",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL session acquires a named advisory lock with GET_LOCK and releases it with RELEASE_LOCK while executing ordinary table work between the lock calls.",
+      "mysql_mariadb_translation": "Reauthored as an independent scalar advisory-lock probe. The session acquires one fixed named lock without waiting, confirms the acquired and released status through explicit projections, and leaves no lock held; the source tables, repeated lock attempts, UPDATE side effects, and test lock name are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["get-lock", "release-lock", "named-advisory-lock", "scalar-functions", "deterministic-results"],
+  "fixture_notes": "GET_LOCK must return 1 for the newly acquired name and RELEASE_LOCK must return 1 for the lock owned by the same session. The fixed zero-second timeout avoids waiting or concurrent scheduling.",
+  "determinism_notes": "The lock name and timeout are fixed; acquisition and release occur serially on one connection with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT GET_LOCK('mysqweel_coverage_advisory', 0) AS acquired",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT RELEASE_LOCK('mysqweel_coverage_advisory') AS released",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}

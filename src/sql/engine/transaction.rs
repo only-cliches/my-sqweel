@@ -730,6 +730,11 @@ impl EngineSession {
         };
         Ok(Some(QueryResult {
             columns: vec![column.clone()],
+            column_metadata: vec![ColumnMetadata {
+                name: column.clone(),
+                column_type: MysqlColumnType::Integer,
+                ..ColumnMetadata::default()
+            }],
             rows: vec![Map::from_iter([(column, value)])],
             ..QueryResult::default()
         }))
