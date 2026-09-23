@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "id": "cte_upsert_last_id",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "langgraph4j/langgraph4j",
+      "commit": "5a8ec75e5d52e503512ad243645f3f5d9c876fa3",
+      "path": "langgraph4j-mysql-saver/src/main/resources/db/v2.0__commands.sql",
+      "url": "https://github.com/langgraph4j/langgraph4j/blob/5a8ec75e5d52e503512ad243645f3f5d9c876fa3/langgraph4j-mysql-saver/src/main/resources/db/v2.0__commands.sql",
+      "sha256": "86d31329ce7ec3ca39a40c921b691cb30bf22dc345511a91a0d7d76e78decb6f",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "v2.0__commands.sql: -- sqlSelectCheckpoints through -- sqlUpsertThread_last_insert_id",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A named CTE feeds a MySQL INSERT ... SELECT workflow, while an ON DUPLICATE KEY UPDATE clause assigns LAST_INSERT_ID(existing_key) so a following same-connection SELECT retrieves the conflicting row identifier.",
+      "mysql_mariadb_translation": "Reauthored as a workflow-run registry. One CTE-backed upsert refreshes an existing north run and sets the connection-local ID, a second CTE-backed upsert inserts a new south run, and a same-connection read verifies the existing key before the ordered final-state check. The source tables, identifiers, fields, values, and checkpoint purpose are not copied.",
+      "independently_authored": true
+    }
+  },
+  "features": [
+    "common-table-expression",
+    "insert-select",
+    "on-duplicate-key-update",
+    "last-insert-id-expression",
+    "connection-state",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The seeded north run keeps primary key 40 while its mutable state is refreshed; the following same-connection read must return 40. The south run is inserted by a second CTE-backed upsert and receives the next deterministic key.",
+  "determinism_notes": "The registry starts with fixed primary key 40, all CTE literals are fixed, statements run sequentially on one connection, and the final rows are ordered by the unique run ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE workflow_runs (run_id INT AUTO_INCREMENT PRIMARY KEY, run_key VARCHAR(32) NOT NULL UNIQUE, run_state VARCHAR(16) NOT NULL, attempt_count INT NOT NULL, payload VARCHAR(64) NOT NULL)",
+    "INSERT INTO workflow_runs (run_id, run_key, run_state, attempt_count, payload) VALUES (40, 'north', 'queued', 2, 'checkpoint-old')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO workflow_runs (run_key, run_state, attempt_count, payload) WITH incoming(run_key, run_state, attempt_count, payload) AS (SELECT 'north', 'running', 3, 'checkpoint-north') SELECT run_key, run_state, attempt_count, payload FROM incoming ON DUPLICATE KEY UPDATE run_id = LAST_INSERT_ID(run_id), run_state = VALUES(run_state), attempt_count = VALUES(attempt_count), payload = VALUES(payload)",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT LAST_INSERT_ID() AS refreshed_run_id",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO workflow_runs (run_key, run_state, attempt_count, payload) WITH incoming(run_key, run_state, attempt_count, payload) AS (SELECT 'south', 'queued', 1, 'checkpoint-south') SELECT run_key, run_state, attempt_count, payload FROM incoming ON DUPLICATE KEY UPDATE run_id = LAST_INSERT_ID(run_id), run_state = VALUES(run_state), attempt_count = VALUES(attempt_count), payload = VALUES(payload)",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT run_id, run_key, run_state, attempt_count, payload FROM workflow_runs ORDER BY run_id",
+      "ordered": true
+    }
+  ]
+}
