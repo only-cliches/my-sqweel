@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "generated_binary_prefix_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "klboke/kkRepo",
+      "commit": "ed2dac154fa8a95fd381cbc1cbb6f1f9176e0070",
+      "path": "persistence-mysql/src/main/resources/db/migration/mysql/V40__cleanup_scan_indexes.sql",
+      "url": "https://github.com/klboke/kkRepo/blob/ed2dac154fa8a95fd381cbc1cbb6f1f9176e0070/persistence-mysql/src/main/resources/db/migration/mysql/V40__cleanup_scan_indexes.sql",
+      "sha256": "5dbc6513fa2f6807633446d8af2128fc21e568a572cdb671530e544b50287133",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "persistence-mysql/src/main/resources/db/migration/mysql/V40__cleanup_scan_indexes.sql:5-6",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL migration adds a VIRTUAL generated VARBINARY prefix column using LEFT, CAST(... AS BINARY), and COALESCE.",
+      "mysql_mariadb_translation": "Minimized independently authored reproduction over one nullable namespace row. It retains the ALTER TABLE generated-column definition and one observable generated-byte projection while removing the source migration guard, indexes, extra columns, and extra rows."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "alter-add-generated-column",
+    "virtual-generated-column",
+    "binary-cast",
+    "left",
+    "coalesce"
+  ],
+  "fixture_notes": "One ordinary namespace value is enough to expose whether the generated binary prefix can be added and read.",
+  "determinism_notes": "One fixed row and ordered scalar projection; no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE label_registry (label_id INT PRIMARY KEY, namespace VARCHAR(64) CHARACTER SET utf8mb4 NULL)",
+    "INSERT INTO label_registry (label_id, namespace) VALUES (1, 'dept/alpha')"
+  ],
+  "steps": [
+    {
+      "sql": "ALTER TABLE label_registry ADD COLUMN namespace_prefix VARBINARY(12) GENERATED ALWAYS AS (LEFT(CAST(COALESCE(namespace, '') AS BINARY), 12)) VIRTUAL",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT HEX(namespace_prefix) AS prefix_hex FROM label_registry ORDER BY label_id",
+      "ordered": true
+    }
+  ]
+}

@@ -1830,6 +1830,9 @@ impl RawEngine {
         if let Some(result) = self.execute_alter_add_column_if_not_exists_compat(trimmed)? {
             return Ok(Some(result));
         }
+        if let Some(result) = self.execute_alter_add_generated_column_compat(trimmed)? {
+            return Ok(Some(result));
+        }
 
         self.capture_index_comment(trimmed);
         if upper.starts_with("SET STATEMENT ") {
@@ -4131,6 +4134,63 @@ impl RawEngine {
             ..QueryResult::default()
         }
     }
+
+    fn execute_alter_add_generated_column_compat(&self, sql: &str) -> Result<Option<QueryResult>> {
+        let upper = sql.to_ascii_uppercase();
+        if !upper.starts_with("ALTER TABLE ") {
+            return Ok(None);
+        }
+        let remainder = &sql["ALTER TABLE ".len()..];
+        let remainder_upper = &upper["ALTER TABLE ".len()..];
+        let Some(add_at) = find_top_level_keyword(remainder_upper, "ADD COLUMN") else {
+            return Ok(None);
+        };
+        let table_text = remainder[..add_at].trim();
+        let definition = remainder[add_at + "ADD COLUMN".len()..].trim();
+        if table_text.is_empty()
+            || definition.is_empty()
+            || !definition.to_ascii_uppercase().contains("GENERATED")
+        {
+            return Ok(None);
+        }
+
+        let create_sql = format!("CREATE TABLE __sqw_generated_column_probe ({definition})");
+        let mut create_statements = super::parse(&create_sql)?;
+        let Some(Statement::CreateTable(create)) = create_statements.pop() else {
+            return Ok(None);
+        };
+        let Some(column_def) = create.columns.into_iter().next() else {
+            return Ok(None);
+        };
+
+        let alter_sql =
+            format!("ALTER TABLE {table_text} ADD COLUMN __sqw_generated_column_probe INT");
+        let mut alter_statements = super::parse(&alter_sql)?;
+        let Some(Statement::AlterTable {
+            name,
+            mut operations,
+            ..
+        }) = alter_statements.pop()
+        else {
+            return Ok(None);
+        };
+        if !alter_statements.is_empty() {
+            return Ok(None);
+        }
+        let Some(operation) = operations.first_mut() else {
+            return Ok(None);
+        };
+        let sqlparser::ast::AlterTableOperation::AddColumn {
+            column_def: parsed_column,
+            ..
+        } = operation
+        else {
+            return Ok(None);
+        };
+        *parsed_column = column_def;
+        Ok(Some(self.alter_table(name, operations, false)?))
+    }
+
     fn execute_alter_add_column_if_not_exists_compat(
         &self,
         sql: &str,
