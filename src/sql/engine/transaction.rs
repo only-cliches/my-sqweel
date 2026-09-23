@@ -57,6 +57,7 @@ pub struct EngineSession {
     shared: Arc<Coordinator>,
     database: String,
     identity: Identity,
+    client_host: String,
     transaction: Option<(Option<WriterLease>, Committed)>,
     transaction_read: bool,
     transaction_read_only: bool,
@@ -68,6 +69,7 @@ pub struct EngineSession {
     variables: HashMap<String, Value>,
     prepared: HashMap<String, (String, String)>,
     session_id: uuid::Uuid,
+    temporary_tables: BTreeMap<String, Arc<RawEngine>>,
 }
 
 impl Default for Engine {
@@ -116,13 +118,7 @@ impl Engine {
             Some(state) => state,
             None => Committed {
                 catalog: Catalog::default(),
-                databases: BTreeMap::from([(
-                    "app".into(),
-                    Arc::new(RawEngine::with_storage(
-                        cfg.clone(),
-                        Arc::new(PrivateStorage),
-                    )?),
-                )]),
+                databases: BTreeMap::from([("app".into(), Arc::new(RawEngine::new(cfg.clone())))]),
             },
         };
         let shared = Arc::new(Coordinator {
@@ -220,8 +216,7 @@ impl Engine {
                     snapshot.version
                 ));
             }
-            let mut raw =
-                RawEngine::with_storage(self.shared.cfg.clone(), Arc::new(PrivateStorage))?;
+            let mut raw = RawEngine::new(self.shared.cfg.clone());
             raw.database_name = name.clone();
             raw.apply_snapshot(snapshot);
             databases.insert(name, Arc::new(raw));
@@ -391,6 +386,7 @@ impl EngineSession {
             shared,
             database: "app".into(),
             identity,
+            client_host: "localhost".into(),
             transaction: None,
             transaction_read: false,
             transaction_read_only: false,
@@ -402,6 +398,7 @@ impl EngineSession {
             variables: HashMap::new(),
             prepared: HashMap::new(),
             session_id: uuid::Uuid::new_v4(),
+            temporary_tables: BTreeMap::new(),
         }
     }
     pub(crate) fn system_variable(&self, name: &str) -> Option<Value> {
@@ -468,6 +465,7 @@ impl EngineSession {
         self.session_state = None;
         self.variables.clear();
         self.prepared.clear();
+        self.temporary_tables.clear();
         self.autocommit = true;
         self.identity = Identity::unauthenticated();
     }
@@ -484,6 +482,85 @@ impl EngineSession {
         self.database = database.into();
         Ok(())
     }
+    pub(crate) fn set_client_host(&mut self, host: String) {
+        self.client_host = host;
+    }
+
+    fn current_state(&self) -> Result<Committed> {
+        let mut state = self.shared.committed.lock().clone();
+        if let Some(temporary) = self.temporary_tables.get(&self.database) {
+            let raw = state
+                .databases
+                .get(&self.database)
+                .ok_or_else(|| anyhow!("Unknown database: {}", self.database))?
+                .fork()?;
+            for table in &temporary.schemas {
+                raw.copy_table_from(temporary, table.key());
+            }
+            state.databases.insert(self.database.clone(), Arc::new(raw));
+        }
+        Ok(state)
+    }
+
+    fn publish_state(&mut self, mut state: Committed) -> Result<()> {
+        let raw = &state.databases[&self.database];
+        if !self.temporary_tables.contains_key(&self.database)
+            && !raw.schemas.iter().any(|table| table.temporary)
+        {
+            return self.shared.publish_database(&self.database, state);
+        }
+        let temporary = RawEngine::new(self.shared.cfg.clone());
+        let mut hidden = BTreeSet::new();
+        if let Some(previous) = self.temporary_tables.get(&self.database) {
+            hidden.extend(previous.schemas.iter().map(|table| table.key().clone()));
+        }
+        for table in &raw.schemas {
+            if table.temporary {
+                hidden.insert(table.key().clone());
+                temporary.copy_table_from(raw, table.key());
+            }
+        }
+        if !hidden.is_empty() {
+            let permanent = raw.fork()?;
+            let committed = self.shared.committed.lock().databases[&self.database].clone();
+            for table in hidden {
+                permanent.copy_table_from(&committed, &table);
+            }
+            state
+                .databases
+                .insert(self.database.clone(), Arc::new(permanent));
+        }
+        self.shared.publish_database(&self.database, state)?;
+        if temporary.schemas.is_empty() {
+            self.temporary_tables.remove(&self.database);
+        } else {
+            self.temporary_tables
+                .insert(self.database.clone(), Arc::new(temporary));
+        }
+        Ok(())
+    }
+
+    fn configure_executor(&self, raw: &mut RawEngine) {
+        if let Some(session) = &self.session_state {
+            raw.copy_session_from(session);
+        } else {
+            raw.clear_session();
+        }
+        raw.system_variables = self.variables.clone();
+        for name in [
+            "autocommit",
+            "time_zone",
+            "transaction_isolation",
+            "tx_isolation",
+        ] {
+            if let Some(value) = self.system_variable(name) {
+                raw.system_variables.insert(name.into(), value);
+            }
+        }
+        raw.session_user = format!("{}@{}", self.identity.username, self.client_host);
+        raw.current_user = format!("{}@%", self.identity.username);
+    }
+
     pub(crate) fn prepare_sql_with_params_for_wire(
         &mut self,
         sql: &str,
@@ -500,8 +577,8 @@ impl EngineSession {
         let state = self
             .transaction
             .as_ref()
-            .map(|(_, state)| state.clone())
-            .unwrap_or_else(|| self.shared.committed.lock().clone());
+            .map(|(_, state)| Ok(state.clone()))
+            .unwrap_or_else(|| self.current_state())?;
         let mut raw = state
             .databases
             .get(&self.database)
@@ -514,11 +591,7 @@ impl EngineSession {
             .map(str::to_owned)
             .collect();
         raw.database_charsets = state.catalog.database_charsets().clone();
-        if let Some(session) = &self.session_state {
-            raw.copy_session_from(session);
-        } else {
-            raw.clear_session();
-        }
+        self.configure_executor(&mut raw);
         raw.execute_sql_internal(&sql, &sql, false, false)
     }
     pub fn is_in_transaction(&self) -> bool {
@@ -743,7 +816,7 @@ impl EngineSession {
     }
     fn begin(&mut self) -> Result<()> {
         self.commit()?;
-        let state = self.shared.committed.lock().clone();
+        let state = self.current_state()?;
         state
             .catalog
             .check_database(&self.identity, &self.database)?;
@@ -751,11 +824,12 @@ impl EngineSession {
         self.transaction_read = false;
         self.transaction_read_only = false;
         self.observed_columns.clear();
+        self.observed_tables = Some(BTreeSet::new());
         Ok(())
     }
     fn commit(&mut self) -> Result<()> {
         if let Some((Some(lease), state)) = self.transaction.take() {
-            self.shared.publish_database(&self.database, state)?;
+            self.publish_state(state)?;
             drop(lease);
         }
         self.transaction_read = false;
@@ -772,7 +846,7 @@ impl EngineSession {
     fn execute(&mut self, sql: &str, normalize: bool, emit: bool) -> Result<Vec<QueryResult>> {
         self.shared.check()?;
         let mut results = Vec::new();
-        for statement in split_sql_statements(sql) {
+        for statement in split_sql_statements(sql)? {
             let text = statement.trim();
             if text.is_empty() {
                 continue;
@@ -848,10 +922,7 @@ impl EngineSession {
                 match state.catalog.apply(&self.identity, command)? {
                     CatalogEffect::None => {}
                     CatalogEffect::CreateDatabase(name) => {
-                        let mut raw = RawEngine::with_storage(
-                            self.shared.cfg.clone(),
-                            Arc::new(PrivateStorage),
-                        )?;
+                        let mut raw = RawEngine::new(self.shared.cfg.clone());
                         raw.database_name = name.clone();
                         state.databases.insert(name, Arc::new(raw));
                     }
@@ -1181,8 +1252,9 @@ impl EngineSession {
                 None
             };
             if read && !session_only && !self.transaction_read {
+                let current = self.current_state()?;
                 if let Some((None, snapshot)) = &mut self.transaction {
-                    *snapshot = self.shared.committed.lock().clone();
+                    *snapshot = current;
                     for (_, saved) in &mut self.savepoints {
                         saved.databases.insert(
                             self.database.clone(),
@@ -1198,20 +1270,23 @@ impl EngineSession {
             let mut state = self
                 .transaction
                 .as_ref()
-                .map(|(_, state)| state.clone())
-                .unwrap_or_else(|| self.shared.committed.lock().clone());
+                .map(|(_, state)| Ok(state.clone()))
+                .unwrap_or_else(|| self.current_state())?;
             // A read-only snapshot must not block independent cancellation/lease
             // updates. Upgrade only before the first write, then serialize writers.
             // A changed snapshot cannot safely overwrite newer committed state.
+            let current = lease.as_ref().map(|_| self.current_state()).transpose()?;
             let lease = if let Some((transaction_lease, snapshot)) = &mut self.transaction {
                 if let Some(lease) = lease {
-                    let current = self.shared.committed.lock().clone();
+                    let current = current.expect("writer upgrade has current state");
                     let unchanged = snapshot
                         .databases
                         .get(&self.database)
                         .zip(current.databases.get(&self.database))
                         .is_some_and(|(before, after)| {
                             Arc::ptr_eq(before, after)
+                                || (self.temporary_tables.contains_key(&self.database)
+                                    && before.same_database_state(after))
                                 || self.observed_tables.as_ref().is_some_and(|tables| {
                                     tables.iter().all(|table| {
                                         before.same_table_state(
@@ -1249,7 +1324,7 @@ impl EngineSession {
             } else {
                 lease
             };
-            let normalized = self.authorize(text)?;
+            let mut normalized = self.authorize(text)?;
             let mut raw = state
                 .databases
                 .get(&self.database)
@@ -1262,11 +1337,34 @@ impl EngineSession {
                 .map(str::to_owned)
                 .collect();
             raw.database_charsets = state.catalog.database_charsets().clone();
-            if let Some(session) = &self.session_state {
-                raw.copy_session_from(session);
-            } else {
-                raw.clear_session();
+            // DROP TEMPORARY must never remove a permanent table of the same name.
+            if let Some(Statement::Drop {
+                temporary: true,
+                names,
+                if_exists,
+                ..
+            }) = ast
+            {
+                let mut targets = Vec::new();
+                for name in names {
+                    let table = object_name(name)?;
+                    if raw
+                        .schemas
+                        .get(&table)
+                        .is_some_and(|schema| schema.temporary)
+                    {
+                        targets.push(name.to_string());
+                    } else if !if_exists {
+                        return Err(anyhow!("unknown temporary table: {table}"));
+                    }
+                }
+                if targets.is_empty() {
+                    results.push(QueryResult::default());
+                    continue;
+                }
+                normalized = format!("DROP TABLE {}", targets.join(", "));
             }
+            self.configure_executor(&mut raw);
             let mut out = raw.execute_sql_internal(text, &normalized, normalize, emit)?;
             for result in &mut out {
                 preserve_select_result_headers(text, result);
@@ -1302,7 +1400,7 @@ impl EngineSession {
                 if let Some((_, pending)) = &mut self.transaction {
                     *pending = state;
                 } else {
-                    self.shared.publish_database(&self.database, state)?;
+                    self.publish_state(state)?;
                 }
             }
             drop(lease);
@@ -1422,6 +1520,58 @@ fn projected_read_columns(statement: Option<&Statement>) -> Option<BTreeSet<Stri
 }
 
 impl RawEngine {
+    fn copy_table_from(&self, source: &Self, table: &str) {
+        self.schemas.remove(table);
+        self.rows.remove(table);
+        self.indexes.remove(table);
+        self.clear_auto_inc(table);
+        let prefix = format!("{table}:");
+        self.index_comments
+            .retain(|key, _| !key.starts_with(&prefix));
+        if let Some(schema) = source.schemas.get(table) {
+            self.schemas.insert(table.into(), schema.clone());
+        }
+        if let Some(rows) = source.rows.get(table) {
+            self.rows.insert(table.into(), rows.clone());
+        }
+        if let Some(indexes) = source.indexes.get(table) {
+            self.indexes.insert(table.into(), indexes.clone());
+        }
+        for value in &source.auto_inc {
+            if value.key().starts_with(&prefix) {
+                self.auto_inc.insert(value.key().clone(), *value.value());
+            }
+        }
+        for value in &source.index_comments {
+            if value.key().starts_with(&prefix) {
+                self.index_comments
+                    .insert(value.key().clone(), value.value().clone());
+            }
+        }
+    }
+
+    fn same_database_state(&self, other: &Self) -> bool {
+        self.schemas.len() == other.schemas.len()
+            && self
+                .schemas
+                .iter()
+                .all(|table| self.same_table_state(other, table.key(), None))
+            && self.auto_inc.len() == other.auto_inc.len()
+            && self
+                .auto_inc
+                .iter()
+                .all(|value| other.auto_inc.get(value.key()).as_deref() == Some(value.value()))
+            && self.views.len() == other.views.len()
+            && self
+                .views
+                .iter()
+                .all(|value| other.views.get(value.key()).as_deref() == Some(value.value()))
+            && self.index_comments.len() == other.index_comments.len()
+            && self.index_comments.iter().all(|value| {
+                other.index_comments.get(value.key()).as_deref() == Some(value.value())
+            })
+    }
+
     fn same_table_state(
         &self,
         other: &Self,
@@ -1462,10 +1612,12 @@ impl RawEngine {
         // sharing only if large single-table write workloads justify it.
         let raw = Self {
             database_name: self.database_name.clone(),
+            system_variables: self.system_variables.clone(),
+            session_user: self.session_user.clone(),
+            current_user: self.current_user.clone(),
             visible_databases: self.visible_databases.clone(),
             database_charsets: self.database_charsets.clone(),
             cfg: self.cfg.clone(),
-            storage: Arc::new(PrivateStorage),
             schemas: self.schemas.clone(),
             rows: self.rows.clone(),
             auto_inc: self.auto_inc.clone(),
@@ -1525,39 +1677,6 @@ impl RawEngine {
             source.last_found_rows.load(AtomicOrdering::Relaxed),
             AtomicOrdering::Relaxed,
         );
-    }
-}
-
-// Private engines never publish intermediate row/index changes to Lux. The
-// coordinator publishes committed changes to Lux only after SQL succeeds.
-struct PrivateStorage;
-impl RedisStore for PrivateStorage {
-    fn is_persistent(&self) -> bool {
-        false
-    }
-    fn hset(&self, _: &str, _: &str, _: &str) -> Result<()> {
-        Ok(())
-    }
-    fn hdel(&self, _: &str, _: &str) -> Result<()> {
-        Ok(())
-    }
-    fn hgetall(&self, _: &str) -> Result<BTreeMap<String, String>> {
-        Ok(BTreeMap::new())
-    }
-    fn sadd(&self, _: &str, _: &str) -> Result<()> {
-        Ok(())
-    }
-    fn srem(&self, _: &str, _: &str) -> Result<()> {
-        Ok(())
-    }
-    fn smembers(&self, _: &str) -> Result<BTreeSet<String>> {
-        Ok(BTreeSet::new())
-    }
-    fn del(&self, _: &str) -> Result<()> {
-        Ok(())
-    }
-    fn keys(&self, _: &str) -> Result<Vec<String>> {
-        Ok(Vec::new())
     }
 }
 

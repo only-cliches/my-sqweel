@@ -387,8 +387,11 @@ impl WireServer {
     }
 
     fn spawn_session(&self, stream: std::net::TcpStream) {
-        let backend =
+        let mut backend =
             Backend::with_authentication(self.engine.clone(), self.authentication.clone());
+        if let Ok(peer) = stream.peer_addr() {
+            backend.session.set_client_host(peer.ip().to_string());
+        }
         std::thread::spawn(move || {
             if let Err(err) = stream.set_nonblocking(false) {
                 tracing::warn!(error = %err, "failed setting mysql session stream to blocking mode");
@@ -413,7 +416,6 @@ struct Backend {
     next_stmt_id: AtomicU32,
     statements: HashMap<u32, PreparedStatement>,
     last_insert_id: u64,
-    session_vars: HashMap<String, Value>,
     warnings: Vec<QueryWarning>,
 }
 
@@ -430,7 +432,6 @@ impl Backend {
             next_stmt_id: AtomicU32::new(1),
             statements: HashMap::new(),
             last_insert_id: 0,
-            session_vars: default_session_vars(),
             warnings: Vec::new(),
         }
     }
@@ -445,7 +446,12 @@ impl<W: io::Read + io::Write> MysqlShim<W> for Backend {
 
     fn on_prepare(&mut self, query: &str, info: StatementMetaWriter<'_, W>) -> io::Result<()> {
         let stmt_id = self.next_stmt_id.fetch_add(1, Ordering::Relaxed);
-        let param_count = count_query_params(query);
+        let param_count = match count_query_params(query) {
+            Ok(count) => count,
+            Err(error) => {
+                return info.error(ErrorKind::ER_PARSE_ERROR, error.to_string().as_bytes());
+            }
+        };
         self.statements.insert(
             stmt_id,
             PreparedStatement {
@@ -709,10 +715,6 @@ impl Backend {
         let parser_query =
             crate::sql::engine::rewrite_delete_returning_order_limit_for_parser(query);
         let results = self.session.execute_sql_for_wire(&parser_query)?;
-        let trimmed = query.trim().trim_end_matches(';').trim();
-        if trimmed.to_ascii_uppercase().starts_with("SET ") {
-            self.apply_set_statement(&trimmed[4..]);
-        }
         Ok(results)
     }
 
@@ -745,136 +747,10 @@ impl Backend {
         }
         let trimmed = query.trim().trim_end_matches(';').trim();
         let upper = trimmed.to_ascii_uppercase();
-        if upper.starts_with("SELECT ") {
-            if let Some(result) = self.select_session_values(trimmed) {
-                return Some(result);
-            }
-            if trimmed.contains("@@") {
-                return Some(system_variable_query_result(trimmed));
-            }
-        }
         if upper.starts_with("SHOW WARNINGS") {
             return Some(show_warnings_result(&self.warnings));
         }
         None
-    }
-
-    fn apply_set_statement(&mut self, assignments: &str) {
-        for assignment in split_sql_args_wire(assignments) {
-            let Some((name, value)) = assignment.split_once('=') else {
-                continue;
-            };
-            let name = normalize_session_var_name(name);
-            let parsed = parse_session_value(value.trim());
-            self.session_vars.insert(name, parsed);
-        }
-    }
-
-    fn select_session_values(&self, sql: &str) -> Option<QueryResult> {
-        let Ok(statements) = crate::sql::parse(sql) else {
-            return None;
-        };
-        let Some(sqlparser::ast::Statement::Query(query)) = statements.into_iter().next() else {
-            return None;
-        };
-        let sqlparser::ast::SetExpr::Select(select) = *query.body else {
-            return None;
-        };
-        if !select.from.is_empty() {
-            return None;
-        }
-
-        let mut columns = Vec::new();
-        let mut row = Map::new();
-        for item in select.projection {
-            let (column, value) = self.session_projection_value(&item)?;
-            let count = columns
-                .iter()
-                .filter(|existing| *existing == &column)
-                .count()
-                + 1;
-            let key = if count == 1 {
-                column.clone()
-            } else {
-                format!("{column}#{count}")
-            };
-            columns.push(column.clone());
-            row.insert(key, value);
-        }
-        Some(QueryResult {
-            rows_affected: 0,
-            last_insert_id: 0,
-            columns,
-            column_metadata: vec![],
-            rows: vec![row],
-            warnings: vec![],
-        })
-    }
-
-    fn session_projection_value(
-        &self,
-        item: &sqlparser::ast::SelectItem,
-    ) -> Option<(String, Value)> {
-        let (expr, alias) = match item {
-            sqlparser::ast::SelectItem::UnnamedExpr(expr) => (expr, None),
-            sqlparser::ast::SelectItem::ExprWithAlias { expr, alias } => {
-                (expr, Some(alias.value.clone()))
-            }
-            _ => return None,
-        };
-        let expr_text = expr.to_string();
-        let normalized = expr_text
-            .chars()
-            .filter(|ch| !ch.is_whitespace() && *ch != '`')
-            .collect::<String>();
-        let normalized_upper = normalized.to_ascii_uppercase();
-        let value = if normalized_upper == "DATABASE()" || normalized_upper == "SCHEMA()" {
-            Value::String(self.session.current_database().to_string())
-        } else if normalized_upper.contains("@@GLOBAL.LOG_BIN")
-            && normalized_upper.contains("@@GLOBAL.BINLOG_FORMAT")
-        {
-            Value::Number(0.into())
-        } else if normalized.starts_with("@@") {
-            let name = normalize_session_var_name(&normalized);
-            self.session
-                .system_variable(&name)
-                .or_else(|| self.session_vars.get(&name).cloned())
-                .unwrap_or_else(|| Value::String(String::new()))
-        } else {
-            return None;
-        };
-        Some((alias.unwrap_or(expr_text), value))
-    }
-}
-
-fn system_variable_query_result(sql: &str) -> QueryResult {
-    let expression = sql
-        .strip_prefix("SELECT")
-        .or_else(|| sql.strip_prefix("select"))
-        .unwrap_or(sql)
-        .trim()
-        .trim_end_matches(';')
-        .trim()
-        .to_string();
-    let value = if expression
-        .chars()
-        .any(|character| matches!(character, '=' | '&' | '|'))
-    {
-        Value::Bool(false)
-    } else if expression.to_ascii_uppercase().contains("CONCAT(@@DATADIR") {
-        Value::String("/tmp/my-sqweel-mysql/test/".to_string())
-    } else {
-        Value::Number(0.into())
-    };
-    let mut row = Map::new();
-    row.insert(expression.clone(), value);
-    QueryResult {
-        rows_affected: 0,
-        last_insert_id: 0,
-        columns: vec![expression],
-        column_metadata: vec![],
-        rows: vec![row],
-        warnings: vec![],
     }
 }
 
@@ -1292,116 +1168,6 @@ fn last_insert_id_result(value: u64, column: String) -> QueryResult {
     }
 }
 
-fn default_session_vars() -> HashMap<String, Value> {
-    [
-        ("autocommit", serde_json::json!(1)),
-        ("sql_mode", serde_json::json!("")),
-        ("time_zone", serde_json::json!("+00:00")),
-        ("version", serde_json::json!("8.0.0-my-sqweel")),
-        ("version_comment", serde_json::json!("MySqweel")),
-        (
-            "transaction_isolation",
-            serde_json::json!("REPEATABLE-READ"),
-        ),
-        ("tx_isolation", serde_json::json!("REPEATABLE-READ")),
-        ("character_set_client", serde_json::json!("utf8mb4")),
-        ("character_set_connection", serde_json::json!("utf8mb4")),
-        ("character_set_results", serde_json::json!("utf8mb4")),
-        (
-            "collation_connection",
-            serde_json::json!("utf8mb4_general_ci"),
-        ),
-        ("max_allowed_packet", serde_json::json!(67108864)),
-        ("log_bin", serde_json::json!(0)),
-        ("binlog_format", serde_json::json!("ROW")),
-    ]
-    .into_iter()
-    .map(|(key, value)| (key.to_string(), value))
-    .collect()
-}
-
-fn normalize_session_var_name(name: &str) -> String {
-    let mut name = name.trim().trim_start_matches("@@").trim();
-    for prefix in ["SESSION.", "GLOBAL.", "SESSION ", "GLOBAL "] {
-        if name
-            .get(..prefix.len())
-            .is_some_and(|candidate| candidate.eq_ignore_ascii_case(prefix))
-        {
-            name = name[prefix.len()..].trim();
-            break;
-        }
-    }
-    name.trim_matches('`').to_ascii_lowercase()
-}
-
-fn parse_session_value(value: &str) -> Value {
-    let value = value.trim();
-    if value.eq_ignore_ascii_case("NULL") {
-        return Value::Null;
-    }
-    if value.eq_ignore_ascii_case("TRUE") {
-        return Value::Bool(true);
-    }
-    if value.eq_ignore_ascii_case("FALSE") {
-        return Value::Bool(false);
-    }
-    if let Ok(value) = value.parse::<i64>() {
-        return Value::Number(value.into());
-    }
-    Value::String(
-        value
-            .trim_matches('\'')
-            .trim_matches('"')
-            .replace("''", "'"),
-    )
-}
-
-fn split_sql_args_wire(args: &str) -> Vec<String> {
-    if args.trim().is_empty() {
-        return Vec::new();
-    }
-
-    let mut out = Vec::new();
-    let mut current = String::new();
-    let mut depth = 0_i32;
-    let mut in_single = false;
-    let mut in_double = false;
-    let mut chars = args.chars().peekable();
-    while let Some(ch) = chars.next() {
-        match ch {
-            '\'' if !in_double => {
-                current.push(ch);
-                if in_single && chars.peek() == Some(&'\'') {
-                    current.push(chars.next().expect("peeked quote"));
-                } else {
-                    in_single = !in_single;
-                }
-            }
-            '"' if !in_single => {
-                in_double = !in_double;
-                current.push(ch);
-            }
-            '(' if !in_single && !in_double => {
-                depth += 1;
-                current.push(ch);
-            }
-            ')' if !in_single && !in_double => {
-                depth -= 1;
-                current.push(ch);
-            }
-            ',' if depth == 0 && !in_single && !in_double => {
-                out.push(current.trim().to_string());
-                current.clear();
-            }
-            _ => current.push(ch),
-        }
-    }
-    if !current.trim().is_empty() {
-        out.push(current.trim().to_string());
-    }
-    out
-}
-
 fn write_row<W: io::Read + io::Write>(
     rw: &mut msql_srv::RowWriter<'_, W>,
     row: &Map<String, Value>,
@@ -1427,9 +1193,7 @@ fn write_row<W: io::Read + io::Write>(
                 })
                 .map(|value| value as u8)
                 .collect::<Vec<_>>();
-            let display = String::from_utf8(bytes)
-                .unwrap_or_else(|error| error.into_bytes().into_iter().map(char::from).collect());
-            rw.write_col(display)?;
+            rw.write_col(bytes.as_slice())?;
             continue;
         }
         match value {
@@ -2161,31 +1925,26 @@ fn mysql_decimal_scale(expr: &sqlparser::ast::Expr) -> Option<usize> {
     Some(scale.parse::<i32>().ok()?.max(0) as usize)
 }
 
-fn count_query_params(query: &str) -> usize {
-    let mut count = 0;
-    let mut in_single = false;
-    let mut in_double = false;
-    let mut chars = query.chars().peekable();
-
-    while let Some(ch) = chars.next() {
-        match ch {
-            '\'' if !in_double => in_single = !in_single,
-            '"' if !in_single => in_double = !in_double,
-            '\\' if in_single || in_double => {
-                let _ = chars.next();
-            }
-            '?' if !in_single && !in_double => count += 1,
-            _ => {}
-        }
-    }
-
-    count
+fn count_query_params(query: &str) -> anyhow::Result<usize> {
+    Ok(crate::sql::sql_tokens(query)?.iter().filter(|(token, _)| {
+        matches!(token, sqlparser::tokenizer::Token::Placeholder(name) if name == "?")
+    }).count())
 }
 
 fn param_to_json(param: ParamValue<'_>) -> Value {
     match param.value.into_inner() {
         ValueInner::NULL => Value::Null,
-        ValueInner::Bytes(bytes) => Value::String(String::from_utf8_lossy(bytes).to_string()),
+        ValueInner::Bytes(bytes) => Value::String(match std::str::from_utf8(bytes) {
+            Ok(text) => text.to_owned(),
+            Err(_) => format!(
+                "{}{}",
+                crate::sql::engine::MYSQL_BINARY_SENTINEL,
+                bytes
+                    .iter()
+                    .map(|byte| format!("{byte:02X}"))
+                    .collect::<String>()
+            ),
+        }),
         ValueInner::Int(value) => Value::Number(value.into()),
         ValueInner::UInt(value) => serde_json::Number::from(value).into(),
         ValueInner::Double(value) => serde_json::Number::from_f64(value)
@@ -2273,8 +2032,8 @@ mod tests {
 
     use super::{
         Authentication, Backend, canonicalize_information_schema_columns,
-        normalize_session_var_name, parse_mysql_datetime_value, prepared_result_columns,
-        references_information_schema, validate_wire_rows,
+        parse_mysql_datetime_value, prepared_result_columns, references_information_schema,
+        validate_wire_rows,
     };
     use crate::sql::engine::{Engine, EngineConfig, QueryResult};
 
@@ -2307,15 +2066,6 @@ mod tests {
         ] {
             assert_eq!(super::mysql_error_kind(message) as u16, code, "{message}");
         }
-        let defaults = super::default_session_vars();
-        assert_eq!(
-            defaults.get("transaction_isolation"),
-            Some(&json!("REPEATABLE-READ"))
-        );
-        assert_eq!(
-            defaults.get("tx_isolation"),
-            Some(&json!("REPEATABLE-READ"))
-        );
     }
 
     #[test]
@@ -2451,24 +2201,24 @@ mod tests {
     }
 
     #[test]
-    fn session_select_shortcut_does_not_capture_table_queries() {
-        let backend =
+    fn session_values_use_normal_query_evaluation() {
+        let mut backend =
             Backend::with_authentication(Arc::new(Engine::default()), Authentication::default());
-
-        let session_only = backend
-            .select_session_values("SELECT DATABASE() AS db")
-            .expect("session-only select should be handled");
-        assert_eq!(
-            session_only.rows[0]
-                .get("db")
-                .and_then(|value| value.as_str()),
-            Some("app")
-        );
-
+        let results = backend
+            .execute_text_query("SELECT DATABASE() AS db")
+            .unwrap();
+        assert_eq!(results[0].rows[0]["db"], json!("app"));
         assert!(
             backend
-                .select_session_values("SELECT DATABASE() AS db, email FROM users")
-                .is_none()
+                .execute_text_query("SELECT DATABASE() AS db, email FROM users")
+                .is_err()
+        );
+        assert!(
+            backend
+                .execute_text_query("SELECT @@autocommit WHERE 1 = 0")
+                .unwrap()[0]
+                .rows
+                .is_empty()
         );
     }
 
@@ -2477,16 +2227,6 @@ mod tests {
         assert!(parse_mysql_datetime_value("2026-07-15 12:34:56.123456").is_some());
         assert!(parse_mysql_datetime_value("2026-07-15T12:34:56.123Z").is_some());
         assert!(parse_mysql_datetime_value("\"2026-07-15T12:34:56.123Z\"").is_some());
-    }
-
-    #[test]
-    fn session_variable_names_accept_global_and_session_sql_forms() {
-        assert_eq!(normalize_session_var_name("GLOBAL time_zone"), "time_zone");
-        assert_eq!(
-            normalize_session_var_name("@@global.time_zone"),
-            "time_zone"
-        );
-        assert_eq!(normalize_session_var_name("SESSION time_zone"), "time_zone");
     }
 
     #[test]

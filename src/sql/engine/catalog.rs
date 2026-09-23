@@ -494,7 +494,8 @@ impl Catalog {
         sql: &str,
     ) -> Result<String> {
         self.check_database(identity, database)?;
-        if let Some(mut table) = parse_drop_foreign_key_table(sql)? {
+        if let Some((mut table, names)) = parse_drop_foreign_keys(sql)? {
+            ensure!(self.is_admin(identity), "Administrative command denied");
             DatabaseVisitor {
                 catalog: self,
                 identity,
@@ -503,7 +504,12 @@ impl Catalog {
                 rewritten: false,
             }
             .relation(&mut table)?;
-            return Ok(sql.to_owned());
+            let drops = names
+                .iter()
+                .map(|name| format!("DROP FOREIGN KEY {name}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Ok(format!("ALTER TABLE {table} {drops}"));
         }
         if let Some((mut table, index, if_exists)) = parse_index_drop(sql)? {
             ensure!(self.is_admin(identity), "Administrative command denied");
@@ -595,6 +601,15 @@ impl Catalog {
 /// classification. Execution retains the original SQL so rewrites do not erase
 /// warning context or change CHECK/REPLACE semantics.
 pub(super) fn parse_session_statement(sql: &str) -> Result<Vec<Statement>> {
+    if let Some((table, names)) = parse_drop_foreign_keys(sql)? {
+        let drops = names
+            .iter()
+            .map(|name| format!("DROP CONSTRAINT {name}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Ok(crate::sql::parse(&format!("ALTER TABLE {table} {drops}"))?);
+    }
+
     if let Some((table, next)) = parse_auto_increment_option(sql)? {
         return Ok(crate::sql::parse(&format!(
             "ALTER TABLE {table} SET TBLPROPERTIES ('auto_increment' = '{next}')"
@@ -1103,26 +1118,30 @@ impl PreparedCommand {
     }
 }
 
-fn parse_drop_foreign_key_table(sql: &str) -> Result<Option<ObjectName>> {
-    let tokens = sql
-        .trim()
-        .trim_end_matches(';')
-        .split_whitespace()
-        .collect::<Vec<_>>();
-    if tokens.len() < 6
-        || !tokens[0].eq_ignore_ascii_case("ALTER")
-        || !tokens[1].eq_ignore_ascii_case("TABLE")
-        || !tokens[3].eq_ignore_ascii_case("DROP")
-        || !tokens[4].eq_ignore_ascii_case("FOREIGN")
-        || !tokens[5].eq_ignore_ascii_case("KEY")
-    {
+pub(super) fn parse_drop_foreign_keys(sql: &str) -> Result<Option<(ObjectName, Vec<Ident>)>> {
+    if !may_start_with(sql, &["ALTER"]) {
         return Ok(None);
     }
-    let parts = tokens[2]
-        .split('.')
-        .map(|part| Ident::new(part.trim_matches('`')))
-        .collect();
-    Ok(Some(ObjectName(parts)))
+    let mut tokens = Tokens::new(sql)?;
+    if !tokens.take_keyword("ALTER") || !tokens.take_keyword("TABLE") {
+        return Ok(None);
+    }
+    let table = tokens.object_name()?;
+    if !tokens.take_keyword("DROP") || !tokens.take_keyword("FOREIGN") {
+        return Ok(None);
+    }
+    let mut names = Vec::new();
+    loop {
+        tokens.keyword("KEY")?;
+        names.push(Ident::with_quote('`', tokens.identifier()?));
+        if !tokens.take(&Token::Comma) {
+            break;
+        }
+        tokens.keyword("DROP")?;
+        tokens.keyword("FOREIGN")?;
+    }
+    tokens.finish()?;
+    Ok(Some((table, names)))
 }
 
 // sqlparser lacks MySQL DROP INDEX ... ON table. Keep the table identity;

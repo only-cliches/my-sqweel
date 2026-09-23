@@ -14,53 +14,28 @@ pub(super) fn is_read_sql(sql: &str) -> bool {
     )
 }
 
-pub(super) fn split_sql_statements(sql: &str) -> Vec<String> {
+pub(super) fn split_sql_statements(sql: &str) -> Result<Vec<String>> {
+    use sqlparser::tokenizer::{Token, Whitespace};
     let mut out = Vec::new();
     let mut current = String::new();
-    let mut in_single = false;
-    let mut in_double = false;
-    let mut in_backtick = false;
-    let mut chars = sql.chars().peekable();
-
-    while let Some(ch) = chars.next() {
-        match ch {
-            '\\' if in_single || in_double => {
-                current.push(ch);
-                if let Some(escaped) = chars.next() {
-                    current.push(escaped);
-                }
-            }
-            '\'' if !in_double && !in_backtick => {
-                current.push(ch);
-                if in_single && chars.peek() == Some(&'\'') {
-                    current.push(chars.next().expect("peeked quote"));
-                } else {
-                    in_single = !in_single;
-                }
-            }
-            '"' if !in_single && !in_backtick => {
-                in_double = !in_double;
-                current.push(ch);
-            }
-            '`' if !in_single && !in_double => {
-                in_backtick = !in_backtick;
-                current.push(ch);
-            }
-            ';' if !in_single && !in_double && !in_backtick => {
-                let statement = current.trim();
-                if !statement.is_empty() {
-                    out.push(statement.to_string());
+    for (token, text) in crate::sql::sql_tokens(sql)? {
+        match token {
+            Token::SemiColon => {
+                if !current.trim().is_empty() {
+                    out.push(current.trim().to_owned());
                 }
                 current.clear();
             }
-            _ => current.push(ch),
+            Token::Whitespace(
+                Whitespace::SingleLineComment { .. } | Whitespace::MultiLineComment(_),
+            ) => current.push(' '),
+            _ => current.push_str(text),
         }
     }
-    let statement = current.trim();
-    if !statement.is_empty() {
-        out.push(statement.to_string());
+    if !current.trim().is_empty() {
+        out.push(current.trim().to_owned());
     }
-    out
+    Ok(out)
 }
 
 pub(super) fn parse_alter_table_drop_index(sql: &str) -> Option<(String, String)> {
@@ -277,97 +252,18 @@ pub(super) fn show_status_result(sql: &str) -> QueryResult {
     }
 }
 
-pub(super) fn select_system_variables(sql: &str) -> Option<QueryResult> {
-    if !sql.contains("@@") {
-        return None;
-    }
-    let expression = sql
-        .trim()
-        .strip_prefix("SELECT")
-        .or_else(|| sql.trim().strip_prefix("select"))?
-        .trim();
-    if !expression.contains(',') {
-        let mut row = Map::new();
-        row.insert(expression.to_string(), system_variable_fallback(expression));
-        return Some(QueryResult {
-            rows_affected: 0,
-            last_insert_id: 0,
-            columns: vec![expression.to_string()],
-            column_metadata: vec![],
-            rows: vec![row],
-            warnings: vec![],
-        });
-    }
-    let Ok(statements) = crate::sql::parse(sql) else {
-        let mut row = Map::new();
-        row.insert(expression.to_string(), system_variable_fallback(expression));
-        return Some(QueryResult {
-            rows_affected: 0,
-            last_insert_id: 0,
-            columns: vec![expression.to_string()],
-            column_metadata: vec![],
-            rows: vec![row],
-            warnings: vec![],
-        });
-    };
-    let Some(Statement::Query(query)) = statements.into_iter().next() else {
-        return None;
-    };
-    let SetExpr::Select(select) = *query.body else {
-        return None;
-    };
-    if !select.from.is_empty() {
-        return None;
-    }
-
-    let mut row = Map::new();
-    let mut columns = Vec::new();
-    for item in select.projection {
-        let (expr, alias) = match item {
-            SelectItem::UnnamedExpr(expr) => (expr, None),
-            SelectItem::ExprWithAlias { expr, alias } => (expr, Some(alias.value)),
-            _ => return None,
-        };
-        let value = eval::eval_expr(&expr, &Map::new(), 0).unwrap_or(Value::Bool(false));
-        let column = alias.unwrap_or_else(|| expr.to_string());
-        columns.push(column.clone());
-        row.insert(column, value);
-    }
-    Some(QueryResult {
-        rows_affected: 0,
-        last_insert_id: 0,
-        columns,
-        column_metadata: vec![],
-        rows: vec![row],
-        warnings: vec![],
-    })
-}
-
-fn system_variable_fallback(expression: &str) -> Value {
-    let normalized = expression
-        .chars()
-        .filter(|character| !character.is_ascii_whitespace() && *character != '`')
-        .collect::<String>();
-    if normalized.starts_with("@@")
-        && !normalized
-            .chars()
-            .any(|character| matches!(character, '=' | '&' | '|'))
-    {
-        session_variable_default(normalized.trim_start_matches("@@"))
-    } else {
-        Value::Bool(false)
-    }
-}
-
 pub(super) fn system_variable_expr_value(expr: &Expr) -> Option<Value> {
-    let normalized = expr
-        .to_string()
-        .chars()
-        .filter(|ch| !ch.is_whitespace() && *ch != '`')
-        .collect::<String>();
-    normalized
-        .starts_with("@@")
-        .then(|| session_variable_default(normalized.trim_start_matches("@@")))
+    let name = match expr {
+        Expr::Identifier(name) => name.value.clone(),
+        Expr::Value(SqlValue::Placeholder(name)) => name.clone(),
+        Expr::CompoundIdentifier(parts) => parts
+            .iter()
+            .map(|part| part.value.as_str())
+            .collect::<Vec<_>>()
+            .join("."),
+        _ => return None,
+    };
+    name.strip_prefix("@@").map(eval_system_variable)
 }
 
 pub(super) fn session_variable_default(name: &str) -> Value {
@@ -379,6 +275,7 @@ pub(super) fn session_variable_default(name: &str) -> Value {
         .to_ascii_lowercase()
         .as_str()
     {
+        "datadir" => Value::String("/tmp/my-sqweel-mysql/test/".into()),
         "version" => Value::String("8.0.0-my-sqweel".to_string()),
         "version_comment" => Value::String("MySqweel".to_string()),
         "autocommit" => Value::Number(Number::from(1)),

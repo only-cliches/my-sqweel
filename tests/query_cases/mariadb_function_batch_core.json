@@ -22,7 +22,7 @@
   },
   "features": ["mariadb-function-catalog", "trigonometry", "radix-conversion", "checksum", "null-aliases", "date-arithmetic", "deterministic-order"],
   "fixture_notes": "Each statement isolates one function or a small compositional pair. Constants are selected so MariaDB's numeric, string, NULL, date, and UTF-8 byte semantics remain observable.",
-  "determinism_notes": "Only fixed literals are used; no clocks, randomness, sleeps, filesystem access, or concurrent connections.",
+  "determinism_notes": "Fixed inputs; identity checks compare account names and alias equality because client hosts differ between servers. No clocks, randomness, sleeps, filesystem access, or concurrent connections.",
   "setup": [],
   "steps": [
     {"sql": "SELECT ACOS(1) AS acos_one, ASIN(1) AS asin_one, ATAN(1) AS atan_one, ATAN2(1, 1) AS atan2_one", "ordered": true},
@@ -34,6 +34,6 @@
     {"sql": "SELECT TO_SECONDS('2020-01-02') AS epoch_seconds, WEEK('2020-01-05', 3) AS iso_week", "ordered": true},
     {"sql": "SELECT TRIM_ORACLE(' x ') AS trim_alias, SUBSTR_ORACLE('abcd', 2, 2) AS substr_alias, LPAD_ORACLE('x', 3, '0') AS lpad_alias, RPAD_ORACLE('x', 3, '0') AS rpad_alias", "ordered": true},
     {"sql": "SELECT LTRIM_ORACLE(' x') AS ltrim_alias, RTRIM_ORACLE('x ') AS rtrim_alias, REPLACE_ORACLE('abc', 'b', 'X') AS replace_alias, CONCAT_OPERATOR_ORACLE('a', 'b') AS concat_alias", "ordered": true},
-    {"sql": "SELECT SESSION_USER() AS session_user_alias, SYSTEM_USER() AS system_user_alias", "ordered": true}
+    {"sql": "SELECT SUBSTRING_INDEX(SESSION_USER(), '@', 1) AS session_user_alias, SUBSTRING_INDEX(SYSTEM_USER(), '@', 1) AS system_user_alias, SESSION_USER() = USER() AS session_matches_user, SYSTEM_USER() = USER() AS system_matches_user", "ordered": true}
   ]
 }

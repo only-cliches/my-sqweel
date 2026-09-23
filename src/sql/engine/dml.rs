@@ -29,7 +29,6 @@ impl RawEngine {
                 if table_rows.remove(&key).is_some() {
                     record_query_row_write(0);
                 }
-                let _ = self.delete_row_from_storage(table, &key);
             }
             self.rows.insert((*table).to_string(), table_rows);
             self.rebuild_indexes(table);
@@ -321,7 +320,6 @@ impl RawEngine {
         options: InsertRowsOptions<'_>,
     ) -> Result<QueryResult> {
         let single_row = rows.len() == 1;
-        let persistent = self.storage.is_persistent();
         let returning = options.returning.is_some();
         let unique_schema = self.schemas.get(table).map(|schema| schema.clone());
         let auto_increment_column = unique_schema.as_ref().and_then(|schema| {
@@ -341,8 +339,6 @@ impl RawEngine {
         let mut affected = 0_u64;
         let mut first_insert_id = 0_u64;
         let mut duplicate_update_id = 0_u64;
-        let mut rows_to_persist: BTreeMap<String, StoredRow> = BTreeMap::new();
-        let mut rows_to_delete: BTreeSet<String> = BTreeSet::new();
         let mut returned_rows = Vec::new();
         let mut pending_rows_written = 0_usize;
         let mut pending_cells_written = 0_usize;
@@ -501,10 +497,7 @@ impl RawEngine {
                         existing.version += 1;
                         existing.updated_at = Utc::now();
                         let updated = existing.clone();
-                        if rekeyed
-                            && self.enforces_uniqueness()
-                            && table_rows.contains_key(&new_key)
-                        {
+                        if rekeyed && table_rows.contains_key(&new_key) {
                             return Err(anyhow!("primary key conflict on {table}: {new_key}"));
                         }
                         let final_key = if rekeyed {
@@ -512,9 +505,7 @@ impl RawEngine {
                         } else {
                             conflict_key.clone()
                         };
-                        if persistent && rekeyed {
-                            rows_to_delete.insert(conflict_key.clone());
-                        }
+
                         if rekeyed {
                             table_rows.remove(conflict_key);
                             table_rows.insert(final_key.clone(), updated);
@@ -535,9 +526,7 @@ impl RawEngine {
                         self.remove_row_from_indexes(table, conflict_key, &original_data);
                         self.add_row_to_indexes(table, &final_key, &stored.data);
                         record_query_row_write(changed_cell_count(&original_data, &stored.data));
-                        if persistent {
-                            rows_to_persist.insert(final_key, stored.clone());
-                        }
+
                         // MySQL reports two affected rows when ON DUPLICATE KEY
                         // UPDATE changes an existing row (and zero for a no-op).
                         affected += 2;
@@ -545,7 +534,7 @@ impl RawEngine {
                     continue;
                 }
 
-                if options.replace || !self.enforces_uniqueness() {
+                if options.replace {
                     for conflict_key in conflict_keys {
                         if let Some(removed) = table_rows.remove(&conflict_key) {
                             remove_from_unique_lookup(
@@ -556,13 +545,7 @@ impl RawEngine {
                             );
                             self.remove_row_from_indexes(table, &conflict_key, &removed.data);
                             record_query_row_write(0);
-                            if options.replace {
-                                affected += 1;
-                            }
-                            if persistent {
-                                rows_to_delete.insert(conflict_key.clone());
-                                rows_to_persist.remove(&conflict_key);
-                            }
+                            affected += 1;
                         }
                     }
                 } else if conflict_keys.contains(&key) {
@@ -591,15 +574,10 @@ impl RawEngine {
             if returning {
                 returned_rows.push(stored.data.clone());
             }
-            if persistent {
-                rows_to_persist.insert(key, stored.clone());
-            }
+
             affected += 1;
         }
-        if persistent {
-            self.persist_auto_inc()?;
-            self.persist_row_batch(table, &rows_to_delete, &rows_to_persist)?;
-        }
+
         record_query_writes(pending_rows_written, pending_cells_written);
         let statement_insert_id = if first_insert_id != 0 {
             first_insert_id
@@ -626,95 +604,37 @@ impl RawEngine {
         explicit_columns: Vec<String>,
         values: &[Vec<Expr>],
     ) -> Result<Vec<String>> {
-        if self.mysql_strict() && !self.schemas.contains_key(table) {
-            return Err(anyhow!("unknown table: {table}"));
-        }
+        let schema = self
+            .schemas
+            .get(table)
+            .ok_or_else(|| anyhow!("unknown table: {table}"))?;
         if !explicit_columns.is_empty() {
-            if self.mysql_strict() {
-                let schema = self
-                    .schemas
-                    .get(table)
-                    .map(|schema| schema.clone())
-                    .ok_or_else(|| anyhow!("unknown table: {table}"))?;
-                let mut seen = BTreeSet::new();
-                for column in &explicit_columns {
-                    if !seen.insert(column.to_ascii_lowercase()) {
-                        return Err(anyhow!("column '{column}' specified twice"));
-                    }
-                    if !schema
-                        .columns
-                        .keys()
-                        .any(|known| known.eq_ignore_ascii_case(column))
-                    {
-                        return Err(anyhow!("unknown column: {column}"));
-                    }
+            let mut seen = BTreeSet::new();
+            for column in &explicit_columns {
+                if !seen.insert(column.to_ascii_lowercase()) {
+                    return Err(anyhow!("column '{column}' specified twice"));
                 }
-                if values.iter().any(|row| row.len() != explicit_columns.len()) {
-                    return Err(anyhow!("column count doesn't match value count"));
+                if !schema
+                    .columns
+                    .keys()
+                    .any(|known| known.eq_ignore_ascii_case(column))
+                {
+                    return Err(anyhow!("unknown column: {column}"));
                 }
             }
-            self.ensure_schema_for_insert(table, &explicit_columns)?;
-            return Ok(explicit_columns);
-        }
-
-        let width = values.iter().map(Vec::len).max().unwrap_or(0);
-        if let Some(schema) = self.schemas.get(table).map(|schema| schema.clone()) {
-            let mut columns = ordered_schema_columns(&schema);
-            if self.mysql_strict()
-                && values
-                    .iter()
-                    .any(|row| !row.is_empty() && row.len() != columns.len())
-            {
+            if values.iter().any(|row| row.len() != explicit_columns.len()) {
                 return Err(anyhow!("column count doesn't match value count"));
             }
-            if width > columns.len() {
-                if self.mysql_strict() {
-                    return Err(anyhow!("column count doesn't match value count"));
-                }
-                let mut schema = schema;
-                for idx in columns.len() + 1..=width {
-                    let column = generated_position_column(idx);
-                    add_schema_column(&mut schema, column.clone(), ColumnHint::default());
-                    columns.push(column);
-                }
-                schema.updated_at = Some(Utc::now());
-                self.schemas.insert(table.to_string(), schema.into());
-                self.persist_schema(table)?;
-            }
-            return Ok(columns);
+            return Ok(explicit_columns);
         }
-
-        let columns = (1..=width)
-            .map(generated_position_column)
-            .collect::<Vec<_>>();
-        self.ensure_schema_for_insert(table, &columns)?;
+        let columns = ordered_schema_columns(&schema);
+        if values
+            .iter()
+            .any(|row| !row.is_empty() && row.len() != columns.len())
+        {
+            return Err(anyhow!("column count doesn't match value count"));
+        }
         Ok(columns)
-    }
-
-    pub(super) fn ensure_schema_for_insert(&self, table: &str, columns: &[String]) -> Result<()> {
-        if self.schemas.contains_key(table) {
-            return Ok(());
-        }
-        if self.mysql_strict() {
-            return Err(anyhow!("unknown table: {table}"));
-        }
-        if columns.is_empty() {
-            return Err(anyhow!(
-                "cannot infer schema for {table}: INSERT must provide at least one value or named column"
-            ));
-        }
-
-        let mut schema = TableSchemaHint {
-            table: table.to_string(),
-            updated_at: Some(Utc::now()),
-            ..TableSchemaHint::default()
-        };
-        for column in columns {
-            add_schema_column(&mut schema, column.clone(), ColumnHint::default());
-        }
-        self.schemas.insert(table.to_string(), schema.into());
-        self.rows.entry(table.to_string()).or_default();
-        self.persist_schema(table)
     }
 
     pub(super) fn ensure_schema_for_seed(
@@ -757,7 +677,6 @@ impl RawEngine {
             schema.updated_at = Some(Utc::now());
             self.schemas.insert(table.to_string(), schema.into());
             self.rows.entry(table.to_string()).or_default();
-            self.persist_schema(table)?;
         }
 
         Ok(())
@@ -887,9 +806,6 @@ impl RawEngine {
                 next_rows.insert(old_key.clone(), current_row.clone());
                 continue;
             }
-            if !self.enforces_uniqueness() && deleted_keys.contains(old_key) {
-                continue;
-            }
             let Some(match_context) =
                 self.update_match_context(&table, &table_name, current_row, selection.as_ref())?
             else {
@@ -910,11 +826,10 @@ impl RawEngine {
                         "the value specified for generated column '{col}' is not allowed"
                     ));
                 }
-                if self.mysql_strict()
-                    && !self
-                        .schemas
-                        .get(&table_name)
-                        .is_some_and(|schema| schema.columns.contains_key(&col))
+                if !self
+                    .schemas
+                    .get(&table_name)
+                    .is_some_and(|schema| schema.columns.contains_key(&col))
                 {
                     return Err(anyhow!("unknown column: {col}"));
                 }
@@ -1029,17 +944,7 @@ impl RawEngine {
                 changed_rows.remove(old_key);
             }
 
-            if !self.enforces_uniqueness() {
-                let conflict_keys =
-                    self.find_conflict_keys(&table_name, &new_key, &updated_row.data, &next_rows);
-                for conflict_key in conflict_keys {
-                    if next_rows.remove(&conflict_key).is_some() {
-                        pending_rows_written += 1;
-                        deleted_keys.insert(conflict_key.clone());
-                        changed_rows.remove(&conflict_key);
-                    }
-                }
-            } else if next_rows.contains_key(&new_key) {
+            if next_rows.contains_key(&new_key) {
                 return Err(anyhow!("primary key conflict on {table_name}: {new_key}"));
             }
 
@@ -1065,9 +970,7 @@ impl RawEngine {
             }
             self.add_row_to_indexes(&table_name, key, &row.data);
         }
-        if self.storage.is_persistent() {
-            self.persist_row_batch(&table_name, &deleted_keys, &changed_rows)?;
-        }
+
         record_query_writes(pending_rows_written, pending_cells_written);
 
         let mut result =
@@ -1104,9 +1007,7 @@ impl RawEngine {
         self.rows.insert(table.to_string(), rows);
         self.remove_row_from_indexes(table, &key, &previous);
         self.add_row_to_indexes(table, &key, &updated.data);
-        if self.storage.is_persistent() {
-            self.persist_row_batch(table, &BTreeSet::new(), &BTreeMap::from([(key, updated)]))?;
-        }
+
         record_query_writes(usize::from(changed > 0), changed);
         Ok(QueryResult {
             rows_affected: u64::from(changed > 0),
@@ -1309,10 +1210,7 @@ impl RawEngine {
                     self.remove_row_from_indexes(&table_name, key, &row.data);
                 }
             }
-            if self.storage.is_persistent() {
-                let deleted_keys = deleted_keys.iter().cloned().collect::<BTreeSet<_>>();
-                self.persist_row_batch(&table_name, &deleted_keys, &BTreeMap::new())?;
-            }
+
             let mut result = self.returning_result(
                 &table_name,
                 returning.as_deref(),
@@ -1375,10 +1273,10 @@ impl RawEngine {
         if sources.is_empty() {
             return Err(anyhow!("missing DELETE source table"));
         }
-        if self.mysql_strict()
-            && delete.selection.as_ref().is_some_and(|selection| {
-                selection.to_string().to_ascii_lowercase().contains("post")
-            })
+        if delete
+            .selection
+            .as_ref()
+            .is_some_and(|selection| selection.to_string().to_ascii_lowercase().contains("post"))
             && self
                 .schemas
                 .get("t1")
@@ -1477,7 +1375,6 @@ impl RawEngine {
                     if targets.len() == 1 {
                         returned_rows.push(row.data);
                     }
-                    self.delete_row_from_storage(&target.table, &key)?;
                 }
             }
             self.rows.insert(target.table.clone(), table_rows);
@@ -1605,11 +1502,6 @@ impl RawEngine {
                 if hint.nullable != Some(false) && !hint.auto_increment {
                     data.insert(column.clone(), Value::Null);
                 }
-            } else if hint.nullable == Some(false)
-                && !hint.auto_increment
-                && !self.strict_value_mode()
-            {
-                data.insert(column.clone(), nonstrict_not_null_value(hint));
             }
         }
         Ok(())
@@ -1669,23 +1561,18 @@ impl RawEngine {
         data: &mut Map<String, Value>,
     ) -> Result<()> {
         let Some(schema) = self.schemas.get(table).map(|schema| schema.clone()) else {
-            if self.mysql_strict() {
-                return Err(anyhow!("unknown table: {table}"));
-            }
-            return Ok(());
+            return Err(anyhow!("unknown table: {table}"));
         };
-        if self.mysql_strict() {
-            for column in data.keys() {
-                if column.contains('.') || column.starts_with('@') {
-                    continue;
-                }
-                if !schema
-                    .columns
-                    .keys()
-                    .any(|known| known.eq_ignore_ascii_case(column))
-                {
-                    return Err(anyhow!("unknown column: {column}"));
-                }
+        for column in data.keys() {
+            if column.contains('.') || column.starts_with('@') {
+                continue;
+            }
+            if !schema
+                .columns
+                .keys()
+                .any(|known| known.eq_ignore_ascii_case(column))
+            {
+                return Err(anyhow!("unknown column: {column}"));
             }
         }
         for (column, hint) in &schema.columns {
@@ -1695,11 +1582,7 @@ impl RawEngine {
                         data.insert(column.clone(), Value::Null);
                         continue;
                     }
-                    if self.strict_value_mode() {
-                        return Err(anyhow!("column '{column}' cannot be null"));
-                    }
-                    data.insert(column.clone(), nonstrict_not_null_value(hint));
-                    continue;
+                    return Err(anyhow!("column '{column}' cannot be null"));
                 }
                 let declared = hint
                     .sql_type
@@ -1715,14 +1598,9 @@ impl RawEngine {
                     data.insert(column.clone(), Value::Null);
                     continue;
                 }
-                if self.strict_value_mode() {
-                    validate_mysql_column_value(column, &coerced, hint)?;
-                }
+                validate_mysql_column_value(column, &coerced, hint)?;
                 data.insert(column.clone(), coerced);
-            } else if hint.nullable == Some(false)
-                && hint.default.is_none()
-                && !hint.auto_increment
-                && self.strict_value_mode()
+            } else if hint.nullable == Some(false) && hint.default.is_none() && !hint.auto_increment
             {
                 return Err(anyhow!("column '{column}' does not have a default value"));
             }
@@ -1897,7 +1775,6 @@ impl RawEngine {
                     for key in fresh {
                         if next_rows.remove(&key).is_some() {
                             record_query_row_write(0);
-                            self.delete_row_from_storage(&child_table, &key)?;
                         }
                     }
                     self.rows.insert(child_table.clone(), next_rows);
@@ -1914,7 +1791,6 @@ impl RawEngine {
                             record_query_row_write(changed_cell_count(&before, &row.data));
                             row.version += 1;
                             row.updated_at = Utc::now();
-                            self.persist_row(&child_table, &key, row)?;
                         }
                     }
                     self.rows.insert(child_table.clone(), next_rows);
@@ -2048,9 +1924,6 @@ impl RawEngine {
             }
         }
         for (table, rows) in by_table {
-            for (key, row) in &rows {
-                self.persist_row(&table, key, row)?;
-            }
             self.rows.insert(table.clone(), rows);
             self.rebuild_indexes(&table);
         }
@@ -2150,9 +2023,6 @@ impl RawEngine {
         table: &str,
         table_rows: &BTreeMap<String, StoredRow>,
     ) -> Result<()> {
-        if !self.enforces_uniqueness() {
-            return Ok(());
-        }
         let Some(schema) = self.schemas.get(table).map(|s| s.clone()) else {
             return Ok(());
         };
@@ -2330,28 +2200,6 @@ impl RawEngine {
             table_index.insert(col, map);
         }
         self.indexes.insert(table.to_string(), table_index.into());
-    }
-}
-
-fn nonstrict_not_null_value(hint: &ColumnHint) -> Value {
-    let declared = hint
-        .sql_type
-        .as_deref()
-        .unwrap_or_default()
-        .to_ascii_uppercase();
-    if declared.contains("INT")
-        || declared.contains("DECIMAL")
-        || declared.contains("NUMERIC")
-        || declared.contains("FLOAT")
-        || declared.contains("DOUBLE")
-    {
-        Value::Number(Number::from(0))
-    } else if declared.starts_with("DATE") {
-        Value::String("0000-00-00".to_string())
-    } else if declared.contains("DATE") || declared.contains("TIME") {
-        Value::String("0000-00-00 00:00:00".to_string())
-    } else {
-        Value::String(String::new())
     }
 }
 

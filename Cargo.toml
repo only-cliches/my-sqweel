@@ -309,3 +309,7 @@ version = "3"
 [[test]]
 name = "database_isolation"
 path = "tests/database_isolation.rs"
+
+[[test]]
+name = "review_regressions"
+path = "tests/review_regressions.rs"

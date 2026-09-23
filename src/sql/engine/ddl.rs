@@ -6,7 +6,6 @@ impl RawEngine {
         self.rows.remove(table);
         self.indexes.remove(table);
         self.clear_auto_inc(table);
-        self.delete_table_from_storage(table)?;
 
         let mut schema = TableSchemaHint {
             table: table.to_string(),
@@ -34,12 +33,12 @@ impl RawEngine {
                 Value::Number(Number::from((index + 1) as u64)),
                 row,
             );
-            self.persist_row(table, &key, &stored)?;
+
             table_rows.insert(key, stored);
         }
         self.rows.insert(table.to_string(), table_rows.into());
         self.rebuild_indexes(table);
-        self.persist_schema(table)?;
+
         Ok(())
     }
 
@@ -52,49 +51,66 @@ impl RawEngine {
         temporary: bool,
         query: sqlparser::ast::Query,
     ) -> Result<QueryResult> {
-        let result = self.select_query(query)?;
-        let rows_affected = result.rows.len() as u64;
+        let mut result = self.select_query(query)?;
         let table = object_name(&name)?;
-        if self.mysql_strict() && self.schemas.contains_key(&table) {
+        if self
+            .schemas
+            .get(&table)
+            .is_some_and(|schema| !temporary || schema.temporary)
+        {
             if if_not_exists {
                 return Ok(QueryResult::default());
             }
             return Err(anyhow!("table '{table}' already exists"));
         }
         let mut schema = table_schema_from_create(&table, columns, constraints);
+        let mut seen = BTreeSet::new();
         for (index, column) in result.columns.iter().enumerate() {
+            if !seen.insert(column.to_ascii_lowercase()) {
+                return Err(anyhow!("duplicate column name: {column}"));
+            }
+            if schema
+                .columns
+                .keys()
+                .any(|name| name.eq_ignore_ascii_case(column))
+            {
+                continue;
+            }
             let value = result.rows.first().and_then(|row| row.get(column));
-            schema.column_order.push(column.clone());
-            schema.columns.insert(
+            let metadata = result.column_metadata.get(index);
+            add_schema_column(
+                &mut schema,
                 column.clone(),
                 ColumnHint {
-                    sql_type: Some(inferred_sql_type_from_metadata(
-                        result.column_metadata.get(index),
-                        value,
-                    )),
-                    nullable: Some(value.is_none_or(Value::is_null)),
+                    sql_type: Some(inferred_sql_type_from_metadata(metadata, value)),
+                    nullable: Some(
+                        metadata.map_or(value.is_none_or(Value::is_null), |column| column.nullable),
+                    ),
                     ..ColumnHint::default()
                 },
             );
         }
         schema.temporary = temporary;
         schema.updated_at = Some(Utc::now());
+        self.validate_mysql_schema(&schema)?;
         self.schemas.insert(table.clone(), schema.into());
-        let mut table_rows = BTreeMap::new();
-        for (index, row) in result.rows.into_iter().enumerate() {
-            let id = Value::Number(Number::from((index + 1) as u64));
-            let key = (index + 1).to_string();
-            let stored = StoredRow::new(table.clone(), id, row);
-            self.persist_row(&table, &key, &stored)?;
-            table_rows.insert(key, stored);
-        }
-        self.rows.insert(table.clone(), table_rows.into());
+        self.rows.insert(table.clone(), BTreeMap::new().into());
+        self.clear_auto_inc(&table);
         self.rebuild_indexes(&table);
-        self.persist_schema(&table)?;
-        Ok(QueryResult {
-            rows_affected,
-            ..QueryResult::default()
-        })
+        // Aggregate results can retain evaluation fields outside the projection.
+        for row in &mut result.rows {
+            row.retain(|column, _| seen.contains(&column.to_ascii_lowercase()));
+        }
+        self.insert_prepared_rows(
+            &table,
+            result.rows,
+            InsertRowsOptions {
+                ignore: false,
+                replace: false,
+                on_duplicate: &[],
+                returning: None,
+            },
+        )
     }
 
     pub(super) fn create_table(
@@ -106,37 +122,30 @@ impl RawEngine {
         temporary: bool,
     ) -> Result<QueryResult> {
         let table = object_name(&name)?;
-        if self.mysql_strict() && self.schemas.contains_key(&table) {
+        if self
+            .schemas
+            .get(&table)
+            .is_some_and(|schema| !temporary || schema.temporary)
+        {
             if if_not_exists {
                 return Ok(QueryResult::default());
             }
             return Err(anyhow!("table '{table}' already exists"));
         }
-        if self.mysql_strict() {
-            let mut seen = BTreeSet::new();
-            for column in &columns {
-                if !seen.insert(column.name.value.to_ascii_lowercase()) {
-                    return Err(anyhow!("duplicate column name: {}", column.name.value));
-                }
+        let mut seen = BTreeSet::new();
+        for column in &columns {
+            if !seen.insert(column.name.value.to_ascii_lowercase()) {
+                return Err(anyhow!("duplicate column name: {}", column.name.value));
             }
         }
         let mut incoming = table_schema_from_create(&table, columns, constraints);
         incoming.temporary = temporary;
-        if self.mysql_strict() {
-            self.validate_mysql_schema(&incoming)?;
-        }
-        let schema = if let Some(existing) = self.schemas.get(&table).map(|schema| schema.clone()) {
-            let mut existing = existing;
-            merge_create_table_schema(&mut existing, incoming);
-            existing
-        } else {
-            incoming.into()
-        };
-
-        self.schemas.insert(table.clone(), schema.into());
-        self.rows.entry(table.clone()).or_default();
+        self.validate_mysql_schema(&incoming)?;
+        self.schemas.insert(table.clone(), incoming.into());
+        self.rows.insert(table.clone(), BTreeMap::new().into());
+        self.clear_auto_inc(&table);
         self.rebuild_indexes(&table);
-        self.persist_schema(&table)?;
+
         Ok(QueryResult::default())
     }
 
@@ -148,7 +157,11 @@ impl RawEngine {
         temporary: bool,
     ) -> Result<QueryResult> {
         let table = object_name(&name)?;
-        if self.mysql_strict() && self.schemas.contains_key(&table) {
+        if self
+            .schemas
+            .get(&table)
+            .is_some_and(|schema| !temporary || schema.temporary)
+        {
             if if_not_exists {
                 return Ok(QueryResult::default());
             }
@@ -166,8 +179,9 @@ impl RawEngine {
         schema.updated_at = Some(Utc::now());
         self.schemas.insert(table.clone(), schema.into());
         self.rows.insert(table.clone(), BTreeMap::new().into());
+        self.clear_auto_inc(&table);
         self.rebuild_indexes(&table);
-        self.persist_schema(&table)?;
+
         Ok(QueryResult::default())
     }
 
@@ -179,7 +193,7 @@ impl RawEngine {
     ) -> Result<QueryResult> {
         let table = object_name(&name)?;
         let existed = self.schemas.contains_key(&table);
-        if self.mysql_strict() && !existed {
+        if !existed {
             if if_exists {
                 return Ok(QueryResult::default());
             }
@@ -218,29 +232,23 @@ impl RawEngine {
             }
         }
 
-        if !existed && !schema_has_metadata(&schema) {
-            return Ok(QueryResult::default());
-        }
-
         schema.updated_at = Some(Utc::now());
-        if self.mysql_strict() {
-            self.validate_mysql_schema(&schema)?;
-            if let Some(rows) = self.rows.get(&table).map(|rows| rows.clone()) {
-                let previous_schema = self.schemas.get(&table).map(|schema| schema.clone());
-                self.schemas.insert(table.clone(), schema.clone());
-                let validation = self.validate_unique_constraints(&table, &rows);
-                if let Some(previous_schema) = previous_schema {
-                    self.schemas.insert(table.clone(), previous_schema);
-                } else {
-                    self.schemas.remove(&table);
-                }
-                validation?;
+        self.validate_mysql_schema(&schema)?;
+        if let Some(rows) = self.rows.get(&table).map(|rows| rows.clone()) {
+            let previous_schema = self.schemas.get(&table).map(|schema| schema.clone());
+            self.schemas.insert(table.clone(), schema.clone());
+            let validation = self.validate_unique_constraints(&table, &rows);
+            if let Some(previous_schema) = previous_schema {
+                self.schemas.insert(table.clone(), previous_schema);
+            } else {
+                self.schemas.remove(&table);
             }
+            validation?;
         }
         self.schemas.insert(table.clone(), schema.into());
         self.rows.entry(table.clone()).or_default();
         self.rebuild_indexes(&table);
-        self.persist_schema(&table)?;
+
         Ok(QueryResult {
             rows_affected,
             ..QueryResult::default()
@@ -260,9 +268,6 @@ impl RawEngine {
                 }
             }
         }
-        for (key, row) in &rows {
-            self.persist_row(table, key, row)?;
-        }
         self.rows.insert(table.to_string(), rows);
         Ok(())
     }
@@ -281,7 +286,7 @@ impl RawEngine {
                 ..
             } => {
                 let column_name = column_def.name.value.clone();
-                if self.mysql_strict() && schema.columns.contains_key(&column_name) {
+                if schema.columns.contains_key(&column_name) {
                     if if_not_exists {
                         return Ok(());
                     }
@@ -300,7 +305,7 @@ impl RawEngine {
                 ..
             } => {
                 if !schema.columns.contains_key(&column_name.value) {
-                    if if_exists || !self.mysql_strict() {
+                    if if_exists {
                         return Ok(());
                     }
                     return Err(anyhow!("unknown column: {}", column_name.value));
@@ -311,10 +316,10 @@ impl RawEngine {
                 old_column_name,
                 new_column_name,
             } => {
-                if self.mysql_strict() && !schema.columns.contains_key(&old_column_name.value) {
+                if !schema.columns.contains_key(&old_column_name.value) {
                     return Err(anyhow!("unknown column: {}", old_column_name.value));
                 }
-                if self.mysql_strict() && schema.columns.contains_key(&new_column_name.value) {
+                if schema.columns.contains_key(&new_column_name.value) {
                     return Err(anyhow!("duplicate column name: {}", new_column_name.value));
                 }
                 rename_column_metadata(schema, &old_column_name.value, &new_column_name.value);
@@ -326,11 +331,10 @@ impl RawEngine {
                 options,
                 column_position,
             } => {
-                if self.mysql_strict() && !schema.columns.contains_key(&old_name.value) {
+                if !schema.columns.contains_key(&old_name.value) {
                     return Err(anyhow!("unknown column: {}", old_name.value));
                 }
-                if self.mysql_strict()
-                    && !old_name.value.eq_ignore_ascii_case(&new_name.value)
+                if !old_name.value.eq_ignore_ascii_case(&new_name.value)
                     && schema.columns.contains_key(&new_name.value)
                 {
                     return Err(anyhow!("duplicate column name: {}", new_name.value));
@@ -347,7 +351,7 @@ impl RawEngine {
                 options,
                 column_position,
             } => {
-                if self.mysql_strict() && !schema.columns.contains_key(&col_name.value) {
+                if !schema.columns.contains_key(&col_name.value) {
                     return Err(anyhow!("unknown column: {}", col_name.value));
                 }
                 let hint = schema.columns.entry(col_name.value.clone()).or_default();
@@ -357,10 +361,7 @@ impl RawEngine {
             }
             sqlparser::ast::AlterTableOperation::AlterColumn { column_name, op } => {
                 let Some(hint) = schema.columns.get_mut(&column_name.value) else {
-                    if self.mysql_strict() {
-                        return Err(anyhow!("unknown column: {}", column_name.value));
-                    }
-                    return Ok(());
+                    return Err(anyhow!("unknown column: {}", column_name.value));
                 };
                 match op {
                     sqlparser::ast::AlterColumnOperation::SetNotNull => hint.nullable = Some(false),
@@ -377,7 +378,7 @@ impl RawEngine {
             }
             other => {
                 let applied = apply_alter_operation_fallback(table, schema, other)?;
-                if self.mysql_strict() && !applied {
+                if !applied {
                     return Err(anyhow!("unsupported ALTER TABLE operation"));
                 }
             }
@@ -391,25 +392,23 @@ impl RawEngine {
         names: Vec<ObjectName>,
         if_exists: bool,
     ) -> Result<QueryResult> {
-        if self.mysql_strict() {
-            let dropping = names
+        let dropping = names
+            .iter()
+            .map(object_name)
+            .collect::<Result<BTreeSet<_>>>()?;
+        for schema in self.schemas.iter() {
+            if dropping.contains(&schema.table) {
+                continue;
+            }
+            if let Some(foreign_key) = schema
+                .foreign_keys
                 .iter()
-                .map(object_name)
-                .collect::<Result<BTreeSet<_>>>()?;
-            for schema in self.schemas.iter() {
-                if dropping.contains(&schema.table) {
-                    continue;
-                }
-                if let Some(foreign_key) = schema
-                    .foreign_keys
-                    .iter()
-                    .find(|foreign_key| dropping.contains(&foreign_key.referenced_table))
-                {
-                    return Err(anyhow!(
-                        "cannot drop table referenced by foreign key constraint: {}",
-                        foreign_key.name
-                    ));
-                }
+                .find(|foreign_key| dropping.contains(&foreign_key.referenced_table))
+            {
+                return Err(anyhow!(
+                    "cannot drop table referenced by foreign key constraint: {}",
+                    foreign_key.name
+                ));
             }
         }
         let mut warnings = Vec::new();
@@ -423,7 +422,7 @@ impl RawEngine {
                 });
                 continue;
             }
-            if self.mysql_strict() && !self.schemas.contains_key(&table) {
+            if !self.schemas.contains_key(&table) {
                 if if_exists {
                     continue;
                 }
@@ -433,7 +432,6 @@ impl RawEngine {
             self.rows.remove(&table);
             self.indexes.remove(&table);
             self.clear_auto_inc(&table);
-            self.delete_table_from_storage(&table)?;
         }
         Ok(QueryResult {
             warnings,
@@ -450,10 +448,10 @@ impl RawEngine {
             return Err(anyhow!("Incorrect usage of OR REPLACE and IF NOT EXISTS"));
         }
 
-        if self.mysql_strict() && !self.schemas.contains_key(&index.table) {
+        if !self.schemas.contains_key(&index.table) {
             return Err(anyhow!("unknown table: {}", index.table));
         }
-        if self.mysql_strict() {
+        {
             let schema = self
                 .schemas
                 .get(&index.table)
@@ -510,7 +508,7 @@ impl RawEngine {
         self.schemas.insert(schema.table.clone(), schema.clone());
         self.rows.entry(schema.table.clone()).or_default();
         self.rebuild_indexes(&schema.table);
-        self.persist_schema(&schema.table)?;
+
         Ok(QueryResult::default())
     }
 
@@ -622,10 +620,7 @@ impl RawEngine {
         index_name: &str,
     ) -> Result<QueryResult> {
         let Some(mut schema) = self.schemas.get(table).map(|schema| schema.clone()) else {
-            if self.mysql_strict() {
-                return Err(anyhow!("unknown table: {table}"));
-            }
-            return Ok(QueryResult::default());
+            return Err(anyhow!("unknown table: {table}"));
         };
         let before = schema.indexes.len() + schema.unique.len();
         drop_unique_metadata(&mut schema, index_name);
@@ -634,7 +629,6 @@ impl RawEngine {
             self.schemas.insert(table.to_string(), schema.into());
             self.index_comments.remove(&format!("{table}:{index_name}"));
             self.rebuild_indexes(table);
-            self.persist_schema(table)?;
         }
         Ok(QueryResult::default())
     }
@@ -646,10 +640,7 @@ impl RawEngine {
         for table_name in table_names {
             let table = object_name(&table_name.name)?;
             if !self.schemas.contains_key(&table) {
-                if self.mysql_strict() {
-                    return Err(anyhow!("unknown table: {table}"));
-                }
-                continue;
+                return Err(anyhow!("unknown table: {table}"));
             }
             if let Some(rows) = self.rows.get(&table) {
                 for _ in rows.values() {
@@ -660,9 +651,8 @@ impl RawEngine {
             self.indexes.remove(&table);
             self.clear_auto_inc(&table);
             self.rebuild_indexes(&table);
-            self.delete_table_rows_from_storage(&table)?;
         }
-        self.persist_auto_inc()?;
+
         Ok(QueryResult::default())
     }
 }
@@ -1042,44 +1032,6 @@ pub(super) fn seed_row_columns(rows: &[Map<String, Value>]) -> Vec<String> {
         }
     }
     columns
-}
-
-pub(super) fn generated_position_column(position: usize) -> String {
-    format!("column_{position}")
-}
-
-pub(super) fn merge_create_table_schema(existing: &mut TableSchemaHint, incoming: TableSchemaHint) {
-    for column in ordered_schema_columns(&incoming) {
-        if let Some(hint) = incoming.columns.get(&column).cloned() {
-            add_schema_column(existing, column, hint);
-        }
-    }
-    for (column, hint) in incoming.columns {
-        if !existing.columns.contains_key(&column) {
-            add_schema_column(existing, column, hint);
-        }
-    }
-    if existing.primary_key.is_empty() && !incoming.primary_key.is_empty() {
-        existing.primary_key = incoming.primary_key;
-    }
-    for unique in incoming.unique {
-        add_unique_metadata(existing, unique);
-    }
-    for index in incoming.indexes {
-        add_index_metadata(existing, index);
-    }
-    for foreign_key in incoming.foreign_keys {
-        add_foreign_key_metadata(existing, foreign_key);
-    }
-    existing.updated_at = Some(Utc::now());
-}
-
-pub(super) fn schema_has_metadata(schema: &TableSchemaHint) -> bool {
-    !schema.columns.is_empty()
-        || !schema.primary_key.is_empty()
-        || !schema.unique.is_empty()
-        || !schema.indexes.is_empty()
-        || !schema.foreign_keys.is_empty()
 }
 
 pub(super) fn apply_alter_operation_fallback(

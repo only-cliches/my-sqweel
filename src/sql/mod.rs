@@ -1,8 +1,58 @@
 pub mod engine;
 
 use sqlparser::ast::Statement;
-use sqlparser::dialect::MySqlDialect;
+use sqlparser::dialect::{Dialect, MySqlDialect};
 use sqlparser::parser::Parser;
+use sqlparser::tokenizer::{Token, Tokenizer, TokenizerError};
+
+// Token boundaries must also work for account names like 'user'@'host'.
+// MySqlDialect otherwise consumes the quote after @ as part of an identifier.
+#[derive(Debug)]
+struct BoundaryDialect;
+
+impl Dialect for BoundaryDialect {
+    fn dialect(&self) -> std::any::TypeId {
+        std::any::TypeId::of::<MySqlDialect>()
+    }
+    fn is_identifier_start(&self, ch: char) -> bool {
+        ch != '@' && MySqlDialect {}.is_identifier_start(ch)
+    }
+    fn is_identifier_part(&self, ch: char) -> bool {
+        self.is_identifier_start(ch) || ch.is_ascii_digit()
+    }
+    fn is_delimited_identifier_start(&self, ch: char) -> bool {
+        ch == '`'
+    }
+    fn supports_string_literal_backslash_escape(&self) -> bool {
+        true
+    }
+    fn supports_numeric_prefix(&self) -> bool {
+        true
+    }
+}
+
+/// Tokenize once while retaining the original spelling and UTF-8 byte boundaries.
+pub(crate) fn sql_tokens(sql: &str) -> Result<Vec<(Token, &str)>, TokenizerError> {
+    let tokens = Tokenizer::new(&BoundaryDialect, sql).tokenize_with_location()?;
+    let mut chars = sql.char_indices();
+    let (mut line, mut column, mut end) = (1, 1, 0);
+    let mut result = Vec::with_capacity(tokens.len());
+    for token in tokens {
+        let start = end;
+        while (line, column) < (token.span.end.line, token.span.end.column) {
+            let (index, ch) = chars.next().expect("token span is within SQL source");
+            end = index + ch.len_utf8();
+            if ch == '\n' {
+                line += 1;
+                column = 1;
+            } else {
+                column += 1;
+            }
+        }
+        result.push((token.token, &sql[start..end]));
+    }
+    Ok(result)
+}
 
 pub fn parse(sql: &str) -> Result<Vec<Statement>, sqlparser::parser::ParserError> {
     let parser_sql = rewrite_mysql_compound_intervals(sql);

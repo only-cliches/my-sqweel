@@ -5530,14 +5530,6 @@ impl RawEngine {
             self.auto_inc.insert(new, value);
         }
 
-        self.delete_table_from_storage(from)?;
-        self.persist_schema(to)?;
-        self.persist_auto_inc()?;
-        if let Some(rows) = self.rows.get(to).map(|rows| rows.clone()) {
-            for (pk, row) in &rows {
-                self.persist_row(to, pk, row)?;
-            }
-        }
         Ok(QueryResult::default())
     }
 
@@ -6701,14 +6693,20 @@ fn order_by_references_projection_alias(select: &Select, order_by: &[OrderByExpr
 
 fn user_variable_name(expr: &Expr) -> Option<&str> {
     match expr {
-        Expr::Identifier(identifier) if identifier.value.starts_with('@') => {
+        Expr::Identifier(identifier)
+            if identifier.value.starts_with('@') && !identifier.value.starts_with("@@") =>
+        {
             Some(identifier.value.trim_start_matches('@'))
         }
         Expr::CompoundIdentifier(identifiers) if identifiers.len() == 1 => identifiers
             .first()
-            .filter(|identifier| identifier.value.starts_with('@'))
+            .filter(|identifier| {
+                identifier.value.starts_with('@') && !identifier.value.starts_with("@@")
+            })
             .map(|identifier| identifier.value.trim_start_matches('@')),
-        Expr::Value(SqlValue::Placeholder(value)) if value.starts_with('@') => {
+        Expr::Value(SqlValue::Placeholder(value))
+            if value.starts_with('@') && !value.starts_with("@@") =>
+        {
             Some(value.trim_start_matches('@'))
         }
         _ => None,

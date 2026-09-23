@@ -469,19 +469,21 @@ impl<S: AsyncStorage> AsyncEngine<S> {
             return Ok(results);
         }
         let _commit = self.inner.commit_gate.lock().await;
-        let (mut results, before, state) = {
+        let (results, before, state) = {
             let engine = self.inner.engine.lock().expect("engine mutex poisoned");
             let before = engine.export_state()?;
-            let results = engine.execute_sql(&request.sql)?;
+            let results = engine.execute_sql(&request.sql);
             let state = engine.export_state()?;
             (results, before, state)
         };
+        // A later statement may fail after earlier statements have committed.
+        commit_changes(&self.inner, before, state).await?;
+        let mut results = results?;
         let filter_outcome = self
             .inner
             .result_filters
             .apply(&request, &mut results)
             .await;
-        commit_changes(&self.inner, before, state).await?;
         filter_outcome?;
         Ok(results)
     }
@@ -536,7 +538,7 @@ impl<S: AsyncStorage> AsyncEngineSession<S> {
             return Ok(results);
         }
         let _commit = self.inner.commit_gate.lock().await;
-        let (mut results, before, state) = {
+        let (results, before, state) = {
             let mut session = self.session.lock().expect("session mutex poisoned");
             let before = self
                 .inner
@@ -544,7 +546,7 @@ impl<S: AsyncStorage> AsyncEngineSession<S> {
                 .lock()
                 .expect("engine mutex poisoned")
                 .export_state()?;
-            let results = session.execute_sql(&request.sql)?;
+            let results = session.execute_sql(&request.sql);
             let state = self
                 .inner
                 .engine
@@ -553,12 +555,14 @@ impl<S: AsyncStorage> AsyncEngineSession<S> {
                 .export_state()?;
             (results, before, state)
         };
+        // A later statement may fail after earlier statements have committed.
+        commit_changes(&self.inner, before, state).await?;
+        let mut results = results?;
         let filter_outcome = self
             .inner
             .result_filters
             .apply(&request, &mut results)
             .await;
-        commit_changes(&self.inner, before, state).await?;
         filter_outcome?;
         Ok(results)
     }

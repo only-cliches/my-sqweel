@@ -1,7 +1,7 @@
 //! Incremental embedded Lux storage. SQL isolation is in-memory; crash-atomic
 //! multi-key commits and synchronous durability are deliberately not promised.
 use super::*;
-use crate::storage::{LuxRedisStore, StorageWrite};
+use crate::storage::{LuxRedisStore, RedisStore, StorageWrite};
 use serde::de::DeserializeOwned;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -86,7 +86,7 @@ impl Persistence {
                 views: self.load_map(&name, "views")?,
                 index_comments: self.load_map(&name, "index_comments")?,
             };
-            let mut raw = RawEngine::with_storage(cfg.clone(), Arc::new(PrivateStorage))?;
+            let mut raw = RawEngine::new(cfg.clone());
             raw.database_name = name.clone();
             raw.apply_snapshot(snapshot);
             databases.insert(name, Arc::new(raw));

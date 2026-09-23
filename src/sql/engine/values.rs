@@ -786,33 +786,14 @@ pub(super) fn sql_value_to_json(v: &SqlValue) -> Result<Value> {
 pub(crate) fn substitute_params(sql: &str, params: &[Value]) -> Result<String> {
     let mut out = String::with_capacity(sql.len() + params.len() * 8);
     let mut params = params.iter();
-    let mut in_single = false;
-    let mut in_double = false;
-    let mut chars = sql.chars().peekable();
-
-    while let Some(ch) = chars.next() {
-        match ch {
-            '\'' if !in_double => {
-                in_single = !in_single;
-                out.push(ch);
-            }
-            '"' if !in_single => {
-                in_double = !in_double;
-                out.push(ch);
-            }
-            '\\' if in_single || in_double => {
-                out.push(ch);
-                if let Some(next) = chars.next() {
-                    out.push(next);
-                }
-            }
-            '?' if !in_single && !in_double => {
-                let value = params
-                    .next()
-                    .ok_or_else(|| anyhow!("not enough parameters for prepared statement"))?;
-                out.push_str(&json_to_sql_literal(value));
-            }
-            _ => out.push(ch),
+    for (token, text) in crate::sql::sql_tokens(sql)? {
+        if matches!(token, sqlparser::tokenizer::Token::Placeholder(ref name) if name == "?") {
+            let value = params
+                .next()
+                .ok_or_else(|| anyhow!("not enough parameters for prepared statement"))?;
+            out.push_str(&json_to_sql_literal(value));
+        } else {
+            out.push_str(text);
         }
     }
 
@@ -838,5 +819,31 @@ pub(super) fn json_to_sql_literal(value: &Value) -> String {
             "'{}'",
             other.to_string().replace('\\', "\\\\").replace('\'', "''")
         ),
+    }
+}
+
+pub(super) fn encode_json_row(row: &Map<String, Value>) -> String {
+    let mut parts = Vec::new();
+    for (_, value) in row {
+        parts.push(encode_json_value(value));
+    }
+    parts.join("\u{1d}")
+}
+
+pub(super) fn encode_json_value(value: &Value) -> String {
+    match value {
+        Value::Null => "n:".to_string(),
+        Value::Bool(value) => format!("b:{}", if *value { "1" } else { "0" }),
+        Value::Number(value) => {
+            if let Some(value) = value.as_i64() {
+                format!("i:{value}")
+            } else if let Some(value) = value.as_u64() {
+                format!("u:{value}")
+            } else {
+                format!("f:{value}")
+            }
+        }
+        Value::String(value) => format!("s:{value}"),
+        Value::Array(_) | Value::Object(_) => format!("j:{value}"),
     }
 }

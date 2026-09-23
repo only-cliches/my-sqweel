@@ -6,6 +6,8 @@ use std::ops::ControlFlow;
 use sqlparser::ast::{Function, FunctionArg, Visit, Visitor};
 
 thread_local! {
+    static EVAL_SYSTEM_VARIABLES: RefCell<HashMap<String, Value>> = RefCell::new(HashMap::new());
+    static EVAL_IDENTITY: RefCell<(String, String)> = RefCell::new(("root@localhost".into(), "root@%".into()));
     static EVAL_DATABASE: RefCell<String> = RefCell::new("app".into());
     static EVAL_USER_VARIABLES: RefCell<std::collections::HashMap<String, Value>> =
         RefCell::new(std::collections::HashMap::new());
@@ -13,6 +15,23 @@ thread_local! {
 
 pub(super) fn set_eval_database(name: &str) {
     EVAL_DATABASE.with(|database| *database.borrow_mut() = name.into());
+}
+
+pub(super) fn set_eval_session(variables: &HashMap<String, Value>, user: &str, current_user: &str) {
+    EVAL_SYSTEM_VARIABLES.with(|values| *values.borrow_mut() = variables.clone());
+    EVAL_IDENTITY.with(|identity| *identity.borrow_mut() = (user.into(), current_user.into()));
+}
+
+pub(super) fn eval_system_variable(name: &str) -> Value {
+    let normalized = name.replace('`', "").to_ascii_lowercase();
+    let key = normalized.rsplit('.').next().unwrap_or(&normalized);
+    if !normalized.starts_with("global.") {
+        if let Some(value) = EVAL_SYSTEM_VARIABLES.with(|values| values.borrow().get(key).cloned())
+        {
+            return value;
+        }
+    }
+    session_variable_default(key)
 }
 
 pub(super) fn clear_eval_user_variables() {
@@ -3880,7 +3899,12 @@ pub(super) fn eval_function_text(
             Ok(EVAL_DATABASE.with(|database| Value::String(database.borrow().clone())))
         }
         "VERSION" => Ok(Value::String("8.0.0-my-sqweel".to_string())),
-        "USER" | "CURRENT_USER" => Ok(Value::String("root@localhost".to_string())),
+        "USER" | "SESSION_USER" | "SYSTEM_USER" => {
+            Ok(EVAL_IDENTITY.with(|identity| Value::String(identity.borrow().0.clone())))
+        }
+        "CURRENT_USER" => {
+            Ok(EVAL_IDENTITY.with(|identity| Value::String(identity.borrow().1.clone())))
+        }
         "VALUES" => args
             .first()
             .map(|arg| eval_scalar_text(arg, data, last_insert_id))
@@ -3943,7 +3967,6 @@ pub(super) fn eval_function_text(
                 .transpose()
                 .map(|value| value.unwrap_or(Value::Null))
         }
-        "SESSION_USER" | "SYSTEM_USER" => Ok(Value::String("root@".to_string())),
         "INTERVAL_FUNC" => {
             let value = args
                 .first()

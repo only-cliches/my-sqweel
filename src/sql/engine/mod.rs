@@ -25,7 +25,6 @@ use sqlparser::ast::{
 
 use crate::model::StoredRow;
 use crate::schema::{CheckConstraintHint, ColumnHint, ForeignKeyHint, IndexHint, TableSchemaHint};
-use crate::storage::RedisStore;
 
 mod catalog;
 pub(crate) use catalog::may_start_with;
@@ -38,7 +37,6 @@ mod dml;
 mod eval;
 mod maintenance;
 mod query;
-mod storage_format;
 mod support;
 mod values;
 
@@ -51,14 +49,10 @@ pub(crate) use eval::json_compact_text;
 pub(crate) use eval::json_wire_text;
 pub(crate) use eval::row_keys_for_columns;
 use eval::*;
-use storage_format::*;
 use support::*;
 use values::*;
 
-const STORAGE_NAMESPACE: &str = "my-sqweel";
-const STORAGE_AUTO_INC_KEY: &str = "my-sqweel:auto_inc";
 const UNIQUE_SEPARATOR: char = '\u{1f}';
-const FK_FIELD_SEPARATOR: char = '\u{1e}';
 pub(crate) const JSON_NULL_SENTINEL: &str = "\0my_sqweel_json_null";
 /// Pre-rendered JSON_AGGREGATE text in MariaDB's aggregate style. The wire
 /// sends the suffix verbatim instead of re-serializing it.
@@ -625,10 +619,12 @@ impl<'a, T> IntoIterator for &'a SharedTable<T> {
 
 pub(super) struct RawEngine {
     database_name: String,
+    system_variables: HashMap<String, Value>,
+    session_user: String,
+    current_user: String,
     visible_databases: Vec<String>,
     database_charsets: BTreeMap<String, (String, String)>,
     cfg: EngineConfig,
-    storage: Arc<dyn RedisStore>,
     schemas: DashMap<String, SharedValue<TableSchemaHint>>,
     rows: DashMap<String, SharedTable<StoredRow>>,
     auto_inc: DashMap<String, i64>,
@@ -680,13 +676,15 @@ impl ParsedSelectCache {
 }
 
 impl RawEngine {
-    fn with_storage(cfg: EngineConfig, storage: Arc<dyn RedisStore>) -> Result<Self> {
-        let engine = Self {
+    fn new(cfg: EngineConfig) -> Self {
+        Self {
             database_name: "app".into(),
+            system_variables: HashMap::new(),
+            session_user: "root@localhost".into(),
+            current_user: "root@%".into(),
             visible_databases: vec!["app".into()],
             database_charsets: BTreeMap::new(),
             cfg,
-            storage,
             // Statement-private directories have no concurrent writers. DashMap
             // requires at least two shards; CPU-scaled defaults multiply the
             // locks and allocations copied on every statement fork.
@@ -707,9 +705,7 @@ impl RawEngine {
             views: DashMap::with_shard_amount(2),
             parsed_select_cache: Arc::new(Mutex::new(ParsedSelectCache::new(256))),
             query_event_subscribers: Arc::new(Mutex::new(Vec::new())),
-        };
-        engine.load_from_storage()?;
-        Ok(engine)
+        }
     }
 
     /// Subscribe to query lifecycle events. Each subscription has its own
@@ -730,23 +726,11 @@ impl RawEngine {
         !self.query_event_subscribers.lock().is_empty()
     }
 
-    pub(super) fn mysql_strict(&self) -> bool {
-        true
-    }
-
     pub(super) fn traditional_sql_mode(&self) -> bool {
         self.sql_mode
             .lock()
             .to_ascii_uppercase()
             .contains("TRADITIONAL")
-    }
-
-    pub(super) fn strict_value_mode(&self) -> bool {
-        let mode = self.sql_mode.lock().to_ascii_uppercase();
-        self.mysql_strict()
-            || mode.contains("TRADITIONAL")
-            || mode.contains("STRICT_TRANS_TABLES")
-            || mode.contains("STRICT_ALL_TABLES")
     }
 
     pub(super) fn user_variable(&self, name: &str) -> Value {
@@ -766,10 +750,6 @@ impl RawEngine {
             .insert("__time_zone".to_string(), Value::String(value.into()));
     }
 
-    pub(super) fn enforces_uniqueness(&self) -> bool {
-        true
-    }
-
     fn execute_sql_internal(
         &self,
         event_sql: &str,
@@ -779,6 +759,11 @@ impl RawEngine {
     ) -> Result<Vec<QueryResult>> {
         eval::clear_eval_user_variables();
         eval::set_eval_database(&self.database_name);
+        eval::set_eval_session(
+            &self.system_variables,
+            &self.session_user,
+            &self.current_user,
+        );
         let query_id = (emit_events && self.query_events_enabled())
             .then(|| self.next_query_id.fetch_add(1, AtomicOrdering::Relaxed));
         let metrics = query_id.map(|_| Rc::new(QueryMetricsRecorder::new(true)));
@@ -794,7 +779,7 @@ impl RawEngine {
         tracing::debug!(sql = execution_sql, "sql.execute");
         let mut out = Vec::new();
         let outcome: Result<Vec<QueryResult>> = (|| {
-            for raw in split_sql_statements(execution_sql) {
+            for raw in split_sql_statements(execution_sql)? {
                 if raw.is_empty() {
                     continue;
                 }
@@ -1782,43 +1767,30 @@ impl RawEngine {
     }
 
     fn execute_drop_foreign_key_compat(&self, sql: &str) -> Result<Option<QueryResult>> {
-        let trimmed = sql.trim().trim_end_matches(';').trim();
-        let upper = trimmed.to_ascii_uppercase();
-        if !upper.starts_with("ALTER TABLE") || !upper.contains("DROP FOREIGN KEY") {
+        let Some((table, names)) = catalog::parse_drop_foreign_keys(sql)? else {
             return Ok(None);
-        }
-        let tokens = normalized_sql_tokens(trimmed);
-        let Some(table) = tokens.get(2) else {
-            return Err(anyhow!("invalid ALTER TABLE statement"));
         };
-        let drop_names = tokens
-            .windows(4)
-            .filter(|window| {
-                window[0].eq_ignore_ascii_case("DROP")
-                    && window[1].eq_ignore_ascii_case("FOREIGN")
-                    && window[2].eq_ignore_ascii_case("KEY")
-            })
-            .filter_map(|window| window.get(3).cloned())
-            .collect::<BTreeSet<_>>();
-        let Some(mut schema) = self.schemas.get(table).map(|schema| schema.clone()) else {
+        let table = object_name(&table)?;
+        let Some(mut schema) = self.schemas.get(&table).map(|schema| schema.clone()) else {
             return Err(anyhow!("unknown table: {table}"));
         };
-        let before = schema.foreign_keys.len();
-        let matching_name = |foreign_key: &ForeignKeyHint| {
-            drop_names
+        for name in &names {
+            if !schema
+                .foreign_keys
                 .iter()
-                .any(|name| name.eq_ignore_ascii_case(&foreign_key.name))
-        };
-        let drop_single_unnamed = drop_names.len() == 1 && schema.foreign_keys.len() == 1;
-        schema
-            .foreign_keys
-            .retain(|foreign_key| !matching_name(foreign_key) && !drop_single_unnamed);
-        if self.mysql_strict() && schema.foreign_keys.len() == before && !drop_single_unnamed {
-            return Err(anyhow!("Can't DROP FOREIGN KEY"));
+                .any(|key| key.name.eq_ignore_ascii_case(&name.value))
+            {
+                return Err(anyhow!("Can't DROP FOREIGN KEY {}", name.value));
+            }
         }
+        schema.foreign_keys.retain(|key| {
+            !names
+                .iter()
+                .any(|name| key.name.eq_ignore_ascii_case(&name.value))
+        });
         schema.updated_at = Some(Utc::now());
         self.schemas.insert(table.clone(), schema);
-        self.persist_schema(table)?;
+
         Ok(Some(QueryResult::default()))
     }
 
@@ -1935,24 +1907,6 @@ impl RawEngine {
             return Err(anyhow!("partition management on nonpartitioned table"));
         }
         if upper.starts_with("ALTER TABLE T TABLESPACE") {
-            return Ok(Some(QueryResult::default()));
-        }
-        if upper.starts_with("CREATE TEMPORARY TABLE") {
-            let table = trimmed["CREATE TEMPORARY TABLE".len()..]
-                .split_whitespace()
-                .next()
-                .unwrap_or_default()
-                .trim_matches('`');
-            if self.schemas.contains_key(table) {
-                self.user_variables
-                    .insert("__mtr_temp_table".to_string(), Value::Bool(true));
-                return Ok(Some(QueryResult::default()));
-            }
-        }
-        if upper.starts_with("DROP TEMPORARY TABLE")
-            && self.user_variables.contains_key("__mtr_temp_table")
-        {
-            self.user_variables.remove("__mtr_temp_table");
             return Ok(Some(QueryResult::default()));
         }
         if upper == "SELECT * FROM T1 WHERE T1 LIKE \"A_\\%\"" {
@@ -2814,7 +2768,7 @@ impl RawEngine {
                     schema.updated_at = Some(Utc::now());
                     self.schemas.insert(table.to_string(), schema);
                     self.rebuild_indexes(table);
-                    self.persist_schema(table)?;
+
                     return Ok(Some(QueryResult::default()));
                 }
                 if upper.contains(" ADD KEY ") && parts.len() >= 11 {
@@ -3092,7 +3046,7 @@ impl RawEngine {
                         .insert(format!("{table}:{new_name}"), comment);
                 }
                 self.rebuild_indexes(table);
-                self.persist_schema(table)?;
+
                 return Ok(Some(QueryResult::default()));
             }
         }
@@ -3118,7 +3072,6 @@ impl RawEngine {
                 }) {
                     self.auto_inc
                         .insert(format!("{table}:{column}"), value.saturating_sub(1));
-                    self.persist_auto_inc()?;
                 }
             }
         }
@@ -3710,7 +3663,6 @@ impl RawEngine {
                 self.rows.remove(&table);
                 self.indexes.remove(&table);
                 self.clear_auto_inc(&table);
-                self.delete_table_from_storage(&table)?;
             }
             if self
                 .user_variable("__selected_database")
@@ -3890,7 +3842,7 @@ impl RawEngine {
                 .ok_or_else(|| anyhow!("invalid DROP TABLE statement"))?;
             return Ok(Some(self.execute_statement_unobserved(statement)?));
         }
-        if self.mysql_strict() && upper.starts_with("DROP TABLE") && !upper.contains("IF EXISTS") {
+        if upper.starts_with("DROP TABLE") && !upper.contains("IF EXISTS") {
             let names = trimmed["DROP TABLE".len()..]
                 .split(',')
                 .map(|name| name.trim().trim_matches('`').trim_end_matches(';'));
@@ -4063,11 +4015,6 @@ impl RawEngine {
         }
         if let Some((from, to)) = parse_rename_table(trimmed) {
             return Ok(Some(self.rename_table(&from, &to)?));
-        }
-        if upper.starts_with("SELECT ")
-            && let Some(result) = select_system_variables(trimmed)
-        {
-            return Ok(Some(result));
         }
 
         Ok(None)
