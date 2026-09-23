@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "id": "json_keys_table_audit_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "scenarios/json-flatten/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/scenarios/json-flatten/mysql.sql",
+      "sha256": "6128233d8b06ca8bf7e6e86809593b5c23ac869ce97d7b9d18deb02f3ddeeeb8",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "scenarios/json-flatten/mysql.sql:80-87",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A correlated JSON_KEYS result from one source row feeds JSON_TABLE, which emits one relational row for each object key.",
+      "mysql_mariadb_translation": "Reduced to one independently authored profile row and one ordered JSON_TABLE projection, isolating outer-column evaluation for JSON_KEYS-to-JSON_TABLE expansion from grouping and multiple source rows."
+    },
+    "independently_authored": true,
+    "minimized_from": "json_keys_table_audit"
+  },
+  "features": ["json-keys", "json-table", "correlated-table-valued-expression", "minimized-regression", "deterministic-order"],
+  "fixture_notes": "The one fixed profile contains alpha and beta keys; the correlated projection must emit both names in deterministic order.",
+  "determinism_notes": "The profile ID, JSON document, and key ordering are fixed; there are no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE mini_device_profiles (device_id INT PRIMARY KEY, profile JSON NOT NULL)",
+    "INSERT INTO mini_device_profiles VALUES (901, '{\"alpha\":1,\"beta\":2}')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT k.key_name FROM mini_device_profiles AS d, JSON_TABLE(JSON_KEYS(d.profile), '$[*]' COLUMNS (key_name VARCHAR(32) PATH '$')) AS k ORDER BY k.key_name",
+      "ordered": true
+    }
+  ]
+}

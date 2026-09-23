@@ -351,6 +351,34 @@ impl RawEngine {
 
             // Cross join each subsequent table
             for from_table in &select.from[1..] {
+                if from_table.joins.is_empty()
+                    && matches!(&from_table.relation, TableFactor::JsonTable { .. })
+                {
+                    let mut next = Vec::new();
+                    for candidate in &current {
+                        let table_rows = self
+                            .rows_for_table_factor_with_context(&from_table.relation, candidate)?
+                            .rows;
+                        for table_data in &table_rows {
+                            let mut combined = candidate.clone();
+                            for (key, value) in table_data {
+                                combined.entry(key.clone()).or_insert_with(|| value.clone());
+                            }
+                            let matches_available_predicates = predicates.iter().all(|predicate| {
+                                !predicate_columns_available(predicate, &combined)
+                                    || self
+                                        .matches_selection_ctx(Some(predicate), &combined, 0)
+                                        .unwrap_or(false)
+                            });
+                            if matches_available_predicates {
+                                next.push(combined);
+                            }
+                        }
+                    }
+                    current = next;
+                    continue;
+                }
+
                 let table_rows = if from_table.joins.is_empty() {
                     self.rows_for_table_factor(&from_table.relation)?.rows
                 } else {
@@ -3000,6 +3028,14 @@ impl RawEngine {
     }
 
     pub(super) fn rows_for_table_factor(&self, factor: &TableFactor) -> Result<TableFactorRows> {
+        self.rows_for_table_factor_with_context(factor, &Map::new())
+    }
+
+    fn rows_for_table_factor_with_context(
+        &self,
+        factor: &TableFactor,
+        context: &Map<String, Value>,
+    ) -> Result<TableFactorRows> {
         match factor {
             TableFactor::Table { name, alias, .. } => {
                 let table = object_name(name)?;
@@ -3114,7 +3150,7 @@ impl RawEngine {
                 json_path,
                 columns,
                 alias,
-            } => self.rows_for_json_table(json_expr, json_path, columns, alias.as_ref()),
+            } => self.rows_for_json_table(json_expr, json_path, columns, alias.as_ref(), context),
             _ => Err(anyhow!("unsupported table factor")),
         }
     }
@@ -3125,8 +3161,9 @@ impl RawEngine {
         json_path: &sqlparser::ast::Value,
         columns: &[sqlparser::ast::JsonTableColumn],
         alias: Option<&sqlparser::ast::TableAlias>,
+        context: &Map<String, Value>,
     ) -> Result<TableFactorRows> {
-        let document = parse_json_document_value(self.eval_expr_ctx(json_expr, &Map::new(), 0)?);
+        let document = parse_json_document_value(self.eval_expr_ctx(json_expr, context, 0)?);
         let path = unquote_sql_string(&json_path.to_string())
             .unwrap_or_else(|| json_path.to_string().trim_matches('"').to_string());
         let roots = json_extract_matches(&document, &path);

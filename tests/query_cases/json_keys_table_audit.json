@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "id": "json_keys_table_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "scenarios/json-flatten/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/scenarios/json-flatten/mysql.sql",
+      "sha256": "6128233d8b06ca8bf7e6e86809593b5c23ac869ce97d7b9d18deb02f3ddeeeb8"
+    },
+    "inspiration": {
+      "source_location": "scenarios/json-flatten/mysql.sql:80-87",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL JSON report passes JSON_KEYS output into JSON_TABLE to expand each top-level object key into a relational row alongside its source record.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored feature-profile audit. Fixed device documents are expanded into one row per top-level profile key, then grouped counts verify key presence across devices. The source schema, JSON documents, labels, and report purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["json-keys", "json-table", "table-valued-json", "grouped-aggregate", "deterministic-order"],
+  "fixture_notes": "Device 701 exposes region, tier, and enabled keys; device 702 exposes region and tier; device 703 exposes only enabled. The expansion must preserve every key occurrence, and the grouped report counts how many devices expose each key.",
+  "determinism_notes": "Device IDs, JSON documents, key projection, grouping, and ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE device_profiles (device_id INT PRIMARY KEY, profile JSON NOT NULL)",
+    "INSERT INTO device_profiles VALUES (701, '{\"region\":\"north\",\"tier\":\"gold\",\"enabled\":true}'), (702, '{\"region\":\"south\",\"tier\":\"silver\"}'), (703, '{\"enabled\":false}')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT d.device_id, k.key_name FROM device_profiles AS d, JSON_TABLE(JSON_KEYS(d.profile), '$[*]' COLUMNS (key_name VARCHAR(32) PATH '$')) AS k ORDER BY d.device_id, k.key_name",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT k.key_name, COUNT(*) AS device_count FROM device_profiles AS d, JSON_TABLE(JSON_KEYS(d.profile), '$[*]' COLUMNS (key_name VARCHAR(32) PATH '$')) AS k GROUP BY k.key_name ORDER BY k.key_name",
+      "ordered": true
+    }
+  ]
+}
