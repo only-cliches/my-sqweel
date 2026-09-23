@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "id": "alter_drop_readd_foreign_key",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Alanaktion/phproject",
+      "commit": "0307062a4b8d31375b6dbe09cb09a7a631dfdafd",
+      "path": "db/14.12.30.sql",
+      "url": "https://github.com/Alanaktion/phproject/blob/0307062a4b8d31375b6dbe09cb09a7a631dfdafd/db/14.12.30.sql",
+      "sha256": "ebf6225681a567c2ba863547f3e8d8d1352990d8d976b3537787834cbe5bbece",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "db/14.12.30.sql:20-21",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL/MariaDB migration drops an existing named foreign-key constraint and re-adds the same constraint with a revised delete action.",
+      "mysql_mariadb_translation": "Reauthored as a parcel manifest migration. An existing restrictive parcel-item foreign key is dropped and recreated with ON DELETE SET NULL; deleting one parcel then nulls only its item references while preserving the items. The source schema, names, values, and issue-tracking purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["alter-table", "drop-foreign-key", "readd-foreign-key", "on-delete-set-null", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "Parcel 5001 owns two items and parcel 5002 owns one. The original RESTRICT action would block deletion; after replacement with SET NULL, deleting 5001 leaves its items with NULL parcel IDs and preserves parcel 5002's relationship.",
+  "determinism_notes": "All parcel and item IDs are fixed and final reads use primary-key ordering. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE parcels (parcel_id INT PRIMARY KEY, route_code VARCHAR(16) NOT NULL)",
+    "CREATE TABLE parcel_items (item_id INT PRIMARY KEY, parcel_id INT NULL, item_code VARCHAR(16) NOT NULL, CONSTRAINT fk_parcel_items_parcel FOREIGN KEY (parcel_id) REFERENCES parcels (parcel_id) ON DELETE RESTRICT)",
+    "INSERT INTO parcels VALUES (5001, 'NORTH'), (5002, 'SOUTH')",
+    "INSERT INTO parcel_items VALUES (6101, 5001, 'ITEM-A'), (6102, 5001, 'ITEM-B'), (6201, 5002, 'ITEM-C')"
+  ],
+  "steps": [
+    {
+      "sql": "ALTER TABLE parcel_items DROP FOREIGN KEY fk_parcel_items_parcel"
+    },
+    {
+      "sql": "ALTER TABLE parcel_items ADD CONSTRAINT fk_parcel_items_parcel FOREIGN KEY (parcel_id) REFERENCES parcels (parcel_id) ON DELETE SET NULL"
+    },
+    {
+      "sql": "DELETE FROM parcels WHERE parcel_id = 5001"
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT parcel_id, route_code FROM parcels ORDER BY parcel_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT item_id, parcel_id, item_code FROM parcel_items ORDER BY item_id",
+      "ordered": true
+    }
+  ]
+}

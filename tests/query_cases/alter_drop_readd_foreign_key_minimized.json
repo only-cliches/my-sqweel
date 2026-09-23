@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "alter_drop_readd_foreign_key_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "alter_drop_readd_foreign_key",
+    "source": {
+      "kind": "github",
+      "repository": "Alanaktion/phproject",
+      "commit": "0307062a4b8d31375b6dbe09cb09a7a631dfdafd",
+      "path": "db/14.12.30.sql",
+      "url": "https://github.com/Alanaktion/phproject/blob/0307062a4b8d31375b6dbe09cb09a7a631dfdafd/db/14.12.30.sql",
+      "sha256": "ebf6225681a567c2ba863547f3e8d8d1352990d8d976b3537787834cbe5bbece",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "db/14.12.30.sql:20-21",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "An existing foreign-key constraint is dropped and recreated with a different ON DELETE action.",
+      "mysql_mariadb_translation": "Reduced to one independently authored parcel and one nullable item. Dropping RESTRICT and adding SET NULL isolates the constraint replacement before deleting the parent."
+    },
+    "independently_authored": true
+  },
+  "features": ["alter-table", "drop-foreign-key", "readd-foreign-key", "on-delete-set-null", "metadata-regression"],
+  "fixture_notes": "The single item initially references the parcel under RESTRICT; after replacement, deleting the parcel must preserve the item with a NULL reference.",
+  "determinism_notes": "The one fixed parent and child use deterministic IDs; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE parcel_min (parcel_id INT PRIMARY KEY)",
+    "CREATE TABLE item_min (item_id INT PRIMARY KEY, parcel_id INT NULL, CONSTRAINT fk_item_min_parcel FOREIGN KEY (parcel_id) REFERENCES parcel_min (parcel_id) ON DELETE RESTRICT)",
+    "INSERT INTO parcel_min VALUES (9001)",
+    "INSERT INTO item_min VALUES (9101, 9001)"
+  ],
+  "steps": [
+    {
+      "sql": "ALTER TABLE item_min DROP FOREIGN KEY fk_item_min_parcel"
+    },
+    {
+      "sql": "ALTER TABLE item_min ADD CONSTRAINT fk_item_min_parcel FOREIGN KEY (parcel_id) REFERENCES parcel_min (parcel_id) ON DELETE SET NULL"
+    },
+    {
+      "sql": "DELETE FROM parcel_min WHERE parcel_id = 9001"
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT parcel_id FROM parcel_min ORDER BY parcel_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT item_id, parcel_id FROM item_min ORDER BY item_id",
+      "ordered": true
+    }
+  ]
+}

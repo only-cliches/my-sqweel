@@ -494,6 +494,17 @@ impl Catalog {
         sql: &str,
     ) -> Result<String> {
         self.check_database(identity, database)?;
+        if let Some(mut table) = parse_drop_foreign_key_table(sql)? {
+            DatabaseVisitor {
+                catalog: self,
+                identity,
+                database,
+                read_only: false,
+                rewritten: false,
+            }
+            .relation(&mut table)?;
+            return Ok(sql.to_owned());
+        }
         if let Some((mut table, index, if_exists)) = parse_index_drop(sql)? {
             ensure!(self.is_admin(identity), "Administrative command denied");
             DatabaseVisitor {
@@ -1085,6 +1096,28 @@ impl PreparedCommand {
         tokens.finish()?;
         Ok(Some(command))
     }
+}
+
+fn parse_drop_foreign_key_table(sql: &str) -> Result<Option<ObjectName>> {
+    let tokens = sql
+        .trim()
+        .trim_end_matches(';')
+        .split_whitespace()
+        .collect::<Vec<_>>();
+    if tokens.len() < 6
+        || !tokens[0].eq_ignore_ascii_case("ALTER")
+        || !tokens[1].eq_ignore_ascii_case("TABLE")
+        || !tokens[3].eq_ignore_ascii_case("DROP")
+        || !tokens[4].eq_ignore_ascii_case("FOREIGN")
+        || !tokens[5].eq_ignore_ascii_case("KEY")
+    {
+        return Ok(None);
+    }
+    let parts = tokens[2]
+        .split('.')
+        .map(|part| Ident::new(part.trim_matches('`')))
+        .collect();
+    Ok(Some(ObjectName(parts)))
 }
 
 // sqlparser lacks MySQL DROP INDEX ... ON table. Keep the table identity;

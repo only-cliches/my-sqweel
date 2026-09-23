@@ -800,6 +800,13 @@ impl RawEngine {
                 self.maybe_inject_failure(&raw)?;
                 let _update_ignore_guard =
                     UpdateIgnoreGuard::install(is_update_ignore_statement(&raw));
+                if let Some(result) = self.execute_drop_foreign_key_compat(&raw)? {
+                    self.capture_eval_user_variables();
+                    self.record_found_rows(&raw, &result);
+                    self.store_last_rows_affected(&raw, &result);
+                    out.push(result);
+                    continue;
+                }
                 if let Some(result) = self.execute_insert_select_returning_compat(&raw)? {
                     self.capture_eval_user_variables();
                     self.record_found_rows(&raw, &result);
@@ -1111,6 +1118,7 @@ impl RawEngine {
         parse_sql = rewrite_outer_parenthesized_select(&parse_sql);
         parse_sql = rewrite_parenthesized_union_branch(&parse_sql);
         parse_sql = rewrite_straight_join(&parse_sql);
+        parse_sql = rewrite_alter_drop_foreign_key(&parse_sql);
         parse_sql = rewrite_parenthesized_alter_columns(&parse_sql);
         parse_sql = rewrite_named_unique_constraints(&parse_sql);
         parse_sql = strip_index_comments(&parse_sql);
@@ -1766,6 +1774,47 @@ impl RawEngine {
             limit,
         )
         .map(Some)
+    }
+
+    fn execute_drop_foreign_key_compat(&self, sql: &str) -> Result<Option<QueryResult>> {
+        let trimmed = sql.trim().trim_end_matches(';').trim();
+        let upper = trimmed.to_ascii_uppercase();
+        if !upper.starts_with("ALTER TABLE") || !upper.contains("DROP FOREIGN KEY") {
+            return Ok(None);
+        }
+        let tokens = normalized_sql_tokens(trimmed);
+        let Some(table) = tokens.get(2) else {
+            return Err(anyhow!("invalid ALTER TABLE statement"));
+        };
+        let drop_names = tokens
+            .windows(4)
+            .filter(|window| {
+                window[0].eq_ignore_ascii_case("DROP")
+                    && window[1].eq_ignore_ascii_case("FOREIGN")
+                    && window[2].eq_ignore_ascii_case("KEY")
+            })
+            .filter_map(|window| window.get(3).cloned())
+            .collect::<BTreeSet<_>>();
+        let Some(mut schema) = self.schemas.get(table).map(|schema| schema.clone()) else {
+            return Err(anyhow!("unknown table: {table}"));
+        };
+        let before = schema.foreign_keys.len();
+        let matching_name = |foreign_key: &ForeignKeyHint| {
+            drop_names
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case(&foreign_key.name))
+        };
+        let drop_single_unnamed = drop_names.len() == 1 && schema.foreign_keys.len() == 1;
+        schema
+            .foreign_keys
+            .retain(|foreign_key| !matching_name(foreign_key) && !drop_single_unnamed);
+        if self.mysql_strict() && schema.foreign_keys.len() == before && !drop_single_unnamed {
+            return Err(anyhow!("Can't DROP FOREIGN KEY"));
+        }
+        schema.updated_at = Some(Utc::now());
+        self.schemas.insert(table.clone(), schema);
+        self.persist_schema(table)?;
+        Ok(Some(QueryResult::default()))
     }
 
     fn execute_compat_statement(&self, sql: &str) -> Result<Option<QueryResult>> {
@@ -3060,9 +3109,6 @@ impl RawEngine {
                     self.persist_auto_inc()?;
                 }
             }
-        }
-        if upper.starts_with("ALTER TABLE") && upper.contains("DROP FOREIGN KEY") {
-            return Ok(Some(QueryResult::default()));
         }
         if upper == "ALTER TABLE TI1 ADD PRIMARY KEY(A), ALGORITHM=INPLACE" {
             return Err(anyhow!("alter operation not supported reason"));
@@ -4422,6 +4468,28 @@ fn rewrite_alter_rename_syntax(sql: &str) -> String {
     let insert_at = rename + " RENAME ".len();
     let mut rewritten = sql.to_string();
     rewritten.insert_str(insert_at, "TO ");
+    rewritten
+}
+fn rewrite_alter_drop_foreign_key(sql: &str) -> String {
+    let upper = sql.to_ascii_uppercase();
+    if !upper.starts_with("ALTER TABLE") {
+        return sql.to_string();
+    }
+    let needle = "DROP FOREIGN KEY";
+    let mut rewritten = String::with_capacity(sql.len());
+    let mut cursor = 0;
+    let mut changed = false;
+    while let Some(relative) = upper[cursor..].find(needle) {
+        let start = cursor + relative;
+        rewritten.push_str(&sql[cursor..start]);
+        rewritten.push_str("DROP CONSTRAINT");
+        cursor = start + needle.len();
+        changed = true;
+    }
+    if !changed {
+        return sql.to_string();
+    }
+    rewritten.push_str(&sql[cursor..]);
     rewritten
 }
 
