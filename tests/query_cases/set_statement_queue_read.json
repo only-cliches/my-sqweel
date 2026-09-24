@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "set_statement_queue_read",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "antlr/grammars-v4",
+      "commit": "7e08234262d2a7c58557d74f2cb8ce90c72d356f",
+      "path": "sql/mariadb/examples/fast/dml_select.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/7e08234262d2a7c58557d74f2cb8ce90c72d356f/sql/mariadb/examples/fast/dml_select.sql",
+      "sha256": "b9128ffb5b50bea79c534bc24a127d9d626fd2d21be8cb0a45deafd8d6c84f79",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/mariadb/examples/fast/dml_select.sql: SET STATEMENT ... FOR SELECT",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB SELECT is wrapped in SET STATEMENT so a per-statement execution setting applies only to that query.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored queue report. A known MariaDB max_statement_time value wraps an ordered read of ready queue rows, while the table, rows, projection, and queue domain are new. The fixture observes the inner SELECT result without depending on elapsed time or a timeout."
+    },
+    "independently_authored": true
+  },
+  "features": ["set-statement", "per-statement-setting", "select", "deterministic-order"],
+  "fixture_notes": "The per-statement setting must not change the ordered ready-row result: queued row 202 is excluded while ready rows 201 and 203 are returned.",
+  "determinism_notes": "The setting is a fixed known MariaDB value and the result is ordered by the unique queue ID. No clocks, timeouts, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE queue_readings (queue_id INT PRIMARY KEY, queue_label VARCHAR(32) NOT NULL, queue_state VARCHAR(16) NOT NULL, pending_count INT NOT NULL)",
+    "INSERT INTO queue_readings VALUES (201, 'alpha', 'ready', 4), (202, 'beta', 'queued', 9), (203, 'gamma', 'ready', 1)"
+  ],
+  "steps": [
+    {
+      "sql": "SET STATEMENT max_statement_time = 60 FOR SELECT queue_id, queue_label, pending_count FROM queue_readings WHERE queue_state = 'ready' ORDER BY queue_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT queue_id, queue_label, queue_state, pending_count FROM queue_readings ORDER BY queue_id",
+      "ordered": true
+    }
+  ]
+}

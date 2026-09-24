@@ -1106,6 +1106,7 @@ impl RawEngine {
             .replace(" ZEROFILL", "")
             .replace(" zerofill", "");
         parse_sql = strip_select_modifiers(&parse_sql);
+        parse_sql = rewrite_set_statement_for_parser(&parse_sql);
         parse_sql = query::strip_explain_index_hints(&parse_sql);
         parse_sql = rewrite_trim_direction(&parse_sql);
         parse_sql = rewrite_trim_both_from(&parse_sql);
@@ -4432,6 +4433,18 @@ fn rewrite_group_by_with_rollup(sql: &str) -> String {
         expressions,
         &sql[rollup + "WITH ROLLUP".len()..]
     )
+}
+
+fn rewrite_set_statement_for_parser(sql: &str) -> String {
+    let trimmed = sql.trim_start();
+    let upper = trimmed.to_ascii_uppercase();
+    if !upper.starts_with("SET STATEMENT ") {
+        return sql.to_string();
+    }
+    let Some(for_at) = find_top_level_keyword(&upper, "FOR") else {
+        return sql.to_string();
+    };
+    trimmed[for_at + "FOR".len()..].trim().to_string()
 }
 
 fn rewrite_update_order_limit_for_parser(sql: &str) -> String {
