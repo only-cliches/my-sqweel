@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "insert_set_label_registry",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "shockerli/Notes",
+      "commit": "ab692c415b98da64528d57ba6856add8d78dc3cd",
+      "path": "MySQL_Note.sql",
+      "url": "https://github.com/shockerli/Notes/blob/ab692c415b98da64528d57ba6856add8d78dc3cd/MySQL_Note.sql",
+      "sha256": "ea4fec2cd49faedee8b86a80642b3d053f23adc112367a32ae4e4e0833d10c0a",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL_Note.sql:525",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL syntax note documents INSERT INTO table SET column=value assignments as an alternative to a VALUES clause.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored label registry. Two INSERT ... SET statements populate fixed label rows with a NULL note and a non-NULL note; a deterministic final read verifies assignment semantics without copying the note's identifiers, schema, or application context."
+    },
+    "independently_authored": true
+  },
+  "features": ["insert-set", "nullable-column", "multi-step-dml", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "Label 1201 is inserted with an explicit NULL note, while label 1202 receives a review note. Both rows must preserve their independently assigned values.",
+  "determinism_notes": "Label IDs, codes, states, notes, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE label_registry (label_id INT PRIMARY KEY, label_code VARCHAR(16) NOT NULL UNIQUE, label_state VARCHAR(16) NOT NULL, review_note VARCHAR(64) NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO label_registry SET label_id = 1201, label_code = 'LB-1201', label_state = 'ready', review_note = NULL",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO label_registry SET label_id = 1202, label_code = 'LB-1202', label_state = 'held', review_note = 'manual review'",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT label_id, label_code, label_state, review_note FROM label_registry ORDER BY label_id",
+      "ordered": true
+    }
+  ]
+}
