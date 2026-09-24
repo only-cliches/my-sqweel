@@ -738,6 +738,28 @@ impl EngineSession {
     }
     fn authorize(&self, sql: &str) -> Result<String> {
         let state = self.shared.committed.lock();
+        let update_low_priority = sql
+            .trim_start()
+            .to_ascii_uppercase()
+            .starts_with("UPDATE LOW_PRIORITY ");
+        if update_low_priority {
+            let rewritten = sql.replacen("UPDATE LOW_PRIORITY", "UPDATE", 1).replacen(
+                "update low_priority",
+                "update",
+                1,
+            );
+            let authorization_sql = state
+                .databases
+                .get(&self.database)
+                .map(|raw| raw.rewrite_sql_for_parser(&rewritten))
+                .ok_or_else(|| anyhow!("Unknown database: {}", self.database))?;
+            state.catalog.authorize_and_normalize(
+                &self.identity,
+                &self.database,
+                &authorization_sql,
+            )?;
+            return Ok(rewritten);
+        }
         match state
             .catalog
             .authorize_and_normalize(&self.identity, &self.database, sql)

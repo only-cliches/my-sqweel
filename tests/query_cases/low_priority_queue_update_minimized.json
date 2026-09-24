@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "low_priority_queue_update_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/692.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/692.sql",
+      "sha256": "bee6a6b6d28bcaaed06efbdec238f9b0633a73311ac00c9f1d8d8a47f9a541be",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from UPDATE LOW_PRIORITY in MySQL/docker/fuzz_root/mysql_initlib/692.sql",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "UPDATE LOW_PRIORITY must execute a single-table mutation rather than treating LOW_PRIORITY as the target table.",
+      "mysql_mariadb_translation": "Reduced to one independently authored queue row and one arithmetic assignment, isolating the UPDATE LOW_PRIORITY parser-compatibility contract while removing ordering, LIMIT, multiple rows, and domain-specific fields."
+    },
+    "independently_authored": true,
+    "minimized_from": "low_priority_queue_update"
+  },
+  "features": ["low-priority-update", "arithmetic-assignment", "minimized-regression"],
+  "fixture_notes": "One fixed queued row increments its attempt count from 2 to 3; the minimal statement must update queue_jobs_min rather than interpret LOW_PRIORITY as a table name.",
+  "determinism_notes": "The row ID and arithmetic value are fixed and the final read is ordered by the primary key; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE queue_jobs_min (job_id INT PRIMARY KEY, attempts INT NOT NULL)",
+    "INSERT INTO queue_jobs_min VALUES (701, 2)"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE LOW_PRIORITY queue_jobs_min SET attempts = attempts + 1 WHERE job_id = 701",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT job_id, attempts FROM queue_jobs_min ORDER BY job_id",
+      "ordered": true
+    }
+  ]
+}

@@ -1095,6 +1095,8 @@ impl RawEngine {
         let mut parse_sql = raw
             .replace("DELETE LOW_PRIORITY", "DELETE")
             .replace("delete low_priority", "delete")
+            .replace("UPDATE LOW_PRIORITY", "UPDATE")
+            .replace("update low_priority", "update")
             .replace("DELETE IGNORE", "DELETE")
             .replace("delete ignore", "delete")
             .replace("UPDATE IGNORE", "UPDATE")

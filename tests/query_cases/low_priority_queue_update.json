@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "low_priority_queue_update",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/692.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/692.sql",
+      "sha256": "bee6a6b6d28bcaaed06efbdec238f9b0633a73311ac00c9f1d8d8a47f9a541be",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/docker/fuzz_root/mysql_initlib/692.sql: UPDATE LOW_PRIORITY t1 SET n = 4",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL UPDATE applies the LOW_PRIORITY modifier to a table mutation.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored queue-state migration. UPDATE LOW_PRIORITY changes the two lowest-urgency queued jobs selected by deterministic ORDER BY and LIMIT, increments their attempts, and leaves the higher-urgency queued job and already-running job unchanged; the source table, values, and application purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["low-priority-update", "filtered-update", "order-by-limit", "arithmetic-assignment", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "Queued jobs 501, 502, and 503 have urgency 30, 20, and 10; the two lowest-urgency jobs become archived and increment attempts. Running job 601 is not eligible, and queued job 501 remains unchanged.",
+  "determinism_notes": "Urgency values and job IDs are fixed, and UPDATE LOW_PRIORITY orders by urgency ascending with job ID as a tie-breaker before LIMIT 2. Final rows are ordered by the unique job ID; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE queue_jobs (job_id INT PRIMARY KEY, job_label VARCHAR(32) NOT NULL, job_state VARCHAR(16) NOT NULL, urgency INT NOT NULL, attempts INT NOT NULL)",
+    "INSERT INTO queue_jobs VALUES (501, 'reindex-search', 'queued', 30, 1), (502, 'refresh-cache', 'queued', 20, 2), (503, 'compact-logs', 'queued', 10, 0), (601, 'serve-traffic', 'running', 1, 4)"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE LOW_PRIORITY queue_jobs SET job_state = 'archived', attempts = attempts + 1 WHERE job_state = 'queued' ORDER BY urgency ASC, job_id ASC LIMIT 2",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT job_id, job_label, job_state, urgency, attempts FROM queue_jobs ORDER BY job_id",
+      "ordered": true
+    }
+  ]
+}
