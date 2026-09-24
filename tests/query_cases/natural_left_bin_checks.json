@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "natural_left_bin_checks",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "antlr/grammars-v4",
+      "commit": "7e08234262d2a7c58557d74f2cb8ce90c72d356f",
+      "path": "sql/postgresql/examples/join.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/7e08234262d2a7c58557d74f2cb8ce90c72d356f/sql/postgresql/examples/join.sql",
+      "sha256": "621ca3207a04ebe87142fff02a22e18730c63ece25b9a660a085a929c13e4892",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "sql/postgresql/examples/join.sql:264-267",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A PostgreSQL join example combines derived relations with NATURAL LEFT JOIN so columns sharing the same name determine the join key and left-side rows remain visible without a match.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored warehouse-bin inspection. NATURAL LEFT JOIN matches bins to check rows through the shared bin_id column, COUNT reports check multiplicity, and a bin with no checks is preserved with a zero count; the source derived tables, names, values, and purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["natural-left-join", "natural-join-key", "grouped-aggregate", "left-preservation", "null-preservation", "deterministic-order"],
+  "fixture_notes": "Bin 410 has two checks, bin 420 has one failed check, and bin 430 has no checks but must remain in the report with count zero.",
+  "determinism_notes": "Bin IDs, check IDs, outcomes, grouping keys, and ordering are fixed; there are no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE depot_bins (bin_id INT PRIMARY KEY, bin_label VARCHAR(32) NOT NULL, zone_code VARCHAR(8) NOT NULL)",
+    "CREATE TABLE bin_checks (check_id INT PRIMARY KEY, bin_id INT NOT NULL, check_outcome VARCHAR(16) NOT NULL)",
+    "INSERT INTO depot_bins VALUES (410, 'north rack', 'N'), (420, 'south rack', 'S'), (430, 'overflow rack', 'O')",
+    "INSERT INTO bin_checks VALUES (8101, 410, 'pass'), (8102, 410, 'pass'), (8201, 420, 'fail')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT bin_id, bin_label, COUNT(check_id) AS check_count FROM depot_bins NATURAL LEFT JOIN bin_checks GROUP BY bin_id, bin_label ORDER BY bin_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT bin_id, bin_label, zone_code FROM depot_bins ORDER BY bin_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT check_id, bin_id, check_outcome FROM bin_checks ORDER BY check_id",
+      "ordered": true
+    }
+  ]
+}
