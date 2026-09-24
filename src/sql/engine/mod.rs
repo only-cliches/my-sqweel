@@ -1075,6 +1075,7 @@ impl RawEngine {
             " SQL_BIG_RESULT",
             " SQL_BUFFER_RESULT",
             " SQL_NO_CACHE",
+            " SQL_CACHE",
             " SQL_CALC_FOUND_ROWS",
             " FORCE INDEX",
             " USE INDEX",
@@ -4260,6 +4261,7 @@ fn preserve_select_result_headers(sql: &str, result: &mut QueryResult) {
             "SQL_BIG_RESULT",
             "SQL_BUFFER_RESULT",
             "SQL_NO_CACHE",
+            "SQL_CACHE",
             "SQL_CALC_FOUND_ROWS",
         ]
         .iter()
@@ -4402,6 +4404,7 @@ fn projection_is_modifier_wildcard(expression: &str) -> bool {
                     "SQL_BIG_RESULT",
                     "SQL_BUFFER_RESULT",
                     "SQL_NO_CACHE",
+                    "SQL_CACHE",
                     "SQL_CALC_FOUND_ROWS",
                 ]
                 .iter()
@@ -4755,6 +4758,7 @@ fn strip_select_modifiers(sql: &str) -> String {
         "SQL_BIG_RESULT",
         "SQL_BUFFER_RESULT",
         "SQL_NO_CACHE",
+        "SQL_CACHE",
         "SQL_CALC_FOUND_ROWS",
     ];
     let mut in_select_prefix = true;

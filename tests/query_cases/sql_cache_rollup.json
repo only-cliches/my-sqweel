@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "sql_cache_rollup",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "actiontech/dble-test-suite",
+      "commit": "19c95415de567f6b32072be7c501ec1db83c4e1f",
+      "path": "behave_dble/sqls/special_sharding/select/select_sharding.sql",
+      "url": "https://github.com/actiontech/dble-test-suite/blob/19c95415de567f6b32072be7c501ec1db83c4e1f/behave_dble/sqls/special_sharding/select/select_sharding.sql",
+      "sha256": "043063097506716ee5a0908f67768a79db73539d799c470eb9f77d8d4195faef",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "behave_dble/sqls/special_sharding/select/select_sharding.sql:23",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL SELECT uses the SQL_CACHE modifier on a table read.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored cache-zone rollup. SELECT SQL_CACHE preserves a left-joined grouped report over ready readings, including zero-activity zones and deterministic zone ordering; the source sharding tables, values, and routing purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["sql-cache", "left-join", "grouped-aggregate", "zero-activity-groups", "deterministic-order"],
+  "fixture_notes": "Zones 11 and 12 have ready readings totaling 14 and 9 units; zone 13 has no ready readings and must remain in the rollup with zero units and zero ready-read count. A non-ready reading is excluded by the join condition.",
+  "determinism_notes": "Zone IDs and reading IDs are fixed, the grouped output is ordered by the unique zone ID, and all aggregate inputs are stable. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE cache_zones (zone_id INT PRIMARY KEY, zone_name VARCHAR(24) NOT NULL)",
+    "CREATE TABLE cache_readings (reading_id INT PRIMARY KEY, zone_id INT NOT NULL, reading_state VARCHAR(16) NOT NULL, units INT NOT NULL)",
+    "INSERT INTO cache_zones VALUES (11, 'north'), (12, 'south'), (13, 'west')",
+    "INSERT INTO cache_readings VALUES (101, 11, 'ready', 8), (102, 11, 'ready', 6), (103, 12, 'ready', 9), (104, 12, 'held', 40)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT SQL_CACHE z.zone_id, z.zone_name, COALESCE(SUM(r.units), 0) AS ready_units, COUNT(r.reading_id) AS ready_readings FROM cache_zones z LEFT JOIN cache_readings r ON r.zone_id = z.zone_id AND r.reading_state = 'ready' GROUP BY z.zone_id, z.zone_name ORDER BY z.zone_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT z.zone_id, z.zone_name, r.reading_id, r.reading_state, r.units FROM cache_zones z LEFT JOIN cache_readings r ON r.zone_id = z.zone_id ORDER BY z.zone_id, r.reading_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT z.zone_id, z.zone_name, r.reading_id, r.reading_state, r.units FROM cache_zones z LEFT JOIN cache_readings r ON r.zone_id = z.zone_id ORDER BY z.zone_id, r.reading_id",
+      "ordered": true
+    }
+  ]
+}

@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "sql_cache_rollup_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "actiontech/dble-test-suite",
+      "commit": "19c95415de567f6b32072be7c501ec1db83c4e1f",
+      "path": "behave_dble/sqls/special_sharding/select/select_sharding.sql",
+      "url": "https://github.com/actiontech/dble-test-suite/blob/19c95415de567f6b32072be7c501ec1db83c4e1f/behave_dble/sqls/special_sharding/select/select_sharding.sql",
+      "sha256": "043063097506716ee5a0908f67768a79db73539d799c470eb9f77d8d4195faef",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from SQL_CACHE SELECT at behave_dble/sqls/special_sharding/select/select_sharding.sql:23",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "SQL_CACHE must not change the rows or metadata returned by a simple ordered SELECT.",
+      "mysql_mariadb_translation": "Reduced to one independently authored cache-zone row and one SQL_CACHE projection, removing the original join, grouping, and multiple zones while isolating SELECT modifier parser compatibility."
+    },
+    "independently_authored": true,
+    "minimized_from": "sql_cache_rollup"
+  },
+  "features": ["sql-cache", "minimized-regression", "deterministic-order"],
+  "fixture_notes": "The one fixed zone row must be returned unchanged by the cached projection.",
+  "determinism_notes": "The zone ID is fixed and supplies the result order; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE cache_zone_min (zone_id INT PRIMARY KEY, zone_name VARCHAR(24) NOT NULL)",
+    "INSERT INTO cache_zone_min VALUES (91, 'archive')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT SQL_CACHE zone_id, zone_name FROM cache_zone_min ORDER BY zone_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT zone_id, zone_name FROM cache_zone_min ORDER BY zone_id",
+      "ordered": true
+    }
+  ]
+}
