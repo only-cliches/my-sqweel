@@ -431,7 +431,7 @@ impl RawEngine {
             );
 
             if !conflict_keys.is_empty() {
-                if options.ignore {
+                if options.on_duplicate.is_empty() && options.ignore {
                     continue;
                 }
 
