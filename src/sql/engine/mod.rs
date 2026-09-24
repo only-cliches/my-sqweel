@@ -1093,6 +1093,14 @@ impl RawEngine {
 
     fn rewrite_sql_for_parser(&self, raw: &str) -> String {
         let mut parse_sql = raw
+            .replace(
+                "START TRANSACTION WITH CONSISTENT SNAPSHOT",
+                "START TRANSACTION",
+            )
+            .replace(
+                "start transaction with consistent snapshot",
+                "start transaction",
+            )
             .replace("DELETE LOW_PRIORITY", "DELETE")
             .replace("delete low_priority", "delete")
             .replace("UPDATE LOW_PRIORITY", "UPDATE")

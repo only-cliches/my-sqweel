@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "id": "consistent_snapshot_audit_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/1246.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/1246.sql",
+      "sha256": "42f13f05658544460b329c93bce54eda0e4320133539b0b6558a013119d27f1b",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from START TRANSACTION WITH CONSISTENT SNAPSHOT in MySQL/docker/fuzz_root/mysql_initlib/1246.sql:28-32",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "START TRANSACTION WITH CONSISTENT SNAPSHOT must begin a valid transaction before an ordinary read and commit.",
+      "mysql_mariadb_translation": "Reduced to one independently authored inventory row, one consistent-snapshot transaction start, one ordered read, and COMMIT, isolating the transaction-start compatibility contract while removing the maintenance mutation and extra rows."
+    },
+    "independently_authored": true,
+    "minimized_from": "consistent_snapshot_audit"
+  },
+  "features": ["consistent-snapshot", "explicit-transaction", "minimized-regression"],
+  "fixture_notes": "The single fixed inventory row must remain readable inside a consistent-snapshot transaction and after commit.",
+  "determinism_notes": "The row ID and values are fixed and the read is ordered by the primary key; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE snapshot_min (sku INT PRIMARY KEY, quantity INT NOT NULL) ENGINE = InnoDB",
+    "INSERT INTO snapshot_min VALUES (901, 14)"
+  ],
+  "steps": [
+    {
+      "sql": "START TRANSACTION WITH CONSISTENT SNAPSHOT",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT sku, quantity FROM snapshot_min ORDER BY sku",
+      "ordered": true
+    },
+    {
+      "sql": "COMMIT",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT sku, quantity FROM snapshot_min ORDER BY sku",
+      "ordered": true
+    }
+  ]
+}

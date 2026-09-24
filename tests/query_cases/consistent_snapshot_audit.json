@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "id": "consistent_snapshot_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/1246.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/1246.sql",
+      "sha256": "42f13f05658544460b329c93bce54eda0e4320133539b0b6558a013119d27f1b",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/docker/fuzz_root/mysql_initlib/1246.sql:28-32",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB transaction starts WITH CONSISTENT SNAPSHOT, reads a fixed InnoDB table, performs a maintenance statement, reads again, and commits.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored inventory audit. START TRANSACTION WITH CONSISTENT SNAPSHOT establishes the transaction before an ordered baseline read; a deterministic stock adjustment is observed inside the same transaction, then COMMIT persists it for a final-state check. The source table, values, maintenance statement, and application purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["consistent-snapshot", "explicit-transaction", "intermediate-state", "ordered-read", "dml-final-state"],
+  "fixture_notes": "Three inventory rows are read before the adjustment. SKU 402 increases from 12 to 17 inside the consistent-snapshot transaction; the committed final read verifies that the other rows are unchanged.",
+  "determinism_notes": "Inventory IDs and quantities are fixed and all reads are ordered by the primary inventory ID. One connection executes the transaction sequentially; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE inventory_snapshot (sku INT PRIMARY KEY, item_label VARCHAR(32) NOT NULL, quantity INT NOT NULL, inventory_state VARCHAR(16) NOT NULL) ENGINE = InnoDB",
+    "INSERT INTO inventory_snapshot VALUES (401, 'copper-wire', 8, 'available'), (402, 'relay-coil', 12, 'available'), (403, 'fuse-pack', 3, 'reserved')"
+  ],
+  "steps": [
+    {
+      "sql": "START TRANSACTION WITH CONSISTENT SNAPSHOT",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT sku, item_label, quantity, inventory_state FROM inventory_snapshot ORDER BY sku",
+      "ordered": true
+    },
+    {
+      "sql": "UPDATE inventory_snapshot SET quantity = quantity + 5 WHERE sku = 402",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT sku, item_label, quantity, inventory_state FROM inventory_snapshot ORDER BY sku",
+      "ordered": true
+    },
+    {
+      "sql": "COMMIT",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT sku, item_label, quantity, inventory_state FROM inventory_snapshot ORDER BY sku",
+      "ordered": true
+    }
+  ]
+}
