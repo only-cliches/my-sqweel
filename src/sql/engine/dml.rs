@@ -2081,7 +2081,7 @@ impl RawEngine {
         }
 
         if let Some(schema) = self.schemas.get(table).map(|s| s.clone()) {
-            for unique_cols in &schema.unique {
+            for unique_cols in unique_columns(&schema) {
                 let Some(incoming) = schema_unique_key(&schema, data, unique_cols) else {
                     continue;
                 };
@@ -2333,6 +2333,15 @@ fn schema_unique_key(
     unique_key_with_prefixes(data, columns, prefix_lengths)
 }
 
+// ALTER TABLE can add a primary key without changing the stored row IDs.
+// Conflict detection must therefore check its values, just like a unique index.
+fn unique_columns(schema: &TableSchemaHint) -> impl Iterator<Item = &Vec<String>> {
+    schema.unique.iter().chain(
+        (!schema.primary_key.is_empty() && !schema.unique.contains(&schema.primary_key))
+            .then_some(&schema.primary_key),
+    )
+}
+
 type UniqueLookup = BTreeMap<Vec<String>, BTreeMap<String, BTreeSet<String>>>;
 
 fn build_unique_lookup(
@@ -2340,7 +2349,7 @@ fn build_unique_lookup(
     rows: &BTreeMap<String, StoredRow>,
 ) -> UniqueLookup {
     let mut lookup = UniqueLookup::new();
-    for columns in &schema.unique {
+    for columns in unique_columns(schema) {
         let values = lookup.entry(columns.clone()).or_default();
         for (primary_key, row) in rows {
             if let Some(value) = schema_unique_key(schema, &row.data, columns) {
@@ -2360,7 +2369,7 @@ fn add_to_unique_lookup(
     let Some(schema) = schema else {
         return;
     };
-    for columns in &schema.unique {
+    for columns in unique_columns(schema) {
         let Some(value) = schema_unique_key(schema, data, columns) else {
             continue;
         };
@@ -2382,7 +2391,7 @@ fn remove_from_unique_lookup(
     let Some(schema) = schema else {
         return;
     };
-    for columns in &schema.unique {
+    for columns in unique_columns(schema) {
         let Some(value) = schema_unique_key(schema, data, columns) else {
             continue;
         };
@@ -2411,7 +2420,7 @@ fn find_conflict_keys_with_lookup(
     let Some(schema) = schema else {
         return conflicts;
     };
-    for columns in &schema.unique {
+    for columns in unique_columns(schema) {
         let Some(value) = schema_unique_key(schema, data, columns) else {
             continue;
         };

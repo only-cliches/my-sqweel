@@ -21,6 +21,10 @@ pub use async_engine::{
     AsyncEngine, AsyncEngineSession, QueryFilter, QueryFilterAction, QueryFilters, QueryRequest,
     ResultFilter, ResultFilterAction, ResultFilters,
 };
+pub use sql::engine::{
+    QueryHookError, QueryHookEvent, QueryHookKey, QueryHookOptions, QueryHookRow,
+    QueryHookSubscription,
+};
 pub(crate) mod vendor;
 
 pub fn run_cli() -> Result<()> {

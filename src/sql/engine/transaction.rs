@@ -15,6 +15,7 @@ struct Committed {
 }
 
 struct Coordinator {
+    hooks: Arc<HookRegistry>,
     cfg: EngineConfig,
     committed: Mutex<Committed>,
     writer: Mutex<Writers>,
@@ -54,6 +55,7 @@ pub struct Engine {
 
 /// Connection-owned state. Dropping a session rolls back uncommitted changes.
 pub struct EngineSession {
+    pub(crate) last_query_read: bool,
     shared: Arc<Coordinator>,
     database: String,
     identity: Identity,
@@ -122,6 +124,7 @@ impl Engine {
             },
         };
         let shared = Arc::new(Coordinator {
+            hooks: Arc::new(HookRegistry::default()),
             cfg,
             committed: Mutex::new(state),
             writer: Mutex::new(Writers::default()),
@@ -169,6 +172,26 @@ impl Engine {
             .into_iter()
             .next()
             .ok_or_else(|| anyhow!("empty statement"))
+    }
+    /// Subscribe to engine-wide events on the current Tokio runtime.
+    /// The callback receives committed changes and must be trusted with all databases.
+    pub fn subscribe_query_hooks<F, Fut>(
+        &self,
+        options: QueryHookOptions,
+        callback: F,
+    ) -> Result<QueryHookSubscription>
+    where
+        F: Fn(Arc<QueryHookEvent>) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = Result<()>> + Send + 'static,
+    {
+        self.shared.hooks.subscribe(options, callback)
+    }
+    pub(crate) fn hooks(&self) -> Arc<HookRegistry> {
+        self.shared.hooks.clone()
+    }
+    pub(crate) fn hook_context(&self) -> (String, bool) {
+        let session = self.default_session.lock();
+        (session.database.clone(), session.last_query_read)
     }
     pub fn subscribe_query_events(&self, options: QueryEventOptions) -> QueryEventStream {
         self.shared.committed.lock().databases["app"].subscribe_query_events(options)
@@ -223,7 +246,7 @@ impl Engine {
         }
         let committed = Committed { catalog, databases };
         let identity = committed.catalog.administrator_identity();
-        self.shared.publish(committed)?;
+        self.shared.publish_quietly(committed)?;
         self.default_session.lock().identity = identity;
         Ok(())
     }
@@ -234,7 +257,7 @@ impl Engine {
                 snapshot.version
             ));
         }
-        self.mutate(|raw| {
+        self.mutate_with_events(false, |raw| {
             raw.apply_snapshot(snapshot);
             Ok(())
         })
@@ -288,12 +311,20 @@ impl Engine {
         self.mutate(|raw| raw.seed_json_rows(table, rows, mode))
     }
     fn mutate<T>(&self, operation: impl FnOnce(&RawEngine) -> Result<T>) -> Result<T> {
+        self.mutate_with_events(true, operation)
+    }
+    fn mutate_with_events<T>(
+        &self,
+        emit: bool,
+        operation: impl FnOnce(&RawEngine) -> Result<T>,
+    ) -> Result<T> {
         let _lease = self.shared.acquire_database("app")?;
         let mut state = self.shared.committed.lock().clone();
         let raw = state.databases["app"].fork()?;
         let value = operation(&raw)?;
         state.databases.insert("app".into(), Arc::new(raw));
-        self.shared.publish_database("app", state)?;
+        self.shared
+            .publish_database_with_events("app", state, emit)?;
         Ok(value)
     }
     #[cfg(test)]
@@ -353,6 +384,14 @@ impl Coordinator {
         })
     }
     fn publish_database(&self, database: &str, pending: Committed) -> Result<()> {
+        self.publish_database_with_events(database, pending, true)
+    }
+    fn publish_database_with_events(
+        &self,
+        database: &str,
+        pending: Committed,
+        emit: bool,
+    ) -> Result<()> {
         // Writers in other databases can commit while this transaction is open.
         // Serialize durable publication and merge only this lease's database.
         let _publication = self.publication.lock();
@@ -363,18 +402,25 @@ impl Coordinator {
             .ok_or_else(|| anyhow!("Unknown database: {database}"))?
             .clone();
         current.databases.insert(database.to_owned(), raw);
-        self.publish_locked(current)
+        self.publish_locked(current, emit)
     }
     fn publish(&self, state: Committed) -> Result<()> {
         let _publication = self.publication.lock();
-        self.publish_locked(state)
+        self.publish_locked(state, true)
     }
-    fn publish_locked(&self, state: Committed) -> Result<()> {
+    fn publish_quietly(&self, state: Committed) -> Result<()> {
+        let _publication = self.publication.lock();
+        self.publish_locked(state, false)
+    }
+    fn publish_locked(&self, state: Committed, emit: bool) -> Result<()> {
         self.check()?;
         if let Some(persistence) = &self.persistence {
             persistence.commit(&self.committed.lock(), &state)?;
         }
-        *self.committed.lock() = state;
+        let before = std::mem::replace(&mut *self.committed.lock(), state.clone());
+        if emit {
+            self.hooks.changes(&before.databases, &state.databases);
+        }
         Ok(())
     }
 }
@@ -384,6 +430,7 @@ impl EngineSession {
         let identity = shared.committed.lock().catalog.administrator_identity();
         Self {
             shared,
+            last_query_read: false,
             database: "app".into(),
             identity,
             client_host: "localhost".into(),
@@ -633,6 +680,26 @@ impl EngineSession {
         self.run(sql, substitute_params(sql, params), false)
     }
     fn run(
+        &mut self,
+        event_sql: &str,
+        execution: Result<String>,
+        normalize: bool,
+    ) -> Result<Vec<QueryResult>> {
+        self.last_query_read = false;
+        let database = self
+            .shared
+            .hooks
+            .automatic_reads()
+            .then(|| self.database.clone());
+        let outcome = self.run_observed(event_sql, execution, normalize);
+        if self.last_query_read {
+            if let (Some(database), Ok(results)) = (database, &outcome) {
+                self.shared.hooks.read(&database, event_sql, results);
+            }
+        }
+        outcome
+    }
+    fn run_observed(
         &mut self,
         event_sql: &str,
         execution: Result<String>,
@@ -963,6 +1030,7 @@ impl EngineSession {
                 })
                 .ok();
             let ast = parsed.as_ref().and_then(|items| items.first());
+            self.last_query_read |= matches!(ast, Some(Statement::Query(_)));
             if matches!(ast, Some(Statement::Query(query)) if query.locks.iter().any(|lock| lock.nonblock.is_some() || lock.of.is_some()))
             {
                 return Err(anyhow!(

@@ -15,7 +15,7 @@
 MySqweel implements a subset of MySQL/MariaDB SQL in Rust. Run it in process,
 connect existing clients through its MySQL wire server, or supply custom
 storage through the async embedded API. It includes strict SQL schemas,
-sessions and transactions, optional Lux persistence, and local maintenance
+sessions and transactions, optional LuxDB persistence, and local maintenance
 and search tools.
 
 The project is intended for embedded development datasets, fixtures, ORM and
@@ -30,12 +30,14 @@ MariaDB compatibility or production database durability and concurrency.
 
 | Entry point | What it provides | Current boundary |
 | --- | --- | --- |
-| `Engine` / `EngineSession` | Synchronous embedded SQL, sessions, transactions, snapshots, and query events | In-memory execution; optional directory-backed Lux persistence |
+| `Engine` / `EngineSession` | Synchronous embedded SQL, sessions, transactions, snapshots, and query events | In-memory execution; optional directory-backed LuxDB persistence |
 | `AsyncEngine<S>` / `AsyncEngineSession<S>` | Async storage integration and query/result filters | One `AsyncStorage` backend per instance; SQL evaluation is still synchronous |
 | `server::run` / `spawn_with_engine` | MySQL wire connections plus debug/search HTTP | Uses `Arc<Engine>`; does not invoke async execution filters or custom async storage |
 | `sqwl` | Server, SQL/maintenance REPL, and SQL inspection | Wraps the synchronous engine |
 
-Lux is the only bundled storage backend. JSON and CSV implementations are
+LuxDB is the only bundled storage backend. It is a Redis-like datastore that
+holds the entire dataset in memory, even when disk persistence is enabled, so
+the dataset must fit in available RAM. JSON and CSV implementations are
 provided as [examples](#json-and-csv-examples). Multiple logical SQL databases
 are supported, but a registry of multiple storage backends and filter-driven
 backend routing are **not implemented**.
@@ -134,7 +136,7 @@ impl QueryFilter for CurrentTenant {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let db = AsyncEngine::open_lux(EngineConfig::default(), None).await?;
+    let db = AsyncEngine::open_luxDB(EngineConfig::default(), None).await?;
     db.query_filters().push(CurrentTenant);
 
     let results = db.execute_sql("SELECT current_tenant").await?;
@@ -310,7 +312,7 @@ Place global options before the subcommand.
 | --- | --- |
 | `--bind <addr>` | MySQL bind address; default `127.0.0.1:3307` |
 | `--debug-bind <addr>` | HTTP bind address; default SQL address with port + 100 |
-| `--data-dir <dir>` | Enable locked Lux persistence |
+| `--data-dir <dir>` | Enable locked LuxDB persistence |
 | `--default-time-zone <offset>` | Initial session timezone; default UTC |
 | `--allow-remote` | Permit non-loopback listeners |
 | `--query-delay-ms <n>` | Add latency per SQL statement |
@@ -332,16 +334,16 @@ sqwl --data-dir .my-sqweel/data serve --repl
 
 Embedded callers use
 `Engine::open_with_data_dir(EngineConfig::default(), Some(path))`.
-The data directory is locked against concurrent opens. Lux persists logical
+The data directory is locked against concurrent opens. LuxDB persists logical
 databases, accounts, schemas, rows, counters, views, and index comments.
 
 The synchronous engine writes incremental changes before publishing the
 new SQL state. Its version-2 format rejects legacy unversioned stores and
 `transaction-image.json`; there is no automatic migration for old
-development data. The async Lux adapter uses a separate storage layout;
+development data. The async LuxDB adapter uses a separate storage layout;
 its directory is not interchangeable with the synchronous engine's directory.
 
-The current Lux adapter uses command pipelines, so persistence does not
+The current LuxDB adapter uses command pipelines, so persistence does not
 guarantee crash-atomic multi-key commits or synchronous durability. The
 synchronous engine stops accepting operations after a persistence error and
 requires reopening; a partial storage write may remain. Writes can also copy
@@ -377,6 +379,62 @@ catalog. `Engine::export_state()` / `import_state()` work with a complete
 Drift reports remain useful for restored or externally modified rows and
 for stored row shapes retained across schema changes. They do not enable
 relaxed SQL schemas. See [persistence and maintenance](docs/operations.md).
+
+### Async query hooks
+
+`Engine::subscribe_query_hooks(options, callback)` and
+`AsyncEngine::subscribe_query_hooks(options, callback)` register engine-wide
+async callbacks. Register inside a Tokio runtime and keep the returned handle
+alive. Callbacks must be `Send + Sync` and their futures `Send`; callbacks receive an
+`Arc<QueryHookEvent>` and return `anyhow::Result<()>`. These are trusted Rust
+embedding APIs: listeners can observe every database served by that engine,
+including queries from its sessions and MySQL clients.
+
+Select `read`, `write`, `delete`, `table_created`, `table_updated`, and
+`table_dropped` independently through `QueryHookOptions`. By default, only
+writes and deletes are selected. See the runnable
+[hook example](examples/query_hooks.rs): `cargo run --example query_hooks`.
+
+- Writes contain complete final rows and their keys. Deletes contain only keys.
+  Keys are named primary-key values (including composite keys), or opaque stored
+  identifiers for keyless tables. Use the key from writes to match deletes.
+- Table creation and alteration contain the full resulting `TableSchemaHint`;
+  drops contain database/table names. Schema notifications cover the columns,
+  keys, indexes, and constraints represented by that type. Auto-increment counter
+  advances and timestamp-only changes do not produce schema notifications.
+- Changes appear after commit and, for `AsyncEngine`, after storage succeeds.
+  Transactions emit net changes: repeated updates coalesce, and an inserted then
+  deleted row emits nothing. Cascades and DDL-induced row changes are included.
+  Temporary tables, restore/import, rollbacks, and unchanged rows are excluded.
+- Within a commit, events arrive as row deletes, table drops, table creates or
+  updates, then row writes, ordered by database/table/serialized row key within each
+  phase. Renames appear as old-name deletion/drop and new-name creation/write.
+  `TRUNCATE` emits row deletions; primary-key changes emit old-key deletes and
+  new-key writes. Separate autocommits remain separate events, including those
+  preceding a later statement failure in a batch.
+- Reads contain the SQL, starting database, and complete returned result vector
+  for a successful request containing a top-level SELECT. This includes mixed
+  batches and empty results, but not DML `RETURNING` alone. Async reads follow
+  result filters, including synthetic/cached SELECTs; rejected requests produce
+  no read event. Reads inside transactions are immediate and can show private,
+  uncommitted data.
+
+Each listener runs sequentially in its own background task without holding
+engine locks. Delivery is in memory, without replay or retries. The bounded
+queue defaults to 256 events; one event can contain many rows, so this is not a
+byte limit. Overflow, callback errors, or callback panics stop that listener and
+are logged. Await `subscription.wait()` to observe the error and arrange a
+resync before subscribing again. `cancel()` or dropping the handle unregisters
+it and discards pending events; cancellation also drops an in-flight callback
+future. A callback already running can have external side effects.
+
+Listeners never change a SQL result or undo a commit. An external async storage
+failure or cancellation makes the async engine refuse subsequent execution
+until reopened; its pending change events are discarded. Queries from a
+callback can themselves trigger hooks, so integrations must avoid feedback
+loops. With no listeners registered, no feed payloads or row comparisons are
+performed. The existing query-event API below remains available for query
+metrics and errors.
 
 ### Query events
 
@@ -506,11 +564,11 @@ are not guarantees for the current checkout.
 ```text
 src/sql/engine/          SQL evaluation, transactions, catalog, and authorization
 src/async_engine.rs      Async wrapper, storage coordination, and execution filters
-src/storage/            Lux integration and public AsyncStorage contract
+src/storage/            LuxDB integration and public AsyncStorage contract
 src/server/             MySQL wire protocol, authentication, debug/search HTTP
 src/lib.rs              Public exports, CLI, and REPL
 src/bin/sqwl.rs          Executable entry point
-src/vendor/             Vendored Lux and wire-server implementations
+src/vendor/             Vendored LuxDB and wire-server implementations
 examples/               JSON and CSV custom storage examples
 docs/                   Library guides
 tests/                  Engine, wire, ORM, and compatibility suites

@@ -1,7 +1,9 @@
 //! Async engine, storage, and execution-filter APIs.
 
+use crate::sql::engine::{HookRegistry, QueryHookEvent, QueryHookOptions, QueryHookSubscription};
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Result, anyhow};
@@ -173,6 +175,8 @@ impl ResultFilters {
 }
 
 struct Inner<S> {
+    hooks: Arc<HookRegistry>,
+    poisoned: AtomicBool,
     engine: Mutex<Engine>,
     storage: S,
     storage_initialized: Mutex<bool>,
@@ -386,6 +390,8 @@ impl<S: AsyncStorage> AsyncEngine<S> {
     /// Open an engine from the supplied backend's complete persisted state.
     pub async fn open(config: EngineConfig, storage: S) -> Result<Self> {
         let engine = Engine::new(config);
+        let hooks = engine.hooks();
+        hooks.external_reads.store(true, Ordering::Relaxed);
         let loaded = load_state(&storage).await?;
         let storage_initialized = loaded.is_some();
         if let Some(state) = loaded {
@@ -393,6 +399,8 @@ impl<S: AsyncStorage> AsyncEngine<S> {
         }
         Ok(Self {
             inner: Arc::new(Inner {
+                hooks,
+                poisoned: AtomicBool::new(false),
                 engine: Mutex::new(engine),
                 storage,
                 storage_initialized: Mutex::new(storage_initialized),
@@ -401,6 +409,19 @@ impl<S: AsyncStorage> AsyncEngine<S> {
                 result_filters: ResultFilters::default(),
             }),
         })
+    }
+
+    /// Subscribe to committed changes and client-visible reads on this engine.
+    pub fn subscribe_query_hooks<F, Fut>(
+        &self,
+        options: QueryHookOptions,
+        callback: F,
+    ) -> Result<QueryHookSubscription>
+    where
+        F: Fn(Arc<QueryHookEvent>) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<()>> + Send + 'static,
+    {
+        self.inner.hooks.subscribe(options, callback)
     }
 
     /// The ordered query filters for this engine.
@@ -460,32 +481,8 @@ impl<S: AsyncStorage> AsyncEngine<S> {
             .export_state()?)
     }
 
-    async fn execute(&self, mut request: QueryRequest) -> Result<Vec<QueryResult>> {
-        if let Some(mut results) = self.inner.query_filters.apply(&mut request).await? {
-            self.inner
-                .result_filters
-                .apply(&request, &mut results)
-                .await?;
-            return Ok(results);
-        }
-        let _commit = self.inner.commit_gate.lock().await;
-        let (results, before, state) = {
-            let engine = self.inner.engine.lock().expect("engine mutex poisoned");
-            let before = engine.export_state()?;
-            let results = engine.execute_sql(&request.sql);
-            let state = engine.export_state()?;
-            (results, before, state)
-        };
-        // A later statement may fail after earlier statements have committed.
-        commit_changes(&self.inner, before, state).await?;
-        let mut results = results?;
-        let filter_outcome = self
-            .inner
-            .result_filters
-            .apply(&request, &mut results)
-            .await;
-        filter_outcome?;
-        Ok(results)
+    async fn execute(&self, request: QueryRequest) -> Result<Vec<QueryResult>> {
+        execute_request(&self.inner, request, None).await
     }
 }
 
@@ -529,43 +526,109 @@ impl<S: AsyncStorage> AsyncEngineSession<S> {
         .await
     }
 
-    async fn execute(&self, mut request: QueryRequest) -> Result<Vec<QueryResult>> {
-        if let Some(mut results) = self.inner.query_filters.apply(&mut request).await? {
-            self.inner
-                .result_filters
-                .apply(&request, &mut results)
-                .await?;
-            return Ok(results);
-        }
-        let _commit = self.inner.commit_gate.lock().await;
-        let (results, before, state) = {
-            let mut session = self.session.lock().expect("session mutex poisoned");
-            let before = self
-                .inner
-                .engine
-                .lock()
-                .expect("engine mutex poisoned")
-                .export_state()?;
-            let results = session.execute_sql(&request.sql);
-            let state = self
-                .inner
-                .engine
-                .lock()
-                .expect("engine mutex poisoned")
-                .export_state()?;
-            (results, before, state)
-        };
-        // A later statement may fail after earlier statements have committed.
-        commit_changes(&self.inner, before, state).await?;
-        let mut results = results?;
-        let filter_outcome = self
-            .inner
-            .result_filters
-            .apply(&request, &mut results)
-            .await;
-        filter_outcome?;
-        Ok(results)
+    async fn execute(&self, request: QueryRequest) -> Result<Vec<QueryResult>> {
+        execute_request(&self.inner, request, Some(&self.session)).await
     }
+}
+
+// An external storage failure/cancellation leaves the in-memory commit uncertain.
+// Refuse further work and never release the buffered feed in that case.
+struct CommitHookGuard<'a> {
+    hooks: &'a HookRegistry,
+    poisoned: &'a AtomicBool,
+    armed: bool,
+}
+impl CommitHookGuard<'_> {
+    fn finish(mut self) {
+        self.hooks.end_deferred(true);
+        self.armed = false;
+    }
+}
+impl Drop for CommitHookGuard<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            self.hooks.end_deferred(false);
+            self.poisoned.store(true, Ordering::Release);
+        }
+    }
+}
+
+async fn execute_request<S: AsyncStorage>(
+    inner: &Inner<S>,
+    mut request: QueryRequest,
+    session: Option<&Mutex<EngineSession>>,
+) -> Result<Vec<QueryResult>> {
+    let check = || -> Result<()> {
+        anyhow::ensure!(
+            !inner.poisoned.load(Ordering::Acquire),
+            "database commit outcome uncertain; close and reopen MySqweel"
+        );
+        Ok(())
+    };
+    check()?;
+    if let Some(mut results) = inner.query_filters.apply(&mut request).await? {
+        let database = match session {
+            Some(session) => session
+                .lock()
+                .expect("session mutex poisoned")
+                .current_database()
+                .to_owned(),
+            None => {
+                inner
+                    .engine
+                    .lock()
+                    .expect("engine mutex poisoned")
+                    .hook_context()
+                    .0
+            }
+        };
+        inner.result_filters.apply(&request, &mut results).await?;
+        check()?;
+        if crate::sql::parse(&request.sql).is_ok_and(|items| {
+            items
+                .iter()
+                .any(|s| matches!(s, sqlparser::ast::Statement::Query(_)))
+        }) {
+            inner.hooks.read(&database, &request.sql, &results);
+        }
+        return Ok(results);
+    }
+    let _commit = inner.commit_gate.lock().await;
+    check()?;
+    inner.hooks.begin_deferred();
+    let pending = CommitHookGuard {
+        hooks: &inner.hooks,
+        poisoned: &inner.poisoned,
+        armed: true,
+    };
+    let (results, before, after, database, read) = {
+        let engine = inner.engine.lock().expect("engine mutex poisoned");
+        let before = engine.export_state()?;
+        let (results, database, read) = match session {
+            Some(session) => {
+                let mut session = session.lock().expect("session mutex poisoned");
+                let database = session.current_database().to_owned();
+                let results = session.execute_sql(&request.sql);
+                (results, database, session.last_query_read)
+            }
+            None => {
+                let database = engine.hook_context().0;
+                let results = engine.execute_sql(&request.sql);
+                (results, database, engine.hook_context().1)
+            }
+        };
+        (results, before, engine.export_state()?, database, read)
+    };
+    // Persist even when a later statement failed after earlier autocommits.
+    commit_changes(inner, before, after).await?;
+    pending.finish();
+    drop(_commit);
+    let mut results = results?;
+    inner.result_filters.apply(&request, &mut results).await?;
+    if read {
+        inner.hooks.read(&database, &request.sql, &results);
+    }
+    Ok(results)
 }
 
 #[cfg(test)]
@@ -580,6 +643,10 @@ mod tests {
         tables: Arc<Mutex<BTreeMap<(String, String), TableState>>>,
         rows: Arc<Mutex<BTreeMap<(String, String), BTreeMap<String, crate::model::StoredRow>>>>,
         commits: Arc<AtomicUsize>,
+        fail_commit: Arc<AtomicBool>,
+        block_commit: Arc<AtomicBool>,
+        entered: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
     }
 
     impl AsyncStorage for TestStore {
@@ -635,6 +702,11 @@ mod tests {
         }
 
         async fn commit(&self, batch: StorageBatch) -> Result<()> {
+            if self.block_commit.load(Ordering::Relaxed) {
+                self.entered.notify_one();
+                self.release.notified().await;
+            }
+            anyhow::ensure!(!self.fail_commit.load(Ordering::Relaxed), "storage offline");
             for mutation in batch.metadata {
                 match mutation {
                     MetadataMutation::PutCatalog(catalog) => {
@@ -695,6 +767,236 @@ mod tests {
             self.commits.fetch_add(1, Ordering::Relaxed);
             Ok(())
         }
+    }
+
+    fn hook_receiver(
+        engine: &AsyncEngine<TestStore>,
+    ) -> (
+        QueryHookSubscription,
+        tokio::sync::mpsc::UnboundedReceiver<Arc<QueryHookEvent>>,
+    ) {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let subscription = engine
+            .subscribe_query_hooks(
+                QueryHookOptions {
+                    read: true,
+                    ..Default::default()
+                },
+                move |event| {
+                    tx.send(event).unwrap();
+                    async { Ok(()) }
+                },
+            )
+            .unwrap();
+        (subscription, rx)
+    }
+
+    async fn hook_next(
+        rx: &mut tokio::sync::mpsc::UnboundedReceiver<Arc<QueryHookEvent>>,
+    ) -> Arc<QueryHookEvent> {
+        tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+            .await
+            .unwrap()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn hooks_wait_for_storage_and_preserve_commit_boundaries() {
+        let store = TestStore::default();
+        let engine = AsyncEngine::open(EngineConfig::default(), store.clone())
+            .await
+            .unwrap();
+        engine
+            .execute_sql("CREATE TABLE items (id INT PRIMARY KEY, v INT)")
+            .await
+            .unwrap();
+        let (_subscription, mut rx) = hook_receiver(&engine);
+        store.block_commit.store(true, Ordering::Relaxed);
+        let execution = engine.execute_sql("INSERT INTO items VALUES (1, 10)");
+        tokio::pin!(execution);
+        tokio::select! {
+            _ = store.entered.notified() => {},
+            result = &mut execution => panic!("commit did not block: {result:?}"),
+        }
+        tokio::task::yield_now().await;
+        assert!(rx.try_recv().is_err());
+        engine.query_filters().push(Synthetic);
+        engine.execute_sql("SELECT cached").await.unwrap();
+        assert!(
+            matches!(&*hook_next(&mut rx).await, QueryHookEvent::Read { results, .. } if results[0].columns == ["cached"])
+        );
+        store.block_commit.store(false, Ordering::Relaxed);
+        store.release.notify_one();
+        execution.await.unwrap();
+        assert!(
+            matches!(&*hook_next(&mut rx).await, QueryHookEvent::Write { rows, .. } if rows[0].row["v"] == Value::from(10))
+        );
+        let session = engine.session();
+        session
+            .execute_sql("BEGIN; UPDATE items SET v=20; UPDATE items SET v=30")
+            .await
+            .unwrap();
+        tokio::task::yield_now().await;
+        assert!(rx.try_recv().is_err());
+        session.execute_sql("COMMIT").await.unwrap();
+        assert!(
+            matches!(&*hook_next(&mut rx).await, QueryHookEvent::Write { rows, .. } if rows.len() == 1 && rows[0].row["v"] == Value::from(30))
+        );
+        assert!(
+            session
+                .execute_sql(
+                    "UPDATE items SET v=40; UPDATE items SET v=50; INSERT INTO absent VALUES (1)"
+                )
+                .await
+                .is_err()
+        );
+        for value in [40, 50] {
+            assert!(
+                matches!(&*hook_next(&mut rx).await, QueryHookEvent::Write { rows, .. } if rows[0].row["v"] == Value::from(value))
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_or_cancelled_storage_discards_hooks_and_stops_execution() {
+        for cancel in [false, true] {
+            let store = TestStore::default();
+            let engine = AsyncEngine::open(EngineConfig::default(), store.clone())
+                .await
+                .unwrap();
+            engine
+                .execute_sql("CREATE TABLE items (id INT PRIMARY KEY)")
+                .await
+                .unwrap();
+            let (_subscription, mut rx) = hook_receiver(&engine);
+            if cancel {
+                store.block_commit.store(true, Ordering::Relaxed);
+                let execution = engine.execute_sql("INSERT INTO items VALUES (1)");
+                tokio::pin!(execution);
+                tokio::select! {
+                    _ = store.entered.notified() => {},
+                    result = &mut execution => panic!("commit did not block: {result:?}"),
+                }
+                // Dropping the pending execution must discard its buffered events.
+            } else {
+                store.fail_commit.store(true, Ordering::Relaxed);
+                assert!(
+                    engine
+                        .execute_sql("INSERT INTO items VALUES (1)")
+                        .await
+                        .is_err()
+                );
+            }
+            tokio::task::yield_now().await;
+            assert!(rx.try_recv().is_err());
+            for result in [
+                engine.execute_sql("SELECT * FROM items").await,
+                engine.session().execute_sql("SELECT * FROM items").await,
+            ] {
+                assert!(result.unwrap_err().to_string().contains("reopen"));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn hook_queue_capacity_also_bounds_deferred_autocommits() {
+        let engine = AsyncEngine::open(EngineConfig::default(), TestStore::default())
+            .await
+            .unwrap();
+        engine
+            .execute_sql("CREATE TABLE items (id INT PRIMARY KEY)")
+            .await
+            .unwrap();
+        let delivered = Arc::new(AtomicUsize::new(0));
+        let count = delivered.clone();
+        let mut subscription = engine
+            .subscribe_query_hooks(
+                QueryHookOptions {
+                    capacity: 1,
+                    ..Default::default()
+                },
+                move |_| {
+                    count.fetch_add(1, Ordering::Relaxed);
+                    async { Ok(()) }
+                },
+            )
+            .unwrap();
+        engine
+            .execute_sql("INSERT INTO items VALUES (1); INSERT INTO items VALUES (2)")
+            .await
+            .unwrap();
+        assert_eq!(
+            subscription.wait().await,
+            Err(crate::QueryHookError::Overflow)
+        );
+        assert_eq!(delivered.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            engine.execute_sql("SELECT * FROM items").await.unwrap()[0]
+                .rows
+                .len(),
+            2
+        );
+    }
+
+    struct HookResultFilter;
+    impl ResultFilter for HookResultFilter {
+        async fn filter(
+            &self,
+            request: &QueryRequest,
+            results: &mut Vec<QueryResult>,
+        ) -> Result<ResultFilterAction> {
+            if request.sql.contains("rejected") {
+                return Ok(ResultFilterAction::Reject("hidden".into()));
+            }
+            if request.sql.contains("replacement") {
+                return Ok(ResultFilterAction::Replace(vec![QueryResult {
+                    columns: vec!["replacement".into()],
+                    rows: vec![
+                        serde_json::json!({"replacement":42})
+                            .as_object()
+                            .unwrap()
+                            .clone(),
+                    ],
+                    ..Default::default()
+                }]));
+            }
+            for result in results {
+                result.rows.clear();
+            }
+            Ok(ResultFilterAction::Continue)
+        }
+    }
+
+    #[tokio::test]
+    async fn read_hooks_follow_filters_for_engine_and_sessions() {
+        let engine = AsyncEngine::open(EngineConfig::default(), TestStore::default())
+            .await
+            .unwrap();
+        engine.query_filters().push(Synthetic);
+        engine.result_filters().push(HookResultFilter);
+        let (_subscription, mut rx) = hook_receiver(&engine);
+        engine.execute_sql("SELECT cached").await.unwrap();
+        assert!(
+            matches!(&*hook_next(&mut rx).await, QueryHookEvent::Read { results, .. } if results[0].columns == ["cached"] && results[0].rows.is_empty())
+        );
+        engine
+            .session()
+            .execute_sql("SELECT 1 AS replacement")
+            .await
+            .unwrap();
+        assert!(
+            matches!(&*hook_next(&mut rx).await, QueryHookEvent::Read { results, .. } if results[0].rows[0]["replacement"] == Value::from(42))
+        );
+        assert!(engine.execute_sql("SELECT 1 AS rejected").await.is_err());
+        assert!(
+            engine
+                .session()
+                .execute_sql("SELECT 1 AS rejected")
+                .await
+                .is_err()
+        );
+        tokio::task::yield_now().await;
+        assert!(rx.try_recv().is_err());
     }
 
     struct Rewrite;

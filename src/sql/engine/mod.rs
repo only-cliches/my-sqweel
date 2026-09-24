@@ -29,6 +29,12 @@ use crate::schema::{CheckConstraintHint, ColumnHint, ForeignKeyHint, IndexHint, 
 mod catalog;
 pub(crate) use catalog::may_start_with;
 pub use catalog::{AuthPrivilege, AuthScope};
+mod hooks;
+pub(crate) use hooks::HookRegistry;
+pub use hooks::{
+    QueryHookError, QueryHookEvent, QueryHookKey, QueryHookOptions, QueryHookRow,
+    QueryHookSubscription,
+};
 mod transaction;
 pub use transaction::{Engine, EngineSession};
 mod compat;

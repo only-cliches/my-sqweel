@@ -313,3 +313,11 @@ path = "tests/database_isolation.rs"
 [[test]]
 name = "review_regressions"
 path = "tests/review_regressions.rs"
+
+[[test]]
+name = "query_hooks"
+path = "tests/query_hooks.rs"
+
+[[example]]
+name = "query_hooks"
+path = "examples/query_hooks.rs"
