@@ -72,6 +72,20 @@ pub(super) use datetime::*;
 use json::*;
 use scalar::*;
 
+pub(super) fn eval_extreme_values(
+    values: impl IntoIterator<Item = Result<Value>>,
+    greatest: bool,
+) -> Result<Value> {
+    scalar::eval_extreme_values(
+        values,
+        if greatest {
+            scalar::ExtremeKind::Greatest
+        } else {
+            scalar::ExtremeKind::Least
+        },
+    )
+}
+
 pub(super) fn eval_regexp_match_values(
     target: Value,
     pattern: Value,

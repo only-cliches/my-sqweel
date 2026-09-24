@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "id": "timestamp_merge_upsert_minimized",
+  "provenance": {
+    "kind": "minimized-reproduction",
+    "source_case": "timestamp_merge_upsert",
+    "source_location": "mysql56-save_history.sql: INSERT INTO ... SELECT ... ON DUPLICATE KEY UPDATE",
+    "source_dialect": "mysql-mariadb",
+    "observed_pattern": "A duplicate-key update uses LEAST/GREATEST with VALUES() to merge an incoming timestamp window into an existing row.",
+    "mysql_mariadb_translation": "Reduced to one existing stream row, one duplicate source row, and one merge statement; the new-row insert path and aggregate checks are removed."
+  },
+  "features": ["insert-select", "on-duplicate-key-update", "values-in-upsert", "least-greatest", "timestamp-window-merge", "dml-final-state"],
+  "fixture_notes": "The existing alpha window must expand to the earlier incoming start and later incoming end.",
+  "determinism_notes": "All IDs and timestamps are fixed and the statement runs on one connection. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE stream_windows (stream_id INT AUTO_INCREMENT PRIMARY KEY, stream_key VARCHAR(24) NOT NULL UNIQUE, first_seen DATETIME NOT NULL, last_seen DATETIME NOT NULL)",
+    "CREATE TABLE event_batch (event_id INT PRIMARY KEY, stream_key VARCHAR(24) NOT NULL, first_seen DATETIME NOT NULL, last_seen DATETIME NOT NULL)",
+    "INSERT INTO stream_windows VALUES (901, 'alpha', '2024-03-10 08:00:00', '2024-03-20 18:00:00')",
+    "INSERT INTO event_batch VALUES (1001, 'alpha', '2024-03-01 07:30:00', '2024-03-25 19:45:00')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO stream_windows (stream_key, first_seen, last_seen) SELECT stream_key, first_seen, last_seen FROM event_batch ON DUPLICATE KEY UPDATE first_seen = LEAST(stream_windows.first_seen, VALUES(first_seen)), last_seen = GREATEST(stream_windows.last_seen, VALUES(last_seen))",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT stream_id, stream_key, first_seen, last_seen FROM stream_windows ORDER BY stream_id",
+      "ordered": true
+    }
+  ]
+}

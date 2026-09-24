@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "timestamp_merge_upsert",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "box/Anemometer",
+      "commit": "929f3385e4ecb539890e4d33e8b6aff052688318",
+      "path": "mysql56-save_history.sql",
+      "url": "https://github.com/box/Anemometer/blob/929f3385e4ecb539890e4d33e8b6aff052688318/mysql56-save_history.sql",
+      "sha256": "c10aa2b222a6963a91c70bdee6350736e09f9aafc44008f87527f56cd6175e59",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "mysql56-save_history.sql: INSERT INTO ... SELECT ... ON DUPLICATE KEY UPDATE",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL INSERT ... SELECT merges grouped history rows on a unique key, using LEAST and GREATEST with VALUES() inside ON DUPLICATE KEY UPDATE to retain the earliest and latest timestamps.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored event-window merge. A source batch is ordered into a summary table; a duplicate stream key expands its timestamp window through LEAST/GREATEST and VALUES(), while a new stream key is inserted. The source schema, identifiers, values, and monitoring application are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["insert-select", "order-by", "on-duplicate-key-update", "values-in-upsert", "least-greatest", "timestamp-window-merge", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "Stream alpha already summarizes an earlier batch; the incoming alpha row extends both ends of its timestamp window. Stream beta is new and is inserted by the same INSERT ... SELECT statement.",
+  "determinism_notes": "Event IDs and timestamps are fixed, the source SELECT is ordered by event ID, the merge runs on one connection, and final rows are ordered by the unique stream ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE stream_windows (stream_id INT PRIMARY KEY, stream_key VARCHAR(24) NOT NULL UNIQUE, first_seen DATETIME NOT NULL, last_seen DATETIME NOT NULL)",
+    "CREATE TABLE event_batch (event_id INT PRIMARY KEY, stream_id INT NOT NULL, stream_key VARCHAR(24) NOT NULL, first_seen DATETIME NOT NULL, last_seen DATETIME NOT NULL)",
+    "INSERT INTO stream_windows VALUES (901, 'alpha', '2024-03-10 08:00:00', '2024-03-20 18:00:00')",
+    "INSERT INTO event_batch VALUES (1001, 901, 'alpha', '2024-03-01 07:30:00', '2024-03-25 19:45:00'), (1002, 902, 'beta', '2024-04-02 09:15:00', '2024-04-02 09:45:00')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO stream_windows (stream_id, stream_key, first_seen, last_seen) SELECT stream_id, stream_key, first_seen, last_seen FROM event_batch ORDER BY event_id ON DUPLICATE KEY UPDATE first_seen = LEAST(stream_windows.first_seen, VALUES(first_seen)), last_seen = GREATEST(stream_windows.last_seen, VALUES(last_seen))",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT stream_id, stream_key, first_seen, last_seen FROM stream_windows ORDER BY stream_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT COUNT(*) AS stream_count, MIN(first_seen) AS earliest_seen, MAX(last_seen) AS latest_seen FROM stream_windows",
+      "ordered": true
+    }
+  ]
+}

@@ -453,17 +453,28 @@ pub(super) fn eval_extreme(
     last_insert_id: u64,
     kind: ExtremeKind,
 ) -> Result<Value> {
-    let mut values = Vec::new();
-    for arg in args {
-        let value = eval_scalar_text(arg, data, last_insert_id)?;
+    eval_extreme_values(
+        args.iter()
+            .map(|arg| eval_scalar_text(arg, data, last_insert_id)),
+        kind,
+    )
+}
+
+pub(super) fn eval_extreme_values(
+    values: impl IntoIterator<Item = Result<Value>>,
+    kind: ExtremeKind,
+) -> Result<Value> {
+    let mut evaluated = Vec::new();
+    for result in values {
+        let value = result?;
         if value == Value::Null {
             return Ok(Value::Null);
         }
-        values.push(value);
+        evaluated.push(value);
     }
     let value = match kind {
-        ExtremeKind::Greatest => values.into_iter().max_by(compare_json_values),
-        ExtremeKind::Least => values.into_iter().min_by(compare_json_values),
+        ExtremeKind::Greatest => evaluated.into_iter().max_by(compare_json_values),
+        ExtremeKind::Least => evaluated.into_iter().min_by(compare_json_values),
     };
     Ok(value.unwrap_or(Value::Null))
 }

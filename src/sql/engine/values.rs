@@ -169,12 +169,36 @@ pub(super) fn eval_insert_update_value(
             }
         }
         Expr::Function(function) => {
-            if let Some(result) = eval_function_expr_fast(function, |argument| {
-                eval_insert_update_value(argument, existing, incoming)
-            }) {
-                return result;
-            }
-            eval_expr(expr, existing, 0)
+            let name = function
+                .name
+                .0
+                .last()
+                .map(|identifier| identifier.value.to_ascii_uppercase())
+                .unwrap_or_default();
+            let greatest = match name.as_str() {
+                "GREATEST" => true,
+                "LEAST" => false,
+                _ => {
+                    if let Some(result) = eval_function_expr_fast(function, |argument| {
+                        eval_insert_update_value(argument, existing, incoming)
+                    }) {
+                        return result;
+                    }
+                    return eval_expr(expr, existing, 0);
+                }
+            };
+            let FunctionArguments::List(arguments) = &function.args else {
+                return Ok(Value::Null);
+            };
+            eval_extreme_values(
+                arguments.args.iter().map(|argument| match argument {
+                    FunctionArg::Unnamed(FunctionArgExpr::Expr(expr)) => {
+                        eval_insert_update_value(expr, existing, incoming)
+                    }
+                    _ => Ok(Value::Null),
+                }),
+                greatest,
+            )
         }
         _ => eval_expr(expr, existing, 0),
     }
