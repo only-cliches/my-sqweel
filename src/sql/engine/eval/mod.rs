@@ -3529,6 +3529,14 @@ where
             let values = args.iter().map(eval_arg).collect::<Result<Vec<_>>>()?;
             eval_regexp_instr_values(&values)
         })()),
+        "IS_IPV4" => Some((|| {
+            let value = args
+                .first()
+                .map(eval_arg)
+                .transpose()?
+                .unwrap_or(Value::Null);
+            eval_is_ipv4_value(value)
+        })()),
         "INET_ATON" => Some((|| {
             let value = args
                 .first()
@@ -4045,6 +4053,7 @@ pub(super) fn eval_function_text(
                 .collect::<Result<Vec<_>>>()?;
             eval_regexp_replace_values(&values)
         }
+        "IS_IPV4" => eval_is_ipv4(args.first(), data, last_insert_id),
         "INET_NTOA" => eval_inet_ntoa(args.first(), data, last_insert_id),
         "REGEXP_SUBSTR" => {
             let values = args

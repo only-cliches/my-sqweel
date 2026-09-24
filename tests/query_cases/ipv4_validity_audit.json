@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "ipv4_validity_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "neemiassgc/CodeSignal-Solutions",
+      "commit": "8e67ac2dc9ca18a6eeb245e2535ae9ce6d2250d6",
+      "path": "Arcade/Databases/correctIPs.sql",
+      "url": "https://github.com/neemiassgc/CodeSignal-Solutions/blob/8e67ac2dc9ca18a6eeb245e2535ae9ce6d2250d6/Arcade/Databases/correctIPs.sql",
+      "sha256": "95993235dd02a965d9e0636d110b60108df04694cd812298dd29234a49151d88",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Arcade/Databases/correctIPs.sql:5-8",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL address query combines a regular-expression guard with IS_IPV4 to select syntactically valid IPv4 text.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored network-allocation audit. Fixed address rows expose IS_IPV4 classification and a guarded valid-address report, while the source procedure, table, labels, and application context are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["is-ipv4", "regexp-filter", "null-input", "filtered-select", "deterministic-order"],
+  "fixture_notes": "Allocations 601 and 602 contain valid documentation-network IPv4 addresses; allocation 603 is malformed and allocation 604 is SQL NULL. MariaDB returns 1 for the two valid addresses and 0 for malformed or NULL input; the classification read preserves all rows, while the guarded report returns only the two valid addresses.",
+  "determinism_notes": "Allocation IDs and address strings are fixed, both reads are ordered by the unique allocation ID, and no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE network_allocations_v4 (allocation_id INT PRIMARY KEY, allocation_label VARCHAR(24) NOT NULL, address_text VARCHAR(64) NULL)",
+    "INSERT INTO network_allocations_v4 VALUES (601, 'edge-a', '192.0.2.17'), (602, 'edge-b', '198.51.100.8'), (603, 'malformed', '999.1.1.1'), (604, 'missing', NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT allocation_id, allocation_label, address_text, IS_IPV4(address_text) AS ipv4_flag FROM network_allocations_v4 ORDER BY allocation_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT allocation_id, address_text FROM network_allocations_v4 WHERE address_text REGEXP '(^|\\.)[0-9]+(\\.|$)' AND IS_IPV4(address_text) ORDER BY allocation_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT allocation_id, allocation_label, address_text FROM network_allocations_v4 ORDER BY allocation_id",
+      "ordered": true
+    }
+  ]
+}

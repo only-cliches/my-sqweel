@@ -297,6 +297,23 @@ pub(super) fn eval_format_number(
     };
     Ok(Value::String(format!("{sign}{grouped}{suffix}")))
 }
+pub(super) fn eval_is_ipv4(
+    value_arg: Option<&String>,
+    data: &Map<String, Value>,
+    last_insert_id: u64,
+) -> Result<Value> {
+    eval_is_ipv4_value(eval_arg(value_arg, data, last_insert_id)?)
+}
+
+pub(super) fn eval_is_ipv4_value(value: Value) -> Result<Value> {
+    Ok(Value::Number(Number::from(
+        (value != Value::Null
+            && json_scalar_to_string(&value)
+                .parse::<std::net::Ipv4Addr>()
+                .is_ok()) as u8,
+    )))
+}
+
 pub(super) fn eval_inet_aton(
     value_arg: Option<&String>,
     data: &Map<String, Value>,

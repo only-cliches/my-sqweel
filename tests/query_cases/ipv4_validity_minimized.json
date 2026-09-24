@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "id": "ipv4_validity_minimized",
+  "provenance": {
+    "kind": "minimized-reproduction",
+    "source_case": "ipv4_validity_audit",
+    "source_location": "Arcade/Databases/correctIPs.sql:5-8",
+    "source_dialect": "mysql-mariadb",
+    "observed_pattern": "IS_IPV4 classifies valid, malformed, and NULL IPv4 text.",
+    "mysql_mariadb_translation": "Reduced to one deterministic scalar SELECT; no table or regular-expression guard remains."
+  },
+  "features": ["is-ipv4", "null-input", "scalar-select"],
+  "fixture_notes": "The literals cover a valid documentation-network address, a malformed address with an out-of-range octet, and SQL NULL; MariaDB returns 1, 0, and 0 respectively.",
+  "determinism_notes": "All inputs are literals; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT IS_IPV4('192.0.2.17') AS valid_flag, IS_IPV4('999.1.1.1') AS invalid_flag, IS_IPV4(NULL) AS null_flag",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
