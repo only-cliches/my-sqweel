@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "low_priority_backlog_cleanup",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "antlr/grammars-v4",
+      "commit": "7e08234262d2a7c58557d74f2cb8ce90c72d356f",
+      "path": "sql/mariadb/examples/fast/dml_delete.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/7e08234262d2a7c58557d74f2cb8ce90c72d356f/sql/mariadb/examples/fast/dml_delete.sql",
+      "sha256": "62329095424f65c4213801a8cc24b7525a679590e941b67624790f4efe462ee8",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/mariadb/examples/fast/dml_delete.sql: DELETE LOW_PRIORITY FROM mytable WHERE value_col > 0 ORDER BY sort_col DESC LIMIT 10",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB DELETE applies the LOW_PRIORITY modifier while filtering rows and limiting an explicit descending ORDER BY selection.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored backlog cleanup. DELETE LOW_PRIORITY removes the two highest-urgency expired items using a stable urgency and ID order, while a non-expired item and the lower-urgency expired item remain for final-state verification; the source table, columns, values, and application purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["low-priority-delete", "filtered-delete", "order-by-limit", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "Expired items 101, 102, and 103 are ordered by urgency 90, 80, and 70; the two highest urgency expired items are deleted. Active item 201 and the lower-priority expired item 103 remain.",
+  "determinism_notes": "Urgency values and item IDs are fixed, and DELETE LOW_PRIORITY orders by urgency descending with item ID as a tie-breaker before LIMIT 2. Final rows are ordered by the unique item ID; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE backlog_items (item_id INT PRIMARY KEY, item_label VARCHAR(32) NOT NULL, item_state VARCHAR(16) NOT NULL, urgency INT NOT NULL)",
+    "INSERT INTO backlog_items VALUES (101, 'cache-rebuild', 'expired', 90), (102, 'index-refresh', 'expired', 80), (103, 'log-compaction', 'expired', 70), (201, 'active-retry', 'active', 99)"
+  ],
+  "steps": [
+    {
+      "sql": "DELETE LOW_PRIORITY FROM backlog_items WHERE item_state = 'expired' ORDER BY urgency DESC, item_id ASC LIMIT 2",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT item_id, item_label, item_state, urgency FROM backlog_items ORDER BY item_id",
+      "ordered": true
+    }
+  ]
+}
