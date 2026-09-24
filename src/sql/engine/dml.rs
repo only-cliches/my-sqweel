@@ -1300,7 +1300,13 @@ impl RawEngine {
                 .collect::<Result<Vec<_>>>()?
         } else {
             from.iter()
-                .map(|target| delete_target_from_factor(&target.relation))
+                .map(|target| {
+                    let target = delete_target_from_factor(&target.relation)?;
+                    Ok(aliases
+                        .get(&target.table.to_ascii_lowercase())
+                        .cloned()
+                        .unwrap_or(target))
+                })
                 .collect::<Result<Vec<_>>>()?
         };
 
