@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "warehouse_sales_rollup",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "cwy007/sql-basic-tutorial-2th",
+      "commit": "45d7ee363729bcfa4d82d827914889c82a6fe616",
+      "path": "Sample/Ch08/8_2/List8_14_MySQL.sql",
+      "url": "https://github.com/cwy007/sql-basic-tutorial-2th/blob/45d7ee363729bcfa4d82d827914889c82a6fe616/Sample/Ch08/8_2/List8_14_MySQL.sql",
+      "sha256": "9f3a63ab12f55f5d5b15503af4342fffe5b4801f0a36a8ae1a38df44d5c45308",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Sample/Ch08/8_2/List8_14_MySQL.sql:2-4",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL aggregate groups sales by two dimensions and uses GROUP BY ... WITH ROLLUP to append per-dimension subtotals and a grand total.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored warehouse-sales report. Fixed shipment rows are grouped by region and sales channel; MariaDB's NULL dimension values identify channel subtotals and the grand total, while the source schema, rows, names, and reporting purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["group-by-rollup", "multi-level-subtotals", "grand-total", "null-subtotal-markers", "deterministic-rows"],
+  "fixture_notes": "Each region has channel-level detail rows, region subtotals have channel NULL, and the final grand total has both dimensions NULL. No source row contains NULL in either grouping dimension, so NULL markers are unambiguous.",
+  "determinism_notes": "Region, channel, shipment IDs, and quantities are fixed. The coverage harness sorts this aggregate's unordered result rows for comparison; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE warehouse_sales (sale_id INT PRIMARY KEY, region VARCHAR(16) NOT NULL, channel VARCHAR(16) NOT NULL, units INT NOT NULL)",
+    "INSERT INTO warehouse_sales VALUES (7101, 'east', 'retail', 12), (7102, 'east', 'online', 8), (7103, 'east', 'online', 5), (7104, 'west', 'retail', 20), (7105, 'west', 'online', 7)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT region, channel, SUM(units) AS total_units FROM warehouse_sales GROUP BY region, channel WITH ROLLUP",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT sale_id, region, channel, units FROM warehouse_sales ORDER BY sale_id",
+      "ordered": true
+    }
+  ]
+}
