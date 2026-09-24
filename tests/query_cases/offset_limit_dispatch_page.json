@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "offset_limit_dispatch_page",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "cindychateau/PythonBancodeChile2024",
+      "commit": "97398c977e8caefbb53a583244446232904634b9",
+      "path": "MySQL/Queries/selects.sql",
+      "url": "https://github.com/cindychateau/PythonBancodeChile2024/blob/97398c977e8caefbb53a583244446232904634b9/MySQL/Queries/selects.sql",
+      "sha256": "085f565a7a2932e8ea31319310795b04b97958b404c29bde14fc262b45addaa3",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/Queries/selects.sql: final filtered SELECT with ORDER BY edad DESC LIMIT 2, 3",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL filtered SELECT orders matching rows and uses comma-form LIMIT offset, count pagination to return a bounded page after the initial offset.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored dispatch-page query. Fixed ready parcels are ranked by priority and parcel ID, LIMIT 2, 2 skips the first two eligible parcels and returns the next two, while a held parcel verifies that filtering occurs before pagination; the source table, rows, labels, and tutorial context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["comma-limit-offset", "filtered-pagination", "deterministic-order", "tie-break-order", "final-state-check"],
+  "fixture_notes": "Ready parcels 101 through 105 rank by priority 90, 80, 70, 60, and 50; LIMIT 2, 2 must return parcels 103 and 104. Held parcel 106 has the highest priority but is excluded before pagination.",
+  "determinism_notes": "Parcel priorities and IDs are fixed, priority descending plus parcel ID ascending defines the page, and final rows are ordered by the primary parcel ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE dispatch_parcels (parcel_id INT PRIMARY KEY, parcel_code VARCHAR(16) NOT NULL, route_state VARCHAR(16) NOT NULL, priority INT NOT NULL)",
+    "INSERT INTO dispatch_parcels VALUES (101, 'PX-101', 'ready', 90), (102, 'PX-102', 'ready', 80), (103, 'PX-103', 'ready', 70), (104, 'PX-104', 'ready', 60), (105, 'PX-105', 'ready', 50), (106, 'PX-106', 'held', 100)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT parcel_id, parcel_code, priority FROM dispatch_parcels WHERE route_state = 'ready' ORDER BY priority DESC, parcel_id ASC LIMIT 2, 2",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT parcel_id, parcel_code, route_state, priority FROM dispatch_parcels ORDER BY parcel_id",
+      "ordered": true
+    }
+  ]
+}
