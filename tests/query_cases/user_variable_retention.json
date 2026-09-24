@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "id": "user_variable_retention",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Baeldung/sql-tutorials",
+      "commit": "ec66bb71c2581d92bcfa6d68116bf1b0092d9a1e",
+      "path": "deleting/delete-records-except-top-or-bottom-N/user-defined-variable-in-mysql.sql",
+      "url": "https://github.com/Baeldung/sql-tutorials/blob/ec66bb71c2581d92bcfa6d68116bf1b0092d9a1e/deleting/delete-records-except-top-or-bottom-N/user-defined-variable-in-mysql.sql",
+      "sha256": "2a299bf8c6a5fad34f1c9e0d6fa9c386ced43530be624926326a4afced2ae254",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "deleting/delete-records-except-top-or-bottom-N/user-defined-variable-in-mysql.sql:1-10",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL maintenance delete initializes a session user variable, assigns ordered row numbers inside a derived query, and preserves only the first bounded set of rows.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored shipment-event retention cleanup. A session variable ranks fixed events by primary key inside a derived table, DELETE removes rows beyond the first three ranks, and a final ordered read verifies the retained history; the source Student table, values, and tutorial purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["session-user-variable", "derived-table", "ordered-row-numbering", "bounded-delete", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "Shipment events 8101, 8102, and 8103 are the retained history; events 8104, 8105, and 8106 are removed after ordered ranking. The event IDs are unique and supply both the ranking order and final-state order.",
+  "determinism_notes": "The session variable is reset before the delete, all event IDs and labels are fixed, and the derived ranking and final read use the primary key order. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE shipment_events (event_id INT PRIMARY KEY, shipment_code VARCHAR(24) NOT NULL, event_kind VARCHAR(16) NOT NULL)",
+    "INSERT INTO shipment_events VALUES (8101, 'SHIP-A', 'picked'), (8102, 'SHIP-A', 'packed'), (8103, 'SHIP-A', 'loaded'), (8104, 'SHIP-A', 'departed'), (8105, 'SHIP-A', 'arrived'), (8106, 'SHIP-A', 'closed')"
+  ],
+  "steps": [
+    {
+      "sql": "SET @event_rank = 0",
+      "ordered": true
+    },
+    {
+      "sql": "DELETE FROM shipment_events WHERE event_id NOT IN (SELECT event_id FROM (SELECT event_id, (@event_rank := @event_rank + 1) AS row_rank FROM shipment_events ORDER BY event_id) AS ranked_events WHERE row_rank <= 3)",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT event_id, shipment_code, event_kind FROM shipment_events ORDER BY event_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT event_id, shipment_code, event_kind FROM shipment_events ORDER BY event_id",
+      "ordered": true
+    }
+  ]
+}
