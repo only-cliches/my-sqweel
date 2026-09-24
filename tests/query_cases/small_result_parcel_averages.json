@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "small_result_parcel_averages",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/2336.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/2336.sql",
+      "sha256": "f32f767390cd473e778700af5fcbeae99c09950b775146d00ef56dca74e8e1fe",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/docker/fuzz_root/mysql_initlib/2336.sql: SELECT SQL_SMALL_RESULT t2.id, avg(rating) from t2 group by t2.id",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL grouped query applies the SQL_SMALL_RESULT SELECT modifier while computing an average for each grouping key.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored parcel-scan report. SQL_SMALL_RESULT accompanies a filtered grouped average and COUNT over nullable parcel counts, with a HAVING threshold and deterministic depot ordering; the source table, values, aliases, and application purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["sql-small-result", "grouped-average", "nullable-aggregate", "having", "filtered-read", "deterministic-order"],
+  "fixture_notes": "Depot north has two accepted scans averaging 11 parcels; depot south has one accepted measured scan because its NULL count is ignored; depot west has only a rejected scan and is excluded. HAVING keeps north and south while SQL_SMALL_RESULT must preserve the grouped result and metadata.",
+  "determinism_notes": "Depot codes and scan IDs are fixed; the grouped result and final rows are ordered by depot code and scan ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE parcel_scans (scan_id INT PRIMARY KEY, depot_code VARCHAR(16) NOT NULL, parcel_count INT NULL, scan_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO parcel_scans VALUES (101, 'north', 8, 'accepted'), (102, 'north', 14, 'accepted'), (201, 'south', NULL, 'accepted'), (202, 'south', 17, 'accepted'), (301, 'west', 6, 'rejected')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT SQL_SMALL_RESULT depot_code, COUNT(parcel_count) AS measured_scans, AVG(parcel_count) AS average_parcels FROM parcel_scans WHERE scan_state = 'accepted' GROUP BY depot_code HAVING COUNT(parcel_count) >= 1 ORDER BY depot_code",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT scan_id, depot_code, parcel_count, scan_state FROM parcel_scans ORDER BY scan_id",
+      "ordered": true
+    }
+  ]
+}
