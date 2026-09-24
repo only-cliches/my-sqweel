@@ -1034,7 +1034,7 @@ impl EngineSession {
             if matches!(ast, Some(Statement::Query(query)) if query.locks.iter().any(|lock| lock.nonblock.is_some() || lock.of.is_some()))
             {
                 return Err(anyhow!(
-                    "unsupported SQL feature: SELECT locking clauses other than plain FOR UPDATE"
+                    "unsupported SQL feature: SELECT locking clauses with OF/NOWAIT/SKIP LOCKED modifiers"
                 ));
             }
             if let Some(result) = self.advisory_query(ast)? {

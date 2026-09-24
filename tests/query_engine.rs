@@ -81,15 +81,12 @@ fn rejects_select_locking_extensions_without_locking_semantics() {
         .unwrap();
 
     for query in [
-        "SELECT id FROM lock_targets FOR SHARE",
         "SELECT id FROM lock_targets FOR UPDATE NOWAIT",
         "SELECT id FROM lock_targets FOR UPDATE SKIP LOCKED",
     ] {
         let error = engine.execute_sql(query).unwrap_err().to_string();
         assert!(
-            error.contains(
-                "unsupported SQL feature: SELECT locking clauses other than plain FOR UPDATE"
-            ),
+            error.contains("unsupported SQL feature: SELECT locking clauses with OF/NOWAIT/SKIP LOCKED modifiers"),
             "unexpected error for {query}: {error}"
         );
     }

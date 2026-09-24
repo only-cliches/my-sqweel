@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "id": "shared_lock_inventory",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "repository": "antlr/grammars-v4",
+      "commit": "7e08234262d2a7c58557d74f2cb8ce90c72d356f",
+      "path": "sql/mariadb/examples/fast/dml_select.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/7e08234262d2a7c58557d74f2cb8ce90c72d356f/sql/mariadb/examples/fast/dml_select.sql",
+      "source_sha256": "b9128ffb5b50bea79c534bc24a127d9d626fd2d21be8cb0a45deafd8d6c84f79",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB SELECT applies LOCK IN SHARE MODE to rows read from a table.",
+      "mysql_mariadb_translation": "Reauthored as a deterministic inventory availability read inside a transaction. The independently authored schema, rows, predicate, ordering, and final-state check exercise the shared-lock clause without copying the grammar fixture or its table names."
+    },
+    "independently_authored": true
+  },
+  "features": ["transaction", "lock-in-share-mode", "ordered-read", "final-state"],
+  "fixture_notes": "Only positive-quantity lots are returned; the zero-quantity lot verifies the predicate while the rollback check verifies that the read leaves committed state unchanged.",
+  "determinism_notes": "Lot IDs define the explicit read order; all rows, predicates, and transaction steps are fixed with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE stock_lots (lot_id INT PRIMARY KEY, sku VARCHAR(16) NOT NULL, quantity INT NOT NULL)",
+    "INSERT INTO stock_lots VALUES (41, 'AX-7', 8), (42, 'AX-7', 0), (43, 'BY-2', 5)"
+  ],
+  "steps": [
+    {"sql": "START TRANSACTION"},
+    {"sql": "SELECT lot_id, sku, quantity FROM stock_lots WHERE quantity > 0 ORDER BY lot_id LOCK IN SHARE MODE", "ordered": true},
+    {"sql": "ROLLBACK"}
+  ],
+  "checks": [
+    {"sql": "SELECT lot_id, sku, quantity FROM stock_lots ORDER BY lot_id", "ordered": true}
+  ]
+}

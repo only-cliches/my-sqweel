@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "id": "shared_lock_inventory_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "shared_lock_inventory",
+    "source": {
+      "repository": "antlr/grammars-v4",
+      "commit": "7e08234262d2a7c58557d74f2cb8ce90c72d356f",
+      "path": "sql/mariadb/examples/fast/dml_select.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/7e08234262d2a7c58557d74f2cb8ce90c72d356f/sql/mariadb/examples/fast/dml_select.sql",
+      "source_sha256": "b9128ffb5b50bea79c534bc24a127d9d626fd2d21be8cb0a45deafd8d6c84f79",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB SELECT applies LOCK IN SHARE MODE to rows read from a table.",
+      "mysql_mariadb_translation": "Reduced to one independently authored inventory row and one ordered shared-lock read inside a transaction, isolating parser and result behavior while removing the original report's predicate and multiple-row data."
+    },
+    "independently_authored": true
+  },
+  "features": ["transaction", "lock-in-share-mode", "minimized-regression"],
+  "fixture_notes": "One fixed lot isolates acceptance of the shared-lock clause and verifies the row remains committed after rollback.",
+  "determinism_notes": "The single fixed row and explicit primary-key order use no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE mini_stock_lots (lot_id INT PRIMARY KEY, quantity INT NOT NULL)",
+    "INSERT INTO mini_stock_lots VALUES (71, 4)"
+  ],
+  "steps": [
+    {"sql": "START TRANSACTION"},
+    {"sql": "SELECT lot_id, quantity FROM mini_stock_lots ORDER BY lot_id LOCK IN SHARE MODE", "ordered": true},
+    {"sql": "ROLLBACK"}
+  ],
+  "checks": [
+    {"sql": "SELECT lot_id, quantity FROM mini_stock_lots ORDER BY lot_id", "ordered": true}
+  ]
+}

@@ -1099,6 +1099,8 @@ impl RawEngine {
             .replace("delete ignore", "delete")
             .replace("UPDATE IGNORE", "UPDATE")
             .replace("update ignore", "update")
+            .replace(" LOCK IN SHARE MODE", " FOR SHARE")
+            .replace(" lock in share mode", " for share")
             .replace(" ON UPDATE CURRENT_TIMESTAMP", "")
             .replace(" on update current_timestamp", "")
             .replace(" ZEROFILL", "")
