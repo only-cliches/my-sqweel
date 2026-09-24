@@ -149,16 +149,24 @@ pub(super) fn parse_show_create_table(sql: &str) -> Option<String> {
     None
 }
 
-pub(super) fn parse_rename_table(sql: &str) -> Option<(String, String)> {
-    let tokens = normalized_sql_tokens(sql);
-    if tokens.len() >= 5
-        && tokens[0].eq_ignore_ascii_case("RENAME")
-        && tokens[1].eq_ignore_ascii_case("TABLE")
-        && tokens[3].eq_ignore_ascii_case("TO")
+pub(super) fn parse_rename_tables(sql: &str) -> Option<Vec<(String, String)>> {
+    let tokens = normalized_sql_tokens(sql.trim().trim_end_matches(';'));
+    if tokens.len() < 5
+        || !tokens[0].eq_ignore_ascii_case("RENAME")
+        || !tokens[1].eq_ignore_ascii_case("TABLE")
     {
-        return Some((tokens[2].clone(), tokens[4].clone()));
+        return None;
     }
-    None
+    let mut renames = Vec::new();
+    let mut position = 2;
+    while position + 2 < tokens.len() {
+        if !tokens[position + 1].eq_ignore_ascii_case("TO") {
+            return None;
+        }
+        renames.push((tokens[position].clone(), tokens[position + 2].clone()));
+        position += 3;
+    }
+    (position == tokens.len()).then_some(renames)
 }
 
 pub(super) fn show_databases_result(sql: &str) -> QueryResult {

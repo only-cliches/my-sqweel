@@ -553,25 +553,66 @@ impl Catalog {
             return Ok(format!("ALTER TABLE {table} AUTO_INCREMENT={next}"));
         }
         let renamed = normalize_rename(sql)?;
+        let multi_rename = renamed
+            .as_deref()
+            .is_some_and(|normalized| normalized.contains("; ALTER TABLE "));
         let mut statements = parse_session_statement(renamed.as_deref().unwrap_or(sql))?;
         ensure!(
-            statements.len() == 1,
+            statements.len() == 1
+                || (multi_rename
+                    && statements.iter().all(|statement| matches!(
+                        statement,
+                        Statement::AlterTable { operations, .. }
+                            if matches!(
+                                operations.as_slice(),
+                                [AlterTableOperation::RenameTable { .. }]
+                            )
+                    ))),
             "Exactly one SQL statement is required"
         );
+        let mut rewritten = false;
+        for statement in &mut statements {
+            let mut visitor = DatabaseVisitor {
+                catalog: self,
+                identity,
+                database,
+                read_only: matches!(statement, Statement::Query(_)),
+                rewritten: false,
+            };
+            if let ControlFlow::Break(error) = statement.visit(&mut visitor) {
+                return Err(error);
+            }
+            rewritten |= visitor.rewritten;
+        }
+        if !rewritten {
+            return Ok(if multi_rename {
+                sql.to_owned()
+            } else {
+                renamed.unwrap_or_else(|| sql.to_owned())
+            });
+        }
+        if multi_rename {
+            let pairs = statements
+                .iter_mut()
+                .map(|statement| {
+                    let _ = statement.visit(&mut MysqlStringEscapes);
+                    let Statement::AlterTable {
+                        name, operations, ..
+                    } = statement
+                    else {
+                        unreachable!("validated multi-table rename statement");
+                    };
+                    let [AlterTableOperation::RenameTable { table_name }] = operations.as_slice()
+                    else {
+                        unreachable!("validated single rename operation");
+                    };
+                    format!("{name} TO {table_name}")
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Ok(format!("RENAME TABLE {pairs}"));
+        }
         let statement = &mut statements[0];
-        let mut visitor = DatabaseVisitor {
-            catalog: self,
-            identity,
-            database,
-            read_only: matches!(statement, Statement::Query(_)),
-            rewritten: false,
-        };
-        if let ControlFlow::Break(error) = statement.visit(&mut visitor) {
-            return Err(error);
-        }
-        if !visitor.rewritten {
-            return Ok(renamed.unwrap_or_else(|| sql.to_owned()));
-        }
         // sqlparser's generic formatter escapes quotes, but not MySQL backslashes.
         // Re-encoding a qualified statement must not decode JSON escapes twice.
         let _ = statement.visit(&mut MysqlStringEscapes);
@@ -1201,6 +1242,17 @@ pub(super) fn parse_index_rename(sql: &str) -> Result<Option<(ObjectName, Ident,
 fn normalize_rename(sql: &str) -> Result<Option<String>> {
     if !may_start_with(sql, &["RENAME"]) {
         return Ok(None);
+    }
+    if let Some(renames) = super::compat::parse_rename_tables(sql)
+        && renames.len() > 1
+    {
+        return Ok(Some(
+            renames
+                .into_iter()
+                .map(|(from, to)| format!("ALTER TABLE {from} RENAME TO {to}"))
+                .collect::<Vec<_>>()
+                .join("; "),
+        ));
     }
     let mut tokens = Tokens::new(sql)?;
     if !tokens.take_keyword("RENAME") {

@@ -4016,8 +4016,8 @@ impl RawEngine {
         if let Some(table) = parse_show_create_table(trimmed) {
             return Ok(Some(self.show_create_table(&table)));
         }
-        if let Some((from, to)) = parse_rename_table(trimmed) {
-            return Ok(Some(self.rename_table(&from, &to)?));
+        if let Some(renames) = parse_rename_tables(trimmed) {
+            return Ok(Some(self.rename_tables(&renames)?));
         }
 
         Ok(None)

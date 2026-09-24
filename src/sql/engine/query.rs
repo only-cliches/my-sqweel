@@ -5496,6 +5496,56 @@ impl RawEngine {
         }
     }
 
+    pub(super) fn rename_tables(&self, renames: &[(String, String)]) -> Result<QueryResult> {
+        let sources = renames
+            .iter()
+            .filter(|(from, to)| from != to)
+            .map(|(from, _)| from.clone())
+            .collect::<HashSet<_>>();
+        let targets = renames
+            .iter()
+            .filter(|(from, to)| from != to)
+            .map(|(_, to)| to.clone())
+            .collect::<HashSet<_>>();
+        anyhow::ensure!(
+            sources.len() == renames.iter().filter(|(from, to)| from != to).count(),
+            "duplicate table in RENAME TABLE"
+        );
+        anyhow::ensure!(
+            targets.len() == renames.iter().filter(|(from, to)| from != to).count(),
+            "duplicate target in RENAME TABLE"
+        );
+        for (from, to) in renames.iter().filter(|(from, to)| from != to) {
+            anyhow::ensure!(self.schemas.contains_key(from), "unknown table: {from}");
+            anyhow::ensure!(
+                !self.schemas.contains_key(to) || sources.contains(to),
+                "table already exists: {to}"
+            );
+        }
+        let temporary_names = renames
+            .iter()
+            .filter(|(from, to)| from != to)
+            .map(|(from, _)| {
+                (
+                    from.clone(),
+                    format!("__sqw_rename_{}", uuid::Uuid::new_v4()),
+                )
+            })
+            .collect::<Vec<_>>();
+        for (from, temporary) in &temporary_names {
+            self.rename_table(from, temporary)?;
+        }
+        for (from, to) in renames.iter().filter(|(from, to)| from != to) {
+            let temporary = temporary_names
+                .iter()
+                .find(|(source, _)| source == from)
+                .map(|(_, temporary)| temporary)
+                .expect("temporary rename name exists");
+            self.rename_table(temporary, to)?;
+        }
+        Ok(QueryResult::default())
+    }
+
     pub(super) fn rename_table(&self, from: &str, to: &str) -> Result<QueryResult> {
         if self.schemas.contains_key(to) {
             return Err(anyhow!("table already exists: {to}"));

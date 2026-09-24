@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "rename_table_pair_archive",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/1509.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/1509.sql",
+      "sha256": "208fcb225b28d7376940d7dad6a0c6861ae3fd80f3d0512a9449841a0b477b0f",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/docker/fuzz_root/mysql_initlib/1509.sql:83-86",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL regression script renames multiple tables in one RENAME TABLE statement, including a swap-like sequence across related log tables.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored shipment archive migration. One atomic RENAME TABLE statement moves a shipment table and its event table together, and ordered reads through the new names verify both schemas' rows were preserved; system logs, settings, and source identifiers are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["multi-table-rename", "atomic-ddl", "row-preservation", "related-tables", "deterministic-order"],
+  "fixture_notes": "The shipment and event tables are renamed together. Both archived names must be queryable, while the original names must no longer be used by the final checks.",
+  "determinism_notes": "Table names, row IDs, values, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE active_shipments (shipment_id INT PRIMARY KEY, shipment_code VARCHAR(16) NOT NULL)",
+    "CREATE TABLE active_shipment_events (event_id INT PRIMARY KEY, shipment_id INT NOT NULL, event_kind VARCHAR(16) NOT NULL)",
+    "INSERT INTO active_shipments VALUES (601, 'SHIP-601'), (602, 'SHIP-602')",
+    "INSERT INTO active_shipment_events VALUES (9601, 601, 'packed'), (9602, 602, 'loaded')"
+  ],
+  "steps": [
+    {
+      "sql": "RENAME TABLE active_shipments TO archived_shipments, active_shipment_events TO archived_shipment_events",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT shipment_id, shipment_code FROM archived_shipments ORDER BY shipment_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT event_id, shipment_id, event_kind FROM archived_shipment_events ORDER BY event_id",
+      "ordered": true
+    }
+  ]
+}
