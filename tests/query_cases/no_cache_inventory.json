@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "no_cache_inventory",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "saharavishag/SQL-index-example",
+      "commit": "f0a92f6acbf96ef11b95e9391169fa726288df8c",
+      "path": "sql/table-select.sql",
+      "url": "https://github.com/saharavishag/SQL-index-example/blob/f0a92f6acbf96ef11b95e9391169fa726288df8c/sql/table-select.sql",
+      "sha256": "79280d8a18219bd563d739565961deca67c161a64ee23a05af6d7054cc7dae91",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/table-select.sql:2-8",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL SELECT uses SQL_NO_CACHE for a filtered table read.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored cold-storage inventory page. SELECT SQL_NO_CACHE reads positive stock from a fixed section with a deterministic SKU order and bounded page, while a second ordinary read verifies the complete catalog state; the source schema, values, and application purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["sql-no-cache", "filtered-select", "order-by-limit", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "Cold-storage SKUs 4102, 4103, and 4104 have positive stock and are ordered by SKU; the first two form the bounded page. SKU 4101 has zero stock and is excluded from the page but remains in the final catalog read.",
+  "determinism_notes": "All SKU IDs and quantities are fixed, the page order uses the unique SKU primary key, and final rows are ordered by SKU. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE cache_inventory (sku INT PRIMARY KEY, item_label VARCHAR(32) NOT NULL, quantity INT NOT NULL, storage_zone VARCHAR(16) NOT NULL)",
+    "INSERT INTO cache_inventory VALUES (4101, 'seal-pack', 0, 'cold'), (4102, 'valve-kit', 12, 'cold'), (4103, 'gasket-roll', 8, 'cold'), (4104, 'bearing-set', 19, 'cold'), (4105, 'thermal-wrap', 7, 'warm')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT SQL_NO_CACHE sku, item_label, quantity FROM cache_inventory WHERE storage_zone = 'cold' AND quantity > 0 ORDER BY sku LIMIT 2",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT sku, item_label, quantity, storage_zone FROM cache_inventory ORDER BY sku",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT sku, item_label, quantity, storage_zone FROM cache_inventory ORDER BY sku",
+      "ordered": true
+    }
+  ]
+}

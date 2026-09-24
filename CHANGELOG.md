@@ -327,6 +327,7 @@ All notable changes to MySqweel will be documented in this file.
 - Added the minimized GitHub-attributed consistent-snapshot transaction regression; MariaDB 10.11.7 and MySqweel agree on the ordered read before and after commit across three fresh minimized differential runs.
 - Added GitHub-attributed `SELECT SQL_BUFFER_RESULT` coverage from [PSU-Security-Universe/sqlright](https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/657.sql#L19) for an independently authored inventory page combining a MySQL result-buffering modifier, filtered pagination, deterministic ordering, and final-state verification; MariaDB 10.11.7 and MySqweel agree across three fresh original differential runs.
 - Added the minimized GitHub-attributed `SELECT SQL_BUFFER_RESULT` projection regression; MariaDB 10.11.7 and MySqweel agree across three fresh minimized differential runs.
+- Added GitHub-attributed `SELECT SQL_NO_CACHE` coverage from [saharavishag/SQL-index-example](https://github.com/saharavishag/SQL-index-example/blob/f0a92f6acbf96ef11b95e9391169fa726288df8c/sql/table-select.sql#L2-L8) for an independently authored cold-storage inventory page combining the MySQL cache-bypass modifier, filtered positive-stock selection, deterministic bounded ordering, and final-state verification; MariaDB 10.11.7 and MySqweel agree across three fresh differential runs.
 
 ### Upstream corpus coverage
 
