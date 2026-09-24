@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "insert_high_priority_inventory",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "actiontech/dble-test-suite",
+      "commit": "19c95415de567f6b32072be7c501ec1db83c4e1f",
+      "path": "behave_dble/sqls/sqls_util/syntax/insert.sql",
+      "url": "https://github.com/actiontech/dble-test-suite/blob/19c95415de567f6b32072be7c501ec1db83c4e1f/behave_dble/sqls/sqls_util/syntax/insert.sql",
+      "sha256": "e25d0ec60847fd634ef87d9343b708a84eafb454b257cb790dc706d0fb53b888",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "behave_dble/sqls/sqls_util/syntax/insert.sql: INSERT [ LOW_PRIORITY | DELAYED | HIGH_PRIORITY ] [IGNORE]",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL INSERT syntax matrix combines the HIGH_PRIORITY and IGNORE modifiers on a row insert.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored inventory replenishment. INSERT HIGH_PRIORITY IGNORE inserts a new SKU while silently skipping a duplicate SKU, and a deterministic final read proves both paths. The source table, rows, values, and sharding syntax are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["high-priority-insert", "insert-ignore", "duplicate-key-skip", "multi-row-insert", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "SKU bolt-17 already exists and must remain unchanged when the duplicate row is ignored; SKU nut-22 is inserted by the same statement.",
+  "determinism_notes": "SKU keys and quantities are fixed, the final read is ordered by the unique stock ID, and no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE inventory_stock (stock_id INT PRIMARY KEY, sku VARCHAR(16) NOT NULL UNIQUE, quantity INT NOT NULL, bin_code VARCHAR(16) NOT NULL)",
+    "INSERT INTO inventory_stock VALUES (1201, 'bolt-17', 8, 'A-01')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT HIGH_PRIORITY IGNORE INTO inventory_stock (stock_id, sku, quantity, bin_code) VALUES (1201, 'bolt-17', 99, 'Z-99'), (1202, 'nut-22', 14, 'B-04')",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT stock_id, sku, quantity, bin_code FROM inventory_stock ORDER BY stock_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT COUNT(*) AS stock_rows, SUM(quantity) AS total_quantity FROM inventory_stock",
+      "ordered": true
+    }
+  ]
+}
