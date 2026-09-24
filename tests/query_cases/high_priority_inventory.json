@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "high_priority_inventory",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/2818.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/2818.sql",
+      "sha256": "83d12846f3065a313acbcafb0771e3cb64fe1486231f2302fd6597512b538a17",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/docker/fuzz_root/mysql_initlib/2818.sql: SELECT HIGH_PRIORITY * FROM t1",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL SELECT applies the HIGH_PRIORITY modifier to a table read.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored inventory-priority report. HIGH_PRIORITY accompanies a filtered projection and deterministic item ordering; the table, columns, rows, and inventory domain are new, and the scheduling hint is observed through the same result rows as the ordinary SELECT."
+    },
+    "independently_authored": true
+  },
+  "features": ["high-priority-select", "filtered-read", "deterministic-order"],
+  "fixture_notes": "Items 301 and 303 are available and returned in item ID order; reserved item 302 is excluded by the status predicate. HIGH_PRIORITY must not alter the selected rows or their declared metadata.",
+  "determinism_notes": "The item ID is unique and supplies the final order. All states and quantities are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE priority_inventory (item_id INT PRIMARY KEY, item_label VARCHAR(32) NOT NULL, item_state VARCHAR(16) NOT NULL, quantity INT NOT NULL)",
+    "INSERT INTO priority_inventory VALUES (301, 'copper-cable', 'available', 12), (302, 'fiber-reel', 'reserved', 7), (303, 'switch-module', 'available', 4)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT HIGH_PRIORITY item_id, item_label, quantity FROM priority_inventory WHERE item_state = 'available' ORDER BY item_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT item_id, item_label, item_state, quantity FROM priority_inventory ORDER BY item_id",
+      "ordered": true
+    }
+  ]
+}
