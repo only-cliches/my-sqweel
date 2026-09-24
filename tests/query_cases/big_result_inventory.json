@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "big_result_inventory",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/2336.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/2336.sql",
+      "sha256": "f32f767390cd473e778700af5fcbeae99c09950b775146d00ef56dca74e8e1fe",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/docker/fuzz_root/mysql_initlib/2336.sql:108-121",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL grouped aggregate query uses the SQL_BIG_RESULT SELECT modifier together with counts, arithmetic aggregates, and bitwise aggregates.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored warehouse inventory audit. SQL_BIG_RESULT precedes grouped item counts, unit totals, BIT_OR/BIT_AND masks, a HAVING threshold filters low-volume warehouses, and deterministic warehouse ordering makes the result stable. The source tables, columns, masks, values, and fuzzing context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["sql-big-result", "grouped-aggregates", "bitwise-aggregates", "having", "deterministic-order"],
+  "fixture_notes": "Warehouses 41 and 42 meet the five-unit threshold; warehouse 43 is filtered by HAVING. Bit masks are nonnegative and fixed so BIT_OR and BIT_AND results are directly observable.",
+  "determinism_notes": "Warehouse IDs and inventory rows are fixed, the grouped result is ordered by the unique warehouse ID, and no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE inventory_signals (signal_id INT PRIMARY KEY, warehouse_id INT NOT NULL, item_code VARCHAR(16) NOT NULL, units INT NOT NULL, alert_mask INT NOT NULL)",
+    "INSERT INTO inventory_signals VALUES (1101, 41, 'rack-a', 4, 1), (1102, 41, 'rack-b', 7, 5), (1103, 42, 'rack-c', 2, 12), (1104, 42, 'rack-d', 3, 8), (1105, 43, 'rack-e', 2, 3)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT SQL_BIG_RESULT warehouse_id, COUNT(*) AS item_count, SUM(units) AS total_units, BIT_OR(alert_mask) AS alert_union, BIT_AND(alert_mask) AS common_alerts FROM inventory_signals GROUP BY warehouse_id HAVING SUM(units) >= 5 ORDER BY warehouse_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT warehouse_id, item_code, units, alert_mask FROM inventory_signals ORDER BY warehouse_id, signal_id",
+      "ordered": true
+    }
+  ]
+}
