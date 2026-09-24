@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "buffer_result_inventory_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/657.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/657.sql",
+      "sha256": "c70386aa9a85dbf23205e4141d5505dcbccaa1518baf97599d1817f9a4a5d759",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from SELECT SQL_BUFFER_RESULT in MySQL/docker/fuzz_root/mysql_initlib/657.sql:19",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "SQL_BUFFER_RESULT must not change the rows returned by an ordinary filtered SELECT.",
+      "mysql_mariadb_translation": "Reduced to one independently authored ready-stock row, one buffered projection, and one ordered final read, isolating SELECT SQL_BUFFER_RESULT parser compatibility while removing pagination and extra inventory rows."
+    },
+    "independently_authored": true,
+    "minimized_from": "buffer_result_inventory"
+  },
+  "features": ["sql-buffer-result", "filtered-select", "minimized-regression"],
+  "fixture_notes": "The single ready SKU must be returned unchanged by the buffered projection and final read.",
+  "determinism_notes": "The SKU and quantity are fixed and both reads are ordered by the primary key; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE inventory_page_min (sku INT PRIMARY KEY, quantity INT NOT NULL, stock_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO inventory_page_min VALUES (2001, 9, 'ready')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT SQL_BUFFER_RESULT sku, quantity FROM inventory_page_min WHERE stock_state = 'ready' ORDER BY sku",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT sku, quantity, stock_state FROM inventory_page_min ORDER BY sku",
+      "ordered": true
+    }
+  ]
+}

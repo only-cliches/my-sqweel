@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "buffer_result_inventory",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/657.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/657.sql",
+      "sha256": "c70386aa9a85dbf23205e4141d5505dcbccaa1518baf97599d1817f9a4a5d759",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/docker/fuzz_root/mysql_initlib/657.sql:19",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL SELECT applies the SQL_BUFFER_RESULT modifier to a filtered table read.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored inventory page. SELECT SQL_BUFFER_RESULT reads ready stock with a deterministic quantity and SKU order plus a bounded page, while a second ordinary read verifies the complete inventory state; the source schema, values, and application purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["sql-buffer-result", "filtered-select", "order-by-limit", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "Ready SKUs 1002, 1003, and 1004 are ordered by quantity descending then SKU ascending; the first two form the buffered page. Backordered SKU 1001 is excluded from the page but remains in the final inventory read.",
+  "determinism_notes": "All SKU IDs and quantities are fixed, the page order has a unique SKU tie-breaker, and final rows are ordered by the primary SKU. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE inventory_page (sku INT PRIMARY KEY, item_label VARCHAR(32) NOT NULL, quantity INT NOT NULL, stock_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO inventory_page VALUES (1001, 'seal-ring', 40, 'backorder'), (1002, 'valve-seat', 18, 'ready'), (1003, 'gasket-kit', 24, 'ready'), (1004, 'bearing-cap', 24, 'ready')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT SQL_BUFFER_RESULT sku, item_label, quantity FROM inventory_page WHERE stock_state = 'ready' ORDER BY quantity DESC, sku ASC LIMIT 2",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT sku, item_label, quantity, stock_state FROM inventory_page ORDER BY sku",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT sku, item_label, quantity, stock_state FROM inventory_page ORDER BY sku",
+      "ordered": true
+    }
+  ]
+}
