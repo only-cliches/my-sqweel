@@ -1571,6 +1571,13 @@ impl RawEngine {
             Expr::Extract { .. } => {
                 metadata.column_type = MysqlColumnType::Integer;
             }
+            Expr::Ceil { expr, .. } => {
+                metadata.column_type = if matches!(expr.as_ref(), Expr::Value(SqlValue::Null)) {
+                    MysqlColumnType::Double
+                } else {
+                    MysqlColumnType::Integer
+                };
+            }
             Expr::Floor { expr, .. } => {
                 let argument = self.expression_metadata(select, expr, String::new(), first_row);
                 metadata.column_type = MysqlColumnType::Decimal;
@@ -2167,6 +2174,19 @@ impl RawEngine {
                     }
                     "STRCMP" | "ISNULL" | "DATEDIFF" => MysqlColumnType::Integer,
                     "TIMESTAMPDIFF" => MysqlColumnType::BigInt,
+                    "CEIL" | "CEILING" => {
+                        let argument = function_arguments(function)
+                            .ok()
+                            .and_then(|arguments| arguments.into_iter().next().flatten());
+                        if argument
+                            .as_ref()
+                            .is_some_and(|argument| matches!(argument, Expr::Value(SqlValue::Null)))
+                        {
+                            MysqlColumnType::Double
+                        } else {
+                            MysqlColumnType::Integer
+                        }
+                    }
                     "COALESCE" | "IFNULL" | "NVL" | "NVL2" => self.widest_function_argument_type(
                         function,
                         select,

@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "id": "ceiling_pricing_boundaries",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "PacktPublishing/SQL-Query-Design-Best-Practices",
+      "commit": "748c442eb64829b554697c5a57a8af085f93d763",
+      "path": "Chapter03/Fig 3.20 Query.sql",
+      "url": "https://github.com/PacktPublishing/SQL-Query-Design-Best-Practices/blob/748c442eb64829b554697c5a57a8af085f93d763/Chapter03/Fig%203.20%20Query.sql",
+      "sha256": "8af21b3a451a6aae8484aa706372f72b44787b167756eea1c83660350333b8ba",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Chapter03/Fig 3.20 Query.sql:1",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL scalar projection applies CEILING to a negative fractional number to round it upward toward the next integer.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored invoice-unit audit. Fixed negative, positive, integral, and NULL decimal amounts are projected through both CEILING and its CEIL synonym, with CASE classification and deterministic ordering verifying upward rounding and NULL propagation. The source literal, aliases, schema, and instructional query context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "ceiling",
+    "ceil-synonym",
+    "negative-fraction-rounding",
+    "positive-fraction-rounding",
+    "null-propagation",
+    "case-classification",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Invoice 601 rounds -102.55268 upward to -102, invoice 602 rounds 7.01000 upward to 8, invoice 603 remains 12, and invoice 604 propagates NULL through both functions.",
+  "determinism_notes": "Invoice IDs, labels, decimal values, function calls, and ordering are fixed; there are no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE invoice_quotes (quote_id INT PRIMARY KEY, quote_label VARCHAR(24) NOT NULL, amount DECIMAL(12,5) NULL)",
+    "INSERT INTO invoice_quotes VALUES (601, 'negative-fraction', -102.55268), (602, 'positive-fraction', 7.01000), (603, 'integral', 12.00000), (604, 'missing', NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT quote_id, quote_label, amount, CEILING(amount) AS ceiling_amount, CEIL(amount) AS ceil_amount, CASE WHEN amount IS NULL THEN 'missing' WHEN CEILING(amount) = amount THEN 'integral' ELSE 'rounded-up' END AS amount_class FROM invoice_quotes ORDER BY quote_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT quote_id, CEILING(amount) AS ceiling_amount, CEIL(amount) AS ceil_amount FROM invoice_quotes ORDER BY quote_id",
+      "ordered": true
+    }
+  ]
+}

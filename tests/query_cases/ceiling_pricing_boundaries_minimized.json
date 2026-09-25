@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "id": "ceiling_pricing_boundaries_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "PacktPublishing/SQL-Query-Design-Best-Practices",
+      "commit": "748c442eb64829b554697c5a57a8af085f93d763",
+      "path": "Chapter03/Fig 3.20 Query.sql",
+      "url": "https://github.com/PacktPublishing/SQL-Query-Design-Best-Practices/blob/748c442eb64829b554697c5a57a8af085f93d763/Chapter03/Fig%203.20%20Query.sql",
+      "sha256": "8af21b3a451a6aae8484aa706372f72b44787b167756eea1c83660350333b8ba",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Chapter03/Fig 3.20 Query.sql:1",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "The source scalar CEILING expression isolates upward rounding of a negative fractional number.",
+      "mysql_mariadb_translation": "Reduced to one independently authored scalar projection containing CEILING and CEIL over a negative fraction and SQL NULL. The table, CASE classification, positive values, and source literal are removed while preserving rounding, NULL propagation, and result metadata.",
+      "independently_authored": true
+    },
+    "independently_authored": true,
+    "minimized_from": "ceiling_pricing_boundaries"
+  },
+  "features": [
+    "ceiling",
+    "ceil-synonym",
+    "null-propagation",
+    "result-metadata",
+    "minimized-regression"
+  ],
+  "fixture_notes": "The scalar projection isolates CEILING/CEIL result values and metadata for a negative fractional number and NULL.",
+  "determinism_notes": "All scalar literals and aliases are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT CEILING(-102.55268) AS ceiling_fraction, CEIL(-102.55268) AS ceil_fraction, CEILING(NULL) AS ceiling_null, CEIL(NULL) AS ceil_null",
+      "ordered": true
+    }
+  ]
+}

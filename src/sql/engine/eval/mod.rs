@@ -4616,7 +4616,11 @@ pub(super) fn eval_function_text(
                 .map(|arg| eval_scalar_text(arg, data, last_insert_id))
                 .transpose()?
                 .unwrap_or(Value::Null);
-            Ok(number_from_f64(json_to_f64_lossy(&value)?.ceil()))
+            if value == Value::Null {
+                Ok(Value::Null)
+            } else {
+                Ok(number_from_f64(json_to_f64_lossy(&value)?.ceil()))
+            }
         }
         "POW" | "POWER" => {
             let base = args
