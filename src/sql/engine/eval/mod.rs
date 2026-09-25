@@ -1312,6 +1312,9 @@ fn aggregate_call(expr: &Expr) -> Option<AggregateCall> {
     if kind == AggregateKind::GroupConcat {
         return Some(parse_group_concat_call(args));
     }
+    if kind == AggregateKind::JsonArrayAgg {
+        return Some(parse_json_arrayagg_call(args));
+    }
 
     let mut args = args;
     let mut distinct = false;
@@ -1332,6 +1335,36 @@ fn aggregate_call(expr: &Expr) -> Option<AggregateCall> {
     })
 }
 
+fn parse_order_by_clause(text: &str) -> Vec<GroupConcatOrder> {
+    split_sql_args(text)
+        .into_iter()
+        .filter_map(|raw| {
+            let trimmed = raw.trim();
+            let upper = trimmed.to_ascii_uppercase();
+            if let Some(expr) = upper.strip_suffix(" DESC") {
+                let expr_len = expr.len();
+                Some(GroupConcatOrder {
+                    expr: CompiledScalarExpr::new(trimmed[..expr_len].trim().to_string()),
+                    asc: false,
+                })
+            } else if let Some(expr) = upper.strip_suffix(" ASC") {
+                let expr_len = expr.len();
+                Some(GroupConcatOrder {
+                    expr: CompiledScalarExpr::new(trimmed[..expr_len].trim().to_string()),
+                    asc: true,
+                })
+            } else if !trimmed.is_empty() {
+                Some(GroupConcatOrder {
+                    expr: CompiledScalarExpr::new(trimmed.to_string()),
+                    asc: true,
+                })
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
 fn parse_group_concat_call(args: Vec<String>) -> AggregateCall {
     let mut body = args.join(", ");
     let mut separator = ",".to_string();
@@ -1342,39 +1375,14 @@ fn parse_group_concat_call(args: Vec<String>) -> AggregateCall {
         separator = unquote_sql_string(&right).unwrap_or(right);
     }
 
-    let mut order_by = Vec::new();
-    if let Some((left, right)) = split_top_level_keyword(&body, "ORDER BY") {
+    let order_by = if let Some((left, right)) = split_top_level_keyword(&body, "ORDER BY") {
         let left = left.to_string();
-        let right = right.to_string();
+        let order_by = parse_order_by_clause(right);
         body = left;
-        order_by = split_sql_args(&right)
-            .into_iter()
-            .filter_map(|raw| {
-                let trimmed = raw.trim();
-                let upper = trimmed.to_ascii_uppercase();
-                if let Some(expr) = upper.strip_suffix(" DESC") {
-                    let expr_len = expr.len();
-                    Some(GroupConcatOrder {
-                        expr: CompiledScalarExpr::new(trimmed[..expr_len].trim().to_string()),
-                        asc: false,
-                    })
-                } else if let Some(expr) = upper.strip_suffix(" ASC") {
-                    let expr_len = expr.len();
-                    Some(GroupConcatOrder {
-                        expr: CompiledScalarExpr::new(trimmed[..expr_len].trim().to_string()),
-                        asc: true,
-                    })
-                } else if !trimmed.is_empty() {
-                    Some(GroupConcatOrder {
-                        expr: CompiledScalarExpr::new(trimmed.to_string()),
-                        asc: true,
-                    })
-                } else {
-                    None
-                }
-            })
-            .collect();
-    }
+        order_by
+    } else {
+        Vec::new()
+    };
 
     let mut args = split_sql_args(&body);
     let mut distinct = false;
@@ -1395,6 +1403,35 @@ fn parse_group_concat_call(args: Vec<String>) -> AggregateCall {
     }
 }
 
+fn parse_json_arrayagg_call(args: Vec<String>) -> AggregateCall {
+    let mut body = args.join(", ");
+    let order_by = if let Some((left, right)) = split_top_level_keyword(&body, "ORDER BY") {
+        let left = left.to_string();
+        let order_by = parse_order_by_clause(right);
+        body = left;
+        order_by
+    } else {
+        Vec::new()
+    };
+    let mut args = split_sql_args(&body);
+    let mut distinct = false;
+    if let Some(first) = args.first_mut() {
+        let trimmed = first.trim();
+        if trimmed.to_ascii_uppercase().starts_with("DISTINCT ") {
+            distinct = true;
+            *first = trimmed[9..].trim().to_string();
+        }
+    }
+
+    AggregateCall {
+        kind: AggregateKind::JsonArrayAgg,
+        args: args.into_iter().map(CompiledScalarExpr::new).collect(),
+        distinct,
+        order_by,
+        separator: ",".to_string(),
+    }
+}
+
 fn eval_aggregate_call(
     call: &AggregateCall,
     group: &[Map<String, Value>],
@@ -1402,7 +1439,11 @@ fn eval_aggregate_call(
     order_hints: &BTreeMap<String, ColumnHint>,
     eval: &dyn Fn(&Expr, &Map<String, Value>, u64) -> Result<Value>,
 ) -> Result<Value> {
-    if call.kind == AggregateKind::GroupConcat && !call.order_by.is_empty() {
+    if matches!(
+        call.kind,
+        AggregateKind::GroupConcat | AggregateKind::JsonArrayAgg
+    ) && !call.order_by.is_empty()
+    {
         let mut ordered_group = group.iter().collect::<Vec<_>>();
         ordered_group.sort_by(|left, right| {
             for order in &call.order_by {

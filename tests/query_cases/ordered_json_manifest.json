@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "ordered_json_manifest",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "felipebz/zpa",
+      "commit": "1eb86820a1e98470519fb3db51b1653ea3321b55",
+      "path": "zpa-checks/src/integrationTest/resources/sources/oracle-database_23/sqlrf/JSON_ARRAYAGG-1.sql",
+      "url": "https://github.com/felipebz/zpa/blob/1eb86820a1e98470519fb3db51b1653ea3321b55/zpa-checks/src/integrationTest/resources/sources/oracle-database_23/sqlrf/JSON_ARRAYAGG-1.sql",
+      "sha256": "369946dc41a71a579922067394e5295c6a6477bac2a55fb1f5ff45921c503180",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "zpa-checks/src/integrationTest/resources/sources/oracle-database_23/sqlrf/JSON_ARRAYAGG-1.sql:2-3",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A JSON_ARRAYAGG aggregate accepts an ORDER BY clause inside the aggregate so values are serialized in a defined key order.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored shipping-manifest report. Order lines are grouped by manifest and serialized into JSON arrays ordered by line priority and line ID; the source's Oracle RETURNING clause, table names, identifiers, and values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["ordered-json-arrayagg", "grouped-join", "aggregate-ordering", "tie-break-order", "deterministic-order", "final-state-check"],
+  "fixture_notes": "Manifest 501 has three lines: priorities 30, 30, and 20 require line ID 1002 before 1003 before 1001. Manifest 502 has two lines with a separate order. The JSON arrays must preserve this explicit priority and ID ordering.",
+  "determinism_notes": "Manifest IDs, line priorities, line IDs, item codes, and quantities are fixed; the aggregate and final reads have explicit deterministic ordering with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE shipping_manifests (manifest_id INT PRIMARY KEY, manifest_code VARCHAR(16) NOT NULL)",
+    "CREATE TABLE manifest_lines (line_id INT PRIMARY KEY, manifest_id INT NOT NULL, item_code VARCHAR(16) NOT NULL, units INT NOT NULL, line_priority INT NOT NULL)",
+    "INSERT INTO shipping_manifests VALUES (501, 'M-NORTH'), (502, 'M-SOUTH')",
+    "INSERT INTO manifest_lines VALUES (1001, 501, 'AX-14', 4, 20), (1002, 501, 'BZ-09', 2, 30), (1003, 501, 'CX-22', 1, 30), (2001, 502, 'DX-31', 8, 10), (2002, 502, 'EX-44', 3, 40)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT m.manifest_id, m.manifest_code, JSON_ARRAYAGG(CONCAT(l.item_code, ':', l.units) ORDER BY l.line_priority DESC, l.line_id ASC) AS packed_lines FROM shipping_manifests m INNER JOIN manifest_lines l ON l.manifest_id = m.manifest_id GROUP BY m.manifest_id, m.manifest_code ORDER BY m.manifest_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT line_id, manifest_id, item_code, units, line_priority FROM manifest_lines ORDER BY line_id",
+      "ordered": true
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "ordered_json_manifest_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "ordered_json_manifest",
+    "source": {
+      "kind": "github",
+      "repository": "felipebz/zpa",
+      "commit": "1eb86820a1e98470519fb3db51b1653ea3321b55",
+      "path": "zpa-checks/src/integrationTest/resources/sources/oracle-database_23/sqlrf/JSON_ARRAYAGG-1.sql",
+      "url": "https://github.com/felipebz/zpa/blob/1eb86820a1e98470519fb3db51b1653ea3321b55/zpa-checks/src/integrationTest/resources/sources/oracle-database_23/sqlrf/JSON_ARRAYAGG-1.sql",
+      "sha256": "369946dc41a71a579922067394e5295c6a6477bac2a55fb1f5ff45921c503180",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "zpa-checks/src/integrationTest/resources/sources/oracle-database_23/sqlrf/JSON_ARRAYAGG-1.sql:2-3",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A JSON_ARRAYAGG aggregate accepts an ORDER BY clause inside the aggregate so values are serialized in a defined key order.",
+      "mysql_mariadb_translation": "Minimized independently authored regression with one manifest group and three line values. JSON_ARRAYAGG ordering by priority and line ID isolates aggregate-order evaluation from joins, multiple groups, and the original domain data.",
+      "minimized_from": "ordered_json_manifest"
+    },
+    "independently_authored": true
+  },
+  "features": ["ordered-json-arrayagg", "aggregate-ordering", "tie-break-order", "minimized-regression"],
+  "fixture_notes": "One manifest has three fixed lines. Priority 30 ties are broken by line ID, so the expected JSON order is BZ-09, CX-22, AX-14 rather than insertion order.",
+  "determinism_notes": "Line priorities and IDs are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE mini_manifest_lines (line_id INT PRIMARY KEY, manifest_id INT NOT NULL, item_code VARCHAR(16) NOT NULL, units INT NOT NULL, line_priority INT NOT NULL)",
+    "INSERT INTO mini_manifest_lines VALUES (1001, 501, 'AX-14', 4, 20), (1002, 501, 'BZ-09', 2, 30), (1003, 501, 'CX-22', 1, 30)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT manifest_id, JSON_ARRAYAGG(CONCAT(item_code, ':', units) ORDER BY line_priority DESC, line_id ASC) AS packed_lines FROM mini_manifest_lines GROUP BY manifest_id ORDER BY manifest_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT line_id, item_code, units, line_priority FROM mini_manifest_lines ORDER BY line_id",
+      "ordered": true
+    }
+  ]
+}
