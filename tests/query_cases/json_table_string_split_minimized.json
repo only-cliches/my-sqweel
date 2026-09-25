@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "id": "json_table_string_split_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "scenarios/string-split-to-rows/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/scenarios/string-split-to-rows/mysql.sql",
+      "sha256": "24239a6fafa70a6fa0e7e23fe36e6176ebfe8158a73ab0578fdd0c6f98118b07",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "scenarios/string-split-to-rows/mysql.sql:27-35",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "JSON_TABLE expands a JSON array expression constructed from a delimited scalar into ordinal rows.",
+      "mysql_mariadb_translation": "Reduced to one independently authored product with two labels, retaining correlated CONCAT/REPLACE JSON construction, JSON_TABLE expansion, and FOR ORDINALITY while removing the extra products."
+    },
+    "independently_authored": true,
+    "minimized_from": "json_table_string_split"
+  },
+  "features": ["json-table", "string-split", "for-ordinality", "minimized-regression"],
+  "fixture_notes": "One fixed product's two labels must emit two ordered rows with ordinals 1 and 2.",
+  "determinism_notes": "One fixed CSV string, deterministic JSON construction, ordinal expansion, and ordered output; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE mini_product_labels (product_id INT PRIMARY KEY, label_csv VARCHAR(128) NOT NULL)",
+    "INSERT INTO mini_product_labels VALUES (81, 'core,seasonal')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT p.product_id, jt.ordinal_no, jt.label FROM mini_product_labels AS p, JSON_TABLE(CONCAT('[\\\"', REPLACE(p.label_csv, ',', '\\\",\\\"'), '\\\"]'), '$[*]' COLUMNS (ordinal_no FOR ORDINALITY, label VARCHAR(32) PATH '$')) AS jt ORDER BY p.product_id, jt.ordinal_no",
+      "ordered": true
+    }
+  ]
+}
