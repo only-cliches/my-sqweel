@@ -1592,6 +1592,10 @@ impl RawEngine {
             } => {
                 metadata.column_type = MysqlColumnType::Integer;
             }
+            Expr::InList { .. } => {
+                metadata.column_type = MysqlColumnType::Integer;
+            }
+
             Expr::Like { .. } | Expr::RLike { .. } => {
                 metadata.column_type = MysqlColumnType::Integer;
             }

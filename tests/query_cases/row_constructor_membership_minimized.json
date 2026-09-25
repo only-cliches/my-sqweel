@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "id": "row_constructor_membership_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "row_constructor_membership",
+    "source": {
+      "kind": "github",
+      "repository": "MariaDB/server",
+      "commit": "45717ef4c736a6a92e0acf49399ce677bfcaea89",
+      "path": "mysql-test/main/row.test",
+      "url": "https://github.com/MariaDB/server/blob/45717ef4c736a6a92e0acf49399ce677bfcaea89/mysql-test/main/row.test",
+      "sha256": "d892d1415b72f1d0583af23004ba62861e06e121d1b399f3bea95c4af651edb1",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "mysql-test/main/row.test:7",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "MariaDB evaluates ROW constructor membership against a fixed list of ROW constructors.",
+      "mysql_mariadb_translation": "Reduced to one scalar ROW membership projection with fixed integer tuples, removing the source table and NULL cases while isolating ROW function evaluation inside IN."
+    },
+    "independently_authored": true,
+    "minimized_from": "row_constructor_membership"
+  },
+  "features": [
+    "row-constructor",
+    "tuple-membership",
+    "in-predicate",
+    "minimized-regression"
+  ],
+  "fixture_notes": "The first tuple is present in the candidate list and must return 1.",
+  "determinism_notes": "All tuple values are fixed and the query has no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT ROW(4, 7) IN (ROW(4, 7), ROW(9, 9)) AS tuple_hit",
+      "ordered": true
+    }
+  ]
+}

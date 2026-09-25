@@ -3507,6 +3507,11 @@ where
     let args = FunctionExprArgs(&arguments.args);
 
     match name.as_str() {
+        "ROW" => Some((|| {
+            let values = args.iter().map(eval_arg).collect::<Result<Vec<_>>>()?;
+            Ok(Value::Array(values))
+        })()),
+
         "TO_BASE64" => Some((|| {
             let value = args
                 .first()
@@ -3796,6 +3801,12 @@ pub(super) fn eval_function_text(
     };
 
     match name.as_str() {
+        "ROW" => Ok(Value::Array(
+            args.iter()
+                .map(|arg| eval_scalar_text(arg, data, last_insert_id))
+                .collect::<Result<Vec<_>>>()?,
+        )),
+
         "CONV" => {
             let values = args
                 .iter()

@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "id": "row_constructor_membership",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "MariaDB/server",
+      "commit": "45717ef4c736a6a92e0acf49399ce677bfcaea89",
+      "path": "mysql-test/main/row.test",
+      "sha256": "d892d1415b72f1d0583af23004ba62861e06e121d1b399f3bea95c4af651edb1",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "mysql-test/main/row.test:6-9",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "MariaDB compares row constructors against a list of row constructors with IN, including ordinary equality and NULL-sensitive membership cases.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored dispatch-lane membership report. A two-column ROW constructor is tested against two fixed lane tuples, with one unmatched row and a separate NULL-containing tuple list to expose SQL three-valued row membership; the source table, values, and test expressions are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "row-constructor",
+    "tuple-membership",
+    "in-predicate",
+    "null-three-valued-logic",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Dispatch rows 701 and 702 match the north/1 and south/2 tuple list, row 703 is not listed, and row 704 has a NULL lane number so the NULL-containing candidate list yields SQL NULL rather than a false match.",
+  "determinism_notes": "All dispatch IDs, lane values, tuple candidates, and output ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE dispatch_lanes (dispatch_id INT PRIMARY KEY, region_code VARCHAR(16) NOT NULL, lane_no INT NULL)",
+    "INSERT INTO dispatch_lanes VALUES (701, 'north', 1), (702, 'south', 2), (703, 'east', 3), (704, 'north', NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT dispatch_id, ROW(region_code, lane_no) IN (ROW('north', 1), ROW('south', 2)) AS listed_lane, ROW(region_code, lane_no) IN (ROW('north', 1), ROW('north', NULL)) AS nullable_lane FROM dispatch_lanes ORDER BY dispatch_id",
+      "ordered": true
+    }
+  ]
+}
