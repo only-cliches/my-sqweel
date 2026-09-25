@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "id": "update_low_priority_ignore_aliases",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "percona/percona-toolkit",
+      "commit": "1d1271ad365f2c4492dfd1d6fda4b969202e4354",
+      "path": "t/lib/QueryParser.t",
+      "url": "https://github.com/percona/percona-toolkit/blob/1d1271ad365f2c4492dfd1d6fda4b969202e4354/t/lib/QueryParser.t",
+      "sha256": "cd48e1b47ae5da683643043c25a27006a30ebb8a01242c9319b64e4d26594334",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "t/lib/QueryParser.t:374 (UPDATE LOW_PRIORITY IGNORE bat SET value = 1 WHERE 1)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL UPDATE combines LOW_PRIORITY and IGNORE modifiers so a write can proceed with duplicate-key conflicts suppressed rather than aborting the statement.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored alias canonicalization. UPDATE LOW_PRIORITY IGNORE attempts two unique-code changes: one conflicts with an already occupied canonical code and remains unchanged, while the other moves to a free code. The source table, values, parser-test context, and application labels are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "low-priority-update",
+    "update-ignore",
+    "unique-conflict",
+    "partial-mutation",
+    "case-assignment",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Alias 801 targets occupied canonical code 20 and must remain code 10; alias 802 targets free code 40 and must update from code 30. The unique constraint makes IGNORE behavior observable while LOW_PRIORITY must not change the mutation result.",
+  "determinism_notes": "Alias IDs and codes are fixed, each alias has one unique target assignment, and the final read is ordered by alias ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE alias_registry (alias_id INT PRIMARY KEY, alias_code INT NOT NULL UNIQUE, alias_label VARCHAR(32) NOT NULL)",
+    "INSERT INTO alias_registry VALUES (801, 10, 'legacy-alpha'), (802, 30, 'legacy-beta'), (803, 20, 'canonical-alpha')"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE LOW_PRIORITY IGNORE alias_registry SET alias_code = CASE WHEN alias_id = 801 THEN 20 ELSE 40 END WHERE alias_id IN (801, 802)",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT alias_id, alias_code, alias_label FROM alias_registry ORDER BY alias_id",
+      "ordered": true
+    }
+  ]
+}
