@@ -1642,13 +1642,14 @@ struct MysqlTimeValue {
     minutes: u8,
     seconds: u8,
     micros: u32,
+    force_fraction: bool,
 }
 
 impl std::fmt::Display for MysqlTimeValue {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let sign = if self.negative { "-" } else { "" };
         let hours = u64::from(self.days) * 24 + u64::from(self.hours);
-        if self.micros == 0 {
+        if self.micros == 0 && !self.force_fraction {
             write!(
                 formatter,
                 "{sign}{hours:02}:{:02}:{:02}",
@@ -1702,6 +1703,7 @@ fn parse_mysql_time_value(value: &str) -> io::Result<MysqlTimeValue> {
         .map(|value| (true, value))
         .or_else(|| value.strip_prefix('+').map(|value| (false, value)))
         .unwrap_or((false, value));
+    let force_fraction = value.contains('.');
     let mut parts = value.split(':');
     let hours = parts.next().and_then(|value| value.parse::<u64>().ok());
     let minutes = parts.next().and_then(|value| value.parse::<u8>().ok());
@@ -1744,6 +1746,7 @@ fn parse_mysql_time_value(value: &str) -> io::Result<MysqlTimeValue> {
         minutes,
         seconds,
         micros,
+        force_fraction,
     })
 }
 

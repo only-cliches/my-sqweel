@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "id": "microsecond_precision_audit_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/2408.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/2408.sql",
+      "sha256": "24f89b0aec0390acf1fa0f97e56026daa66f496daed95864f0caf12ce6184fc4",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/docker/fuzz_root/mysql_initlib/2408.sql:60-71",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "MICROSECOND extracts fractional-second precision from quoted temporal values and numeric datetime forms.",
+      "mysql_mariadb_translation": "Reduced to one independently authored TIME(6) column containing an exact-second value, preserving the fractional-time wire-format and MICROSECOND extraction contract."
+    },
+    "independently_authored": true,
+    "minimized_from": "microsecond_precision_audit"
+  },
+  "features": ["microsecond", "time6", "result-format", "minimized-regression"],
+  "fixture_notes": "The single fixed TIME(6) value isolates MariaDB's preserved six-digit fractional-time representation when MICROSECOND is projected alongside it.",
+  "determinism_notes": "The table and temporal literal are fixed; the query has no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE timing_ticks (tick_id INT PRIMARY KEY, elapsed TIME(6) NOT NULL)",
+    "INSERT INTO timing_ticks VALUES (901, '06:07:08.000000')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT elapsed, MICROSECOND(elapsed) AS elapsed_microseconds FROM timing_ticks ORDER BY tick_id",
+      "ordered": true
+    }
+  ]
+}

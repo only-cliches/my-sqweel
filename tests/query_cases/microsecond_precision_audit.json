@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "microsecond_precision_audit",
+  "provenance": {
+    "kind": "github-inspired",
+    "source": {
+      "kind": "github",
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/2408.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/2408.sql",
+      "sha256": "24f89b0aec0390acf1fa0f97e56026daa66f496daed95864f0caf12ce6184fc4",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/docker/fuzz_root/mysql_initlib/2408.sql:60-71",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "MICROSECOND extracts fractional-second precision from quoted temporal values and numeric datetime forms.",
+      "mysql_mariadb_translation": "Re-authored as a deterministic shipment-timing audit over DATETIME(6) and TIME(6) columns, covering distinct fractional precision, exact seconds, and NULL propagation with ordered CASE classification."
+    },
+    "independently_authored": true
+  },
+  "features": ["microsecond", "datetime6", "time6", "null-propagation", "case-classification", "deterministic-order"],
+  "fixture_notes": "Fixed temporal literals isolate MICROSECOND results for a six-digit fraction, a shorter fractional value normalized by MariaDB, an exact-second value, and missing timestamps.",
+  "determinism_notes": "All temporal values are fixed literals; statements use a primary-key ordering and no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE shipment_ticks (tick_id INT PRIMARY KEY, tick_label VARCHAR(24) NOT NULL, observed_at DATETIME(6) NULL, elapsed TIME(6) NULL)",
+    "INSERT INTO shipment_ticks VALUES (801, 'precise', '2024-04-05 06:07:08.100001', '06:07:08.500001'), (802, 'short-fraction', '2024-04-05 06:07:08.010000', '06:07:08.010000'), (803, 'whole-second', '2024-04-05 06:07:08.000000', '06:07:08.000000'), (804, 'missing', NULL, NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT tick_id, tick_label, observed_at, elapsed, MICROSECOND(observed_at) AS observed_microseconds, MICROSECOND(elapsed) AS elapsed_microseconds, CASE WHEN observed_at IS NULL THEN 'missing' WHEN MICROSECOND(observed_at) = 0 THEN 'whole-second' WHEN MICROSECOND(observed_at) < 100000 THEN 'short-fraction' ELSE 'precise-fraction' END AS precision_class FROM shipment_ticks ORDER BY tick_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT tick_id, MICROSECOND(observed_at) AS observed_microseconds, MICROSECOND(elapsed) AS elapsed_microseconds FROM shipment_ticks ORDER BY tick_id",
+      "ordered": true
+    }
+  ]
+}
