@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "low_priority_upsert_returning",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "mariadb-corporation/mariadb-qa",
+      "commit": "b2623726bdede0fed7b167a4edf7c62208ee60d4",
+      "path": "BUGS/MDEV-36354.sql",
+      "url": "https://github.com/mariadb-corporation/mariadb-qa/blob/b2623726bdede0fed7b167a4edf7c62208ee60d4/BUGS/MDEV-36354.sql",
+      "sha256": "1ae10c4179d6ad13f1eeb45a3c440bc29cbd47e020c3cafbab07d9016df3a3f3",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "BUGS/MDEV-36354.sql: INSERT LOW_PRIORITY IGNORE ... ON DUPLICATE KEY UPDATE ... RETURNING *",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB INSERT combines LOW_PRIORITY and IGNORE modifiers with duplicate-key updating and a RETURNING projection on the resulting rows.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored warehouse receipt merge. One multi-row LOW_PRIORITY IGNORE upsert updates an existing receipt, inserts a new receipt, and returns explicit receipt fields from both resulting rows; the source's fuzzed expressions, schema, values, and bug-reproduction context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["low-priority-insert", "insert-ignore", "multi-row-upsert", "duplicate-key-update", "returning", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "Receipt 901 already exists with quantity 5 and state held; the incoming row adds 3 units and changes the state to received. Receipt 902 is new with quantity 7. RETURNING must expose the updated and inserted rows, while the final read verifies both stored results.",
+  "determinism_notes": "Receipt IDs and values are fixed, the duplicate update has one unique target per input row, the final read is ordered by receipt ID, and no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE warehouse_receipts (receipt_id INT PRIMARY KEY, item_code VARCHAR(16) NOT NULL, quantity INT NOT NULL, receipt_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO warehouse_receipts VALUES (901, 'part-A17', 5, 'held')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT LOW_PRIORITY IGNORE INTO warehouse_receipts (receipt_id, item_code, quantity, receipt_state) VALUES (901, 'part-A17', 3, 'received'), (902, 'part-B24', 7, 'received') ON DUPLICATE KEY UPDATE quantity = quantity + VALUES(quantity), receipt_state = VALUES(receipt_state) RETURNING receipt_id, item_code, quantity, receipt_state",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT receipt_id, item_code, quantity, receipt_state FROM warehouse_receipts ORDER BY receipt_id",
+      "ordered": true
+    }
+  ]
+}
