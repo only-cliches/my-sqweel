@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "id": "replace_select_returning_routes",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "mariadb-corporation/mariadb-qa",
+      "commit": "b2623726bdede0fed7b167a4edf7c62208ee60d4",
+      "path": "OLD/generator/generator.prev.sh",
+      "url": "https://github.com/mariadb-corporation/mariadb-qa/blob/b2623726bdede0fed7b167a4edf7c62208ee60d4/OLD/generator/generator.prev.sh",
+      "sha256": "e4fece069b7b7c1741a8377f881936a0949c87b6c4cf1949f0ad15367e6100dc",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "OLD/generator/generator.prev.sh:1805-1809 (REPLACE expanded; REPLACE INTO ${_t1} SELECT * FROM ${_t2} ${REPLY})",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB query generator emits REPLACE INTO ... SELECT ... RETURNING, combining source-table loading with replacement semantics and a result projection.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored route-directory refresh. A filtered route feed supplies one existing route and one new route to REPLACE INTO ... SELECT ... RETURNING; the existing row is fully replaced, the new row is inserted, and a final ordered read verifies that an excluded feed row and an unrelated route remain unchanged. The generator's random values, table names, and fuzzing context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "replace-into",
+    "insert-select",
+    "returning",
+    "primary-key-replacement",
+    "filtered-source",
+    "dml-result-rows",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Route 41 already exists and is fully replaced from the ready feed; route 42 is new and is inserted; route 43 is held and must not be copied; route 44 is an unrelated existing target that must remain unchanged. RETURNING must expose only the two rows written by REPLACE INTO ... SELECT.",
+  "determinism_notes": "Route IDs, source states, values, and predicates are fixed; the RETURNING result is compared unordered and the final target read is ordered by the primary key. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE route_directory (route_id INT PRIMARY KEY, route_code VARCHAR(16) NOT NULL, destination VARCHAR(32) NOT NULL, retry_limit INT NOT NULL, route_state VARCHAR(16) NOT NULL)",
+    "CREATE TABLE route_feed (route_id INT PRIMARY KEY, route_code VARCHAR(16) NOT NULL, destination VARCHAR(32) NOT NULL, retry_limit INT NOT NULL, route_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO route_directory VALUES (41, 'north', 'queue-a-v1', 1, 'ready'), (44, 'west', 'queue-c', 2, 'ready')",
+    "INSERT INTO route_feed VALUES (41, 'north', 'queue-a-v2', 4, 'rerouted'), (42, 'south', 'queue-b', 3, 'ready'), (43, 'east', 'queue-x', 9, 'held')"
+  ],
+  "steps": [
+    {
+      "sql": "REPLACE INTO route_directory (route_id, route_code, destination, retry_limit, route_state) SELECT route_id, route_code, destination, retry_limit, route_state FROM route_feed WHERE route_state = 'ready' OR route_id = 41 RETURNING route_id, route_code, destination, retry_limit, route_state",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT route_id, route_code, destination, retry_limit, route_state FROM route_directory ORDER BY route_id",
+      "ordered": true
+    }
+  ]
+}
