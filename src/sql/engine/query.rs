@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::ops::ControlFlow;
 
-use sqlparser::ast::Visitor;
+use sqlparser::ast::{VisitMut, Visitor, VisitorMut};
 
 impl RawEngine {
     pub(super) fn select_query(&self, mut query: Query) -> Result<QueryResult> {
@@ -5656,7 +5656,12 @@ impl RawEngine {
                 return Ok(explain_tree_result(select, &tables, &self.rows));
             }
             if json_format {
-                return Ok(self.explain_json_result(select, &tables));
+                let order_by = query
+                    .order_by
+                    .as_ref()
+                    .map(|order_by| order_by.exprs.as_slice())
+                    .unwrap_or_default();
+                return Ok(self.explain_json_result(select, &tables, order_by));
             }
             return Ok(self.explain_select_result(select, &tables));
         }
@@ -5808,6 +5813,7 @@ impl RawEngine {
         &self,
         select: &Select,
         tables: &[(String, Option<String>)],
+        order_by: &[OrderByExpr],
     ) -> QueryResult {
         let mut query_block = Map::new();
         query_block.insert("select_id".to_string(), Value::Number(Number::from(1_u8)));
@@ -5829,12 +5835,15 @@ impl RawEngine {
         for (table, alias) in tables {
             let row_count = self.rows.get(table).map(|rows| rows.len()).unwrap_or(0);
             let mut table_plan = Map::new();
-            let use_primary_order = has_window
-                && select.selection.is_none()
-                && self
-                    .schemas
-                    .get(table)
-                    .is_some_and(|schema| !schema.primary_key.is_empty());
+            let schema = self.schemas.get(table);
+            let projects_primary_key = schema
+                .as_ref()
+                .is_some_and(|schema| projection_is_primary_key(select, &schema.primary_key));
+            let use_primary_order = !has_window
+                && schema.as_ref().is_some_and(|schema| {
+                    order_by_covers_primary_key(order_by, &schema.primary_key)
+                        || projects_primary_key
+                });
             if use_primary_order {
                 table_plan.insert(
                     "table_name".to_string(),
@@ -5867,7 +5876,18 @@ impl RawEngine {
                 Value::Number(Number::from(row_count as u64)),
             );
             table_plan.insert("filtered".to_string(), Value::Number(Number::from(100_u8)));
-            if use_primary_order {
+            if let Some(selection) = &select.selection {
+                let condition = explain_attached_condition(
+                    selection,
+                    alias.as_deref().unwrap_or(table),
+                    schema
+                        .as_ref()
+                        .map(|schema| &**schema)
+                        .map(|schema| &**schema),
+                );
+                table_plan.insert("attached_condition".to_string(), Value::String(condition));
+            }
+            if use_primary_order && projects_primary_key {
                 table_plan.insert("using_index".to_string(), Value::Bool(true));
             }
             nested_loop.push(Value::Object(Map::from_iter([(
@@ -5907,13 +5927,23 @@ impl RawEngine {
             "query_block".to_string(),
             Value::Object(query_block),
         )]));
+        let serialized = serde_json::to_string_pretty(&document)
+            .unwrap_or_else(|_| "{}".to_string())
+            .replace(
+                "\"used_key_parts\": [\n            \"",
+                "\"used_key_parts\": [\"",
+            )
+            .replace("\"\n          ],", "\"],");
         QueryResult {
             columns: vec!["EXPLAIN".to_string()],
+            column_metadata: vec![ColumnMetadata {
+                name: "EXPLAIN".to_string(),
+                column_type: MysqlColumnType::VarChar,
+                ..ColumnMetadata::default()
+            }],
             rows: vec![Map::from_iter([(
                 "EXPLAIN".to_string(),
-                Value::String(
-                    serde_json::to_string_pretty(&document).unwrap_or_else(|_| "{}".to_string()),
-                ),
+                Value::String(serialized),
             )])],
             ..QueryResult::default()
         }
@@ -6738,6 +6768,63 @@ fn order_by_covers_primary_key(order_by: &[OrderByExpr], primary_key: &[String])
                     .is_some_and(|column| column.eq_ignore_ascii_case(primary))
             })
         })
+}
+
+fn projection_is_primary_key(select: &Select, primary_key: &[String]) -> bool {
+    !primary_key.is_empty()
+        && select.projection.len() == primary_key.len()
+        && select.projection.iter().all(|item| {
+            let expression = match item {
+                SelectItem::UnnamedExpr(expression)
+                | SelectItem::ExprWithAlias {
+                    expr: expression, ..
+                } => expression,
+                _ => return false,
+            };
+            direct_order_column(expression).is_some_and(|column| {
+                primary_key
+                    .iter()
+                    .any(|primary| column.eq_ignore_ascii_case(primary))
+            })
+        })
+}
+
+fn explain_attached_condition(
+    selection: &Expr,
+    qualifier: &str,
+    schema: Option<&TableSchemaHint>,
+) -> String {
+    let Some(schema) = schema else {
+        return selection.to_string();
+    };
+    struct Qualifier<'a> {
+        qualifier: &'a str,
+        columns: &'a std::collections::BTreeMap<String, ColumnHint>,
+    }
+    impl VisitorMut for Qualifier<'_> {
+        type Break = ();
+
+        fn pre_visit_expr(&mut self, expression: &mut Expr) -> ControlFlow<Self::Break> {
+            if let Expr::Identifier(identifier) = expression
+                && self
+                    .columns
+                    .keys()
+                    .any(|column| column.eq_ignore_ascii_case(&identifier.value))
+            {
+                *expression = Expr::CompoundIdentifier(vec![
+                    sqlparser::ast::Ident::new(self.qualifier),
+                    identifier.clone(),
+                ]);
+            }
+            ControlFlow::Continue(())
+        }
+    }
+    let mut selection = selection.clone();
+    let _ = selection.visit(&mut Qualifier {
+        qualifier,
+        columns: &schema.columns,
+    });
+    selection.to_string()
 }
 
 fn direct_order_column(expr: &Expr) -> Option<&str> {

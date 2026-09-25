@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "explain_json_inventory",
+  "provenance": {
+    "kind": "github-inspiration",
+    "source": {
+      "kind": "github",
+      "repository": "antlr/grammars-v4",
+      "commit": "7e08234262d2a7c58557d74f2cb8ce90c72d356f",
+      "path": "sql/mariadb/examples/fast/show.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/7e08234262d2a7c58557d74f2cb8ce90c72d356f/sql/mariadb/examples/fast/show.sql",
+      "sha256": "3218fe41e97bf8712fa84f3e85bf1d6db6a0f4eac0f6330d326ae9ecbb9da650",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/mariadb/examples/fast/show.sql: EXPLAIN FORMAT=JSON statements",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "MariaDB exposes a JSON-formatted execution plan for a SELECT statement through EXPLAIN FORMAT=JSON.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored inventory-plan probe. A fixed inventory table has a primary key and a status filter; EXPLAIN FORMAT=JSON inspects the filtered read, followed by the actual deterministic inventory result. The source schema, values, and application context are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["explain-format-json", "filtered-plan", "deterministic-select"],
+  "fixture_notes": "The plan must describe the fixed inventory read, and the actual query must return only ready items in item ID order.",
+  "determinism_notes": "Table rows, predicate, projection, and ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE plan_inventory (item_id INT PRIMARY KEY, item_code VARCHAR(16) NOT NULL, item_state VARCHAR(16) NOT NULL, quantity INT NOT NULL)",
+    "INSERT INTO plan_inventory VALUES (1301, 'P-READY', 'ready', 6), (1302, 'P-HOLD', 'hold', 9), (1303, 'P-EMPTY', 'ready', 0)"
+  ],
+  "steps": [
+    {
+      "sql": "EXPLAIN FORMAT=JSON SELECT item_id, item_code, quantity FROM plan_inventory WHERE item_state = 'ready' ORDER BY item_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT item_id, item_code, quantity FROM plan_inventory WHERE item_state = 'ready' ORDER BY item_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT item_id, item_code, quantity FROM plan_inventory WHERE item_state = 'ready' ORDER BY item_id",
+      "ordered": true
+    }
+  ]
+}
