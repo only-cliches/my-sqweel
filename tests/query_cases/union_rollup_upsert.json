@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "union_rollup_upsert",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Nextpertise/freeradius-amqp",
+      "commit": "58047b4f02b97e41a168eef401b8f15aa18e432d",
+      "path": "data/freeradius/mods-config/sql/main/mysql/process-radacct.sql",
+      "url": "https://github.com/Nextpertise/freeradius-amqp/blob/58047b4f02b97e41a168eef401b8f15aa18e432d/data/freeradius/mods-config/sql/main/mysql/process-radacct.sql",
+      "sha256": "f8a5249721288ac8963c0034391be90feb8feec000ad6b9b084abbee9be464af",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "data/freeradius/mods-config/sql/main/mysql/process-radacct.sql:102-132",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "An INSERT ... SELECT aggregates a derived UNION ALL source and uses ON DUPLICATE KEY UPDATE to add incoming usage totals to an existing rollup row.",
+      "mysql_mariadb_translation": "Reauthored as a tenant-usage rollup. Two independently filtered event streams are UNION ALLed, grouped by tenant, inserted into a rollup table, and added to an existing tenant total through VALUES(...) in the duplicate-key clause; procedures, timestamps, and source schemas are omitted."
+    },
+    "independently_authored": true
+  },
+  "features": ["derived-union-all", "grouped-insert-select", "upsert-accumulation", "deterministic-order"],
+  "fixture_notes": "The first tenant already has a rollup row and receives both union branches; the second tenant is inserted from the grouped source. Event IDs and final tenant order are fixed.",
+  "determinism_notes": "All tenant IDs, event rows, branch predicates, grouping, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE usage_events (event_id INT PRIMARY KEY, tenant_id INT NOT NULL, event_group CHAR(1) NOT NULL, units INT NOT NULL)",
+    "CREATE TABLE tenant_rollups (tenant_id INT PRIMARY KEY, total_units INT NOT NULL)",
+    "INSERT INTO usage_events VALUES (101, 7, 'A', 4), (102, 7, 'B', 3), (103, 7, 'A', 2), (201, 8, 'B', 6), (202, 8, 'C', 5)",
+    "INSERT INTO tenant_rollups VALUES (7, 10)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO tenant_rollups (tenant_id, total_units) SELECT incoming.tenant_id, SUM(incoming.units) FROM (SELECT tenant_id, units FROM usage_events WHERE event_group = 'A' UNION ALL SELECT tenant_id, units FROM usage_events WHERE event_group = 'B') AS incoming GROUP BY incoming.tenant_id ON DUPLICATE KEY UPDATE total_units = tenant_rollups.total_units + VALUES(total_units)",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT tenant_id, total_units FROM tenant_rollups ORDER BY tenant_id",
+      "ordered": true
+    }
+  ]
+}

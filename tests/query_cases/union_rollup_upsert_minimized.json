@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "union_rollup_upsert_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "Nextpertise/freeradius-amqp",
+      "commit": "58047b4f02b97e41a168eef401b8f15aa18e432d",
+      "path": "data/freeradius/mods-config/sql/main/mysql/process-radacct.sql",
+      "url": "https://github.com/Nextpertise/freeradius-amqp/blob/58047b4f02b97e41a168eef401b8f15aa18e432d/data/freeradius/mods-config/sql/main/mysql/process-radacct.sql",
+      "sha256": "f8a5249721288ac8963c0034391be90feb8feec000ad6b9b084abbee9be464af",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "data/freeradius/mods-config/sql/main/mysql/process-radacct.sql:102-132",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped INSERT ... SELECT consumes a UNION ALL derived table and accumulates the grouped value on a duplicate key.",
+      "mysql_mariadb_translation": "Reduced to one existing tenant rollup, two independently filtered source rows, one derived UNION ALL, and one grouped duplicate-key addition while removing the second tenant and unrelated usage columns."
+    },
+    "independently_authored": true,
+    "minimized_from": "union_rollup_upsert"
+  },
+  "features": ["derived-union-all", "grouped-insert-select", "upsert-accumulation", "minimized-regression"],
+  "fixture_notes": "One existing rollup receives the sum of two union branches, isolating grouped derived-source upsert accumulation.",
+  "determinism_notes": "Two fixed source rows, one fixed target row, deterministic grouping, and one ordered final read; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE mini_usage (event_id INT PRIMARY KEY, tenant_id INT NOT NULL, event_group CHAR(1) NOT NULL, units INT NOT NULL)",
+    "CREATE TABLE mini_rollups (tenant_id INT PRIMARY KEY, total_units INT NOT NULL)",
+    "INSERT INTO mini_usage VALUES (301, 9, 'A', 4), (302, 9, 'B', 5)",
+    "INSERT INTO mini_rollups VALUES (9, 2)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO mini_rollups (tenant_id, total_units) SELECT incoming.tenant_id, SUM(incoming.units) FROM (SELECT tenant_id, units FROM mini_usage WHERE event_group = 'A' UNION ALL SELECT tenant_id, units FROM mini_usage WHERE event_group = 'B') AS incoming GROUP BY incoming.tenant_id ON DUPLICATE KEY UPDATE total_units = mini_rollups.total_units + VALUES(total_units)",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT tenant_id, total_units FROM mini_rollups ORDER BY tenant_id",
+      "ordered": true
+    }
+  ]
+}
