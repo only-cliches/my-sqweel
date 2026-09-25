@@ -782,7 +782,7 @@ pub(super) fn json_scalar_to_string(value: &Value) -> String {
         Value::Number(value) => value.to_string(),
         Value::Null => "null".to_string(),
         Value::Array(_) | Value::Object(_) => {
-            serde_json::to_string(&public_json_value(value)).unwrap_or_else(|_| value.to_string())
+            json_wire_text(value).unwrap_or_else(|_| value.to_string())
         }
     }
 }

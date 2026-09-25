@@ -2143,7 +2143,7 @@ impl RawEngine {
                             MysqlColumnType::VarChar
                         }
                     }
-                    "JSON_UNQUOTE" => MysqlColumnType::LongBlob,
+                    "JSON_UNQUOTE" => MysqlColumnType::VarChar,
                     "JSON_KEYS" => {
                         let argument = function_arguments(function)
                             .ok()

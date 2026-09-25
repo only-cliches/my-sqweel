@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "json_schema_group_concat_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "json_schema_group_concat",
+    "source_url": "https://github.com/Apress/bigquery-for-data-warehousing/blob/c7fbf797f00bcc9aa428d979ad0276c6303f1faa/Chapter%205/Chapter%205%20-%20Convert%20Data%20Types%20from%20MySQL.sql",
+    "source_commit": "c7fbf797f00bcc9aa428d979ad0276c6303f1faa",
+    "source_location": "Chapter 5/Chapter 5 - Convert Data Types from MySQL.sql:4-21",
+    "source_sha256": "3e827a87f3ef39c30abace1010357534f1d7d4490d3b121ac6b5dbd7e5babe63",
+    "source_dialect": "mysql-mariadb",
+    "observed_pattern": "A derived table turns one selected field into a JSON object string and an outer ordered GROUP_CONCAT wraps it in an array-like result.",
+    "mysql_mariadb_translation": "Reduced to one independently authored required integer field. The derived-table alias, JSON_OBJECT, JSON_UNQUOTE, CASE mapping, ordered GROUP_CONCAT, and CONCAT wrapper remain while filtering, multiple rows, and unrelated metadata are removed."
+  },
+  "features": [
+    "json-object",
+    "json-unquote",
+    "group-concat",
+    "derived-table",
+    "ordered-aggregation",
+    "metadata"
+  ],
+  "fixture_notes": "One fixed field isolates the JSON object string and aggregate result while preserving the derived-table and ordered GROUP_CONCAT shape.",
+  "determinism_notes": "The single field has a fixed ordinal position and no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE mini_manifest_fields (field_id INT PRIMARY KEY, field_name VARCHAR(32) NOT NULL, nullable_flag TINYINT NOT NULL, sql_type VARCHAR(16) NOT NULL, ordinal_position INT NOT NULL)",
+    "INSERT INTO mini_manifest_fields VALUES (21, 'tenant_id', 0, 'INT', 1)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT CONCAT('[', GROUP_CONCAT(field_json ORDER BY ordinal_position SEPARATOR ', '), ']') AS schema_manifest FROM (SELECT ordinal_position, JSON_UNQUOTE(JSON_OBJECT('name', field_name, 'mode', CASE nullable_flag WHEN 1 THEN 'NULLABLE' ELSE 'REQUIRED' END, 'type', CASE sql_type WHEN 'INT' THEN 'INT64' ELSE 'UNKNOWN' END)) AS field_json FROM mini_manifest_fields ORDER BY ordinal_position) AS ordered_fields",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT JSON_UNQUOTE(JSON_OBJECT('name', field_name, 'mode', CASE nullable_flag WHEN 1 THEN 'NULLABLE' ELSE 'REQUIRED' END, 'type', CASE sql_type WHEN 'INT' THEN 'INT64' ELSE 'UNKNOWN' END)) AS field_json FROM mini_manifest_fields",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT CONCAT('[', GROUP_CONCAT(field_json ORDER BY ordinal_position SEPARATOR ', '), ']') AS schema_manifest FROM (SELECT ordinal_position, JSON_UNQUOTE(JSON_OBJECT('name', field_name, 'mode', CASE nullable_flag WHEN 1 THEN 'NULLABLE' ELSE 'REQUIRED' END, 'type', CASE sql_type WHEN 'INT' THEN 'INT64' ELSE 'UNKNOWN' END)) AS field_json FROM mini_manifest_fields ORDER BY ordinal_position) AS ordered_fields",
+      "ordered": true
+    }
+  ]
+}

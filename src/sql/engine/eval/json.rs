@@ -177,12 +177,25 @@ pub(super) fn eval_json_unquote(
     }
     match value {
         Value::String(value) => {
-            if let Ok(Value::String(unquoted)) = serde_json::from_str::<Value>(&value) {
-                Ok(Value::String(unquoted))
+            if let Ok(parsed) = serde_json::from_str::<Value>(&value) {
+                match parsed {
+                    Value::String(unquoted) => Ok(Value::String(unquoted)),
+                    parsed @ (Value::Array(_) | Value::Object(_)) => {
+                        let parsed = mark_json_nulls(parsed);
+                        Ok(Value::String(
+                            json_wire_text(&parsed)
+                                .unwrap_or_else(|_| json_scalar_to_string(&parsed)),
+                        ))
+                    }
+                    _ => Ok(Value::String(value)),
+                }
             } else {
                 Ok(Value::String(value))
             }
         }
+        value @ (Value::Array(_) | Value::Object(_)) => Ok(Value::String(
+            json_wire_text(&value).unwrap_or_else(|_| json_scalar_to_string(&value)),
+        )),
         other => Ok(Value::String(json_scalar_to_string(&other))),
     }
 }

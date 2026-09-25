@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "json_schema_group_concat",
+  "provenance": {
+    "kind": "github",
+    "source_url": "https://github.com/Apress/bigquery-for-data-warehousing/blob/c7fbf797f00bcc9aa428d979ad0276c6303f1faa/Chapter%205/Chapter%205%20-%20Convert%20Data%20Types%20from%20MySQL.sql",
+    "source_commit": "c7fbf797f00bcc9aa428d979ad0276c6303f1faa",
+    "source_location": "Chapter 5/Chapter 5 - Convert Data Types from MySQL.sql:4-21",
+    "source_sha256": "3e827a87f3ef39c30abace1010357534f1d7d4490d3b121ac6b5dbd7e5babe63",
+    "source_dialect": "mysql-mariadb",
+    "observed_pattern": "A MySQL metadata query converts each column description to a JSON object, removes the JSON string quotes, and concatenates the ordered objects into a JSON-like array through a derived table.",
+    "mysql_mariadb_translation": "Reauthored as an independently authored schema manifest. A derived table converts fixed field rows into JSON objects with JSON_UNQUOTE, CASE maps nullability and SQL types to manifest values, and ordered GROUP_CONCAT assembles the selected objects into one array-like string. The table, values, labels, and catalog context are new."
+  },
+  "features": [
+    "json-object",
+    "json-unquote",
+    "group-concat",
+    "derived-table",
+    "case-expression",
+    "ordered-aggregation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The manifest includes three published fields in ordinal order and excludes one internal field. Nullable and required modes, several type mappings, JSON quoting removal, and the final array-like serialization are all observable in one deterministic result.",
+  "determinism_notes": "Field IDs and ordinal positions are fixed, the derived rows and GROUP_CONCAT use ordinal ordering, and no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE manifest_fields (field_id INT PRIMARY KEY, field_name VARCHAR(32) NOT NULL, nullable_flag TINYINT NOT NULL, sql_type VARCHAR(16) NOT NULL, ordinal_position INT NOT NULL, visibility VARCHAR(16) NOT NULL)",
+    "INSERT INTO manifest_fields VALUES (11, 'account_id', 0, 'INT', 1, 'published'), (12, 'display_name', 1, 'VARCHAR', 2, 'published'), (13, 'opened_on', 1, 'DATE', 3, 'published'), (14, 'debug_token', 1, 'TEXT', 4, 'internal')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT CONCAT('[', GROUP_CONCAT(field_json ORDER BY ordinal_position SEPARATOR ', '), ']') AS schema_manifest FROM (SELECT ordinal_position, JSON_UNQUOTE(JSON_OBJECT('name', field_name, 'mode', CASE nullable_flag WHEN 1 THEN 'NULLABLE' ELSE 'REQUIRED' END, 'type', CASE sql_type WHEN 'INT' THEN 'INT64' WHEN 'VARCHAR' THEN 'STRING' WHEN 'DATE' THEN 'DATE' WHEN 'TEXT' THEN 'STRING' ELSE 'UNKNOWN' END)) AS field_json FROM manifest_fields WHERE visibility = 'published' ORDER BY ordinal_position) AS ordered_fields"
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT CONCAT('[', GROUP_CONCAT(field_json ORDER BY ordinal_position SEPARATOR ', '), ']') AS schema_manifest FROM (SELECT ordinal_position, JSON_UNQUOTE(JSON_OBJECT('name', field_name, 'mode', CASE nullable_flag WHEN 1 THEN 'NULLABLE' ELSE 'REQUIRED' END, 'type', CASE sql_type WHEN 'INT' THEN 'INT64' WHEN 'VARCHAR' THEN 'STRING' WHEN 'DATE' THEN 'DATE' WHEN 'TEXT' THEN 'STRING' ELSE 'UNKNOWN' END)) AS field_json FROM manifest_fields WHERE visibility = 'published' ORDER BY ordinal_position) AS ordered_fields",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT field_id, field_name, visibility FROM manifest_fields ORDER BY field_id",
+      "ordered": true
+    }
+  ]
+}
