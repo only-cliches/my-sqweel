@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "labeled_rollup_city_sales",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "mariakruglov/data_engineering",
+      "commit": "e693c0855dcdf29837c8ef345bf7589db47ddc8a",
+      "path": "data_warehousing/concepts/queries_mysql.sql",
+      "url": "https://github.com/mariakruglov/data_engineering/blob/e693c0855dcdf29837c8ef345bf7589db47ddc8a/data_warehousing/concepts/queries_mysql.sql",
+      "sha256": "6dfbcabaa6875293d5c3adede936b85ea6dc3d505102f61e7425e7d9b6b820f3",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "data_warehousing/concepts/queries_mysql.sql:117-124",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A joined sales aggregation uses GROUP BY ... WITH ROLLUP and COALESCE labels to turn NULL subtotal dimensions into readable city and store totals.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored regional channel ledger. Fixed store and sale rows produce detail, regional subtotal, and grand-total rows; COALESCE labels the rollup NULLs without copying the source schema, values, or coffee-sales context."
+    },
+    "independently_authored": true
+  },
+  "features": ["join-rollup", "coalesce-rollup-labels", "grouped-aggregate", "subtotal-grand-total", "deterministic-results"],
+  "fixture_notes": "North has web and retail detail rows, South has one web row, and the rollup emits each region subtotal plus a grand total. COALESCE labels subtotal and grand-total NULL dimensions distinctly.",
+  "determinism_notes": "Store IDs, regions, channels, and amounts are fixed; the result contains no clocks, randomness, sleeps, or concurrent connections. Rollup rows are compared as an unordered multiset because subtotal presentation order is not a semantic contract.",
+  "setup": [
+    "CREATE TABLE sales_locations (location_id INT PRIMARY KEY, region_name VARCHAR(16) NOT NULL, channel_name VARCHAR(16) NOT NULL)",
+    "CREATE TABLE regional_sales (sale_id INT PRIMARY KEY, location_id INT NOT NULL, sale_amount DECIMAL(10,2) NOT NULL)",
+    "INSERT INTO sales_locations VALUES (901, 'North', 'Web'), (902, 'North', 'Retail'), (903, 'South', 'Web')",
+    "INSERT INTO regional_sales VALUES (9901, 901, 125.00), (9902, 901, 75.00), (9903, 902, 200.00), (9904, 903, 50.00)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT COALESCE(l.region_name, '** ALL REGIONS **') AS region_label, COALESCE(l.channel_name, '** REGION TOTAL **') AS channel_label, SUM(s.sale_amount) AS revenue_total FROM regional_sales AS s JOIN sales_locations AS l ON l.location_id = s.location_id GROUP BY l.region_name, l.channel_name WITH ROLLUP",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT COALESCE(l.region_name, '** ALL REGIONS **') AS region_label, COALESCE(l.channel_name, '** REGION TOTAL **') AS channel_label, SUM(s.sale_amount) AS revenue_total FROM regional_sales AS s JOIN sales_locations AS l ON l.location_id = s.location_id GROUP BY l.region_name, l.channel_name WITH ROLLUP",
+      "ordered": false
+    }
+  ]
+}
