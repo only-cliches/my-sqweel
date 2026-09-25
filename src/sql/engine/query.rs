@@ -1592,7 +1592,7 @@ impl RawEngine {
             } => {
                 metadata.column_type = MysqlColumnType::Integer;
             }
-            Expr::RLike { .. } => {
+            Expr::Like { .. } | Expr::RLike { .. } => {
                 metadata.column_type = MysqlColumnType::Integer;
             }
             Expr::Function(function) => {
@@ -3751,9 +3751,21 @@ impl RawEngine {
                 negated,
                 ..
             } => {
+                let case_sensitive = matches!(
+                    pattern.as_ref(),
+                    Expr::TypedString {
+                        data_type: sqlparser::ast::DataType::Binary(_),
+                        ..
+                    }
+                );
                 let target = self.eval_expr_ctx(expr, data, last_insert_id)?;
                 let pattern = self.eval_expr_ctx(pattern, data, last_insert_id)?;
-                Ok(eval_like_values(target, pattern, *negated))
+                Ok(eval_like_values_with_case(
+                    target,
+                    pattern,
+                    *negated,
+                    case_sensitive,
+                ))
             }
             Expr::RLike {
                 expr,

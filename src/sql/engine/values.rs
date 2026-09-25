@@ -131,9 +131,21 @@ pub(super) fn eval_insert_update_value(
             negated,
             ..
         } => {
+            let case_sensitive = matches!(
+                pattern.as_ref(),
+                Expr::TypedString {
+                    data_type: sqlparser::ast::DataType::Binary(_),
+                    ..
+                }
+            );
             let target = eval_insert_update_value(expr, existing, incoming)?;
             let pattern = eval_insert_update_value(pattern, existing, incoming)?;
-            Ok(eval_like_values(target, pattern, *negated))
+            Ok(eval_like_values_with_case(
+                target,
+                pattern,
+                *negated,
+                case_sensitive,
+            ))
         }
         Expr::RLike {
             expr,

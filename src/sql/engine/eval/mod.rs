@@ -2766,18 +2766,38 @@ pub(super) fn value_truthy(value: &Value) -> bool {
     matches!(sql_truth(value), SqlTruth::True)
 }
 
-pub(super) fn eval_like_values(target: Value, pattern: Value, negated: bool) -> Value {
+pub(super) fn eval_like_values_with_case(
+    target: Value,
+    pattern: Value,
+    negated: bool,
+    case_sensitive: bool,
+) -> Value {
     if target == Value::Null || pattern == Value::Null {
         return Value::Null;
     }
-    let hit = like_match(
-        &json_scalar_to_string(&target),
-        &json_scalar_to_string(&pattern),
-    );
+    let hit = if case_sensitive {
+        like_match_case_sensitive(
+            &json_scalar_to_string(&target),
+            &json_scalar_to_string(&pattern),
+        )
+    } else {
+        like_match(
+            &json_scalar_to_string(&target),
+            &json_scalar_to_string(&pattern),
+        )
+    };
     Value::Bool(if negated { !hit } else { hit })
 }
 
+pub(super) fn like_match_case_sensitive(target: &str, pattern: &str) -> bool {
+    like_match_impl(target, pattern, true)
+}
+
 pub(super) fn like_match(target: &str, pattern: &str) -> bool {
+    like_match_impl(target, pattern, false)
+}
+
+fn like_match_impl(target: &str, pattern: &str, case_sensitive: bool) -> bool {
     #[derive(Clone, Copy)]
     enum LikeToken {
         AnyMany,
@@ -2796,7 +2816,11 @@ pub(super) fn like_match(target: &str, pattern: &str) -> bool {
         }
     }
 
-    let target = target.to_ascii_lowercase().chars().collect::<Vec<_>>();
+    let target = if case_sensitive {
+        target.chars().collect::<Vec<_>>()
+    } else {
+        target.to_ascii_lowercase().chars().collect::<Vec<_>>()
+    };
     let mut reachable = BTreeSet::from([(0usize, 0usize)]);
     while let Some((pattern_idx, target_idx)) = reachable.pop_first() {
         if pattern_idx == tokens.len() {
@@ -2819,9 +2843,13 @@ pub(super) fn like_match(target: &str, pattern: &str) -> bool {
                 }
             }
             LikeToken::Literal(ch) => {
-                if target.get(target_idx).map(|c| c.to_ascii_lowercase())
-                    == Some(ch.to_ascii_lowercase())
-                {
+                let target_char = target.get(target_idx).copied();
+                let matches = if case_sensitive {
+                    target_char == Some(ch)
+                } else {
+                    target_char.map(|c| c.to_ascii_lowercase()) == Some(ch.to_ascii_lowercase())
+                };
+                if matches {
                     reachable.insert((pattern_idx + 1, target_idx + 1));
                 }
             }
@@ -3030,9 +3058,21 @@ pub(super) fn eval_expr(
             negated,
             ..
         } => {
+            let case_sensitive = matches!(
+                pattern.as_ref(),
+                Expr::TypedString {
+                    data_type: sqlparser::ast::DataType::Binary(_),
+                    ..
+                }
+            );
             let target = eval_expr(expr, data, last_insert_id)?;
             let pattern = eval_expr(pattern, data, last_insert_id)?;
-            Ok(eval_like_values(target, pattern, *negated))
+            Ok(eval_like_values_with_case(
+                target,
+                pattern,
+                *negated,
+                case_sensitive,
+            ))
         }
         Expr::RLike {
             expr,

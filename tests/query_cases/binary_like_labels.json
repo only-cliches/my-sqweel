@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "binary_like_labels",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "ptyadana/SQL-Data-Analysis-and-Visualization-Projects",
+      "commit": "df39adb0d36d961759ef14e654a6a1efca917585",
+      "path": "Ultimate MySQL/08.Refining Our Selection.sql",
+      "url": "https://github.com/ptyadana/SQL-Data-Analysis-and-Visualization-Projects/blob/df39adb0d36d961759ef14e654a6a1efca917585/Ultimate%20MySQL/08.Refining%20Our%20Selection.sql",
+      "sha256": "9d1b3b1c22a232f4071133031d1dc0ac22a72f1c504db6ddc3119a08a9e8bbb8",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Ultimate MySQL/08.Refining Our Selection.sql:62-68",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL LIKE predicate normally follows case-insensitive collation behavior, while the BINARY modifier makes the pattern comparison case-sensitive.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored label-prefix audit. Fixed labels vary only by letter case, and a BINARY LIKE prefix must select the lowercase label without copying the source table, values, aliases, or tutorial context."
+    },
+    "independently_authored": true
+  },
+  "features": ["like-binary", "case-sensitive-pattern", "null-filtering", "deterministic-order"],
+  "fixture_notes": "Only lowercase label 602 matches the case-sensitive binary prefix a%; mixed-case and uppercase variants are excluded, while the NULL label is also excluded.",
+  "determinism_notes": "Label IDs and fixed strings are deterministic; the final projection is ordered by the unique label ID, with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE label_candidates (label_id INT PRIMARY KEY, label_text VARCHAR(32) NULL)",
+    "INSERT INTO label_candidates VALUES (601, 'Alpha'), (602, 'alpha'), (603, 'ALPHA'), (604, 'beta'), (605, NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT label_id, label_text FROM label_candidates WHERE label_text LIKE BINARY 'a%' ORDER BY label_id",
+      "ordered": true
+    }
+  ]
+}
