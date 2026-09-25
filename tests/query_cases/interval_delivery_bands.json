@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "interval_delivery_bands",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/2412.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/2412.sql",
+      "sha256": "2e46e3649ba3280da7fa087396fd2d55eb4935032fe86e060fd87fd188ca1b01",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "2412.sql:1-4",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL function corpus evaluates the numeric INTERVAL function across ordered thresholds, arithmetic threshold expressions, and NULL inputs to classify values into zero-based bands.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored delivery-latency report. Fixed elapsed-minute samples are classified against service-level thresholds, including an exact-boundary value and NULL propagation; the source schema, values, and operational domain are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["interval-function", "numeric-threshold-bands", "boundary-comparison", "null-propagation", "deterministic-order"],
+  "fixture_notes": "Delivery 101 falls below the first threshold, 102 equals it, 103 lands between thresholds, 104 reaches the final threshold exactly, and 105 preserves a NULL elapsed value.",
+  "determinism_notes": "All delivery IDs, elapsed-minute values, and threshold literals are fixed, and output is ordered by the primary key. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE delivery_latency (delivery_id INT PRIMARY KEY, elapsed_minutes INT NULL)",
+    "INSERT INTO delivery_latency VALUES (101, 5), (102, 10), (103, 25), (104, 60), (105, NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT delivery_id, elapsed_minutes, INTERVAL(elapsed_minutes, 10, 20, 30, 60) AS service_band FROM delivery_latency ORDER BY delivery_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT delivery_id, elapsed_minutes FROM delivery_latency ORDER BY delivery_id",
+      "ordered": true
+    }
+  ]
+}
