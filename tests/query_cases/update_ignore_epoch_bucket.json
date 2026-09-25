@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "update_ignore_epoch_bucket",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "antlr/grammars-v4",
+      "commit": "2c8f74860509c39629ef23451eee670a23d4b280",
+      "path": "sql/mariadb/examples/fast/dml_update.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/2c8f74860509c39629ef23451eee670a23d4b280/sql/mariadb/examples/fast/dml_update.sql",
+      "sha256": "0c9e308785c07006908ec4d3fc8bf09c798837f720f15520e62c4ceee283d0de",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/mariadb/examples/fast/dml_update.sql:4",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB UPDATE IGNORE statement assigns a temporal scalar expression reduced with MOD while also assigning a DEFAULT value.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored dispatch-window refresh. UPDATE IGNORE stamps selected windows with a fixed calendar-second bucket and resets their priority to the column default; the source table, identifiers, values, and operational meaning are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": ["update-ignore", "to-seconds", "mod-arithmetic", "default-assignment", "deterministic-order", "final-state-check"],
+  "fixture_notes": "The fixed timestamp makes temporal bucketing deterministic while the DEFAULT assignment verifies UPDATE expression handling across multiple assignments.",
+  "determinism_notes": "All timestamps, rows, predicates, and ordering are fixed; no clocks, randomness, sleeps, filesystem access, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE dispatch_windows (window_id INT PRIMARY KEY, bucket_id INT NOT NULL, window_label VARCHAR(24) NOT NULL, priority INT NOT NULL DEFAULT 7)",
+    "INSERT INTO dispatch_windows VALUES (11, 4, 'north', 2), (12, 9, 'east', 3), (13, 15, 'south', 5), (14, 22, 'west', 1)"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE IGNORE dispatch_windows SET bucket_id = TO_SECONDS('2024-01-02 00:00:00') MOD 37, priority = DEFAULT WHERE window_id IN (11, 12)",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT window_id, bucket_id, window_label, priority FROM dispatch_windows ORDER BY window_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT bucket_id, COUNT(*) AS window_count FROM dispatch_windows GROUP BY bucket_id ORDER BY bucket_id",
+      "ordered": true
+    }
+  ]
+}

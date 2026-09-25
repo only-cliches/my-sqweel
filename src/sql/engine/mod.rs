@@ -1151,6 +1151,7 @@ impl RawEngine {
         parse_sql = rewrite_alter_comment_quotes(&parse_sql);
         parse_sql = rewrite_delete_wildcard_targets(&parse_sql);
         parse_sql = rewrite_delete_returning_order_limit_for_parser(&parse_sql);
+        parse_sql = rewrite_mod_operator(&parse_sql);
         parse_sql = parse_sql.replace(" SRID 0", "").replace(" srid 0", "");
         let statement_upper = raw.trim_start().to_ascii_uppercase();
         if statement_upper.starts_with("ALTER TABLE") {
@@ -1249,8 +1250,6 @@ impl RawEngine {
                 .replace("references t3,", "references t3 (a),")
                 .replace("REFERENCES t3 ,", "REFERENCES t3 (a) ,")
                 .replace("references t3 ,", "references t3 (a) ,")
-                .replace(" MOD ", " % ")
-                .replace(" mod ", " % ")
                 .replace(" MATCH ", " ")
                 .replace(" match ", " ")
                 .replace(" ON DELETE SET DEFAULT", " ON DELETE RESTRICT")
@@ -4539,6 +4538,55 @@ fn rewrite_group_by_with_rollup(sql: &str) -> String {
         expressions,
         &sql[rollup + "WITH ROLLUP".len()..]
     )
+}
+
+fn rewrite_mod_operator(sql: &str) -> String {
+    let characters = sql.chars().collect::<Vec<_>>();
+    let mut rewritten = String::with_capacity(sql.len());
+    let mut quote = None;
+    let mut index = 0;
+    while index < characters.len() {
+        let character = characters[index];
+        if let Some(delimiter) = quote {
+            rewritten.push(character);
+            if character == '\\' && index + 1 < characters.len() {
+                index += 1;
+                rewritten.push(characters[index]);
+            } else if character == delimiter {
+                quote = None;
+            }
+            index += 1;
+            continue;
+        }
+        if matches!(character, '\'' | '"' | '`') {
+            quote = Some(character);
+            rewritten.push(character);
+            index += 1;
+            continue;
+        }
+        if index + 3 <= characters.len()
+            && characters[index].to_ascii_uppercase() == 'M'
+            && characters[index + 1].to_ascii_uppercase() == 'O'
+            && characters[index + 2].to_ascii_uppercase() == 'D'
+        {
+            let is_boundary = |value: Option<&char>| {
+                value.is_none_or(|value| !value.is_ascii_alphanumeric() && *value != '_')
+            };
+            if is_boundary(
+                index
+                    .checked_sub(1)
+                    .and_then(|previous| characters.get(previous)),
+            ) && is_boundary(characters.get(index + 3))
+            {
+                rewritten.push('%');
+                index += 3;
+                continue;
+            }
+        }
+        rewritten.push(character);
+        index += 1;
+    }
+    rewritten
 }
 
 fn rewrite_set_statement_for_parser(sql: &str) -> String {

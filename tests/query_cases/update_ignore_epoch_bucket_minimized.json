@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "update_ignore_epoch_bucket_minimized",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "antlr/grammars-v4",
+      "commit": "2c8f74860509c39629ef23451eee670a23d4b280",
+      "path": "sql/mariadb/examples/fast/dml_update.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/2c8f74860509c39629ef23451eee670a23d4b280/sql/mariadb/examples/fast/dml_update.sql",
+      "sha256": "0c9e308785c07006908ec4d3fc8bf09c798837f720f15520e62c4ceee283d0de",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/mariadb/examples/fast/dml_update.sql:4",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB UPDATE IGNORE assignment uses a TO_SECONDS temporal expression reduced with MOD.",
+      "mysql_mariadb_translation": "Minimized to one deterministic dispatch-window update assigning a fixed TO_SECONDS value modulo 37; this removes unrelated rows and the DEFAULT assignment while preserving the source operator composition."
+    },
+    "independently_authored": true,
+    "minimized_from": "update_ignore_epoch_bucket"
+  },
+  "features": ["to-seconds", "mod-arithmetic", "update-assignment", "minimized-regression"],
+  "fixture_notes": "One fixed row isolates temporal scalar arithmetic in an UPDATE assignment.",
+  "determinism_notes": "The timestamp, row, predicate, and final ordering are fixed; no clocks, randomness, sleeps, filesystem access, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE dispatch_windows (window_id INT PRIMARY KEY, bucket_id INT NOT NULL, window_label VARCHAR(24) NOT NULL)",
+    "INSERT INTO dispatch_windows VALUES (11, 4, 'north')"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE dispatch_windows SET bucket_id = (TO_SECONDS('2024-01-02 00:00:00') MOD 37) WHERE window_id = 11",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT window_id, bucket_id, window_label FROM dispatch_windows ORDER BY window_id",
+      "ordered": true
+    }
+  ]
+}

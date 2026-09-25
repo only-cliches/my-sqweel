@@ -870,11 +870,18 @@ impl RawEngine {
                     updated_data.insert(col, Value::Null);
                     continue;
                 }
-                let value = self.eval_expr_ctx(
+                let value = if matches!(
                     &assignment.value,
-                    &value_context,
-                    self.last_insert_id.load(AtomicOrdering::Relaxed),
-                )?;
+                    Expr::Identifier(identifier) if identifier.value.eq_ignore_ascii_case("DEFAULT")
+                ) {
+                    sql_default_value()
+                } else {
+                    self.eval_expr_ctx(
+                        &assignment.value,
+                        &value_context,
+                        self.last_insert_id.load(AtomicOrdering::Relaxed),
+                    )?
+                };
                 updated_data.insert(col, value);
             }
             self.apply_defaults(&table_name, &mut updated_data)?;
