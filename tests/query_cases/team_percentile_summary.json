@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "team_percentile_summary",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "TeslimAdeyanju/Advanced-SQL-Analytics-International-Cohort-Risk-Segmentation",
+      "commit": "fd9b9286ab5fc5bc0fbdb43ef21dc20f637d2cc2",
+      "path": "sql/mysql_code.sql",
+      "url": "https://github.com/TeslimAdeyanju/Advanced-SQL-Analytics-International-Cohort-Risk-Segmentation/blob/fd9b9286ab5fc5bc0fbdb43ef21dc20f637d2cc2/sql/mysql_code.sql",
+      "sha256": "c202681d607502ad678cbb6f051d080de45a3d176ef8821f3995096885b1765b",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/advanced_analytics.sql:98-176",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "One CTE computes grouped population statistics, a second CTE computes partitioned PERCENT_RANK values and conditional percentile aggregates, and the final query joins the summaries by their grouping key.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored team-score summary. Fixed player scores are ranked within each team, lower and upper percentile bands are aggregated in a second CTE, and a USING-style key join combines those values with team counts and averages; the source schema, metrics, labels, and analytics context are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["grouped-cte", "percent-rank", "conditional-percentile-aggregate", "cte-summary-join", "using-join", "decimal-metrics", "deterministic-order"],
+  "fixture_notes": "Team 11 has scores 10, 20, and 30, producing lower and upper band averages of 15 and 25. Team 22 has scores 5, 15, 25, and a tied 25, exercising peer-aware PERCENT_RANK values and averages of 10 and 25.",
+  "determinism_notes": "Team IDs, player IDs, scores, rank ordering, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE score_teams (team_id INT PRIMARY KEY, team_label VARCHAR(24) NOT NULL)",
+    "CREATE TABLE score_players (player_id INT PRIMARY KEY, team_id INT NOT NULL, score DECIMAL(8,2) NOT NULL)",
+    "INSERT INTO score_teams VALUES (11, 'North'), (22, 'South')",
+    "INSERT INTO score_players VALUES (1101, 11, 10.00), (1102, 11, 20.00), (1103, 11, 30.00), (2201, 22, 5.00), (2202, 22, 15.00), (2203, 22, 25.00), (2204, 22, 25.00)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH team_stats AS (SELECT team_id, COUNT(*) AS player_count, ROUND(AVG(score), 2) AS average_score FROM score_players GROUP BY team_id), ranked_scores AS (SELECT team_id, score, PERCENT_RANK() OVER (PARTITION BY team_id ORDER BY score) AS score_percentile FROM score_players), team_percentiles AS (SELECT team_id, ROUND(AVG(CASE WHEN score_percentile <= 0.50 THEN score END), 2) AS lower_band_average, ROUND(AVG(CASE WHEN score_percentile >= 0.50 THEN score END), 2) AS upper_band_average FROM ranked_scores GROUP BY team_id) SELECT ts.team_id, ts.player_count, ts.average_score, tp.lower_band_average, tp.upper_band_average FROM team_stats AS ts JOIN team_percentiles AS tp USING (team_id) ORDER BY ts.team_id",
+      "ordered": true
+    }
+  ]
+}
