@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "except_all_inventory_filter",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "ritik-3/learning_sql",
+      "commit": "fdb7bc1a16147cf5cf4d3716bff0a55b4e2b25e4",
+      "path": "queries/Day 23(Union,union all, Except, except all).sql",
+      "url": "https://github.com/ritik-3/learning_sql/blob/fdb7bc1a16147cf5cf4d3716bff0a55b4e2b25e4/queries/Day%2023%28Union%2Cunion%20all%2C%20Except%2C%20except%20all%29.sql",
+      "sha256": "90367fbf873374a5ed5b4e7b544d0ac13ea1bf03b62517af3d5c08a27e038d72",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Day 23(Union,union all, Except, except all).sql:37-48",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A set-operation lesson contrasts duplicate-preserving UNION ALL with EXCEPT ALL, where repeated values on the right subtract matching multiplicity from the left.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored inventory exclusion report. Requested SKU labels contain deliberate duplicates, blocked labels subtract only their matching multiplicity through EXCEPT ALL, and the remaining labels are ordered deterministically without copying the source schema, names, or values."
+    },
+    "independently_authored": true
+  },
+  "features": ["except-all", "multiset-difference", "duplicate-preservation", "set-operations", "deterministic-order"],
+  "fixture_notes": "The requested list contains two copies of alpha, one beta, and one gamma. Blocking removes one alpha and two gamma copies, so EXCEPT ALL must retain one alpha and beta while preserving alpha's remaining duplicate multiplicity.",
+  "determinism_notes": "All request and block IDs and labels are fixed, and the final label ordering is explicit. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE requested_inventory (request_id INT PRIMARY KEY, sku_label VARCHAR(32) NOT NULL)",
+    "CREATE TABLE blocked_inventory (block_id INT PRIMARY KEY, sku_label VARCHAR(32) NOT NULL)",
+    "INSERT INTO requested_inventory VALUES (9101, 'alpha'), (9102, 'alpha'), (9103, 'beta'), (9104, 'gamma')",
+    "INSERT INTO blocked_inventory VALUES (9201, 'alpha'), (9202, 'gamma'), (9203, 'gamma')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT sku_label FROM requested_inventory EXCEPT ALL SELECT sku_label FROM blocked_inventory ORDER BY sku_label",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT request_id, sku_label FROM requested_inventory ORDER BY request_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT block_id, sku_label FROM blocked_inventory ORDER BY block_id",
+      "ordered": true
+    }
+  ]
+}
