@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "find_in_set_route_membership",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/2412.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/2412.sql",
+      "sha256": "2e46e3649ba3280da7fa087396fd2d55eb4935032fe86e060fd87fd188ca1b01",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "2412.sql:4-6",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL function corpus exercises FIND_IN_SET for matching positions, missing values, NULL arguments, and a comma-containing search token.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored route-membership audit. Fixed route tokens are searched in comma-delimited candidate lists, with absent tokens returning zero, comma-containing tokens returning zero, and NULL lists preserving NULL; the schema, values, and routing domain are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["find-in-set", "comma-delimited-membership", "null-propagation", "zero-on-miss", "deterministic-order"],
+  "fixture_notes": "Route 101 finds beta at position 2, route 102 misses omega, route 103 uses a comma-containing token that must return zero, route 104 has a NULL candidate list, and route 105 finds gamma at position 3.",
+  "determinism_notes": "All route IDs, tokens, and candidate lists are fixed, and output is ordered by the primary key. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE route_membership (route_id INT PRIMARY KEY, route_token VARCHAR(32) NULL, candidate_routes VARCHAR(96) NULL)",
+    "INSERT INTO route_membership VALUES (101, 'beta', 'alpha,beta,gamma'), (102, 'omega', 'alpha,beta,gamma'), (103, 'a,b', 'a,b,c'), (104, 'alpha', NULL), (105, 'gamma', 'alpha,beta,gamma')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT route_id, route_token, candidate_routes, FIND_IN_SET(route_token, candidate_routes) AS route_position FROM route_membership ORDER BY route_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT route_id, route_token, candidate_routes FROM route_membership ORDER BY route_id",
+      "ordered": true
+    }
+  ]
+}
