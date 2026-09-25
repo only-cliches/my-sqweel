@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "json_replace_service_flags",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "open-metadata/OpenMetadata",
+      "commit": "525f5f71e3b301ff001c6541596990526affa5ba",
+      "path": "bootstrap/sql/migrations/flyway/com.mysql.cj.jdbc.Driver/v009__create_db_connection_info.sql",
+      "url": "https://github.com/open-metadata/OpenMetadata/blob/525f5f71e3b301ff001c6541596990526affa5ba/bootstrap/sql/migrations/flyway/com.mysql.cj.jdbc.Driver/v009__create_db_connection_info.sql",
+      "sha256": "a2cf859180f5361b8cb1c5b13cc4da0dddd3f18de4ae8f9ee0c994bc0b60f953",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "v009__create_db_connection_info.sql: migration block commented 'migrate ingestAllDatabases in postgres'",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL migration nests JSON_INSERT inside JSON_REPLACE: it copies an existing JSON field into a newly named path and then forces a boolean feature flag while guarding rows whose destination field is already populated.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored service-profile migration. A guarded UPDATE copies a legacy database label into a new database_name path and replaces an existing ingest flag with true; rows with a preexisting destination remain unchanged, and JSON scalar projections verify both inserted and replaced values. The source tables, paths, identifiers, values, and application migration are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "json-replace",
+    "json-insert",
+    "nested-json-mutation",
+    "json-extract",
+    "guarded-update",
+    "preserve-preexisting-destination",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Profile 501 receives database_name from database and flips ingest_all to true. Profile 502 receives database_name but JSON_REPLACE leaves its missing ingest_all path absent. Profile 503 already has database_name and is excluded, preserving its old values.",
+  "determinism_notes": "Profile IDs, JSON documents, paths, boolean values, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE service_profiles (profile_id INT PRIMARY KEY, settings JSON NOT NULL)",
+    "INSERT INTO service_profiles VALUES (501, '{\"database\":\"warehouse\",\"ingest_all\":false}'), (502, '{\"database\":\"archive\"}'), (503, '{\"database\":\"legacy\",\"database_name\":\"kept\",\"ingest_all\":false}')"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE service_profiles SET settings = JSON_REPLACE(JSON_INSERT(settings, '$.database_name', JSON_EXTRACT(settings, '$.database')), '$.ingest_all', true) WHERE JSON_EXTRACT(settings, '$.database_name') IS NULL",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT profile_id, JSON_UNQUOTE(JSON_EXTRACT(settings, '$.database')) AS database_label, JSON_UNQUOTE(JSON_EXTRACT(settings, '$.database_name')) AS database_name, JSON_UNQUOTE(JSON_EXTRACT(settings, '$.ingest_all')) AS ingest_all FROM service_profiles ORDER BY profile_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT profile_id, JSON_CONTAINS_PATH(settings, 'one', '$.database_name') AS has_database_name, JSON_CONTAINS_PATH(settings, 'one', '$.ingest_all') AS has_ingest_flag FROM service_profiles ORDER BY profile_id",
+      "ordered": true
+    }
+  ]
+}
