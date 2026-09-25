@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "id": "insert_high_priority_returning_inventory",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "mariadb-corporation/mariadb-qa",
+      "commit": "b2623726bdede0fed7b167a4edf7c62208ee60d4",
+      "path": "BUGS/MDEV-40339.sql",
+      "url": "https://github.com/mariadb-corporation/mariadb-qa/blob/b2623726bdede0fed7b167a4edf7c62208ee60d4/BUGS/MDEV-40339.sql",
+      "sha256": "175727678fa8d5d3aaff08ed31cea3d938f6e49c461bad7de0366e8e93b46480",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "BUGS/MDEV-40339.sql:5 (INSERT HIGH_PRIORITY IGNORE INTO t1 VALUES ...)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB INSERT combines HIGH_PRIORITY and IGNORE modifiers on a multi-row VALUES write, allowing a duplicate row to be skipped while a new row is accepted.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored inventory replenishment with RETURNING. One duplicate SKU remains unchanged and is omitted from the returned rows, while one new SKU is inserted and returned; the source's vector type, table names, values, and bug context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "high-priority-insert",
+    "insert-ignore",
+    "returning",
+    "multi-row-insert",
+    "primary-key-conflict",
+    "dml-result-rows",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Stock item 1201 already exists and conflicts on the primary key, so INSERT HIGH_PRIORITY IGNORE must preserve it and omit it from RETURNING. Item 1202 is new and must be the only returned and added row.",
+  "determinism_notes": "Stock IDs and values are fixed; the RETURNING result is compared unordered and the final inventory read is ordered by stock ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE inventory_stock (stock_id INT PRIMARY KEY, sku VARCHAR(16) NOT NULL UNIQUE, quantity INT NOT NULL, bin_code VARCHAR(16) NOT NULL)",
+    "INSERT INTO inventory_stock VALUES (1201, 'bolt-17', 12, 'A-01')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT HIGH_PRIORITY IGNORE INTO inventory_stock (stock_id, sku, quantity, bin_code) VALUES (1201, 'bolt-17', 99, 'Z-99'), (1202, 'nut-22', 14, 'B-04') RETURNING stock_id, sku, quantity, bin_code",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT stock_id, sku, quantity, bin_code FROM inventory_stock ORDER BY stock_id",
+      "ordered": true
+    }
+  ]
+}
