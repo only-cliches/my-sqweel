@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "regexp_like_contact_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "feaselkl/Now-You-Have-Two-Problems",
+      "commit": "8db1b80042f0b80fd665cb1fca23e2d3dd536922",
+      "path": "Scripts/02 - REGEXP_LIKE.sql",
+      "url": "https://github.com/feaselkl/Now-You-Have-Two-Problems/blob/8db1b80042f0b80fd665cb1fca23e2d3dd536922/Scripts/02%20-%20REGEXP_LIKE.sql",
+      "sha256": "a79ab382d31bcb2225285fde47f4a1914b7f7f08f51cf952f943d42995472e7b",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Scripts/02 - REGEXP_LIKE.sql:87-102",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A contact report uses REGEXP_LIKE in a CASE expression to classify phone strings by several regular-expression formats.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored contact-channel audit. Because MariaDB 10.11.7 does not expose REGEXP_LIKE as a callable function, the equivalent REGEXP predicate with an inline case-insensitive flag classifies service handles, while a filtered report separates valid handles, missing values, and malformed labels. The schema, patterns, values, and reporting domain are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["regexp-like-predicate", "regexp-like-match-mode", "case-expression", "null-propagation", "filtered-report", "deterministic-order"],
+  "fixture_notes": "Contacts 701 and 702 match the case-insensitive handle pattern, contact 703 is malformed, and contact 704 is NULL. The audit keeps all rows in the classification query and counts only valid handles in the filtered report.",
+  "determinism_notes": "All contact IDs, labels, regular expressions, filters, and ordering are fixed. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE service_contacts (contact_id INT PRIMARY KEY, contact_label VARCHAR(96) NULL)",
+    "INSERT INTO service_contacts VALUES (701, 'Ops-East-17'), (702, 'billing-west-204'), (703, 'ops east 17'), (704, NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT contact_id, contact_label, CASE WHEN contact_label REGEXP '(?i)^[a-z]+-[a-z]+-[0-9]{2,3}$' THEN 'valid' WHEN contact_label IS NULL THEN 'missing' ELSE 'invalid' END AS label_status FROM service_contacts ORDER BY contact_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT COUNT(*) AS valid_count FROM service_contacts WHERE contact_label REGEXP '(?i)^[a-z]+-[a-z]+-[0-9]{2,3}$'",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT contact_id, contact_label FROM service_contacts ORDER BY contact_id",
+      "ordered": true
+    }
+  ]
+}
