@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "id": "ignore_index_subquery_average",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "ntua-el22874/DB-Project-12",
+      "commit": "f515c57b388c3837add180050fe51be965cda3af",
+      "path": "Queries/Q04 ignore index.sql",
+      "url": "https://github.com/ntua-el22874/DB-Project-12/blob/f515c57b388c3837add180050fe51be965cda3af/Queries/Q04%20ignore%20index.sql",
+      "sha256": "e0d1ab0846b423612fd0a0f3f3c7947900bdb63d5863fd6410365f3202e4c46c",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Queries/Q04 ignore index.sql:5-13 (SELECT AVG(...) FROM HospitalizationRating IGNORE INDEX (PRIMARY) WHERE hosp_id IN (...))",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL aggregate read explicitly ignores the primary-key index while restricting rows through an IN subquery, combining an access-path hint with aggregate evaluation and nested filtering.",
+      "mysql_mariadb_translation": "Reauthored as a clinic-visit summary. IGNORE INDEX (PRIMARY) is applied to a visit table whose clinician-qualified patient IDs come from a subquery; AVG and COUNT report the selected visits. The source schema, names, values, and healthcare query are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "ignore-index",
+    "primary-index-hint",
+    "in-subquery",
+    "aggregate",
+    "avg",
+    "count",
+    "deterministic-content"
+  ],
+  "fixture_notes": "Patients 701 and 703 are assigned to clinician 8801 and contribute four visits; patient 702 is assigned elsewhere and is excluded by the IN subquery. IGNORE INDEX (PRIMARY) must not change the qualifying rows or aggregate values.",
+  "determinism_notes": "Visit IDs, patient assignments, severity values, and recovery durations are fixed. The single aggregate row has no ordering dependency; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE clinic_visits (visit_id INT PRIMARY KEY, patient_id INT NOT NULL, severity_score INT NOT NULL, recovery_days INT NOT NULL, INDEX idx_patient (patient_id))",
+    "CREATE TABLE clinician_assignments (assignment_id INT PRIMARY KEY, patient_id INT NOT NULL, clinician_id INT NOT NULL, INDEX idx_clinician (clinician_id))",
+    "INSERT INTO clinic_visits VALUES (401, 701, 4, 2), (402, 701, 6, 4), (403, 702, 10, 8), (404, 703, 8, 6)",
+    "INSERT INTO clinician_assignments VALUES (1, 701, 8801), (2, 702, 8802), (3, 703, 8801)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT AVG(clinic_visits.severity_score) AS average_severity, AVG(clinic_visits.recovery_days) AS average_recovery, COUNT(*) AS visit_count FROM clinic_visits IGNORE INDEX (PRIMARY) WHERE patient_id IN (SELECT patient_id FROM clinician_assignments WHERE clinician_id = 8801)",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT visit_id, patient_id, severity_score, recovery_days FROM clinic_visits ORDER BY visit_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT assignment_id, patient_id, clinician_id FROM clinician_assignments ORDER BY assignment_id",
+      "ordered": true
+    }
+  ]
+}
