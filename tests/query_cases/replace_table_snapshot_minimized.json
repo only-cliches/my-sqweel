@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "replace_table_snapshot_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "DataLinkDC/dinky",
+      "commit": "63b5a5aa2438a4c30efd1067da8aedf844951143",
+      "path": "script/sql/dinky-mysql.sql",
+      "url": "https://github.com/DataLinkDC/dinky/blob/63b5a5aa2438a4c30efd1067da8aedf844951143/script/sql/dinky-mysql.sql",
+      "sha256": "a0196e96dc23e80c96b8fd054d80ffb17d205cfdf44a98f7997233d9329f736d",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from CREATE OR REPLACE TABLE in script/sql/dinky-mysql.sql",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "CREATE OR REPLACE TABLE must replace a stale relation from a one-row SELECT while preserving the SELECT's declared integer metadata and affected-row count.",
+      "mysql_mariadb_translation": "Reduced to one independently authored integer source row, one stale target table, and one replacement CTAS statement, isolating replacement affected-row and integer metadata behavior while removing filtering, CASE expressions, and multiple rows."
+    },
+    "independently_authored": true,
+    "minimized_from": "replace_table_snapshot"
+  },
+  "features": ["create-or-replace-table", "ctas", "metadata-regression", "minimized-regression"],
+  "fixture_notes": "The stale target must be replaced by one row and the replacement projection must retain MariaDB's integer result metadata.",
+  "determinism_notes": "The single fixed source row and final ordered read use no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE mini_stock_source (stock_id INT PRIMARY KEY, active TINYINT NOT NULL)",
+    "INSERT INTO mini_stock_source VALUES (1201, 1)",
+    "CREATE TABLE mini_stock_snapshot (old_marker INT PRIMARY KEY)",
+    "INSERT INTO mini_stock_snapshot VALUES (99)"
+  ],
+  "steps": [
+    {
+      "sql": "CREATE OR REPLACE TABLE mini_stock_snapshot AS SELECT stock_id FROM mini_stock_source WHERE active = 1",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT stock_id FROM mini_stock_snapshot ORDER BY stock_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT stock_id FROM mini_stock_snapshot ORDER BY stock_id",
+      "ordered": true
+    }
+  ]
+}

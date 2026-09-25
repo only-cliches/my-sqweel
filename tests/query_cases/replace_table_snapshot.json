@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "replace_table_snapshot",
+  "provenance": {
+    "kind": "github-inspiration",
+    "source": {
+      "kind": "github",
+      "repository": "DataLinkDC/dinky",
+      "commit": "63b5a5aa2438a4c30efd1067da8aedf844951143",
+      "path": "script/sql/dinky-mysql.sql",
+      "url": "https://github.com/DataLinkDC/dinky/blob/63b5a5aa2438a4c30efd1067da8aedf844951143/script/sql/dinky-mysql.sql",
+      "sha256": "a0196e96dc23e80c96b8fd054d80ffb17d205cfdf44a98f7997233d9329f736d",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "script/sql/dinky-mysql.sql: CREATE OR REPLACE TABLE migration statements",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "CREATE OR REPLACE TABLE rebuilds an existing relation from a SELECT result, replacing stale table contents and schema in one DDL statement.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored inventory snapshot refresh. A stale snapshot is replaced by a filtered CTAS projection with a computed stock band, and an ordered read verifies the new schema rows rather than the old table. The source schema, values, and migration context are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["create-or-replace-table", "ctas", "schema-replacement", "deterministic-final-state"],
+  "fixture_notes": "The old snapshot row and obsolete column must disappear; active source rows must become the complete replacement snapshot with a computed stock band.",
+  "determinism_notes": "Source IDs, labels, quantities, and active flags are fixed; the replacement projection and final read are ordered by the primary key; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE stock_feed (stock_id INT PRIMARY KEY, sku VARCHAR(16) NOT NULL, quantity INT NOT NULL, active TINYINT NOT NULL)",
+    "INSERT INTO stock_feed VALUES (1001, 'SKU-A', 12, 1), (1002, 'SKU-B', 0, 1), (1003, 'SKU-C', 8, 0)",
+    "CREATE TABLE stock_snapshot (old_marker INT PRIMARY KEY, old_label VARCHAR(16) NOT NULL)",
+    "INSERT INTO stock_snapshot VALUES (77, 'stale')"
+  ],
+  "steps": [
+    {
+      "sql": "CREATE OR REPLACE TABLE stock_snapshot AS SELECT stock_id, sku, quantity, CASE WHEN quantity > 0 THEN 'available' ELSE 'empty' END AS stock_band FROM stock_feed WHERE active = 1",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT stock_id, sku, quantity, stock_band FROM stock_snapshot ORDER BY stock_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT stock_id, sku, quantity, stock_band FROM stock_snapshot ORDER BY stock_id",
+      "ordered": true
+    }
+  ]
+}

@@ -1010,8 +1010,8 @@ impl RawEngine {
             Statement::Query(query) => self.select_query(*query)?,
             _ => return Err(anyhow!("CREATE OR REPLACE TABLE requires a SELECT query")),
         };
-        self.replace_table_from_result(&table, result)?;
-        Ok(Some(QueryResult::default()))
+        let result = self.replace_table_from_result(&table, result)?;
+        Ok(Some(result))
     }
 
     fn record_found_rows(&self, sql: &str, result: &QueryResult) {

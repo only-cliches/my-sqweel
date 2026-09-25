@@ -1,7 +1,12 @@
 use super::*;
 
 impl RawEngine {
-    pub(super) fn replace_table_from_result(&self, table: &str, result: QueryResult) -> Result<()> {
+    pub(super) fn replace_table_from_result(
+        &self,
+        table: &str,
+        result: QueryResult,
+    ) -> Result<QueryResult> {
+        let affected_rows = result.rows.len() as u64;
         self.schemas.remove(table);
         self.rows.remove(table);
         self.indexes.remove(table);
@@ -11,14 +16,17 @@ impl RawEngine {
             table: table.to_string(),
             ..TableSchemaHint::default()
         };
-        for column in &result.columns {
+        for (index, column) in result.columns.iter().enumerate() {
             let value = result.rows.first().and_then(|row| row.get(column));
+            let metadata = result.column_metadata.get(index);
             schema.column_order.push(column.clone());
             schema.columns.insert(
                 column.clone(),
                 ColumnHint {
-                    sql_type: Some(inferred_sql_type(value)),
-                    nullable: Some(value.is_none_or(Value::is_null)),
+                    sql_type: Some(inferred_sql_type_from_metadata(metadata, value)),
+                    nullable: Some(
+                        metadata.map_or(value.is_none_or(Value::is_null), |column| column.nullable),
+                    ),
                     ..ColumnHint::default()
                 },
             );
@@ -39,7 +47,10 @@ impl RawEngine {
         self.rows.insert(table.to_string(), table_rows.into());
         self.rebuild_indexes(table);
 
-        Ok(())
+        Ok(QueryResult {
+            rows_affected: affected_rows,
+            ..QueryResult::default()
+        })
     }
 
     pub(super) fn create_table_as_select(
