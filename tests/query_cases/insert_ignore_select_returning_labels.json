@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "id": "insert_ignore_select_returning_labels",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "mariadb-corporation/mariadb-qa",
+      "commit": "b2623726bdede0fed7b167a4edf7c62208ee60d4",
+      "path": "OLD/generator/generator.prev.sh",
+      "url": "https://github.com/mariadb-corporation/mariadb-qa/blob/b2623726bdede0fed7b167a4edf7c62208ee60d4/OLD/generator/generator.prev.sh",
+      "sha256": "e4fece069b7b7c1741a8377f881936a0949c87b6c4cf1949f0ad15367e6100dc",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "OLD/generator/generator.prev.sh:1747-1751 (INSERT IGNORE ... SELECT branch)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB INSERT IGNORE can load rows from a filtered SELECT source, skipping source rows that conflict with a target key; this fixture extends that DML shape with MariaDB's RETURNING projection.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored label-feed load. A ready source relation supplies one duplicate label and one new label to INSERT IGNORE ... SELECT ... RETURNING; the duplicate remains unchanged and is omitted from returned rows, while the new label is returned and inserted. The generator's random tables, values, and fuzzing context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "insert-ignore",
+    "insert-select",
+    "returning",
+    "primary-key-conflict",
+    "filtered-source",
+    "dml-result-rows",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Label 701 already exists and conflicts with a ready source row, so INSERT IGNORE must preserve it and return only newly inserted label 702. Source label 703 is paused and excluded before insertion.",
+  "determinism_notes": "Label IDs and source states are fixed; the RETURNING result is compared unordered and the final target read is ordered by label ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE active_labels (label_id INT PRIMARY KEY, label_code VARCHAR(16) NOT NULL, label_text VARCHAR(32) NOT NULL, label_state VARCHAR(16) NOT NULL)",
+    "CREATE TABLE label_feed (label_id INT PRIMARY KEY, label_code VARCHAR(16) NOT NULL, label_text VARCHAR(32) NOT NULL, label_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO active_labels VALUES (701, 'fragile', 'Handle with care', 'active'), (704, 'bulk', 'Bulk handling', 'active')",
+    "INSERT INTO label_feed VALUES (701, 'fragile', 'Updated fragile text', 'ready'), (702, 'priority', 'Priority handling', 'ready'), (703, 'paused', 'Paused handling', 'paused')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT IGNORE INTO active_labels (label_id, label_code, label_text, label_state) SELECT label_id, label_code, label_text, label_state FROM label_feed WHERE label_state = 'ready' RETURNING label_id, label_code, label_text, label_state",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT label_id, label_code, label_text, label_state FROM active_labels ORDER BY label_id",
+      "ordered": true
+    }
+  ]
+}
