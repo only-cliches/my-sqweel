@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "alter_unique_key_if_exists",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "spacious-team/investbook",
+      "commit": "fc1c2831531f381d42532fcbb1d55d14e5e1d31e",
+      "path": "src/main/resources/db/migration/mariadb/V2020_13_0_0.sql",
+      "url": "https://github.com/spacious-team/investbook/blob/fc1c2831531f381d42532fcbb1d55d14e5e1d31e/src/main/resources/db/migration/mariadb/V2020_13_0_0.sql#L29-L32",
+      "sha256": "63a73ddb8fc58d8ff356c8f37280375c12d98934b7f2c55a1422ea68504493d7",
+      "source_dialect": "mariadb"
+    },
+    "inspiration": {
+      "source_location": "V2020_13_0_0.sql:29-32",
+      "source_dialect": "mariadb",
+      "observed_pattern": "A MariaDB migration atomically drops an obsolete key and adds a replacement unique key with IF EXISTS and IF NOT EXISTS guards.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored quote-snapshot migration. A legacy two-column unique key is replaced by a three-column unique key in one ALTER TABLE, the same guarded migration is repeated for idempotence, and final rows plus index metadata verify the replacement. The source tables, names, values, and portfolio context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["alter-table-drop-key-if-exists", "alter-table-add-unique-key-if-not-exists", "multi-operation-ddl", "idempotent-ddl", "schema-metadata"],
+  "fixture_notes": "Quote rows begin under a legacy uniqueness rule on instrument and capture time. The migration replaces it with uniqueness including venue, a later same-time quote from a new venue proves the broadened key, and the repeated guarded ALTER preserves one replacement index.",
+  "determinism_notes": "IDs, codes, timestamps, DDL order, and metadata ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE quote_snapshots (snapshot_id INT PRIMARY KEY, instrument_code VARCHAR(16) NOT NULL, captured_at DATETIME NOT NULL, venue_code VARCHAR(16) NOT NULL, quote_value DECIMAL(10,2) NOT NULL, UNIQUE KEY instrument_code (instrument_code, captured_at))",
+    "INSERT INTO quote_snapshots VALUES (801, 'ALPHA', '2026-08-01 09:00:00', 'north', 101.25), (802, 'ALPHA', '2026-08-01 09:05:00', 'south', 101.40), (803, 'BETA', '2026-08-01 09:05:00', 'north', 88.10)"
+  ],
+  "steps": [
+    {
+      "sql": "ALTER TABLE quote_snapshots DROP KEY IF EXISTS instrument_code, ADD UNIQUE KEY IF NOT EXISTS uq_quote_instrument_time_venue (instrument_code, captured_at, venue_code)",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO quote_snapshots VALUES (804, 'ALPHA', '2026-08-01 09:00:00', 'east', 101.30)",
+      "ordered": false
+    },
+    {
+      "sql": "ALTER TABLE quote_snapshots DROP KEY IF EXISTS instrument_code, ADD UNIQUE KEY IF NOT EXISTS uq_quote_instrument_time_venue (instrument_code, captured_at, venue_code)",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT snapshot_id, instrument_code, captured_at, venue_code, quote_value FROM quote_snapshots ORDER BY snapshot_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT index_name, non_unique, seq_in_index, column_name FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = 'quote_snapshots' ORDER BY index_name, seq_in_index",
+      "ordered": true
+    }
+  ]
+}

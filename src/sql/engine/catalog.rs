@@ -651,6 +651,10 @@ pub(super) fn parse_session_statement(sql: &str) -> Result<Vec<Statement>> {
         return Ok(crate::sql::parse(&format!("ALTER TABLE {table} {drops}"))?);
     }
 
+    if let Some(normalized) = rewrite_conditional_key_syntax(sql) {
+        return Ok(crate::sql::parse(&normalized)?);
+    }
+
     if let Some((table, next)) = parse_auto_increment_option(sql)? {
         return Ok(crate::sql::parse(&format!(
             "ALTER TABLE {table} SET TBLPROPERTIES ('auto_increment' = '{next}')"
@@ -725,6 +729,56 @@ pub(super) fn parse_session_statement(sql: &str) -> Result<Vec<Statement>> {
         text.to_owned()
     };
     Ok(crate::sql::parse(&rewritten)?)
+}
+
+/// Rewrites conditional key syntax into an AST accepted by the authorizer.
+fn rewrite_conditional_key_syntax(sql: &str) -> Option<String> {
+    let trimmed = sql.trim();
+    let upper = trimmed.to_ascii_uppercase();
+    if !upper.starts_with("ALTER TABLE ")
+        || !(upper.contains("DROP KEY IF EXISTS") || upper.contains("ADD UNIQUE KEY IF NOT EXISTS"))
+    {
+        return None;
+    }
+
+    let mut rewritten = trimmed.to_owned();
+    for (needle, replacement) in [
+        ("DROP KEY IF EXISTS", "DROP INDEX"),
+        ("ADD UNIQUE KEY IF NOT EXISTS", "ADD UNIQUE INDEX"),
+    ] {
+        loop {
+            let upper = rewritten.to_ascii_uppercase();
+            let Some(start) = upper.find(needle) else {
+                break;
+            };
+            rewritten.replace_range(start..start + needle.len(), replacement);
+        }
+    }
+    if crate::sql::parse(&rewritten).is_ok() {
+        return Some(rewritten);
+    }
+    let upper = rewritten.to_ascii_uppercase();
+    let remainder = &rewritten["ALTER TABLE ".len()..];
+    let table_end = remainder.find(char::is_whitespace)?;
+    let table = remainder[..table_end].trim();
+    if let Some(add_at) = upper.find("ADD UNIQUE INDEX ") {
+        let definition = rewritten[add_at + "ADD UNIQUE INDEX ".len()..].trim();
+        let candidate = format!("ALTER TABLE {table} ADD UNIQUE INDEX {definition}");
+        if crate::sql::parse(&candidate).is_ok() {
+            return Some(candidate);
+        }
+    }
+    if let Some(drop_at) = upper.find("DROP INDEX ") {
+        let key = rewritten[drop_at + "DROP INDEX ".len()..]
+            .split_whitespace()
+            .next()
+            .unwrap_or_default();
+        let candidate = format!("ALTER TABLE {table} DROP INDEX {key}");
+        if crate::sql::parse(&candidate).is_ok() {
+            return Some(candidate);
+        }
+    }
+    None
 }
 
 // Parse the complete option, including its table, before authorization. Never
@@ -1188,6 +1242,9 @@ pub(super) fn parse_drop_foreign_keys(sql: &str) -> Result<Option<(ObjectName, V
 // sqlparser lacks MySQL DROP INDEX ... ON table. Keep the table identity;
 // the legacy parser's fallback discarded it and could drop names in other tables.
 pub(super) fn parse_index_drop(sql: &str) -> Result<Option<(ObjectName, Ident, bool)>> {
+    if sql.contains(',') {
+        return Ok(None);
+    }
     if !may_start_with(sql, &["DROP", "ALTER"]) {
         return Ok(None);
     }
@@ -1199,6 +1256,9 @@ pub(super) fn parse_index_drop(sql: &str) -> Result<Option<(ObjectName, Ident, b
             return Ok(None);
         }
         let table = tokens.object_name()?;
+        if tokens.position != tokens.tokens.len() {
+            return Ok(None);
+        }
         tokens.finish()?;
         return Ok(Some((table, index, if_exists)));
     }
@@ -1212,6 +1272,9 @@ pub(super) fn parse_index_drop(sql: &str) -> Result<Option<(ObjectName, Ident, b
         }
         let if_exists = tokens.if_exists()?;
         let index = Ident::with_quote('`', tokens.identifier()?);
+        if tokens.position != tokens.tokens.len() {
+            return Ok(None);
+        }
         tokens.finish()?;
         return Ok(Some((table, index, if_exists)));
     }

@@ -788,13 +788,21 @@ impl RawEngine {
         tracing::debug!(sql = execution_sql, "sql.execute");
         let mut out = Vec::new();
         let outcome: Result<Vec<QueryResult>> = (|| {
-            for raw in split_sql_statements(execution_sql)? {
+            let statements = split_sql_statements(execution_sql)?;
+            for raw in statements {
                 if raw.is_empty() {
                     continue;
                 }
                 self.maybe_inject_failure(&raw)?;
                 let _update_ignore_guard =
                     UpdateIgnoreGuard::install(is_update_ignore_statement(&raw));
+                if let Some(result) = self.execute_alter_conditional_key_compat(&raw)? {
+                    self.capture_eval_user_variables();
+                    self.record_found_rows(&raw, &result);
+                    self.store_last_rows_affected(&raw, &result);
+                    out.push(result);
+                    continue;
+                }
                 if let Some(result) = self.execute_drop_foreign_key_compat(&raw)? {
                     self.capture_eval_user_variables();
                     self.record_found_rows(&raw, &result);
@@ -1818,6 +1826,82 @@ impl RawEngine {
         });
         schema.updated_at = Some(Utc::now());
         self.schemas.insert(table.clone(), schema);
+
+        Ok(Some(QueryResult::default()))
+    }
+
+    fn execute_alter_conditional_key_compat(&self, sql: &str) -> Result<Option<QueryResult>> {
+        let trimmed = sql.trim().trim_end_matches(';').trim();
+        let upper = trimmed.to_ascii_uppercase();
+        if !upper.starts_with("ALTER TABLE ")
+            || !(upper.contains("DROP KEY IF EXISTS")
+                || upper.contains("ADD UNIQUE KEY IF NOT EXISTS"))
+        {
+            return Ok(None);
+        }
+
+        let remainder = &trimmed["ALTER TABLE ".len()..];
+        let Some(table_end) = remainder.find(char::is_whitespace) else {
+            return Ok(None);
+        };
+        let table = remainder[..table_end].trim();
+        let operations = eval::split_sql_args(remainder[table_end..].trim());
+        if operations.is_empty()
+            || operations.iter().any(|operation| {
+                let operation_upper = operation.trim().to_ascii_uppercase();
+                !(operation_upper.starts_with("DROP KEY IF EXISTS ")
+                    || operation_upper.starts_with("ADD UNIQUE KEY IF NOT EXISTS "))
+            })
+        {
+            return Ok(None);
+        }
+
+        let table_name = table.trim_matches('`');
+        for operation in operations {
+            let operation = operation.trim();
+            let operation_upper = operation.to_ascii_uppercase();
+            if operation_upper.starts_with("DROP KEY IF EXISTS ") {
+                let key = operation["DROP KEY IF EXISTS ".len()..]
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or_default()
+                    .trim_matches('`');
+                let exists = self.schemas.get(table_name).is_some_and(|schema| {
+                    schema
+                        .indexes
+                        .iter()
+                        .any(|index| index.name.eq_ignore_ascii_case(key))
+                });
+                if exists {
+                    let Some(mut schema) =
+                        self.schemas.get(table_name).map(|schema| schema.clone())
+                    else {
+                        return Err(anyhow!("unknown table: {table_name}"));
+                    };
+                    ddl::drop_unique_metadata(&mut schema, key);
+                    schema.updated_at = Some(Utc::now());
+                    self.schemas.insert(table_name.to_string(), schema);
+                    self.rebuild_indexes(table_name);
+                }
+            } else {
+                let definition = operation["ADD UNIQUE KEY IF NOT EXISTS ".len()..].trim();
+                let key = definition
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or_default()
+                    .trim_matches('`');
+                let exists = self.schemas.get(table_name).is_some_and(|schema| {
+                    schema
+                        .indexes
+                        .iter()
+                        .any(|index| index.name.eq_ignore_ascii_case(key))
+                });
+                if !exists {
+                    let normalized = format!("ALTER TABLE {table} ADD UNIQUE INDEX {definition}");
+                    self.execute_sql_internal(&normalized, &normalized, true, false)?;
+                }
+            }
+        }
 
         Ok(Some(QueryResult::default()))
     }

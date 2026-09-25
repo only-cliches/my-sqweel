@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "alter_unique_key_if_exists_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "alter_unique_key_if_exists",
+    "source": {
+      "kind": "github",
+      "repository": "spacious-team/investbook",
+      "commit": "fc1c2831531f381d42532fcbb1d55d14e5e1d31e",
+      "path": "src/main/resources/db/migration/mariadb/V2020_13_0_0.sql",
+      "url": "https://github.com/spacious-team/investbook/blob/fc1c2831531f381d42532fcbb1d55d14e5e1d31e/src/main/resources/db/migration/mariadb/V2020_13_0_0.sql#L29-L32",
+      "sha256": "63a73ddb8fc58d8ff356c8f37280375c12d98934b7f2c55a1422ea68504493d7",
+      "source_dialect": "mariadb"
+    },
+    "inspiration": {
+      "source_location": "V2020_13_0_0.sql:29-32",
+      "source_dialect": "mariadb",
+      "observed_pattern": "A guarded ALTER TABLE replaces one named unique key with another in a single migration statement.",
+      "mysql_mariadb_translation": "Reduced to one independently authored row and one conditional drop/add key operation, retaining the key-name guards and index metadata check while removing the source schema and portfolio data."
+    },
+    "independently_authored": true,
+    "minimized_from": "alter_unique_key_if_exists"
+  },
+  "features": ["conditional-key-drop", "conditional-unique-key-add", "multi-operation-ddl", "minimized-regression"],
+  "fixture_notes": "One fixed row starts under a legacy unique key. The guarded ALTER must replace it with the named composite unique key without changing the row.",
+  "determinism_notes": "The row, key names, DDL, and metadata ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE key_probe (probe_id INT PRIMARY KEY, code VARCHAR(16) NOT NULL, zone_code VARCHAR(16) NOT NULL, UNIQUE KEY code (code))",
+    "INSERT INTO key_probe VALUES (901, 'KAPPA', 'west')"
+  ],
+  "steps": [
+    {
+      "sql": "ALTER TABLE key_probe DROP KEY IF EXISTS code, ADD UNIQUE KEY IF NOT EXISTS uq_probe_code_zone (code, zone_code)",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT probe_id, code, zone_code FROM key_probe ORDER BY probe_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT index_name, non_unique, seq_in_index, column_name FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = 'key_probe' ORDER BY index_name, seq_in_index",
+      "ordered": true
+    }
+  ]
+}
