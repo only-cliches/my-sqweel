@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "seasonal_category_rank",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "doocs/leetcode",
+      "commit": "897eabe3147ceacc391e05a5d9fe67b8147fc941",
+      "path": "solution/3500-3599/3564.Seasonal Sales Analysis/Solution.sql",
+      "url": "https://github.com/doocs/leetcode/blob/897eabe3147ceacc391e05a5d9fe67b8147fc941/solution/3500-3599/3564.Seasonal%20Sales%20Analysis/Solution.sql",
+      "sha256": "eac93d8e0eb82710f595665a6365a78854fe11ed267159df6462b0a68e695de4",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "solution/3500-3599/3564.Seasonal Sales Analysis/Solution.sql:2-31",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A common-table expression aggregates joined sales by a derived season and category, then a second CTE ranks categories within each season and keeps the top-ranked rows.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored regional product-season report. Fixed sale dates map into season labels, a USING join supplies product categories and prices, and RANK selects each season's highest unit total with revenue as a deterministic tie-breaker; the source schema, rows, labels, and application context are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["cte-aggregate", "join-using", "season-case", "partitioned-rank", "window-over-cte", "decimal-revenue", "deterministic-order"],
+  "fixture_notes": "Winter's Gear category leads on units, while Summer's Shelter category wins a unit tie through higher revenue. Spring has one category and therefore rank one; seasons without sales do not produce rows.",
+  "determinism_notes": "Product IDs, sale dates, quantities, prices, season boundaries, and ordering keys are fixed. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE seasonal_products (product_id INT PRIMARY KEY, category_name VARCHAR(24) NOT NULL, unit_price DECIMAL(10,2) NOT NULL)",
+    "CREATE TABLE seasonal_sales (sale_id INT PRIMARY KEY, product_id INT NOT NULL, sold_on DATE NOT NULL, units INT NOT NULL)",
+    "INSERT INTO seasonal_products VALUES (1001, 'Gear', 20.00), (1002, 'Kitchen', 30.00), (1003, 'Hydration', 12.00), (1004, 'Shelter', 15.00), (1005, 'Guides', 8.00)",
+    "INSERT INTO seasonal_sales VALUES (9101, 1001, '2026-01-15', 3), (9102, 1002, '2026-01-20', 2), (9103, 1003, '2026-07-04', 5), (9104, 1004, '2026-08-12', 5), (9105, 1005, '2026-04-10', 1)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH seasonal_totals AS (SELECT CASE WHEN MONTH(sold_on) IN (12, 1, 2) THEN 'Winter' WHEN MONTH(sold_on) IN (3, 4, 5) THEN 'Spring' WHEN MONTH(sold_on) IN (6, 7, 8) THEN 'Summer' WHEN MONTH(sold_on) IN (9, 10, 11) THEN 'Fall' END AS season_label, category_name, SUM(units) AS total_units, SUM(units * unit_price) AS total_revenue FROM seasonal_sales JOIN seasonal_products USING (product_id) GROUP BY season_label, category_name), ranked_categories AS (SELECT season_label, category_name, total_units, total_revenue, RANK() OVER (PARTITION BY season_label ORDER BY total_units DESC, total_revenue DESC) AS rank_no FROM seasonal_totals) SELECT season_label, category_name, total_units, total_revenue FROM ranked_categories WHERE rank_no = 1 ORDER BY season_label, category_name",
+      "ordered": true
+    }
+  ]
+}
