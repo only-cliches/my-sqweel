@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "id": "json_table_query_shapes",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "sqlpage/SQLPage",
+      "commit": "b91629d3e222af68de8c8afe1a89a91f4807f1eb",
+      "path": "examples/official-site/sqlpage/migrations/50_blog_json.sql",
+      "url": "https://github.com/sqlpage/SQLPage/blob/b91629d3e222af68de8c8afe1a89a91f4807f1eb/examples/official-site/sqlpage/migrations/50_blog_json.sql",
+      "sha256": "f1bceda169831708027c1c45d758be8b5604d8c940514538ff66ac4461ac27d2",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "examples/official-site/sqlpage/migrations/50_blog_json.sql:340-413, 569-570",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL JSON guide uses JSON_TABLE to turn JSON collections into relational rows and JSON_QUERY to extract object or array fragments from JSON documents.",
+      "mysql_mariadb_translation": "Reauthored as a catalog-payload audit. JSON_TABLE exposes item identifiers and JSON payloads, while JSON_QUERY extracts nested object and array fragments and JSON_TYPE classifies the extracted shapes; the source guide text, literals, and application context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["json-table", "json-query", "json-type", "nested-json", "deterministic-order"],
+  "fixture_notes": "Two fixed catalog payloads expand into rows; one has object and array fragments and the other has a missing object path that must return SQL NULL.",
+  "determinism_notes": "The JSON array order and outer item ID order are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT jt.item_id, JSON_QUERY(jt.attributes, '$.details') AS details_fragment, JSON_QUERY(jt.attributes, '$.labels') AS labels_fragment, JSON_TYPE(JSON_QUERY(jt.attributes, '$.details')) AS details_type FROM JSON_TABLE('[{\"id\":11,\"attributes\":{\"details\":{\"tier\":\"gold\"},\"labels\":[\"new\",\"sale\"]}},{\"id\":12,\"attributes\":{\"labels\":[\"clearance\"]}}]', '$[*]' COLUMNS (item_id INT PATH '$.id', attributes JSON PATH '$.attributes')) AS jt ORDER BY jt.item_id",
+      "ordered": true
+    }
+  ]
+}
