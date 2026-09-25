@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "union_all_rollup_ledger",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "JavaTMP/JavaTMP",
+      "commit": "6ee9069b301da91f34a28c69c9e78afdb045be08",
+      "path": "docs/pages/erp/scripts/Balance_Sheet.sql",
+      "url": "https://github.com/JavaTMP/JavaTMP/blob/6ee9069b301da91f34a28c69c9e78afdb045be08/docs/pages/erp/scripts/Balance_Sheet.sql",
+      "sha256": "1923c12e4efb9f9ef4ff15da31a23c2c8872e0bc5e754f60624ccf7c3339b4b6",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Balance_Sheet.sql:16-72",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL balance-sheet report combines multiple UNION ALL branches, including grouped branches that use GROUP BY ... WITH ROLLUP to emit subtotal rows.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored regional adjustment ledger. Posted shipment and return rows are combined with UNION ALL, return quantities are negative, and GROUP BY ... WITH ROLLUP emits region/channel detail, regional subtotals, and a grand total; the source schema, names, values, and accounting context are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["union-all", "derived-table", "group-by-rollup", "multi-level-subtotals", "grand-total", "signed-aggregation", "null-subtotal-markers"],
+  "fixture_notes": "Shipment 1002 and return 2002 intentionally share the south/online grouping while the return contributes negative units. No source row contains NULL grouping values, so NULL region/channel values identify rollup levels unambiguously.",
+  "determinism_notes": "All IDs, regions, channels, states, and quantities are fixed. Rollup result rows are compared unordered because subtotal presentation order is not part of the SQL contract; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE posted_shipments (shipment_id INT PRIMARY KEY, region_code VARCHAR(16) NOT NULL, channel_code VARCHAR(16) NOT NULL, shipment_state VARCHAR(16) NOT NULL, units INT NOT NULL)",
+    "CREATE TABLE posted_returns (return_id INT PRIMARY KEY, region_code VARCHAR(16) NOT NULL, channel_code VARCHAR(16) NOT NULL, return_state VARCHAR(16) NOT NULL, units INT NOT NULL)",
+    "INSERT INTO posted_shipments VALUES (1001, 'north', 'online', 'posted', 10), (1002, 'south', 'online', 'posted', 7), (1003, 'south', 'store', 'pending', 99), (1004, 'west', 'store', 'posted', 4)",
+    "INSERT INTO posted_returns VALUES (2001, 'north', 'online', 'posted', 2), (2002, 'south', 'online', 'posted', 3), (2003, 'west', 'store', 'pending', 8)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT region_code, channel_code, SUM(net_units) AS net_units FROM (SELECT region_code, channel_code, units AS net_units FROM posted_shipments WHERE shipment_state = 'posted' UNION ALL SELECT region_code, channel_code, -units AS net_units FROM posted_returns WHERE return_state = 'posted') AS posted_ledger GROUP BY region_code, channel_code WITH ROLLUP",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT shipment_id, region_code, channel_code, shipment_state, units FROM posted_shipments ORDER BY shipment_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT return_id, region_code, channel_code, return_state, units FROM posted_returns ORDER BY return_id",
+      "ordered": true
+    }
+  ]
+}
