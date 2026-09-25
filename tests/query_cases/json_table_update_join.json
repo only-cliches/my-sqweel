@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "json_table_update_join",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "open-metadata/OpenMetadata",
+      "commit": "02b46e448e0961cf1f5cf9c0fbc470657b0d855e",
+      "path": "bootstrap/sql/migrations/native/2.0.0/mysql/postDataMigrationSQLScript.sql",
+      "url": "https://github.com/open-metadata/OpenMetadata/blob/02b46e448e0961cf1f5cf9c0fbc470657b0d855e/bootstrap/sql/migrations/native/2.0.0/mysql/postDataMigrationSQLScript.sql",
+      "sha256": "37b704fd06918132be606efe944cd345b9c3bbf3fd10d672701faf7923dc54db",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "bootstrap/sql/migrations/native/2.0.0/mysql/postDataMigrationSQLScript.sql:319-335",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "An UPDATE JOIN derives matching target identifiers from JSON_TABLE rows and a JSON_VALUE scalar predicate before changing the target state.",
+      "mysql_mariadb_translation": "Reauthored as an asset-review state update. A derived relation expands each asset document's label array with JSON_TABLE, filters its category with two-argument JSON_VALUE, and joins matching asset IDs into the update; typed RETURNING clauses, migration logic, and source schema are omitted because MariaDB 10.11.7 rejects that JSON_VALUE form."
+    },
+    "independently_authored": true
+  },
+  "features": ["json-table", "json-value", "update-join", "derived-relation", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "Assets with category alert and label urgent are marked review; assets with another category, no urgent label, or an inactive document remain unchanged.",
+  "determinism_notes": "Asset IDs, JSON documents, label expansion, predicates, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE asset_documents (asset_id INT PRIMARY KEY, document JSON NOT NULL)",
+    "CREATE TABLE asset_states (asset_id INT PRIMARY KEY, state VARCHAR(16) NOT NULL)",
+    "INSERT INTO asset_documents VALUES (11, '{\"category\":\"alert\",\"labels\":[\"urgent\",\"external\"]}'), (12, '{\"category\":\"alert\",\"labels\":[\"routine\"]}'), (13, '{\"category\":\"notice\",\"labels\":[\"urgent\"]}'), (14, '{\"category\":\"alert\",\"labels\":[]}')",
+    "INSERT INTO asset_states VALUES (11, 'queued'), (12, 'queued'), (13, 'queued'), (14, 'queued')"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE asset_states AS s INNER JOIN (SELECT d.asset_id FROM asset_documents AS d, JSON_TABLE(d.document, '$.labels[*]' COLUMNS (label VARCHAR(24) PATH '$')) AS jt WHERE JSON_VALUE(d.document, '$.category') = 'alert' AND jt.label = 'urgent') AS matches ON matches.asset_id = s.asset_id SET s.state = 'review'",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT asset_id, state FROM asset_states ORDER BY asset_id",
+      "ordered": true
+    }
+  ]
+}

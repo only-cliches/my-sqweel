@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "json_table_update_join_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "open-metadata/OpenMetadata",
+      "commit": "02b46e448e0961cf1f5cf9c0fbc470657b0d855e",
+      "path": "bootstrap/sql/migrations/native/2.0.0/mysql/postDataMigrationSQLScript.sql",
+      "url": "https://github.com/open-metadata/OpenMetadata/blob/02b46e448e0961cf1f5cf9c0fbc470657b0d855e/bootstrap/sql/migrations/native/2.0.0/mysql/postDataMigrationSQLScript.sql",
+      "sha256": "37b704fd06918132be606efe944cd345b9c3bbf3fd10d672701faf7923dc54db",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "bootstrap/sql/migrations/native/2.0.0/mysql/postDataMigrationSQLScript.sql:319-335",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "An UPDATE JOIN consumes a JSON_TABLE-expanded label row selected by a JSON_VALUE scalar predicate.",
+      "mysql_mariadb_translation": "Reduced to one independently authored document, one matching state row, one expanded urgent label, and one state assignment while retaining the derived JSON_TABLE relation and JSON_VALUE filter."
+    },
+    "independently_authored": true,
+    "minimized_from": "json_table_update_join"
+  },
+  "features": ["json-table", "json-value", "update-join", "minimized-regression"],
+  "fixture_notes": "The single alert asset has an urgent label and must transition from queued to review.",
+  "determinism_notes": "One fixed document, one target row, one derived label row, and one ordered final read; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE mini_asset_documents (asset_id INT PRIMARY KEY, document JSON NOT NULL)",
+    "CREATE TABLE mini_asset_states (asset_id INT PRIMARY KEY, state VARCHAR(16) NOT NULL)",
+    "INSERT INTO mini_asset_documents VALUES (21, '{\"category\":\"alert\",\"labels\":[\"urgent\"]}')",
+    "INSERT INTO mini_asset_states VALUES (21, 'queued')"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE mini_asset_states AS s INNER JOIN (SELECT d.asset_id FROM mini_asset_documents AS d, JSON_TABLE(d.document, '$.labels[*]' COLUMNS (label VARCHAR(24) PATH '$')) AS jt WHERE JSON_VALUE(d.document, '$.category') = 'alert' AND jt.label = 'urgent') AS matches ON matches.asset_id = s.asset_id SET s.state = 'review'",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT asset_id, state FROM mini_asset_states ORDER BY asset_id",
+      "ordered": true
+    }
+  ]
+}
