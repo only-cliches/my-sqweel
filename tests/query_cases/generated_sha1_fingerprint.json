@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "id": "generated_sha1_fingerprint",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "jessepeterson/kmfddm",
+      "commit": "f89c781839fbb248a8c4690122187c993f25ae20",
+      "path": "storage/mysql/schema.00001.sql",
+      "url": "https://github.com/jessepeterson/kmfddm/blob/f89c781839fbb248a8c4690122187c993f25ae20/storage/mysql/schema.00001.sql",
+      "sha256": "0774fe554d6025d2b4d0ab60270af43b78fa5d9d0738211fd80cfd6b76a89295",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "storage/mysql/schema.00001.sql:1-2",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL ALTER TABLE converts an existing token column into a stored generated SHA1 digest over several row fields concatenated into one canonical string.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored deployment fingerprint migration using MariaDB-compatible ADD COLUMN and VIRTUAL generated-column syntax. A generated SHA1 column is added over service, environment, payload, and revision fields; an UPDATE changes the source payload and a second ordered read verifies the digest recomputes. The source schema, names, values, and token purpose are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "alter-add-generated-column",
+    "virtual-generated-column",
+    "sha1",
+    "concat",
+    "derived-fingerprint",
+    "generated-update",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Deployment 801 and 802 receive deterministic SHA1 fingerprints from their canonical fields. Updating deployment 801's payload must change only its generated fingerprint while deployment 802 remains stable.",
+  "determinism_notes": "All identifiers, strings, revisions, DDL, and final ordering are fixed; SHA1 and CONCAT are deterministic with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE deployment_records (record_id INT PRIMARY KEY, service_code VARCHAR(16) NOT NULL, environment_name VARCHAR(16) NOT NULL, payload_text VARCHAR(64) NOT NULL, revision_no INT NOT NULL)",
+    "INSERT INTO deployment_records VALUES (801, 'edge-api', 'staging', 'blue-config', 3), (802, 'worker', 'production', 'green-config', 7)"
+  ],
+  "steps": [
+    {
+      "sql": "ALTER TABLE deployment_records ADD COLUMN fingerprint CHAR(40) GENERATED ALWAYS AS (SHA1(CONCAT(service_code, ':', environment_name, ':', payload_text, ':', revision_no))) VIRTUAL",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT record_id, fingerprint FROM deployment_records ORDER BY record_id",
+      "ordered": true
+    },
+    {
+      "sql": "UPDATE deployment_records SET payload_text = 'amber-config' WHERE record_id = 801",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT record_id, payload_text, fingerprint FROM deployment_records ORDER BY record_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT record_id, payload_text, fingerprint FROM deployment_records ORDER BY record_id",
+      "ordered": true
+    }
+  ]
+}
