@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "id": "json_table_overlap_flags",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "types/json/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/types/json/mysql.sql",
+      "sha256": "1d1d9d6b657a8a972f7a712da2bb4329780f0b9b8c425882d7bba57371c7be94",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "types/json/mysql.sql:89-112",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "MySQL JSON queries use JSON_OVERLAPS for set intersection and JSON_TABLE to relationalize JSON documents and nested arrays.",
+      "mysql_mariadb_translation": "Reauthored as a catalog-label audit. JSON_TABLE exposes each catalog item's JSON label array, then JSON_OVERLAPS tests whether it shares a fixed target-label set; index definitions, operator explanations, source tables, and source values are omitted."
+    },
+    "independently_authored": true
+  },
+  "features": ["json-table", "json-overlaps", "json-array", "deterministic-order"],
+  "fixture_notes": "Three fixed catalog objects produce overlap results for a shared label, a disjoint label set, and an empty label array.",
+  "determinism_notes": "The JSON array order, extracted item IDs, target label set, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT jt.item_id, jt.labels, JSON_OVERLAPS(jt.labels, '[\"featured\",\"priority\"]') AS shares_target FROM JSON_TABLE('[{\"id\":51,\"labels\":[\"featured\",\"seasonal\"]},{\"id\":52,\"labels\":[\"archived\"]},{\"id\":53,\"labels\":[]}]', '$[*]' COLUMNS (item_id INT PATH '$.id', labels JSON PATH '$.labels')) AS jt ORDER BY jt.item_id",
+      "ordered": true
+    }
+  ]
+}

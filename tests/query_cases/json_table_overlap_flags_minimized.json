@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "id": "json_table_overlap_flags_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "types/json/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/types/json/mysql.sql",
+      "sha256": "1d1d9d6b657a8a972f7a712da2bb4329780f0b9b8c425882d7bba57371c7be94",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "types/json/mysql.sql:89-112",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "JSON_TABLE produces a JSON array column that feeds JSON_OVERLAPS set-intersection evaluation.",
+      "mysql_mariadb_translation": "Reduced to one independently authored catalog object with one matching label, retaining JSON_TABLE JSON-column projection and JSON_OVERLAPS classification while removing extra objects and labels."
+    },
+    "independently_authored": true,
+    "minimized_from": "json_table_overlap_flags"
+  },
+  "features": ["json-table", "json-overlaps", "minimized-regression"],
+  "fixture_notes": "One fixed catalog object has the target label and must return an overlap flag of 1.",
+  "determinism_notes": "One literal JSON object and one ordered row; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT jt.item_id, JSON_OVERLAPS(jt.labels, '[\"featured\"]') AS shares_target FROM JSON_TABLE('[{\"id\":91,\"labels\":[\"featured\"]}]', '$[*]' COLUMNS (item_id INT PATH '$.id', labels JSON PATH '$.labels')) AS jt ORDER BY jt.item_id",
+      "ordered": true
+    }
+  ]
+}
