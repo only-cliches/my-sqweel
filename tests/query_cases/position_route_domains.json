@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "position_route_domains",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "fishercoder1534/Leetcode",
+      "commit": "21574248036d95ed0980916fcb4392987e09a95b",
+      "path": "database/_3059.sql",
+      "url": "https://github.com/fishercoder1534/Leetcode/blob/21574248036d95ed0980916fcb4392987e09a95b/database/_3059.sql",
+      "sha256": "35a7b12a0bc59dca3e17854fba7b9b490078dde7c6edc2f8028061fe494b8cac",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "database/_3059.sql:2-8",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL report uses POSITION with the IN syntax inside SUBSTRING, then filters, groups, counts, and orders the extracted suffix values.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored route-zone report. Fixed route addresses extract the suffix after a hash delimiter, while a grouped query counts only well-formed routes; malformed and NULL rows remain in the source table but are excluded by the filter. The source schema, delimiter, values, and reporting domain are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["position-in-syntax", "substring-expression", "group-by-count", "like-filter", "null-propagation", "deterministic-order"],
+  "fixture_notes": "Routes 601-604 contain east, west, and central zones; route 605 lacks the delimiter and route 606 is NULL. The grouped report includes only the four well-formed routes.",
+  "determinism_notes": "All route IDs, addresses, filters, grouping expressions, and ordering are fixed. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE route_addresses (route_id INT PRIMARY KEY, route_address VARCHAR(96) NULL)",
+    "INSERT INTO route_addresses VALUES (601, 'edge-api#east'), (602, 'batch-api#west'), (603, 'admin-api#east'), (604, 'media-api#central'), (605, 'unclassified'), (606, NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT route_id, SUBSTRING(route_address, POSITION('#' IN route_address) + 1) AS route_zone FROM route_addresses ORDER BY route_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT SUBSTRING(route_address, POSITION('#' IN route_address) + 1) AS route_zone, COUNT(*) AS route_count FROM route_addresses WHERE route_address LIKE '%#%' GROUP BY route_zone ORDER BY route_zone",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT route_id, route_address FROM route_addresses ORDER BY route_id",
+      "ordered": true
+    }
+  ]
+}
