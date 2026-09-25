@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "id": "sleep_stage_summary",
+  "provenance": {
+    "kind": "github-inspiration",
+    "source": {
+      "kind": "github",
+      "repository": "umutkeltek/healthsave-observatory",
+      "commit": "dd2a5ed1320a0d6b39e817c68588deccfd8a1a92",
+      "path": "db/schema.sql",
+      "sha256": "b32d0e716c34b9614277093909330207e23e7d4ec38aeb4218a1627374a163fc",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "db/schema.sql: sleep_daily conditional duration aggregates",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A grouped report pivots duration totals into several named categories while also retaining the overall duration total.",
+      "mysql_mariadb_translation": "Reauthored as a fixed-date sleep-stage summary. PostgreSQL FILTER aggregates are translated to MariaDB CASE-based conditional SUM expressions; the source extension, time-bucketing function, schema, values, and application context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["conditional-aggregates", "grouped-report", "null-duration", "deterministic-order"],
+  "fixture_notes": "Each sleeper-day group contains multiple stages, including a NULL duration that must be ignored by the total and conditional sums. COALESCE makes absent stages report zero.",
+  "determinism_notes": "Sleep dates, stage labels, durations, grouping keys, and ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE sleep_segments (segment_id INT PRIMARY KEY, sleeper_id INT NOT NULL, sleep_day DATE NOT NULL, stage VARCHAR(16) NOT NULL, duration_ms INT NULL)",
+    "INSERT INTO sleep_segments VALUES (1, 11, '2026-01-04', 'deep', 120), (2, 11, '2026-01-04', 'rem', 80), (3, 11, '2026-01-04', 'light', 200), (4, 11, '2026-01-04', 'awake', 30), (5, 11, '2026-01-05', 'deep', 90), (6, 11, '2026-01-05', 'awake', NULL), (7, 22, '2026-01-04', 'light', 160), (8, 22, '2026-01-04', 'awake', 20)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT sleeper_id, sleep_day, COALESCE(SUM(CASE WHEN stage = 'deep' THEN duration_ms END), 0) AS deep_ms, COALESCE(SUM(CASE WHEN stage = 'rem' THEN duration_ms END), 0) AS rem_ms, COALESCE(SUM(CASE WHEN stage IN ('light', 'core') THEN duration_ms END), 0) AS light_ms, COALESCE(SUM(CASE WHEN stage = 'awake' THEN duration_ms END), 0) AS awake_ms, SUM(duration_ms) AS total_ms FROM sleep_segments GROUP BY sleeper_id, sleep_day ORDER BY sleeper_id, sleep_day",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT sleeper_id, sleep_day, COALESCE(SUM(CASE WHEN stage = 'deep' THEN duration_ms END), 0) AS deep_ms, COALESCE(SUM(CASE WHEN stage = 'rem' THEN duration_ms END), 0) AS rem_ms, COALESCE(SUM(CASE WHEN stage IN ('light', 'core') THEN duration_ms END), 0) AS light_ms, COALESCE(SUM(CASE WHEN stage = 'awake' THEN duration_ms END), 0) AS awake_ms, SUM(duration_ms) AS total_ms FROM sleep_segments GROUP BY sleeper_id, sleep_day ORDER BY sleeper_id, sleep_day",
+      "ordered": true
+    }
+  ]
+}
