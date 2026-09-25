@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "character_length_unicode",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "acmeism/RosettaCodeData",
+      "commit": "1d475861d7141ef2fafff293d9339f56e4b0f5db",
+      "path": "Task/String-length/SQL-PL/string-length-1.sql",
+      "url": "https://github.com/acmeism/RosettaCodeData/blob/1d475861d7141ef2fafff293d9339f56e4b0f5db/Task/String-length/SQL-PL/string-length-1.sql",
+      "sha256": "6a768fb3c82ba828b0a0d88c111410eae9cf88136200009915c64f2614dfb693",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Task/String-length/SQL-PL/string-length-1.sql:1-15",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A SQL string-length corpus compares character-length behavior for multibyte, supplementary-plane, combining-mark, and ordinary text values.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored text-storage audit. CHARACTER_LENGTH counts logical characters while LENGTH reports encoded byte length for fixed Unicode samples, including empty and NULL values; unsupported source-specific code-unit arguments and source literals are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["character-length", "byte-length", "unicode-text", "combining-marks", "null-propagation", "deterministic-order"],
+  "fixture_notes": "Samples 501-503 distinguish logical character counts from byte counts for multibyte and combining-mark text; sample 504 is empty and sample 505 is NULL.",
+  "determinism_notes": "All sample IDs, labels, Unicode literals, and ordering are fixed. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE text_samples (sample_id INT PRIMARY KEY, sample_label VARCHAR(32) NOT NULL, sample_text VARCHAR(64) NULL)",
+    "INSERT INTO text_samples VALUES (501, 'multibyte', 'møøse'), (502, 'supplementary', '𝔘𝔫𝔦𝔠𝔬𝔡𝔢'), (503, 'combining', 'J̲o̲s̲é̲'), (504, 'empty', ''), (505, 'missing', NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT sample_id, sample_label, CHARACTER_LENGTH(sample_text) AS character_count, LENGTH(sample_text) AS byte_count FROM text_samples ORDER BY sample_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT sample_id, sample_text FROM text_samples ORDER BY sample_id",
+      "ordered": true
+    }
+  ]
+}
