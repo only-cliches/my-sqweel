@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "id": "insert_delayed_events",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "repository": "alibaba/AliSQL",
+      "commit": "9e121f27d404cad6cdb1cc695eab4276469adace",
+      "path": "unittest/gunit/insert_delayed-t.cc",
+      "url": "https://github.com/alibaba/AliSQL/blob/9e121f27d404cad6cdb1cc695eab4276469adace/unittest/gunit/insert_delayed-t.cc",
+      "sha256": "314fce4349bd060776cd56dfbe178ae02a03cf146b58243737509a351cafc668",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "unittest/gunit/insert_delayed-t.cc: INSERT DELAYED test statements",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL INSERT DELAYED statement writes a row through the delayed-insert syntax while preserving ordinary inserted-row state.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored event-ingest append. INSERT DELAYED writes a fixed event row, and a deterministic final read verifies the stored payload and sequence; the source test tables, values, and client harness are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["insert-delayed", "insert", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "The delayed insert adds event 1402 after the existing event 1401; the final ordered read must show both rows with unchanged payloads.",
+  "determinism_notes": "Event IDs and payloads are fixed and the final read is ordered by the primary key; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE ingest_events (event_id INT PRIMARY KEY, event_kind VARCHAR(24) NOT NULL, payload VARCHAR(64) NOT NULL) ENGINE=MyISAM",
+    "INSERT INTO ingest_events VALUES (1401, 'heartbeat', 'node-a-ready')"
+  ],
+  "steps": [
+    {"sql": "INSERT DELAYED INTO ingest_events (event_id, event_kind, payload) VALUES (1402, 'checkpoint', 'node-a-synced')", "ordered": true}
+  ],
+  "checks": [
+    {"sql": "SELECT event_id, event_kind, payload FROM ingest_events ORDER BY event_id", "ordered": true}
+  ]
+}
