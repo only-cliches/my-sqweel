@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "intersect_all_labels",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "antlr/grammars-v4",
+      "commit": "7e08234262d2a7c58557d74f2cb8ce90c72d356f",
+      "path": "sql/postgresql/examples/union.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/7e08234262d2a7c58557d74f2cb8ce90c72d356f/sql/postgresql/examples/union.sql",
+      "sha256": "f4914b279d9f722ccf387fffb3a6d29c8ebe2a085cfa23355dd7591cee5e5097",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "sql/postgresql/examples/union.sql:99",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A set operation uses INTERSECT ALL to preserve the minimum matching multiplicity from two input relations, followed by deterministic ordering.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored label-eligibility report. Requested labels and approved labels contain deliberate duplicate rows; INTERSECT ALL must retain each label up to the lower input multiplicity, and an explicit label/occurrence order makes every duplicate observable. The source tables, values, and PostgreSQL regression context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["intersect-all", "multiset-intersection", "duplicate-preservation", "set-operations", "deterministic-order"],
+  "fixture_notes": "Requested labels contain alpha three times, beta once, and gamma once. Approved labels contain alpha twice, beta twice, and delta once. INTERSECT ALL must return alpha twice and beta once, preserving the lower multiplicity from each input.",
+  "determinism_notes": "All row IDs and labels are fixed, and the result is ordered by label and source occurrence; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE requested_labels (request_id INT PRIMARY KEY, label VARCHAR(32) NOT NULL)",
+    "CREATE TABLE approved_labels (approval_id INT PRIMARY KEY, label VARCHAR(32) NOT NULL)",
+    "INSERT INTO requested_labels VALUES (101, 'alpha'), (102, 'alpha'), (103, 'alpha'), (104, 'beta'), (105, 'gamma')",
+    "INSERT INTO approved_labels VALUES (201, 'alpha'), (202, 'alpha'), (203, 'beta'), (204, 'beta'), (205, 'delta')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT label FROM requested_labels INTERSECT ALL SELECT label FROM approved_labels ORDER BY label",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT label, COUNT(*) AS retained_count FROM (SELECT label FROM requested_labels INTERSECT ALL SELECT label FROM approved_labels) AS retained GROUP BY label ORDER BY label",
+      "ordered": true
+    }
+  ]
+}
