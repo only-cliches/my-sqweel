@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "depot_inventory_imbalance",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "doocs/leetcode",
+      "commit": "897eabe3147ceacc391e05a5d9fe67b8147fc941",
+      "path": "solution/3600-3699/3626.Find Stores with Inventory Imbalance/Solution.sql",
+      "url": "https://github.com/doocs/leetcode/blob/897eabe3147ceacc391e05a5d9fe67b8147fc941/solution/3600-3699/3626.Find%20Stores%20with%20Inventory%20Imbalance/Solution.sql",
+      "sha256": "4951c53243e9fc923d65a88f5f09a3eba1aee5da2b1ef20ea60bf9d879767fb8",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "solution/3600-3699/3626.Find Stores with Inventory Imbalance/Solution.sql:2-40",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A CTE computes two partitioned ranks and a partition count, filtered CTE views identify the most and least expensive rows, and a self-join compares their quantities before joining descriptive metadata.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored depot stock imbalance report. Fixed inventory rows receive cost-direction ranks and per-depot counts, two filtered CTE views are joined to compare quantities, and a depot lookup supplies the final label; the source schema, names, values, and retail context are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["multi-rank-window", "partition-count-window", "filtered-cte-views", "self-join-comparison", "decimal-ratio", "deterministic-order"],
+  "fixture_notes": "Depot 31 has at least three items and its cheapest item has four times the units of its costliest item, so it is reported. Depot 32 fails the minimum-count condition; depot 33 has enough items but its quantity comparison does not satisfy the imbalance predicate.",
+  "determinism_notes": "Depot IDs, inventory IDs, prices, quantities, rank orderings, and final ordering are fixed. All quantities are positive; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE stock_depots (depot_id INT PRIMARY KEY, depot_name VARCHAR(32) NOT NULL, region_name VARCHAR(16) NOT NULL)",
+    "CREATE TABLE depot_inventory (inventory_id INT PRIMARY KEY, depot_id INT NOT NULL, item_label VARCHAR(32) NOT NULL, unit_cost DECIMAL(10,2) NOT NULL, quantity INT NOT NULL)",
+    "INSERT INTO stock_depots VALUES (31, 'Harbor', 'East'), (32, 'Cedar', 'West'), (33, 'Summit', 'North')",
+    "INSERT INTO depot_inventory VALUES (3101, 31, 'Beacon', 90.00, 2), (3102, 31, 'Cable', 10.00, 8), (3103, 31, 'Gasket', 50.00, 5), (3201, 32, 'Valve', 70.00, 3), (3202, 32, 'Washer', 12.00, 9), (3301, 33, 'Panel', 80.00, 10), (3302, 33, 'Relay', 15.00, 5), (3303, 33, 'Sensor', 40.00, 6)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH ranked_inventory AS (SELECT depot_id, item_label, unit_cost, quantity, RANK() OVER (PARTITION BY depot_id ORDER BY unit_cost DESC, quantity DESC) AS high_rank, RANK() OVER (PARTITION BY depot_id ORDER BY unit_cost, quantity DESC) AS low_rank, COUNT(*) OVER (PARTITION BY depot_id) AS item_count FROM depot_inventory), costliest AS (SELECT * FROM ranked_inventory WHERE high_rank = 1 AND item_count >= 3), cheapest AS (SELECT * FROM ranked_inventory WHERE low_rank = 1) SELECT d.depot_id, d.depot_name, d.region_name, costliest.item_label AS costliest_item, cheapest.item_label AS cheapest_item, ROUND(cheapest.quantity / costliest.quantity, 2) AS quantity_ratio FROM costliest JOIN cheapest ON costliest.depot_id = cheapest.depot_id AND costliest.quantity < cheapest.quantity JOIN stock_depots AS d ON d.depot_id = costliest.depot_id ORDER BY quantity_ratio DESC, d.depot_id",
+      "ordered": true
+    }
+  ]
+}
