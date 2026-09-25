@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "alter_column_default_flags",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "DataLinkDC/dinky",
+      "commit": "63b5a5aa2438a4c30efd1067da8aedf844951143",
+      "path": "script/sql/upgrade/1.0.0_schema/mysql/dinky_dml.sql",
+      "url": "https://github.com/DataLinkDC/dinky/blob/63b5a5aa2438a4c30efd1067da8aedf844951143/script/sql/upgrade/1.0.0_schema/mysql/dinky_dml.sql",
+      "sha256": "f34aaa1c5d1b03cd6f63e48d3744230b8ec03b4dca179337d64cd79872bf40ce",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "script/sql/upgrade/1.0.0_schema/mysql/dinky_dml.sql:37",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL migration changes a column's implicit value with ALTER TABLE ... ALTER COLUMN ... SET DEFAULT.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored feature-flag migration. A nullable flag starts with a zero default, changes to one for later inserts, then drops its default before an explicit NULL insert; existing rows and each post-DDL insert are checked deterministically. The source table, column names, values, and migration context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["alter-column-set-default", "alter-column-drop-default", "ddl-default-mutation", "nullable-column", "deterministic-final-state"],
+  "fixture_notes": "Existing rows retain their values. The first omitted flag after SET DEFAULT receives 1; DROP DEFAULT is then exercised before a later explicit NULL insert so the DDL transition remains valid under MariaDB strict mode.",
+  "determinism_notes": "IDs, labels, DDL, insert order, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE feature_flags (flag_id INT PRIMARY KEY, enabled TINYINT NULL DEFAULT 0, flag_label VARCHAR(32) NOT NULL)",
+    "INSERT INTO feature_flags VALUES (101, NULL, 'legacy-null'), (102, 0, 'legacy-off')"
+  ],
+  "steps": [
+    {
+      "sql": "ALTER TABLE feature_flags ALTER COLUMN enabled SET DEFAULT 1",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO feature_flags (flag_id, flag_label) VALUES (103, 'rollout-on')",
+      "ordered": false
+    },
+    {
+      "sql": "ALTER TABLE feature_flags ALTER COLUMN enabled DROP DEFAULT",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO feature_flags (flag_id, enabled, flag_label) VALUES (104, NULL, 'manual-review')",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT flag_id, enabled, flag_label FROM feature_flags ORDER BY flag_id",
+      "ordered": true
+    }
+  ]
+}
