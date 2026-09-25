@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "union_all_settlement_rollup",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "futurer1/SQL",
+      "commit": "36c4d4ec1d752cdfcda5ef7d8872f43b8a7ff022",
+      "path": "SELECT.sql",
+      "url": "https://github.com/futurer1/SQL/blob/36c4d4ec1d752cdfcda5ef7d8872f43b8a7ff022/SELECT.sql",
+      "sha256": "d6bf5d707b67614d77d93b2a1caf25e6f58313d915fc781eed95b12fa9f4e35b",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "SELECT.sql:61-67",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL report combines aggregate values from two source relations with UNION ALL and applies a final SUM over the derived combined relation.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored settlement-channel rollup. Settled online and store orders are combined with UNION ALL, preserving repeated region/unit rows before a grouped SUM and COUNT report; source tables, columns, values, labels, and reporting context are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["union-all", "derived-table", "aggregate-over-union", "grouped-sum", "duplicate-preservation", "deterministic-order"],
+  "fixture_notes": "Online order 1002 and store order 2002 intentionally share the same region and units, so UNION ALL must retain both rows and the grouped count and total must include both. Pending orders are filtered before combination.",
+  "determinism_notes": "Order IDs, regions, states, units, and final region ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE online_settlements (order_id INT PRIMARY KEY, region_code VARCHAR(16) NOT NULL, order_state VARCHAR(16) NOT NULL, units INT NOT NULL)",
+    "CREATE TABLE store_settlements (order_id INT PRIMARY KEY, region_code VARCHAR(16) NOT NULL, order_state VARCHAR(16) NOT NULL, units INT NOT NULL)",
+    "INSERT INTO online_settlements VALUES (1001, 'north', 'settled', 4), (1002, 'south', 'settled', 7), (1003, 'south', 'pending', 99)",
+    "INSERT INTO store_settlements VALUES (2001, 'north', 'settled', 6), (2002, 'south', 'settled', 7), (2003, 'west', 'pending', 12)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT region_code, COUNT(*) AS settlement_count, SUM(units) AS settled_units FROM (SELECT region_code, units FROM online_settlements WHERE order_state = 'settled' UNION ALL SELECT region_code, units FROM store_settlements WHERE order_state = 'settled') AS settled_orders GROUP BY region_code ORDER BY region_code",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT order_id, region_code, order_state, units FROM online_settlements ORDER BY order_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT order_id, region_code, order_state, units FROM store_settlements ORDER BY order_id",
+      "ordered": true
+    }
+  ]
+}
