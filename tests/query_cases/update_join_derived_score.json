@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "update_join_derived_score",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Manish3323/fifa-2022",
+      "commit": "e79febe8435b1b1d7d7497e88aa7b23451580c45",
+      "path": "update_score.sql",
+      "url": "https://github.com/Manish3323/fifa-2022/blob/e79febe8435b1b1d7d7497e88aa7b23451580c45/update_score.sql",
+      "sha256": "c88d8afc1290eaa245102a4978fa5e86bf31c6bd28e3c090696a9de18d251a2e",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "update_score.sql: UPDATE Users ... FROM (...)",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A score update reads a derived relation built from a vote table and completed-match table, then assigns computed points to the target rows.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored MariaDB multi-table UPDATE JOIN. A derived relation joins fixed ballot and contest rows, computes earned points and a result label with CASE, and updates one score row per ballot; the source tables, identifiers, values, and application context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["update-join", "derived-table", "multi-source-join", "case-assignment", "conditional-dml", "deterministic-final-state"],
+  "fixture_notes": "Ballots 801 and 802 target completed contests and update scores; ballot 803 targets a pending contest and must not update; ballot 804 references no score row and is ignored by the inner join. Each score row has at most one derived source row, making the update deterministic.",
+  "determinism_notes": "All IDs, contest states, vote labels, point values, assignments, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE score_cards (player_id INT PRIMARY KEY, player_name VARCHAR(32) NOT NULL, score INT NOT NULL, last_result VARCHAR(16) NOT NULL)",
+    "CREATE TABLE contest_votes (vote_id INT PRIMARY KEY, player_id INT NOT NULL, contest_id INT NOT NULL, predicted_side VARCHAR(16) NOT NULL)",
+    "CREATE TABLE contests (contest_id INT PRIMARY KEY, winning_side VARCHAR(16) NOT NULL, contest_state VARCHAR(16) NOT NULL, win_points INT NOT NULL, loss_points INT NOT NULL)",
+    "INSERT INTO score_cards VALUES (11, 'Aster', 10, 'new'), (12, 'Beryl', 7, 'new'), (13, 'Cinder', 4, 'new')",
+    "INSERT INTO contest_votes VALUES (801, 11, 501, 'home'), (802, 12, 502, 'away'), (803, 13, 503, 'home'), (804, 99, 501, 'home')",
+    "INSERT INTO contests VALUES (501, 'home', 'complete', 3, 0), (502, 'home', 'complete', 5, -1), (503, 'home', 'pending', 4, -2)"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE score_cards AS s JOIN (SELECT v.player_id, CASE WHEN v.predicted_side = c.winning_side THEN c.win_points ELSE c.loss_points END AS earned_points, CASE WHEN v.predicted_side = c.winning_side THEN 'win' ELSE 'loss' END AS result_label FROM contest_votes AS v INNER JOIN contests AS c ON c.contest_id = v.contest_id WHERE c.contest_state = 'complete') AS outcome ON outcome.player_id = s.player_id SET s.score = s.score + outcome.earned_points, s.last_result = outcome.result_label",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT player_id, player_name, score, last_result FROM score_cards ORDER BY player_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT COUNT(*) AS updated_players FROM score_cards WHERE last_result IN ('win', 'loss')",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT player_id, player_name, score, last_result FROM score_cards ORDER BY player_id",
+      "ordered": true
+    }
+  ]
+}
