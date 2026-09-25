@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "id": "keyset_tuple_pagination_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "query/pagination/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/query/pagination/mysql.sql",
+      "sha256": "f3d9d63334b4330798aef26599fa66e57c45bfbb6d3b9d82dc20cf840190089b",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "query/pagination/mysql.sql:58-65",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A composite keyset cursor compares a row constructor and orders by the same descending key columns.",
+      "mysql_mariadb_translation": "Reduced to three independently authored shipment events, one equal-timestamp tie, a fixed composite cursor, and a two-row page so tuple comparison and deterministic descending pagination remain while extra data is removed."
+    },
+    "independently_authored": true,
+    "minimized_from": "keyset_tuple_pagination"
+  },
+  "features": ["row-constructor-comparison", "keyset-pagination", "minimized-regression"],
+  "fixture_notes": "The cursor excludes its equal-key row and returns the two older events in descending tuple order.",
+  "determinism_notes": "Three fixed events, a fixed cursor, unique event IDs, and fixed LIMIT/order clauses; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE cursor_events (event_id INT PRIMARY KEY, recorded_at DATETIME NOT NULL, event_code VARCHAR(16) NOT NULL)",
+    "INSERT INTO cursor_events VALUES (401, '2026-07-03 09:00:00', 'open'), (402, '2026-07-03 08:59:00', 'move'), (403, '2026-07-03 08:59:00', 'close')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT event_id, recorded_at, event_code FROM cursor_events WHERE (recorded_at, event_id) < ('2026-07-03 08:59:00', 403) ORDER BY recorded_at DESC, event_id DESC LIMIT 2",
+      "ordered": true
+    }
+  ]
+}

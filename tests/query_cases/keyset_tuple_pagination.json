@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "keyset_tuple_pagination",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "query/pagination/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/query/pagination/mysql.sql",
+      "sha256": "f3d9d63334b4330798aef26599fa66e57c45bfbb6d3b9d82dc20cf840190089b",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "query/pagination/mysql.sql:58-65",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "Keyset pagination uses a lexicographic row-constructor comparison against the last composite sort key, then applies matching descending order and LIMIT.",
+      "mysql_mariadb_translation": "Reauthored as a shipment-event cursor report. A timestamp plus event ID tuple is compared to a fixed cursor, preserving the source's composite-key pagination semantics while the table, rows, labels, and page size are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["row-constructor-comparison", "keyset-pagination", "descending-order", "limit", "deterministic-order"],
+  "fixture_notes": "The fixed cursor excludes the cursor row and newer descending-page rows; the event ID tie-breaker makes equal timestamps lexicographically deterministic.",
+  "determinism_notes": "All timestamps, event IDs, cursor values, ordering, and LIMIT are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE shipment_events (event_id INT PRIMARY KEY, recorded_at DATETIME NOT NULL, event_code VARCHAR(16) NOT NULL)",
+    "INSERT INTO shipment_events VALUES (301, '2026-07-02 12:01:00', 'scan'), (302, '2026-07-02 12:00:00', 'load'), (303, '2026-07-02 12:00:00', 'seal'), (304, '2026-07-02 11:59:00', 'depart'), (305, '2026-07-02 11:58:00', 'handoff'), (306, '2026-07-02 11:57:00', 'arrive'), (307, '2026-07-02 11:56:00', 'close')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT event_id, recorded_at, event_code FROM shipment_events WHERE (recorded_at, event_id) < ('2026-07-02 12:00:00', 303) ORDER BY recorded_at DESC, event_id DESC LIMIT 4",
+      "ordered": true
+    }
+  ]
+}
