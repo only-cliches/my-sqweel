@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "id": "nullable_truth_predicates",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "repository": "GuilhermeLaraRusso/Trybe-MySQL",
+      "commit": "9564338ed88b6f102189ee1f8eb7332253c40c74",
+      "path": "Bloco 19/WHERE.sql",
+      "url": "https://github.com/GuilhermeLaraRusso/Trybe-MySQL/blob/9564338ed88b6f102189ee1f8eb7332253c40c74/Bloco%2019/WHERE.sql#L25-L31",
+      "source_sha256": "5b5972e64e1453ebe161853fd2dfd51f1d51ad7f54f023939c9b03ca82c06e6b",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL WHERE example uses IS TRUE, IS NULL, and IS NOT TRUE predicates to distinguish true, false, and missing boolean states.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored feature-toggle audit. A nullable BOOLEAN column is queried with IS TRUE, IS FALSE, IS NULL, and IS NOT TRUE, while fixed IDs and explicit ordering make the three-valued predicate classifications deterministic without copying the source schema, rows, or application labels."
+    },
+    "independently_authored": true
+  },
+  "features": ["is-true", "is-false", "is-null", "is-not-true", "nullable-boolean", "deterministic-order"],
+  "fixture_notes": "Toggle 91 is true, toggle 92 is false, and toggle 93 is SQL NULL. The four filtered projections expose true-only, false-only, missing-only, and not-true (false-or-NULL) membership.",
+  "determinism_notes": "Toggle IDs define every result order; all states and predicates are fixed with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE feature_toggles (toggle_id INT PRIMARY KEY, toggle_label VARCHAR(24) NOT NULL, enabled BOOLEAN NULL)",
+    "INSERT INTO feature_toggles VALUES (91, 'alerts', TRUE), (92, 'billing', FALSE), (93, 'search', NULL)"
+  ],
+  "steps": [
+    {"sql": "SELECT toggle_id, toggle_label, enabled FROM feature_toggles WHERE enabled IS TRUE ORDER BY toggle_id", "ordered": true},
+    {"sql": "SELECT toggle_id, toggle_label, enabled FROM feature_toggles WHERE enabled IS FALSE ORDER BY toggle_id", "ordered": true},
+    {"sql": "SELECT toggle_id, toggle_label, enabled FROM feature_toggles WHERE enabled IS NULL ORDER BY toggle_id", "ordered": true},
+    {"sql": "SELECT toggle_id, toggle_label, enabled FROM feature_toggles WHERE enabled IS NOT TRUE ORDER BY toggle_id", "ordered": true}
+  ],
+  "checks": [
+    {"sql": "SELECT toggle_id, toggle_label, enabled FROM feature_toggles ORDER BY toggle_id", "ordered": true}
+  ]
+}

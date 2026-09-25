@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "id": "nullable_truth_predicates_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "repository": "GuilhermeLaraRusso/Trybe-MySQL",
+      "commit": "9564338ed88b6f102189ee1f8eb7332253c40c74",
+      "path": "Bloco 19/WHERE.sql",
+      "url": "https://github.com/GuilhermeLaraRusso/Trybe-MySQL/blob/9564338ed88b6f102189ee1f8eb7332253c40c74/Bloco%2019/WHERE.sql#L25-L31",
+      "source_sha256": "5b5972e64e1453ebe161853fd2dfd51f1d51ad7f54f023939c9b03ca82c06e6b",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "IS TRUE and IS NOT TRUE distinguish a true value from a false-or-NULL value in a nullable boolean predicate.",
+      "mysql_mariadb_translation": "Reduced to one independently authored nullable flag and two scalar truth projections, removing the source table shape and extra predicates while retaining the NULL-sensitive boolean contract."
+    },
+    "independently_authored": true,
+    "minimized_from": "nullable_truth_predicates"
+  },
+  "features": ["is-true", "is-not-true", "nullable-boolean", "minimized-regression"],
+  "fixture_notes": "The fixed SQL NULL flag must return 0 for IS TRUE and 1 for IS NOT TRUE.",
+  "determinism_notes": "One fixed NULL expression is evaluated with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [],
+  "steps": [
+    {"sql": "SELECT NULL IS TRUE AS is_true, NULL IS NOT TRUE AS is_not_true", "ordered": true}
+  ],
+  "checks": []
+}

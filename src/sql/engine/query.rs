@@ -1571,6 +1571,16 @@ impl RawEngine {
             Expr::Extract { .. } => {
                 metadata.column_type = MysqlColumnType::Integer;
             }
+            Expr::IsFalse(_)
+            | Expr::IsNotFalse(_)
+            | Expr::IsTrue(_)
+            | Expr::IsNotTrue(_)
+            | Expr::IsNull(_)
+            | Expr::IsNotNull(_)
+            | Expr::IsUnknown(_)
+            | Expr::IsNotUnknown(_) => {
+                metadata.column_type = MysqlColumnType::Integer;
+            }
             Expr::Ceil { expr, .. } => {
                 metadata.column_type = if matches!(expr.as_ref(), Expr::Value(SqlValue::Null)) {
                     MysqlColumnType::Double
