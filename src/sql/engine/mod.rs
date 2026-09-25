@@ -830,7 +830,13 @@ impl RawEngine {
                     out.push(result);
                     continue;
                 }
-                let statements = if self.can_parse_without_compat_rewrites(&raw) {
+                let has_distinctrow = raw
+                    .split_whitespace()
+                    .any(|token| token.eq_ignore_ascii_case("DISTINCTROW"));
+                let statements = if has_distinctrow {
+                    let parse_sql = self.rewrite_sql_for_parser(&raw);
+                    super::parse(&parse_sql)?
+                } else if self.can_parse_without_compat_rewrites(&raw) {
                     match self.parsed_select_cache.lock().get_or_parse(&raw) {
                         Ok(statements) => statements,
                         Err(_) => super::parse(&self.rewrite_sql_for_parser(&raw))?,
@@ -1065,6 +1071,7 @@ impl RawEngine {
         const REWRITE_MARKERS: &[&str] = &[
             " ALL",
             " DISTINCT DISTINCT",
+            " DISTINCTROW",
             " LOW_PRIORITY",
             " UPDATE IGNORE",
             " ON UPDATE CURRENT_TIMESTAMP",
@@ -4255,6 +4262,7 @@ fn preserve_select_result_headers(sql: &str, result: &mut QueryResult) {
         [
             "ALL",
             "DISTINCT",
+            "DISTINCTROW",
             "HIGH_PRIORITY",
             "STRAIGHT_JOIN",
             "SQL_SMALL_RESULT",
@@ -4398,6 +4406,7 @@ fn projection_is_modifier_wildcard(expression: &str) -> bool {
                 [
                     "ALL",
                     "DISTINCT",
+                    "DISTINCTROW",
                     "HIGH_PRIORITY",
                     "STRAIGHT_JOIN",
                     "SQL_SMALL_RESULT",
@@ -4764,11 +4773,16 @@ fn strip_select_modifiers(sql: &str) -> String {
     let mut in_select_prefix = true;
     let mut saw_distinct = false;
     for token in tokens {
-        if in_select_prefix && token.eq_ignore_ascii_case("DISTINCT") {
+        if in_select_prefix
+            && (token.eq_ignore_ascii_case("DISTINCT") || token.eq_ignore_ascii_case("DISTINCTROW"))
+        {
             if saw_distinct {
                 continue;
             }
             saw_distinct = true;
+            result.push(' ');
+            result.push_str("DISTINCT");
+            continue;
         }
         let is_modifier = modifiers
             .iter()

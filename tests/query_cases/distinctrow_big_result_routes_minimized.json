@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "distinctrow_big_result_routes_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "actiontech/dble-test-suite",
+      "commit": "19c95415de567f6b32072be7c501ec1db83c4e1f",
+      "path": "behave_dble/sqls/sqls_util/select/select.sql",
+      "url": "https://github.com/actiontech/dble-test-suite/blob/19c95415de567f6b32072be7c501ec1db83c4e1f/behave_dble/sqls/sqls_util/select/select.sql",
+      "sha256": "531a6c7c3e237de6fbcc6adfce8e6e0ce732be7cb2c453dc32527adb57abee47",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from behave_dble/sqls/sqls_util/select/select.sql:119-120",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "DISTINCTROW is a MySQL synonym for DISTINCT and must remain compatible when paired with the SQL_BIG_RESULT SELECT modifier.",
+      "mysql_mariadb_translation": "Reduced to one independently authored label table with one duplicate projected value and one distinct value. The minimized SELECT isolates DISTINCTROW plus SQL_BIG_RESULT duplicate elimination while removing the original join and application schema."
+    },
+    "independently_authored": true,
+    "minimized_from": "distinctrow_big_result_routes"
+  },
+  "features": [
+    "distinctrow",
+    "sql-big-result",
+    "duplicate-elimination",
+    "minimized-regression"
+  ],
+  "fixture_notes": "Two source rows project the same Harbor label and one projects Depot; the query must return exactly one row for each label.",
+  "determinism_notes": "Labels and IDs are fixed and ordered alphabetically; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE route_city_labels (label_id INT PRIMARY KEY, city_name VARCHAR(32) NOT NULL)",
+    "INSERT INTO route_city_labels VALUES (1, 'Harbor'), (2, 'Harbor'), (3, 'Depot')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT DISTINCTROW SQL_BIG_RESULT city_name FROM route_city_labels ORDER BY city_name",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT label_id, city_name FROM route_city_labels ORDER BY label_id",
+      "ordered": true
+    }
+  ]
+}

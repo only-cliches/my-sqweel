@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "id": "distinctrow_big_result_routes",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "actiontech/dble-test-suite",
+      "commit": "19c95415de567f6b32072be7c501ec1db83c4e1f",
+      "path": "behave_dble/sqls/sqls_util/select/select.sql",
+      "url": "https://github.com/actiontech/dble-test-suite/blob/19c95415de567f6b32072be7c501ec1db83c4e1f/behave_dble/sqls/sqls_util/select/select.sql",
+      "sha256": "531a6c7c3e237de6fbcc6adfce8e6e0ce732be7cb2c453dc32527adb57abee47",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "behave_dble/sqls/sqls_util/select/select.sql:119-120 (select distinctrow SQL_BIG_RESULT pad from test1 [order by pad])",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL SELECT combines the DISTINCTROW duplicate-elimination synonym with the SQL_BIG_RESULT execution modifier.",
+      "mysql_mariadb_translation": "Reauthored as a route-stop directory report. DISTINCTROW SQL_BIG_RESULT is applied across a left join so duplicate stop cities collapse while a route with no stops remains as one NULL-extended row; deterministic route and city ordering makes the result stable. The source tables, values, and sharding test context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "distinctrow",
+    "sql-big-result",
+    "left-join",
+    "duplicate-elimination",
+    "null-preservation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Route R-10 has two stops in the same city and one in another city, so DISTINCTROW must collapse the duplicate projected city. Route R-20 has no stops and must remain as one NULL-extended row from the LEFT JOIN.",
+  "determinism_notes": "Route codes and city names are fixed; the final result is ordered by route code and city with no clocks, randomness, sleeps, or concurrent connections. Duplicate projected rows are identical, so their source-row order is unobservable.",
+  "setup": [
+    "CREATE TABLE delivery_routes (route_id INT PRIMARY KEY, route_code VARCHAR(16) NOT NULL UNIQUE, route_state VARCHAR(16) NOT NULL)",
+    "CREATE TABLE route_stops (stop_id INT PRIMARY KEY, route_id INT NOT NULL, city_name VARCHAR(32) NULL, stop_state VARCHAR(16) NOT NULL, INDEX idx_route (route_id))",
+    "INSERT INTO delivery_routes VALUES (10, 'R-10', 'active'), (20, 'R-20', 'active'), (30, 'R-30', 'closed')",
+    "INSERT INTO route_stops VALUES (101, 10, 'Harbor', 'ready'), (102, 10, 'Harbor', 'ready'), (103, 10, 'Depot', 'ready'), (104, 30, 'Yard', 'ready')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT DISTINCTROW SQL_BIG_RESULT r.route_code, s.city_name FROM delivery_routes r LEFT JOIN route_stops s ON s.route_id = r.route_id WHERE r.route_state = 'active' ORDER BY r.route_code, s.city_name",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT route_id, route_code, route_state FROM delivery_routes ORDER BY route_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT stop_id, route_id, city_name, stop_state FROM route_stops ORDER BY stop_id",
+      "ordered": true
+    }
+  ]
+}
