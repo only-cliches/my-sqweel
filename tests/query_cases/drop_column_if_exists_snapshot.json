@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "id": "drop_column_if_exists_snapshot",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "apache/dolphinscheduler",
+      "commit": "7cf1677133624484d2a8e70b4cc7bcf9cdb8ef6d",
+      "path": "dolphinscheduler-dao/src/main/resources/sql/upgrade/3.1.0_schema/mysql/dolphinscheduler_ddl.sql",
+      "url": "https://github.com/apache/dolphinscheduler/blob/7cf1677133624484d2a8e70b4cc7bcf9cdb8ef6d/dolphinscheduler-dao/src/main/resources/sql/upgrade/3.1.0_schema/mysql/dolphinscheduler_ddl.sql#L17-L31",
+      "sha256": "67add5ceb4edb2e29529c52b3bb744238a2ac0f5f430fe29dcb43a04d0b1ba08",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "dolphinscheduler_ddl.sql:17-31",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL migration makes removal of a legacy column rerunnable by checking information_schema before ALTER TABLE DROP COLUMN.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored snapshot migration. A legacy payload column is dropped with MariaDB's direct DROP COLUMN IF EXISTS syntax, the same migration step is repeated after the column is gone, and final row plus metadata checks verify that only the obsolete column disappeared. The source tables, names, values, procedures, and application context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["drop-column-if-exists", "idempotent-ddl", "schema-metadata", "deterministic-final-state"],
+  "fixture_notes": "Two snapshot rows retain their IDs and states after the legacy payload column is removed. Repeating DROP COLUMN IF EXISTS must be a no-op and leave the remaining column order unchanged.",
+  "determinism_notes": "IDs, labels, DDL order, and metadata ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE migration_snapshots (snapshot_id INT PRIMARY KEY, legacy_payload VARCHAR(64) NULL, snapshot_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO migration_snapshots VALUES (701, 'obsolete-alpha', 'ready'), (702, 'obsolete-beta', 'archived')"
+  ],
+  "steps": [
+    {
+      "sql": "ALTER TABLE migration_snapshots DROP COLUMN IF EXISTS legacy_payload",
+      "ordered": true
+    },
+    {
+      "sql": "ALTER TABLE migration_snapshots DROP COLUMN IF EXISTS legacy_payload",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT snapshot_id, snapshot_state FROM migration_snapshots ORDER BY snapshot_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT ordinal_position, column_name, data_type FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'migration_snapshots' ORDER BY ordinal_position",
+      "ordered": true
+    }
+  ]
+}
