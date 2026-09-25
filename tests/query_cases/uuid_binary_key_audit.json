@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "uuid_binary_key_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/2439.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/2439.sql",
+      "sha256": "ad53dbe64f5aa3cd64729015088d4f5efab765abc2352307e0386ac842226d64",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/docker/fuzz_root/mysql_initlib/2439.sql:1-20",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL compatibility corpus exercises UUID_TO_BIN and BIN_TO_UUID with the optional byte-order swap flag, malformed values, and NULL propagation.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored binary-key audit. MariaDB 10.11.7 does not expose UUID_TO_BIN or BIN_TO_UUID, so the fixture expresses the deterministic UUID byte layouts with UNHEX, HEX, SUBSTRING, and CONCAT: canonical UUID groups are packed directly, and the swap form reorders the time fields before packing. A NULL key verifies propagation. The table, identifiers, UUID values, and audit purpose are new, and malformed inputs are omitted to keep the comparison focused on valid deterministic semantics."
+    },
+    "independently_authored": true
+  },
+  "features": ["uuid-byte-layout", "uuid-byte-order-swap", "hex-binary-observation", "null-propagation", "deterministic-order"],
+  "fixture_notes": "Keys 801 and 802 contain valid canonical UUIDs; key 803 is NULL. The report shows canonical and swapped binary encodings while preserving the NULL row.",
+  "determinism_notes": "All key IDs, UUID literals, swap flags, projections, and ordering are fixed. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE binary_service_keys (key_id INT PRIMARY KEY, uuid_text CHAR(36) NULL)",
+    "INSERT INTO binary_service_keys VALUES (801, '123e4567-e89b-12d3-a456-426614174000'), (802, '8f14e45f-ceea-367a-9a36-6f3a4f1e2c9b'), (803, NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT key_id, LOWER(uuid_text) AS canonical_text, HEX(UNHEX(CONCAT(SUBSTRING(uuid_text, 1, 8), SUBSTRING(uuid_text, 10, 4), SUBSTRING(uuid_text, 15, 4), SUBSTRING(uuid_text, 20, 4), SUBSTRING(uuid_text, 25, 12)))) AS packed_hex, HEX(UNHEX(CONCAT(SUBSTRING(uuid_text, 15, 4), SUBSTRING(uuid_text, 10, 4), SUBSTRING(uuid_text, 1, 8), SUBSTRING(uuid_text, 20, 4), SUBSTRING(uuid_text, 25, 12)))) AS swapped_hex FROM binary_service_keys ORDER BY key_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT key_id, uuid_text FROM binary_service_keys ORDER BY key_id",
+      "ordered": true
+    }
+  ]
+}
