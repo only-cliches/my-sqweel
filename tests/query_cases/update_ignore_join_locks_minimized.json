@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "update_ignore_join_locks_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "FDA/fda-hive",
+      "commit": "1fe900eb084ca8d1378bdb998a164f4aefc927cf",
+      "path": "vlib/db/sp_req_lock.sql",
+      "url": "https://github.com/FDA/fda-hive/blob/1fe900eb084ca8d1378bdb998a164f4aefc927cf/vlib/db/sp_req_lock.sql",
+      "sha256": "a7ab9e3bbcdd5af1cfefa6987d892ac3db58d1a60eb148ea49a70af7c3e08308",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "vlib/db/sp_req_lock.sql:56-58",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "UPDATE IGNORE can update a row through a LEFT JOIN using a shared key and a joined assignment.",
+      "mysql_mariadb_translation": "Reduced to one independently authored lock row and one matching request state. The UPDATE IGNORE ... LEFT JOIN ... USING shape and CASE assignment remain while duplicate-conflict data, extra columns, and multiple rows are removed."
+    },
+    "independently_authored": true,
+    "minimized_from": "update_ignore_join_locks"
+  },
+  "features": ["update-ignore", "update-left-join", "update-using", "minimized-regression", "deterministic-order"],
+  "fixture_notes": "The single held lock joins request 7 and must become active without changing its unique request ID.",
+  "determinism_notes": "The fixed IDs and one joined row make the final read deterministic; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE mini_request_states (request_id INT PRIMARY KEY, approved INT NOT NULL)",
+    "CREATE TABLE mini_queue_locks (lock_id INT PRIMARY KEY, request_id INT NOT NULL UNIQUE, lock_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO mini_request_states VALUES (7, 1)",
+    "INSERT INTO mini_queue_locks VALUES (701, 7, 'held')"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE IGNORE mini_queue_locks l LEFT JOIN mini_request_states r USING (request_id) SET l.lock_state = CASE WHEN r.approved = 1 THEN 'active' ELSE 'waiting' END WHERE l.lock_state = 'held'",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT lock_id, request_id, lock_state FROM mini_queue_locks ORDER BY lock_id",
+      "ordered": true
+    }
+  ]
+}

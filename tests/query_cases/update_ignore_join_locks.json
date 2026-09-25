@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "update_ignore_join_locks",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "FDA/fda-hive",
+      "commit": "1fe900eb084ca8d1378bdb998a164f4aefc927cf",
+      "path": "vlib/db/sp_req_lock.sql",
+      "url": "https://github.com/FDA/fda-hive/blob/1fe900eb084ca8d1378bdb998a164f4aefc927cf/vlib/db/sp_req_lock.sql",
+      "sha256": "a7ab9e3bbcdd5af1cfefa6987d892ac3db58d1a60eb148ea49a70af7c3e08308",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "vlib/db/sp_req_lock.sql:56-58",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "An UPDATE IGNORE uses a LEFT JOIN with a USING key to refresh lock state while tolerating duplicate-key conflicts.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored queue-lock reconciliation. Joined request states provide replacement request IDs and state labels for three held locks; UPDATE IGNORE remains in the joined statement while all deterministic assignments succeed. Procedures, clocks, lock expiry, schema names, and source values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["update-ignore", "update-left-join", "update-using", "joined-assignments", "case-assignment", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "Each held lock receives a distinct replacement request ID and a state derived from joined request data.",
+  "determinism_notes": "All IDs, replacement IDs, approval flags, and states are fixed; final rows are ordered by the unique lock ID with no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE request_states (request_id INT PRIMARY KEY, replacement_request_id INT NOT NULL, approved INT NOT NULL)",
+    "CREATE TABLE queue_locks (lock_id INT PRIMARY KEY, request_id INT NOT NULL UNIQUE, lock_key VARCHAR(32) NOT NULL, lock_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO request_states VALUES (10, 40, 1), (20, 50, 0), (30, 60, 1)",
+    "INSERT INTO queue_locks VALUES (101, 10, 'alpha', 'held'), (102, 20, 'beta', 'held'), (103, 30, 'gamma', 'held')"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE IGNORE queue_locks l LEFT JOIN request_states r USING (request_id) SET l.request_id = r.replacement_request_id, l.lock_state = CASE WHEN r.approved = 1 THEN 'active' ELSE 'waiting' END WHERE l.lock_state = 'held'",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT lock_id, request_id, lock_key, lock_state FROM queue_locks ORDER BY lock_id",
+      "ordered": true
+    }
+  ]
+}

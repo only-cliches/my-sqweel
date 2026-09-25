@@ -1278,6 +1278,7 @@ impl RawEngine {
         }
         let parse_sql = rewrite_update_order_limit_for_parser(&parse_sql);
         let parse_sql = rewrite_update_comma_join_for_parser(&parse_sql);
+        let parse_sql = rewrite_update_using_for_parser(&parse_sql);
         rewrite_group_by_with_rollup(&parse_sql)
     }
 
@@ -4646,6 +4647,74 @@ fn rewrite_update_comma_join_for_parser(sql: &str) -> String {
         }
     );
     rewritten
+}
+
+fn rewrite_update_using_for_parser(sql: &str) -> String {
+    let trimmed = sql.trim();
+    let upper = trimmed.to_ascii_uppercase();
+    if !upper.starts_with("UPDATE ") {
+        return sql.to_string();
+    }
+    let Some(using_at) = find_top_level_keyword(&upper, "USING") else {
+        return sql.to_string();
+    };
+    let Some(open_at) = trimmed[using_at + "USING".len()..].find('(') else {
+        return sql.to_string();
+    };
+    let open_at = using_at + "USING".len() + open_at;
+    let Some(close_at) = trimmed[open_at + 1..].find(')') else {
+        return sql.to_string();
+    };
+    let close_at = open_at + 1 + close_at;
+    let columns = trimmed[open_at + 1..close_at]
+        .split(',')
+        .map(str::trim)
+        .filter(|column| !column.is_empty())
+        .collect::<Vec<_>>();
+    if columns.is_empty() {
+        return sql.to_string();
+    }
+
+    let Some(join_at) = upper[..using_at].rfind("JOIN") else {
+        return sql.to_string();
+    };
+    let right_relation = trimmed[join_at + "JOIN".len()..using_at].trim();
+    let mut left_relation = trimmed["UPDATE ".len()..join_at].trim();
+    while let Some(space_at) = left_relation.rfind(char::is_whitespace) {
+        let (prefix, word) = left_relation.split_at(space_at);
+        let word = word.trim();
+        if matches!(
+            word.to_ascii_uppercase().as_str(),
+            "LEFT" | "RIGHT" | "INNER" | "OUTER" | "FULL" | "CROSS" | "NATURAL"
+        ) {
+            left_relation = prefix.trim_end();
+        } else {
+            break;
+        }
+    }
+    let left_alias = relation_alias(left_relation);
+    let right_alias = relation_alias(right_relation);
+    let on_clause = columns
+        .iter()
+        .map(|column| format!("{left_alias}.{column} = {right_alias}.{column}"))
+        .collect::<Vec<_>>()
+        .join(" AND ");
+    format!(
+        "{}ON {}{}",
+        &trimmed[..using_at],
+        on_clause,
+        &trimmed[close_at + 1..]
+    )
+}
+
+fn relation_alias(relation: &str) -> &str {
+    let tokens = relation.split_whitespace().collect::<Vec<_>>();
+    match tokens.as_slice() {
+        [table] => table.rsplit('.').next().unwrap_or(table),
+        [_, "AS", alias] | [_, "as", alias] => alias,
+        [_, alias] => alias,
+        _ => tokens.last().copied().unwrap_or(relation),
+    }
 }
 
 fn find_top_level_comma(sql: &str) -> Option<usize> {
