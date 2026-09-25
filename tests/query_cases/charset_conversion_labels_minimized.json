@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "id": "charset_conversion_labels_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "functions/type-conversion/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/functions/type-conversion/mysql.sql",
+      "sha256": "5269d8a81bae7d9c4a2c99dfb1f725153f97ff6bf46c5ef8349cc409c57163e3",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "functions/type-conversion/mysql.sql:34-35",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A scalar CONVERT(expr USING charset) expression transcodes text to a named character set and propagates SQL NULL.",
+      "mysql_mariadb_translation": "Reduced to two fixed scalar conversions: one CJK string must become latin1 replacement characters, and one SQL NULL must remain NULL. Table setup, ordering, and unrelated label rows are removed so charset conversion and NULL propagation are isolated."
+    },
+    "independently_authored": true,
+    "minimized_from": "charset_conversion_labels"
+  },
+  "features": ["convert-using", "latin1", "unrepresentable-character", "null-propagation", "deterministic-order"],
+  "fixture_notes": "The CJK scalar is not representable in latin1 and must return two question-mark replacement characters; converting SQL NULL must return SQL NULL rather than the string 'null'.",
+  "determinism_notes": "Both scalar inputs and the charset name are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT CONVERT('東京' USING latin1) AS latin1_label, CONVERT(NULL USING latin1) AS null_label",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}

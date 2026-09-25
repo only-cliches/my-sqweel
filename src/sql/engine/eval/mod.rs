@@ -3202,14 +3202,49 @@ pub(super) fn eval_expr(
             let value = eval_expr(expr, data, last_insert_id)?;
             if let Some(data_type) = data_type {
                 cast_json_value(value, &data_type.to_string())
-            } else if charset.is_some() {
-                Ok(Value::String(json_scalar_to_string(&value)))
+            } else if let Some(charset) = charset {
+                let charset = charset
+                    .0
+                    .last()
+                    .map(|identifier| identifier.value.as_str())
+                    .unwrap_or_default();
+                eval_convert_charset(value, charset)
             } else {
                 Ok(value)
             }
         }
         _ => Err(anyhow!("unsupported expression: {expr}")),
     }
+}
+
+fn eval_convert_charset(value: Value, charset: &str) -> Result<Value> {
+    if value == Value::Null {
+        return Ok(Value::Null);
+    }
+    let text = json_scalar_to_string(&value);
+    let normalized = charset.to_ascii_lowercase();
+    let converted = match normalized.as_str() {
+        "ascii" | "ascii_bin" => text
+            .chars()
+            .map(
+                |character| {
+                    if character.is_ascii() { character } else { '?' }
+                },
+            )
+            .collect(),
+        "latin1" | "latin1_bin" | "latin1_general_ci" => text
+            .chars()
+            .map(|character| {
+                if (character as u32) <= 0xff {
+                    character
+                } else {
+                    '?'
+                }
+            })
+            .collect(),
+        _ => text,
+    };
+    Ok(Value::String(converted))
 }
 
 fn eval_trim_values(

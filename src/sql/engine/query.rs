@@ -3553,7 +3553,10 @@ impl RawEngine {
         }
         if !matches!(
             expr,
-            Expr::Value(_) | Expr::TypedString { .. } | Expr::IntroducedString { .. }
+            Expr::Value(_)
+                | Expr::TypedString { .. }
+                | Expr::IntroducedString { .. }
+                | Expr::Convert { .. }
         ) && let Some(value) = data.get(&projection_expr_column_name(expr))
         {
             return Ok(value.clone());

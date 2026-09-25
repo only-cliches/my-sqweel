@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "charset_conversion_labels",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "functions/type-conversion/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/functions/type-conversion/mysql.sql",
+      "sha256": "5269d8a81bae7d9c4a2c99dfb1f725153f97ff6bf46c5ef8349cc409c57163e3",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "functions/type-conversion/mysql.sql:34-35",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "Scalar conversion expressions explicitly transcode text to named MySQL character sets with CONVERT(expr USING charset).",
+      "mysql_mariadb_translation": "Reauthored as a label-encoding audit over fixed ASCII, accented, CJK, and NULL values. The report applies utf8mb4 and latin1 conversions and exposes character length while using newly authored rows and schema; the source literals and instructional examples are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["convert-using", "character-set-transcoding", "utf8mb4", "latin1", "multibyte-text", "null-propagation", "deterministic-order"],
+  "fixture_notes": "Rows cover ASCII, an accented label, CJK text, and SQL NULL. utf8mb4 preserves the authored text; latin1 conversion exercises MariaDB replacement behavior for characters outside latin1, while NULL remains NULL.",
+  "determinism_notes": "Labels and IDs are fixed and ordered by the primary key; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE encoding_labels (label_id INT PRIMARY KEY, label_text VARCHAR(64) CHARACTER SET utf8mb4 NULL)",
+    "INSERT INTO encoding_labels VALUES (11, 'alpha'), (22, 'café'), (33, '東京'), (44, NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT label_id, CONVERT(label_text USING utf8mb4) AS utf8_label, CONVERT(label_text USING latin1) AS latin1_label, CHAR_LENGTH(label_text) AS character_count FROM encoding_labels ORDER BY label_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT label_id, label_text FROM encoding_labels ORDER BY label_id",
+      "ordered": true
+    }
+  ]
+}
