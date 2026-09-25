@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "json_insert_policy_defaults",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "bitwarden/server",
+      "commit": "8f24b07002f729b659e2f4dd875449e8046a20f6",
+      "path": "util/MySqlMigrations/HelperScripts/2021-09-21_01_SplitManageCollectionsPermission.sql",
+      "url": "https://github.com/bitwarden/server/blob/8f24b07002f729b659e2f4dd875449e8046a20f6/util/MySqlMigrations/HelperScripts/2021-09-21_01_SplitManageCollectionsPermission.sql",
+      "sha256": "a72230504661fdb77eff73e655a522e11c6143f16f39f206ce10e1354385a6d0",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "util/MySqlMigrations/HelperScripts/2021-09-21_01_SplitManageCollectionsPermission.sql:4-23",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL migration updates JSON documents with JSON_INSERT, using JSON_EXTRACT and nested IFNULL fallbacks so missing permission keys inherit an older aggregate permission while existing keys remain unchanged.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored policy-default migration. A single UPDATE adds missing edit and delete flags from an existing manage flag, falls back to false when no legacy flag exists, and preserves already-present values; ordered scalar projections verify the resulting booleans and NULL policy rows remain untouched. The source schema, permission names, literals, and migration context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "json-insert",
+    "json-extract",
+    "nested-coalesce-fallback",
+    "json-update",
+    "preserve-existing-json-key",
+    "null-propagation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Policy 401 inherits both missing flags from manage=true. Policy 402 retains its existing edit=false and receives delete=false because manage is absent. Policy 403 preserves an existing delete=true while adding edit=false from manage=false. Policy 404 has a NULL document and is excluded from the migration.",
+  "determinism_notes": "Policy IDs, JSON documents, paths, fallback values, and final ordering are fixed; the migration uses no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE policy_defaults (policy_id INT PRIMARY KEY, policy JSON NULL)",
+    "INSERT INTO policy_defaults VALUES (401, '{\"name\":\"alpha\",\"manage\":true}'), (402, '{\"name\":\"beta\",\"edit\":false}'), (403, '{\"name\":\"gamma\",\"manage\":false,\"delete\":true}'), (404, NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE policy_defaults SET policy = JSON_INSERT(policy, '$.edit', COALESCE(JSON_EXTRACT(policy, '$.edit'), JSON_EXTRACT(policy, '$.manage'), JSON_EXTRACT('false', '$')), '$.delete', COALESCE(JSON_EXTRACT(policy, '$.delete'), JSON_EXTRACT(policy, '$.manage'), JSON_EXTRACT('false', '$'))) WHERE policy IS NOT NULL AND (JSON_EXTRACT(policy, '$.edit') IS NULL OR JSON_EXTRACT(policy, '$.delete') IS NULL)",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT policy_id, JSON_UNQUOTE(JSON_EXTRACT(policy, '$.name')) AS policy_name, JSON_UNQUOTE(JSON_EXTRACT(policy, '$.edit')) AS edit_flag, JSON_UNQUOTE(JSON_EXTRACT(policy, '$.delete')) AS delete_flag FROM policy_defaults ORDER BY policy_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT policy_id, JSON_UNQUOTE(JSON_EXTRACT(policy, '$.name')) AS policy_name, JSON_UNQUOTE(JSON_EXTRACT(policy, '$.edit')) AS edit_flag, JSON_UNQUOTE(JSON_EXTRACT(policy, '$.delete')) AS delete_flag FROM policy_defaults ORDER BY policy_id",
+      "ordered": true
+    }
+  ]
+}
