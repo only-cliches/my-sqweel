@@ -2172,7 +2172,7 @@ impl RawEngine {
                     "LENGTH" | "OCTET_LENGTH" | "CHAR_LENGTH" | "CHARACTER_LENGTH" => {
                         MysqlColumnType::Integer
                     }
-                    "STRCMP" | "ISNULL" | "DATEDIFF" => MysqlColumnType::Integer,
+                    "STRCMP" | "ISNULL" | "DATEDIFF" | "SIGN" => MysqlColumnType::Integer,
                     "TIMESTAMPDIFF" => MysqlColumnType::BigInt,
                     "CEIL" | "CEILING" => {
                         let argument = function_arguments(function)

@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "sign_direction_boundaries",
+  "provenance": {
+    "kind": "github-inspired",
+    "source": {
+      "kind": "github",
+      "repository": "PacktWorkshops/The-SQL-Workshop",
+      "commit": "568c6f62fae9a22b37823ae4bf267553d5d60046",
+      "path": "Chapter07/Chapter 7 Activity.sql",
+      "url": "https://github.com/PacktWorkshops/The-SQL-Workshop/blob/568c6f62fae9a22b37823ae4bf267553d5d60046/Chapter07/Chapter%207%20Activity.sql",
+      "sha256": "4efaf6dd51b28977c8b36e5495286e00f122921435870a75514205979b44383f",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Chapter07/Chapter 7 Activity.sql:235",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A scalar SIGN projection classifies negative, zero, and positive numeric inputs.",
+      "mysql_mariadb_translation": "Re-authored as a deterministic invoice-direction audit over a nullable DECIMAL column, retaining negative, zero, positive, and NULL sign outcomes while adding ordered CASE labels and a final sign-only check."
+    },
+    "independently_authored": true
+  },
+  "features": ["sign", "nullable-decimal", "case-classification", "null-propagation", "deterministic-order"],
+  "fixture_notes": "The fixed invoice amounts isolate SIGN behavior for negative, zero, positive, and missing values without relying on clocks or generated data.",
+  "determinism_notes": "All rows and numeric literals are fixed; statements use a primary-key ordering and no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE invoice_directions (sample_id INT PRIMARY KEY, sample_label VARCHAR(24) NOT NULL, amount DECIMAL(10,3) NULL)",
+    "INSERT INTO invoice_directions VALUES (701, 'credit', -18.750), (702, 'neutral', 0.000), (703, 'debit', 42.125), (704, 'missing', NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT sample_id, sample_label, amount, SIGN(amount) AS direction, CASE WHEN amount IS NULL THEN 'missing' WHEN SIGN(amount) < 0 THEN 'negative' WHEN SIGN(amount) = 0 THEN 'zero' ELSE 'positive' END AS direction_label FROM invoice_directions ORDER BY sample_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT sample_id, SIGN(amount) AS direction FROM invoice_directions ORDER BY sample_id",
+      "ordered": true
+    }
+  ]
+}

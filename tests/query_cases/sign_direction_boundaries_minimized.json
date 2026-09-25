@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "id": "sign_direction_boundaries_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "PacktWorkshops/The-SQL-Workshop",
+      "commit": "568c6f62fae9a22b37823ae4bf267553d5d60046",
+      "path": "Chapter07/Chapter 7 Activity.sql",
+      "url": "https://github.com/PacktWorkshops/The-SQL-Workshop/blob/568c6f62fae9a22b37823ae4bf267553d5d60046/Chapter07/Chapter%207%20Activity.sql",
+      "sha256": "4efaf6dd51b28977c8b36e5495286e00f122921435870a75514205979b44383f",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Chapter07/Chapter 7 Activity.sql:235",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A scalar SIGN projection classifies negative, zero, and positive numeric inputs.",
+      "mysql_mariadb_translation": "Reduced to one independently authored scalar SIGN projection over fixed negative, zero, positive, and NULL literals to isolate result metadata and NULL propagation."
+    },
+    "independently_authored": true,
+    "minimized_from": "sign_direction_boundaries"
+  },
+  "features": ["sign", "null-propagation", "result-metadata", "minimized-regression"],
+  "fixture_notes": "The scalar expressions isolate SIGN's integer wire metadata for fixed decimal literals and its NULL result.",
+  "determinism_notes": "All numeric literals are fixed; the scalar query has no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT SIGN(-18.750) AS negative_direction, SIGN(0.000) AS zero_direction, SIGN(42.125) AS positive_direction, SIGN(NULL) AS missing_direction",
+      "ordered": true
+    }
+  ]
+}
