@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "make_set_permission_labels",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/2412.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/2412.sql",
+      "sha256": "2e46e3649ba3280da7fa087396fd2d55eb4935032fe86e060fd87fd188ca1b01",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "2412.sql:1-8",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL function corpus probes MAKE_SET with zero, negative, selected-bit, out-of-range, NULL, and expression-derived masks to exercise comma-joined bit-label output.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored permission-profile report. Fixed bitmasks select read/write/admin labels, an out-of-range mask yields an empty label set, and a NULL mask preserves NULL; the schema, labels, rows, and security domain are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["make-set", "bitmask-labels", "null-propagation", "empty-result-string", "deterministic-order"],
+  "fixture_notes": "Profile 101 selects read, profile 102 selects read and admin, profile 103 has no selected bits, profile 104 selects no supplied label bits, and profile 105 preserves NULL from its NULL mask.",
+  "determinism_notes": "All profile IDs and masks are fixed, label arguments are constants, and output is ordered by the primary key. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE permission_profiles (profile_id INT PRIMARY KEY, permission_mask INT NULL)",
+    "INSERT INTO permission_profiles VALUES (101, 1), (102, 5), (103, 0), (104, 8), (105, NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT profile_id, permission_mask, MAKE_SET(permission_mask, 'read', 'write', 'admin') AS permissions FROM permission_profiles ORDER BY profile_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT profile_id, permission_mask FROM permission_profiles ORDER BY profile_id",
+      "ordered": true
+    }
+  ]
+}
