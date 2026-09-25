@@ -2383,14 +2383,21 @@ fn mysql_cmp_non_null(left: &Value, right: &Value) -> Ordering {
             {
                 return compare_decimal_parts(&left_decimal, &right_decimal);
             }
-            binary_display_value(left)
-                .unwrap_or_else(|| left.clone())
-                .to_lowercase()
-                .cmp(
-                    &binary_display_value(right)
-                        .unwrap_or_else(|| right.clone())
-                        .to_lowercase(),
-                )
+            let left_binary = left.starts_with(MYSQL_BINARY_SENTINEL);
+            let right_binary = right.starts_with(MYSQL_BINARY_SENTINEL);
+            let left = binary_display_value(left).unwrap_or_else(|| left.clone());
+            let right = binary_display_value(right).unwrap_or_else(|| right.clone());
+            let left = if left_binary {
+                left
+            } else {
+                left.trim_end_matches(' ').to_string()
+            };
+            let right = if right_binary {
+                right
+            } else {
+                right.trim_end_matches(' ').to_string()
+            };
+            left.to_lowercase().cmp(&right.to_lowercase())
         }
         (Value::Number(_), Value::Number(_))
         | (Value::Number(_), Value::String(_))

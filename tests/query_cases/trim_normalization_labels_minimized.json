@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "id": "trim_normalization_labels_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "leeyeonjun85/leeyeonjun85",
+      "commit": "363130451a1a0b374d0f767b80b769c7c1d57c15",
+      "path": "src/SQL/leeyeonjun_Practice_MySQL.sql",
+      "url": "https://github.com/leeyeonjun85/leeyeonjun85/blob/363130451a1a0b374d0f767b80b769c7c1d57c15/src/SQL/leeyeonjun_Practice_MySQL.sql",
+      "sha256": "1f84eecfe96e85f6c80beaf1bd33e9e7b0ebe7fb15a3c04ec26a8db6f7c3b644",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "src/SQL/leeyeonjun_Practice_MySQL.sql:507-510",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "LTRIM and RTRIM remove leading and trailing spaces independently, while their nesting produces a canonical label.",
+      "mysql_mariadb_translation": "Reduced to one independently authored trailing-space comparison between a raw label and its nested LTRIM/RTRIM result, isolating MariaDB's trailing-space-insensitive equality contract."
+    },
+    "independently_authored": true,
+    "minimized_from": "trim_normalization_labels"
+  },
+  "features": ["ltrim", "rtrim", "nested-trim", "trailing-space-comparison", "minimized-regression"],
+  "fixture_notes": "The scalar expression isolates equality between a fixed VARCHAR-like label with trailing spaces and its canonical trim result.",
+  "determinism_notes": "All string literals are fixed; the scalar query has no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT 'west yard   ' AS raw_label, LTRIM(RTRIM('west yard   ')) AS canonical_label, CASE WHEN 'west yard   ' = LTRIM(RTRIM('west yard   ')) THEN 'equal' ELSE 'different' END AS comparison_state",
+      "ordered": true
+    }
+  ]
+}

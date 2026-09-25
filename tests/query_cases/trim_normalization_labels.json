@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "trim_normalization_labels",
+  "provenance": {
+    "kind": "github-inspired",
+    "source": {
+      "kind": "github",
+      "repository": "leeyeonjun85/leeyeonjun85",
+      "commit": "363130451a1a0b374d0f767b80b769c7c1d57c15",
+      "path": "src/SQL/leeyeonjun_Practice_MySQL.sql",
+      "url": "https://github.com/leeyeonjun85/leeyeonjun85/blob/363130451a1a0b374d0f767b80b769c7c1d57c15/src/SQL/leeyeonjun_Practice_MySQL.sql",
+      "sha256": "1f84eecfe96e85f6c80beaf1bd33e9e7b0ebe7fb15a3c04ec26a8db6f7c3b644",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "src/SQL/leeyeonjun_Practice_MySQL.sql:507-510",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "LTRIM and RTRIM remove leading and trailing spaces independently, while their nesting produces a canonical label.",
+      "mysql_mariadb_translation": "Re-authored as a deterministic nullable contact-label normalization audit with independent left/right trims, nested canonicalization, and ordered classification."
+    },
+    "independently_authored": true
+  },
+  "features": ["ltrim", "rtrim", "nested-trim", "null-propagation", "case-classification", "deterministic-order"],
+  "fixture_notes": "Fixed labels isolate leading-only, trailing-only, both-sided, and NULL whitespace behavior without copying the source strings.",
+  "determinism_notes": "All labels are fixed literals; statements use a primary-key ordering and no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE contact_labels (label_id INT PRIMARY KEY, label_kind VARCHAR(24) NOT NULL, raw_label VARCHAR(40) NULL)",
+    "INSERT INTO contact_labels VALUES (1001, 'both-sided', '   north hub   '), (1002, 'leading-only', '   east depot'), (1003, 'trailing-only', 'west yard   '), (1004, 'missing', NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT label_id, label_kind, raw_label, LTRIM(raw_label) AS left_trimmed, RTRIM(raw_label) AS right_trimmed, LTRIM(RTRIM(raw_label)) AS canonical_label, CASE WHEN raw_label IS NULL THEN 'missing' WHEN raw_label = LTRIM(RTRIM(raw_label)) THEN 'already-canonical' ELSE 'normalized' END AS normalization_state FROM contact_labels ORDER BY label_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT label_id, LTRIM(RTRIM(raw_label)) AS canonical_label FROM contact_labels ORDER BY label_id",
+      "ordered": true
+    }
+  ]
+}
