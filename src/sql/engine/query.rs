@@ -1852,6 +1852,7 @@ impl RawEngine {
                     }
                     "FLOOR" => MysqlColumnType::Decimal,
                     "ROUND" | "TRUNCATE" => {
+                        let mut approximate = false;
                         if let Ok(arguments) = function_arguments(function) {
                             if let Some(Some(Expr::Value(SqlValue::Number(number, _)))) =
                                 arguments.get(1)
@@ -1866,8 +1867,26 @@ impl RawEngine {
                                     .expression_metadata(select, argument, String::new(), first_row)
                                     .decimals;
                             }
+                            approximate = arguments
+                                .first()
+                                .and_then(Option::as_ref)
+                                .map(|argument| argument.to_string().to_ascii_uppercase())
+                                .is_some_and(|argument_text| {
+                                    [
+                                        "ACOS(", "ASIN(", "ATAN(", "ATAN2(", "COS(", "COT(",
+                                        "DEGREES(", "EXP(", "LN(", "LOG(", "LOG10(", "LOG2(",
+                                        "PI(", "POW(", "POWER(", "RADIANS(", "SIN(", "SQRT(",
+                                        "TAN(",
+                                    ]
+                                    .iter()
+                                    .any(|name| argument_text.contains(name))
+                                });
                         }
-                        MysqlColumnType::Decimal
+                        if approximate {
+                            MysqlColumnType::Double
+                        } else {
+                            MysqlColumnType::Decimal
+                        }
                     }
                     "MOD" => {
                         let argument_metadata = function_arguments(function)
@@ -1988,8 +2007,9 @@ impl RawEngine {
                             _ => MysqlColumnType::Char,
                         }
                     }
-                    "ACOS" | "ASIN" | "ATAN" | "ATAN2" | "COS" | "COT" | "DEGREES" | "PI"
-                    | "RADIANS" | "SIN" | "TAN" => MysqlColumnType::Double,
+                    "ACOS" | "ASIN" | "ATAN" | "ATAN2" | "COS" | "COT" | "DEGREES" | "EXP"
+                    | "LN" | "LOG" | "LOG10" | "LOG2" | "PI" | "POWER" | "POW" | "RADIANS"
+                    | "SIN" | "SQRT" | "TAN" => MysqlColumnType::Double,
                     "BIN" | "CHR" | "OCT" | "TO_CHAR" => MysqlColumnType::VarChar,
                     "LENGTHB" | "WEEK" => MysqlColumnType::Integer,
                     "TO_SECONDS" => MysqlColumnType::BigInt,

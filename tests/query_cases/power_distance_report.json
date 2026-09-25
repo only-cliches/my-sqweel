@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "power_distance_report",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "fishercoder1534/Leetcode",
+      "commit": "21574248036d95ed0980916fcb4392987e09a95b",
+      "path": "database/_612.sql",
+      "url": "https://github.com/fishercoder1534/Leetcode/blob/21574248036d95ed0980916fcb4392987e09a95b/database/_612.sql",
+      "sha256": "63eb4e5e6b60f7edeb2783d1735f3537d76e392b51227e435c9c66987f96bc0a",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "database/_612.sql:1-4",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL geometry query computes pairwise Euclidean distance with squared coordinate differences, then applies SQRT, MIN, and ROUND to select the shortest distance.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored sensor-map proximity report. Fixed integer coordinates are paired once by point ID, POWER squares each axis difference, SQRT produces Euclidean distance, and MIN/ROUND report the nearest pair; the source table, values, aliases, and application domain are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["power", "sqrt", "pairwise-self-join", "minimum-aggregate", "rounding", "deterministic-order"],
+  "fixture_notes": "Sensor points 701-704 form fixed coordinate pairs; the closest pair is point 702 to 704 at distance 3; the remaining pair distances are 4, 5, 10, and sqrt(52).",
+  "determinism_notes": "All point IDs, integer coordinates, pair predicate, and aggregate expression are fixed. The query has no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE sensor_points (point_id INT PRIMARY KEY, x_coord INT NOT NULL, y_coord INT NOT NULL)",
+    "INSERT INTO sensor_points VALUES (701, 0, 0), (702, 3, 4), (703, 6, 8), (704, 0, 4)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT ROUND(MIN(SQRT(POWER(left_point.x_coord - right_point.x_coord, 2) + POWER(left_point.y_coord - right_point.y_coord, 2))), 2) AS nearest_distance FROM sensor_points AS left_point JOIN sensor_points AS right_point ON left_point.point_id < right_point.point_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT point_id, x_coord, y_coord FROM sensor_points ORDER BY point_id",
+      "ordered": true
+    }
+  ]
+}

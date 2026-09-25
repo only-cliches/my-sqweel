@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "id": "round_double_metadata_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "fishercoder1534/Leetcode",
+      "commit": "21574248036d95ed0980916fcb4392987e09a95b",
+      "path": "database/_612.sql",
+      "url": "https://github.com/fishercoder1534/Leetcode/blob/21574248036d95ed0980916fcb4392987e09a95b/database/_612.sql",
+      "sha256": "63eb4e5e6b60f7edeb2783d1735f3537d76e392b51227e435c9c66987f96bc0a",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "database/_612.sql:1-4",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A rounded Euclidean distance over POWER and SQRT produces an approximate numeric result whose wire metadata must remain DOUBLE.",
+      "mysql_mariadb_translation": "Reduced to one independently authored scalar distance expression, removing table access, pair generation, and MIN while preserving the ROUND-over-SQRT metadata contract."
+    },
+    "independently_authored": true,
+    "minimized_from": "power_distance_report"
+  },
+  "features": ["round", "double-metadata", "power", "sqrt", "minimized-regression"],
+  "fixture_notes": "The fixed 3-4-5 triangle isolates ROUND's approximate numeric result type after SQRT and POWER evaluation.",
+  "determinism_notes": "All numeric literals are fixed; the scalar query has no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT ROUND(SQRT(POWER(3, 2) + POWER(4, 2)), 2) AS rounded_distance",
+      "ordered": true
+    }
+  ]
+}
