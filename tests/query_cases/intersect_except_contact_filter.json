@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "intersect_except_contact_filter",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Youtube-NikitaTymoshenko/sql-course",
+      "commit": "b204c86b5c1fb1b5e7c587ab1f2afc9bcd4a9afc",
+      "path": "union.sql",
+      "url": "https://github.com/Youtube-NikitaTymoshenko/sql-course/blob/b204c86b5c1fb1b5e7c587ab1f2afc9bcd4a9afc/union.sql",
+      "sha256": "f2df4e3925ebf268bd75f6667fa51f494cd03eb05ad658653146a294f53fcd35",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "union.sql:47-55",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A compact contact query uses INTERSECT to retain values present in two independent relations, with a neighboring EXCEPT example showing exclusion by a third relation.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored eligibility filter: active contact emails are intersected with verified emails, suppressed emails are removed with EXCEPT, duplicate source entries are collapsed by set semantics, and the result is ordered deterministically without copying the source schema or values."
+    },
+    "independently_authored": true
+  },
+  "features": ["intersect", "except", "set-operations", "duplicate-elimination", "deterministic-order"],
+  "fixture_notes": "Ari is active and verified and remains eligible; Bo is suppressed after passing both positive filters; Cy lacks verification; Dee lacks activity; Eli is verified but inactive. Ari appears twice in the active table to make INTERSECT duplicate elimination observable.",
+  "determinism_notes": "All contact IDs, emails, statuses, and set-operation inputs are fixed. The final email ordering is explicit; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE active_contact_events (event_id INT PRIMARY KEY, email VARCHAR(64) NOT NULL)",
+    "CREATE TABLE verified_contacts (verification_id INT PRIMARY KEY, email VARCHAR(64) NOT NULL)",
+    "CREATE TABLE suppressed_contacts (suppression_id INT PRIMARY KEY, email VARCHAR(64) NOT NULL)",
+    "INSERT INTO active_contact_events VALUES (8101, 'ari@example.test'), (8102, 'ari@example.test'), (8103, 'bo@example.test'), (8104, 'dee@example.test')",
+    "INSERT INTO verified_contacts VALUES (8201, 'ari@example.test'), (8202, 'bo@example.test'), (8203, 'cy@example.test'), (8204, 'eli@example.test')",
+    "INSERT INTO suppressed_contacts VALUES (8301, 'bo@example.test')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT email FROM active_contact_events INTERSECT SELECT email FROM verified_contacts EXCEPT SELECT email FROM suppressed_contacts ORDER BY email",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT event_id, email FROM active_contact_events ORDER BY event_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT verification_id, email FROM verified_contacts ORDER BY verification_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT suppression_id, email FROM suppressed_contacts ORDER BY suppression_id",
+      "ordered": true
+    }
+  ]
+}
