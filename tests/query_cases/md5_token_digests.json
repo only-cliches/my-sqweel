@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "md5_token_digests",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "bhargavgolla/Online-Compiler",
+      "commit": "5ad77dab549af91f25e778bc5e3afcfd0b2ee8d2",
+      "path": "init_db.sql",
+      "url": "https://github.com/bhargavgolla/Online-Compiler/blob/5ad77dab549af91f25e778bc5e3afcfd0b2ee8d2/init_db.sql",
+      "sha256": "cd56f5b50edac94c6b48dd82ca53e7db9ab482d65b13fbab5bd76cdde86b859e",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "init_db.sql:7",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL seed insert computes an MD5 digest from a fixed text value while populating a credential row.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored token-digest migration. An UPDATE computes MD5 values for two fixed secrets and preserves NULL for a missing secret; the source schema, identifiers, values, and credential domain are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["md5", "update-expression", "null-propagation", "fixed-digest", "deterministic-order"],
+  "fixture_notes": "Tokens 401 and 402 receive deterministic 32-character MD5 digests from distinct secrets; token 403 has no secret and retains a NULL digest after the UPDATE.",
+  "determinism_notes": "All token IDs, labels, secret values, update expressions, and output ordering are fixed. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE token_material (token_id INT PRIMARY KEY, token_label VARCHAR(32) NOT NULL, secret_material VARCHAR(64) NULL, token_digest CHAR(32) NULL)",
+    "INSERT INTO token_material VALUES (401, 'alpha', 'orchid-rail-401', NULL), (402, 'beta', 'cobalt-lake-402', NULL), (403, 'missing', NULL, NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE token_material SET token_digest = MD5(secret_material)"
+    },
+    {
+      "sql": "SELECT token_id, token_label, token_digest FROM token_material ORDER BY token_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT token_id, secret_material FROM token_material ORDER BY token_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT token_id, token_digest FROM token_material ORDER BY token_id",
+      "ordered": true
+    }
+  ]
+}
