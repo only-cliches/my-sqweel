@@ -244,6 +244,56 @@ impl RawEngine {
                         })
                         .unwrap_or_default()
                 };
+                let source_alias = select
+                    .from
+                    .first()
+                    .and_then(|source| match &source.relation {
+                        TableFactor::Table { alias, .. }
+                        | TableFactor::Derived { alias, .. }
+                        | TableFactor::JsonTable { alias, .. } => {
+                            alias.as_ref().map(|alias| alias.name.value.clone())
+                        }
+                        _ => None,
+                    })
+                    .or_else(|| {
+                        select.projection.iter().find_map(|item| {
+                            let expr = match item {
+                                SelectItem::UnnamedExpr(expr)
+                                | SelectItem::ExprWithAlias { expr, .. } => expr,
+                                SelectItem::Wildcard(_) | SelectItem::QualifiedWildcard(_, _) => {
+                                    return None;
+                                }
+                            };
+                            match expr {
+                                Expr::CompoundIdentifier(parts) if parts.len() > 1 => {
+                                    Some(parts[0].value.clone())
+                                }
+                                _ => None,
+                            }
+                        })
+                    });
+                let derived_source_contexts = if on_duplicate.is_empty() {
+                    Vec::new()
+                } else {
+                    match select.from.first().map(|source| &source.relation) {
+                        Some(TableFactor::Derived { subquery, .. }) => {
+                            let derived = self.select_query((**subquery).clone())?;
+                            derived
+                                .rows
+                                .into_iter()
+                                .map(|row| {
+                                    let mut context = row.clone();
+                                    if let Some(alias) = source_alias.as_deref() {
+                                        add_qualified_columns(&mut context, alias, &row);
+                                    }
+                                    context
+                                })
+                                .collect()
+                        }
+                        _ => Vec::new(),
+                    }
+                };
+
                 let columns = if explicit_columns.is_empty() {
                     self.schemas
                         .get(&table)
@@ -280,6 +330,43 @@ impl RawEngine {
                             data.insert(format!("@{name}"), value.clone());
                         }
                     }
+                    if let Some(alias) = source_alias.as_deref() {
+                        for (column, value) in &row {
+                            if !column.contains('.') {
+                                data.insert(format!("{alias}.{column}"), value.clone());
+                            }
+                        }
+                    }
+                    if !derived_source_contexts.is_empty()
+                        && let Some(source) = derived_source_contexts.iter().find(|source| {
+                            select.projection.iter().enumerate().all(|(idx, item)| {
+                                let expr = match item {
+                                    SelectItem::UnnamedExpr(expr)
+                                    | SelectItem::ExprWithAlias { expr, .. } => expr,
+                                    SelectItem::Wildcard(_)
+                                    | SelectItem::QualifiedWildcard(_, _) => return true,
+                                };
+                                let Some(source_key) = source_keys.get(idx) else {
+                                    return false;
+                                };
+                                let Ok(value) = self.eval_expr_ctx(
+                                    expr,
+                                    source,
+                                    self.last_insert_id.load(AtomicOrdering::Relaxed),
+                                ) else {
+                                    return false;
+                                };
+                                row.get(source_key)
+                                    .is_some_and(|expected| mysql_eq(expected, &value))
+                            })
+                        })
+                    {
+                        for (column, value) in source {
+                            if column.contains('.') {
+                                data.insert(column.clone(), value.clone());
+                            }
+                        }
+                    }
                     if !source_contexts.is_empty()
                         && let Some(source) = source_contexts.iter().find(|source| {
                             source_columns.iter().all(|column| {
@@ -295,6 +382,7 @@ impl RawEngine {
                             }
                         }
                     }
+
                     prepared_rows.push(data);
                 }
             }

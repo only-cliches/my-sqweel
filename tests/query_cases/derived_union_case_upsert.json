@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "id": "derived_union_case_upsert",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "matigo/streams",
+      "commit": "ec3f42a8a854e3634b912ac8330164448644b4e7",
+      "path": "sql/site/spSetSiteData.sql",
+      "url": "https://github.com/matigo/streams/blob/ec3f42a8a854e3634b912ac8330164448644b4e7/sql/site/spSetSiteData.sql",
+      "sha256": "f97fb6bf192066a5f29e71e40540c3f89853b25808fd2563a9ffece9ba112744",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/site/spSetSiteData.sql:L46-L69",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "An INSERT ... SELECT reads a derived UNION ALL relation, then an ON DUPLICATE KEY UPDATE clause re-evaluates a CASE expression against the derived-row alias for both conflicting and new settings.",
+      "mysql_mariadb_translation": "Reauthored as a deterministic account-setting refresh. Three UNION ALL candidates normalize textual flags through CASE; two existing unique settings update from incoming aliases and one unseen account-setting pair is inserted. The source procedure, schema, identifiers, and values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "derived-union-all-source",
+    "case-normalization",
+    "duplicate-key-alias-update",
+    "multi-row-upsert",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Account 7 starts with two settings and account 8 has none. The upsert must update both existing keys, insert the new key, and normalize each incoming flag consistently in both insert and duplicate-update paths.",
+  "determinism_notes": "The source relation is a fixed UNION ALL of literals, the unique key is (account_id, setting_key), and the final check orders by account and setting. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE account_settings (setting_id INT PRIMARY KEY, account_id INT NOT NULL, setting_key VARCHAR(32) NOT NULL, setting_value VARCHAR(16) NOT NULL, UNIQUE KEY account_setting_key (account_id, setting_key))",
+    "INSERT INTO account_settings VALUES (1, 7, 'digest', 'disabled'), (2, 7, 'alerts', 'enabled')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO account_settings (setting_id, account_id, setting_key, setting_value) SELECT incoming.setting_id, incoming.account_id, incoming.setting_key, CASE WHEN incoming.setting_value IN ('on', '1') THEN 'enabled' ELSE 'disabled' END FROM (SELECT 1 AS setting_id, 7 AS account_id, 'digest' AS setting_key, 'on' AS setting_value UNION ALL SELECT 2, 7, 'alerts', '0' UNION ALL SELECT 3, 8, 'digest', 'yes') AS incoming ON DUPLICATE KEY UPDATE setting_value = CASE WHEN incoming.setting_value IN ('on', '1') THEN 'enabled' ELSE 'disabled' END",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT account_id, setting_key, setting_value FROM account_settings ORDER BY account_id, setting_key",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT account_id, COUNT(*) AS setting_count, MIN(setting_value) AS first_value, MAX(setting_value) AS last_value FROM account_settings GROUP BY account_id ORDER BY account_id",
+      "ordered": true
+    }
+  ]
+}

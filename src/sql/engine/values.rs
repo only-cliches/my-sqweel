@@ -26,6 +26,9 @@ pub(super) fn eval_insert_update_value(
     if let Some(value) = incoming_value_expr(expr, incoming)? {
         return Ok(value);
     }
+    if let Some(value) = incoming_qualified_column_expr(expr, incoming) {
+        return Ok(value);
+    }
 
     match expr {
         Expr::Identifier(identifier) if identifier.value.eq_ignore_ascii_case("DEFAULT") => {
@@ -232,6 +235,26 @@ fn incoming_value_expr(expr: &Expr, incoming: &Map<String, Value>) -> Result<Opt
     let column = projection_expr_column_name(expr);
     let column = column.rsplit('.').next().unwrap_or(&column);
     Ok(Some(incoming.get(column).cloned().unwrap_or(Value::Null)))
+}
+
+fn incoming_qualified_column_expr(expr: &Expr, incoming: &Map<String, Value>) -> Option<Value> {
+    let Expr::CompoundIdentifier(parts) = expr else {
+        return None;
+    };
+    let key = parts
+        .iter()
+        .map(|part| part.value.as_str())
+        .collect::<Vec<_>>()
+        .join(".");
+    incoming
+        .iter()
+        .find_map(|(name, value)| name.eq_ignore_ascii_case(&key).then_some(value.clone()))
+        .or_else(|| {
+            let column = parts.last()?.value.as_str();
+            incoming.iter().find_map(|(name, value)| {
+                name.eq_ignore_ascii_case(column).then_some(value.clone())
+            })
+        })
 }
 
 pub(super) fn assignment_target_name(assignment: &Assignment) -> String {
