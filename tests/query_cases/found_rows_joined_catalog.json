@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "id": "found_rows_joined_catalog",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "vinsidious/sqlriver",
+      "commit": "2f886fbfcd8f8a4d19de43ae8dee1013a3f29405",
+      "path": "website/examples/mysql.sql",
+      "url": "https://github.com/vinsidious/sqlriver/blob/2f886fbfcd8f8a4d19de43ae8dee1013a3f29405/website/examples/mysql.sql",
+      "sha256": "9593cf448acee53c24b0efa44b663b9475db396f6b223188829087a2d178cbf8",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "website/examples/mysql.sql: Pagination pattern",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL pagination query combines SQL_CALC_FOUND_ROWS with a LEFT JOIN, a bounded price filter, deterministic ordering, and an offset LIMIT.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored catalog page. Active catalog rows are filtered by a price range, enriched through a LEFT JOIN that preserves a missing category, paged with an offset, and followed by FOUND_ROWS() before and after an ordinary limited read to verify session-state counts."
+    },
+    "independently_authored": true
+  },
+  "features": ["sql-calc-found-rows", "found-rows", "left-join", "range-filter", "offset-pagination", "session-state", "deterministic-order"],
+  "fixture_notes": "Four active catalog rows match the price range, including one row whose category is absent and must remain visible with a NULL category label. The first two-row page starts at offset one; FOUND_ROWS() must report four, while the later ordinary page must replace the session count with two.",
+  "determinism_notes": "Catalog IDs, names, prices, category IDs, active flags, and page bounds are fixed; every page is ordered by the unique item name and item ID without clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE catalog_categories (category_id INT PRIMARY KEY, category_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE catalog_items (item_id INT PRIMARY KEY, category_id INT NOT NULL, item_name VARCHAR(32) NOT NULL, price_cents INT NOT NULL, active TINYINT NOT NULL)",
+    "INSERT INTO catalog_categories VALUES (1, 'Audio'), (2, 'Office')",
+    "INSERT INTO catalog_items VALUES (101, 1, 'Amber', 1500, 1), (102, 99, 'Beacon', 2200, 1), (103, 2, 'Cedar', 3200, 1), (104, 1, 'Delta', 4500, 1), (105, 2, 'Echo', 7000, 1), (106, 1, 'Fjord', 1200, 0)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT SQL_CALC_FOUND_ROWS i.item_id, i.item_name, i.price_cents, c.category_name FROM catalog_items i LEFT JOIN catalog_categories c ON c.category_id = i.category_id WHERE i.active = 1 AND i.price_cents BETWEEN 1000 AND 5000 ORDER BY i.item_name ASC, i.item_id ASC LIMIT 1, 2",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT FOUND_ROWS() AS matching_count",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT i.item_id, i.item_name, i.price_cents, c.category_name FROM catalog_items i LEFT JOIN catalog_categories c ON c.category_id = i.category_id WHERE i.active = 1 AND i.price_cents BETWEEN 1000 AND 5000 ORDER BY i.item_name ASC, i.item_id ASC LIMIT 1, 2",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT FOUND_ROWS() AS latest_page_count",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT i.item_id, i.item_name, i.price_cents, i.category_id, i.active FROM catalog_items i ORDER BY i.item_id",
+      "ordered": true
+    }
+  ]
+}

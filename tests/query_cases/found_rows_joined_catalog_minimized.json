@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "id": "found_rows_joined_catalog_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "vinsidious/sqlriver",
+      "commit": "2f886fbfcd8f8a4d19de43ae8dee1013a3f29405",
+      "path": "website/examples/mysql.sql",
+      "url": "https://github.com/vinsidious/sqlriver/blob/2f886fbfcd8f8a4d19de43ae8dee1013a3f29405/website/examples/mysql.sql",
+      "sha256": "9593cf448acee53c24b0efa44b663b9475db396f6b223188829087a2d178cbf8",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "website/examples/mysql.sql: Pagination pattern",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "SQL_CALC_FOUND_ROWS with a LEFT JOIN and offset pagination must update FOUND_ROWS() consistently after a later ordinary limited read.",
+      "mysql_mariadb_translation": "Reduced to three catalog rows, one category lookup with a missing category, and paired buffered and ordinary offset pages so the session count transition is isolated."
+    },
+    "independently_authored": true,
+    "minimized_from": "found_rows_joined_catalog"
+  },
+  "features": ["sql-calc-found-rows", "found-rows", "left-join", "offset-pagination", "minimized-regression"],
+  "fixture_notes": "Three rows match the join query. The buffered page starts at offset one and FOUND_ROWS() must report three; the later ordinary page returns two rows and FOUND_ROWS() must then report two.",
+  "determinism_notes": "Fixed integer IDs and labels are ordered by the unique item ID; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE mini_categories (category_id INT PRIMARY KEY, category_name VARCHAR(16) NOT NULL)",
+    "CREATE TABLE mini_items (item_id INT PRIMARY KEY, category_id INT NOT NULL, item_name VARCHAR(16) NOT NULL)",
+    "INSERT INTO mini_categories VALUES (1, 'Audio')",
+    "INSERT INTO mini_items VALUES (1, 1, 'Alpha'), (2, 99, 'Beacon'), (3, 1, 'Cedar')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT SQL_CALC_FOUND_ROWS i.item_id, i.item_name, c.category_name FROM mini_items i LEFT JOIN mini_categories c ON c.category_id = i.category_id ORDER BY i.item_id LIMIT 1, 2",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT FOUND_ROWS() AS matching_count",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT i.item_id, i.item_name, c.category_name FROM mini_items i LEFT JOIN mini_categories c ON c.category_id = i.category_id ORDER BY i.item_id LIMIT 1, 2",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT FOUND_ROWS() AS latest_page_count",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT i.item_id, i.item_name, i.category_id FROM mini_items i ORDER BY i.item_id",
+      "ordered": true
+    }
+  ]
+}

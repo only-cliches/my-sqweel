@@ -1028,15 +1028,36 @@ impl RawEngine {
             self.last_found_rows.store(0, AtomicOrdering::Relaxed);
             return;
         }
+        if upper.starts_with("SELECT FOUND_ROWS()") {
+            return;
+        }
         let count = if upper.contains("SQL_CALC_FOUND_ROWS") {
             self.calculate_found_rows(sql)
                 .unwrap_or(result.rows.len() as u64)
+        } else if let Some(offset) = self.joined_query_offset(sql) {
+            result.rows.len().saturating_add(offset) as u64
         } else if upper.contains("COUNT(") && result.rows.is_empty() {
             1
         } else {
             result.rows.len() as u64
         };
         self.last_found_rows.store(count, AtomicOrdering::Relaxed);
+    }
+
+    fn joined_query_offset(&self, sql: &str) -> Option<usize> {
+        let parse_sql = self.rewrite_sql_for_parser(&strip_select_modifiers(sql));
+        let mut statements = super::parse(&parse_sql).ok()?;
+        let Statement::Query(query) = statements.pop()? else {
+            return None;
+        };
+        let has_join = match &*query.body {
+            SetExpr::Select(select) => select.from.iter().any(|table| !table.joins.is_empty()),
+            _ => false,
+        };
+        has_join
+            .then(|| query.offset.as_ref())
+            .flatten()
+            .and_then(|offset| eval::offset_to_usize(offset).ok())
     }
 
     fn calculate_found_rows(&self, sql: &str) -> Option<u64> {
