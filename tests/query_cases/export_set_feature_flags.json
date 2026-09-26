@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "id": "export_set_feature_flags",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "anilsolanki2645/MySQL-Tutorial",
+      "commit": "205393ee3b9db1041777e8667161f62e656c6558",
+      "path": "MySQL-String-Function.sql",
+      "url": "https://github.com/anilsolanki2645/MySQL-Tutorial/blob/205393ee3b9db1041777e8667161f62e656c6558/MySQL-String-Function.sql",
+      "sha256": "4889fbabcd6e16b646c2568cd6d959bce8de65d338fe8dad0042a81d4d428d25",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL-String-Function.sql: EXPORT_SET example",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL string-function query expands the bits of an integer mask into repeated on/off labels with a chosen separator.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored feature-flag audit. Fixed masks exercise no bits, alternating bits, all bits, and SQL NULL; a pipe separator and four-bit width make every emitted position observable without copying the source tutorial values or context."
+    },
+    "independently_authored": true
+  },
+  "features": ["export-set", "bitmask-expansion", "custom-separator", "null-propagation", "deterministic-order"],
+  "fixture_notes": "Masks 0, 5, 15, and NULL render four fixed positions with ENABLED/DISABLED labels; position order is least-significant bit first as defined by EXPORT_SET.",
+  "determinism_notes": "Flag IDs, masks, labels, separator, and bit count are fixed; output is ordered by flag ID with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE feature_flag_masks (flag_id INT PRIMARY KEY, flag_label VARCHAR(24) NOT NULL, flag_mask INT NULL)",
+    "INSERT INTO feature_flag_masks VALUES (201, 'none', 0), (202, 'alternating', 5), (203, 'all-enabled', 15), (204, 'unknown', NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT flag_id, flag_label, flag_mask, EXPORT_SET(flag_mask, 'ENABLED', 'DISABLED', '|', 4) AS flag_state_vector FROM feature_flag_masks ORDER BY flag_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
