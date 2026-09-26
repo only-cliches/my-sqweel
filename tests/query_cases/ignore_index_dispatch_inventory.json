@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "id": "ignore_index_dispatch_inventory",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "shockerli/Notes",
+      "commit": "ab692c415b98da64528d57ba6856add8d78dc3cd",
+      "path": "MySQL_Note.sql",
+      "url": "https://github.com/shockerli/Notes/blob/ab692c415b98da64528d57ba6856add8d78dc3cd/MySQL_Note.sql",
+      "sha256": "ea4fec2cd49faedee8b86a80642b3d053f23adc112367a32ae4e4e0833d10c0a",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL_Note.sql:379-381",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL read excludes one or more named indexes with IGNORE INDEX while applying predicates.",
+      "mysql_mariadb_translation": "Reauthored as a dispatch inventory report. IGNORE INDEX excludes the state index for an open-bin filter, while a second query excludes the primary index and orders by a stable label. The source schema, rows, aliases, and operational context are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "ignore-index",
+    "named-index-hint",
+    "primary-index-hint",
+    "filtered-select",
+    "order-by",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Bins 301 and 303 are open and returned by the state-index-excluding query; bin 302 is closed. A second query excludes the primary index and returns all bins by label. Hints must not alter selected rows or ordering.",
+  "determinism_notes": "Bin IDs, states, and labels are fixed, both indexes exist, and every result has an explicit unique ordering. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE dispatch_ignore_bins (bin_id INT PRIMARY KEY, bin_state VARCHAR(12) NOT NULL, bin_label VARCHAR(32) NOT NULL, INDEX idx_ignore_state (bin_state))",
+    "INSERT INTO dispatch_ignore_bins VALUES (301, 'open', 'north'), (302, 'closed', 'hold'), (303, 'open', 'south')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT bin_id, bin_label FROM dispatch_ignore_bins IGNORE INDEX (idx_ignore_state) WHERE bin_state = 'open' ORDER BY bin_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT bin_id, bin_state FROM dispatch_ignore_bins IGNORE INDEX (PRIMARY) ORDER BY bin_label, bin_id",
+      "ordered": true
+    }
+  ]
+}
