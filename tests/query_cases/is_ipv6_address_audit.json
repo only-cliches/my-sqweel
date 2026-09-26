@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "is_ipv6_address_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "tanviredu/100_days_of_learning",
+      "commit": "546b52889f82b5ecc1fb52ee01d79225c926f88d",
+      "path": "MySQL Fundamentals 2/work1.sql",
+      "url": "https://github.com/tanviredu/100_days_of_learning/blob/546b52889f82b5ecc1fb52ee01d79225c926f88d/MySQL%20Fundamentals%202/work1.sql",
+      "sha256": "f34b718051951927bd57845f87ff40905e65ec287819b90201803649b1b9b558",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL Fundamentals 2/work1.sql:497-501",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL scalar-function probe calls IS_IPV6 on a valid IPv4 address, a valid compressed IPv6 address, and malformed IPv6 text.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored address-quality audit. Fixed rows classify canonical IPv6 text, compressed IPv6 text, IPv4 text, malformed text, and SQL NULL with IS_IPV6; valid IPv6 rows additionally round-trip through INET6_ATON and HEX so the predicate and binary conversion compose in one ordered report. The source's scalar probe, values, schema, and teaching context are not copied.",
+      "independently_authored": true
+    }
+  },
+  "features": [
+    "is-ipv6",
+    "ipv6-text-validation",
+    "inet6-aton",
+    "hex-projection",
+    "null-propagation",
+    "malformed-input",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Rows 1201 and 1202 are valid IPv6 forms and must be classified as 1 with 16-byte hexadecimal encodings. Row 1203 is IPv4 text, row 1204 is malformed IPv6 text, and row 1205 is SQL NULL; each must be classified as 0 or NULL according to MariaDB semantics and must not produce a binary encoding.",
+  "determinism_notes": "Address IDs, text values, and ordered final projection are fixed. There are no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE address_quality (address_id INT PRIMARY KEY, address_text VARCHAR(64) NULL)",
+    "INSERT INTO address_quality VALUES (1201, '2001:db8::1'), (1202, '2001:db8:0:1:2:3:4:5'), (1203, '192.0.2.44'), (1204, '2001:db8::zz'), (1205, NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT address_id, address_text, IS_IPV6(address_text) AS ipv6_flag, CASE WHEN IS_IPV6(address_text) = 1 THEN HEX(INET6_ATON(address_text)) ELSE NULL END AS packed_hex FROM address_quality ORDER BY address_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}

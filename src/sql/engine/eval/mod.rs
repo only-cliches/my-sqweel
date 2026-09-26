@@ -3720,6 +3720,15 @@ where
                 .unwrap_or(Value::Null);
             eval_is_ipv4_value(value)
         })()),
+        "IS_IPV6" => Some((|| {
+            let value = args
+                .first()
+                .map(eval_arg)
+                .transpose()?
+                .unwrap_or(Value::Null);
+            eval_is_ipv6_value(value)
+        })()),
+
         "INET_ATON" => Some((|| {
             let value = args
                 .first()
@@ -4235,6 +4244,7 @@ pub(super) fn eval_function_text(
             }
             Ok(Value::String(parts.join(&separator)))
         }
+        "IS_IPV6" => eval_is_ipv6(args.first(), data, last_insert_id),
         "REGEXP_REPLACE" => {
             let values = args
                 .iter()

@@ -1775,7 +1775,7 @@ impl RawEngine {
                     "REGEXP_REPLACE" => MysqlColumnType::LongBlob,
                     "REGEXP_SUBSTR" => MysqlColumnType::VarChar,
                     "REGEXP_INSTR" => MysqlColumnType::Integer,
-                    "IS_IPV4" => MysqlColumnType::Integer,
+                    "IS_IPV4" | "IS_IPV6" => MysqlColumnType::Integer,
                     "INET_ATON" => {
                         metadata.unsigned = true;
                         MysqlColumnType::BigInt

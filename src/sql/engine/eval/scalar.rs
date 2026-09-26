@@ -313,6 +313,23 @@ pub(super) fn eval_is_ipv4_value(value: Value) -> Result<Value> {
                 .is_ok()) as u8,
     )))
 }
+pub(super) fn eval_is_ipv6(
+    value_arg: Option<&String>,
+    data: &Map<String, Value>,
+    last_insert_id: u64,
+) -> Result<Value> {
+    eval_is_ipv6_value(eval_arg(value_arg, data, last_insert_id)?)
+}
+
+pub(super) fn eval_is_ipv6_value(value: Value) -> Result<Value> {
+    Ok(Value::Number(Number::from(
+        (value != Value::Null
+            && matches!(
+                json_scalar_to_string(&value).parse::<std::net::IpAddr>(),
+                Ok(std::net::IpAddr::V6(_))
+            )) as u8,
+    )))
+}
 
 pub(super) fn eval_inet_aton(
     value_arg: Option<&String>,
