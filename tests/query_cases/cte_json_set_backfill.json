@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "id": "cte_json_set_backfill",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "open-metadata/OpenMetadata",
+      "commit": "b0a971e82ecdfcce757e23b47f95437feea8b876",
+      "path": "bootstrap/sql/migrations/native/2.1.0/mysql/postDataMigrationSQLScript.sql",
+      "url": "https://github.com/open-metadata/OpenMetadata/blob/b0a971e82ecdfcce757e23b47f95437feea8b876/bootstrap/sql/migrations/native/2.1.0/mysql/postDataMigrationSQLScript.sql",
+      "sha256": "2a00da107d3e1372058fa3cff7af1d233f119101d88e06f5372aaa59016c2b66",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "postDataMigrationSQLScript.sql: history upsert followed by JSON_SET status backfill",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A migration folds historical rows through CTEs into an INSERT ... ON DUPLICATE KEY UPDATE summary, then backfills a JSON document with JSON_SET when a workflow field is absent or stale.",
+      "mysql_mariadb_translation": "Reauthored as a tenant status backfill. One CTE-backed upsert selects the latest tied history row and preserves the earliest observation through LEAST; a second update conditionally adds a reviewed flag to a JSON profile. The source schema, identifiers, values, and application migration are not copied.",
+      "independently_authored": true
+    }
+  },
+  "features": [
+    "common-table-expression",
+    "latest-row-max-tie-break",
+    "json-extract-unquote",
+    "insert-select",
+    "on-duplicate-key-update",
+    "least-upsert-merge",
+    "json-set-backfill",
+    "conditional-json-update",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Tenant 701 has two history rows at its latest timestamp, so history_id 703 must win; its existing summary keeps the earlier first_seen timestamp. Tenant 702 is inserted from history. The JSON profile update adds reviewed=true only to the profile missing the flag and leaves an explicit false flag unchanged.",
+  "determinism_notes": "All timestamps, identifiers, JSON payloads, and statements are fixed. The latest-row tie-break is explicit, statements run sequentially on one connection, and final reads are ordered by primary keys. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE tenant_history (history_id INT PRIMARY KEY, tenant_id INT NOT NULL, state_code VARCHAR(16) NOT NULL, observed_at DATETIME NOT NULL, details JSON NOT NULL)",
+    "CREATE TABLE tenant_summary (tenant_id INT PRIMARY KEY, state_code VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, first_seen DATETIME NOT NULL, last_seen DATETIME NOT NULL, latest_history_id INT NOT NULL)",
+    "CREATE TABLE tenant_profiles (tenant_id INT PRIMARY KEY, profile JSON NOT NULL)",
+    "INSERT INTO tenant_history (history_id, tenant_id, state_code, observed_at, details) VALUES (7011, 701, 'queued', '2026-07-01 08:00:00', '{\"severity\":\"low\"}'), (7012, 701, 'running', '2026-07-02 09:30:00', '{\"severity\":\"medium\"}'), (7013, 701, 'failed', '2026-07-02 09:30:00', '{\"severity\":\"high\"}'), (7021, 702, 'complete', '2026-07-03 10:15:00', '{\"severity\":\"low\"}')",
+    "INSERT INTO tenant_summary (tenant_id, state_code, severity, first_seen, last_seen, latest_history_id) VALUES (701, 'legacy', 'unknown', '2026-06-30 12:00:00', '2026-06-30 12:00:00', 7000)",
+    "INSERT INTO tenant_profiles (tenant_id, profile) VALUES (701, '{\"plan\":\"pro\"}'), (702, '{\"plan\":\"basic\",\"reviewed\":false}')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO tenant_summary (tenant_id, state_code, severity, first_seen, last_seen, latest_history_id) WITH history_bounds AS (SELECT tenant_id, MIN(observed_at) AS first_seen, MAX(observed_at) AS last_seen FROM tenant_history GROUP BY tenant_id), latest_history AS (SELECT b.tenant_id, b.first_seen, b.last_seen, MAX(h.history_id) AS latest_history_id FROM history_bounds AS b INNER JOIN tenant_history AS h ON h.tenant_id = b.tenant_id AND h.observed_at = b.last_seen GROUP BY b.tenant_id, b.first_seen, b.last_seen) SELECT h.tenant_id, h.state_code, JSON_UNQUOTE(JSON_EXTRACT(h.details, '$.severity')), l.first_seen, l.last_seen, h.history_id FROM latest_history AS l INNER JOIN tenant_history AS h ON h.history_id = l.latest_history_id ON DUPLICATE KEY UPDATE state_code = VALUES(state_code), severity = VALUES(severity), tenant_summary.first_seen = LEAST(tenant_summary.first_seen, VALUES(first_seen)), last_seen = VALUES(last_seen), latest_history_id = VALUES(latest_history_id)",
+      "ordered": true
+    },
+    {
+      "sql": "UPDATE tenant_profiles SET profile = JSON_SET(profile, '$.reviewed', true) WHERE JSON_EXTRACT(profile, '$.reviewed') IS NULL OR JSON_TYPE(JSON_EXTRACT(profile, '$.reviewed')) = 'NULL'",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT tenant_id, state_code, severity, first_seen, last_seen, latest_history_id FROM tenant_summary ORDER BY tenant_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT tenant_id, JSON_UNQUOTE(JSON_EXTRACT(profile, '$.reviewed')) AS reviewed, JSON_UNQUOTE(JSON_EXTRACT(profile, '$.plan')) AS plan FROM tenant_profiles ORDER BY tenant_id",
+      "ordered": true
+    }
+  ]
+}
