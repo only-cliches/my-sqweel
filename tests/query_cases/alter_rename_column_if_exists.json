@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "id": "alter_rename_column_if_exists",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "antlr/grammars-v4",
+      "commit": "2c8f74860509c39629ef23451eee670a23d4b280",
+      "path": "sql/mariadb/examples/fast/ddl_alter.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/2c8f74860509c39629ef23451eee670a23d4b280/sql/mariadb/examples/fast/ddl_alter.sql",
+      "sha256": "6855c7472f478c1e0f6001ee54f8054ead273413e12548baa8525f3574bf1837",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/mariadb/examples/fast/ddl_alter.sql:151",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "MariaDB ALTER TABLE supports RENAME COLUMN IF EXISTS so a migration can rename a legacy column without failing when the source column is already absent.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored telemetry-schema migration. One rename changes a legacy label column, a repeated IF EXISTS rename becomes a no-op, and a final projection verifies both preserved values and the new column name. The source table, columns, and migration context are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "alter-table",
+    "rename-column",
+    "rename-column-if-exists",
+    "idempotent-ddl",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Telemetry rows 610 and 611 begin with legacy_label. The first rename changes it to signal_label while preserving values; the second IF EXISTS rename targets the absent legacy name and must leave the already-renamed schema unchanged.",
+  "determinism_notes": "Row IDs, labels, and DDL statements are fixed; the final read is ordered by the primary key with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE telemetry_labels (telemetry_id INT PRIMARY KEY, legacy_label VARCHAR(24) NOT NULL, signal_value INT NOT NULL)",
+    "INSERT INTO telemetry_labels (telemetry_id, legacy_label, signal_value) VALUES (610, 'alpha', 7), (611, 'beta', 9)"
+  ],
+  "steps": [
+    {
+      "sql": "ALTER TABLE telemetry_labels RENAME COLUMN legacy_label TO signal_label",
+      "ordered": true
+    },
+    {
+      "sql": "ALTER TABLE telemetry_labels RENAME COLUMN IF EXISTS legacy_label TO signal_label",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT telemetry_id, signal_label, signal_value FROM telemetry_labels ORDER BY telemetry_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}

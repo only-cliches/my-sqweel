@@ -804,6 +804,13 @@ impl RawEngine {
                 self.maybe_inject_failure(&raw)?;
                 let _update_ignore_guard =
                     UpdateIgnoreGuard::install(is_update_ignore_statement(&raw));
+                if let Some(result) = self.execute_alter_rename_column_if_exists_compat(&raw)? {
+                    self.capture_eval_user_variables();
+                    self.record_found_rows(&raw, &result);
+                    self.store_last_rows_affected(&raw, &result);
+                    out.push(result);
+                    continue;
+                }
                 if let Some(result) = self.execute_alter_conditional_key_compat(&raw)? {
                     self.capture_eval_user_variables();
                     self.record_found_rows(&raw, &result);
@@ -1171,6 +1178,7 @@ impl RawEngine {
         parse_sql = rewrite_straight_join(&parse_sql);
         parse_sql = rewrite_chained_join_constraints(&parse_sql);
         parse_sql = rewrite_alter_drop_foreign_key(&parse_sql);
+        parse_sql = rewrite_alter_rename_column_if_exists(&parse_sql);
         parse_sql = rewrite_alter_add_column_if_not_exists(&parse_sql);
         parse_sql = rewrite_parenthesized_alter_columns(&parse_sql);
         parse_sql = rewrite_named_unique_constraints(&parse_sql);
@@ -4308,6 +4316,59 @@ impl RawEngine {
         Ok(Some(self.alter_table(name, operations, false)?))
     }
 
+    fn execute_alter_rename_column_if_exists_compat(
+        &self,
+        sql: &str,
+    ) -> Result<Option<QueryResult>> {
+        let upper = sql.to_ascii_uppercase();
+        const MARKER: &str = "RENAME COLUMN IF EXISTS";
+        if !upper.starts_with("ALTER TABLE ") || !upper.contains(MARKER) {
+            return Ok(None);
+        }
+        let remainder = &sql["ALTER TABLE ".len()..];
+        let remainder_upper = &upper["ALTER TABLE ".len()..];
+        let Some(rename_at) = find_top_level_keyword(remainder_upper, MARKER) else {
+            return Ok(None);
+        };
+        let table_text = remainder[..rename_at].trim();
+        let definition = remainder[rename_at + MARKER.len()..]
+            .trim()
+            .trim_end_matches(';')
+            .trim();
+        let normalized = format!("ALTER TABLE {table_text} RENAME COLUMN {definition}");
+        let mut parts = definition.split_whitespace();
+        let Some(old_column) = parts.next() else {
+            return Ok(None);
+        };
+        let Some(to_keyword) = parts.next() else {
+            return Ok(None);
+        };
+        let Some(_new_column) = parts.next() else {
+            return Ok(None);
+        };
+        if !to_keyword.eq_ignore_ascii_case("TO") || parts.next().is_some() {
+            return Ok(None);
+        }
+        let table_name = table_text.trim_matches(['`', '"']);
+        let Some(schema) = self
+            .schemas
+            .iter()
+            .find(|schema| schema.table.eq_ignore_ascii_case(table_name))
+        else {
+            return Ok(None);
+        };
+        let old_column_name = old_column.trim_matches(['`', '"']);
+        if !schema
+            .columns
+            .keys()
+            .any(|column| column.eq_ignore_ascii_case(old_column_name))
+        {
+            return Ok(Some(QueryResult::default()));
+        }
+        self.execute_sql_internal(&normalized, &normalized, false, false)?;
+        Ok(Some(QueryResult::default()))
+    }
+
     fn execute_alter_add_column_if_not_exists_compat(
         &self,
         sql: &str,
@@ -4934,6 +4995,26 @@ fn rewrite_alter_drop_foreign_key(sql: &str) -> String {
     rewritten.push_str(&sql[cursor..]);
     rewritten
 }
+fn rewrite_alter_rename_column_if_exists(sql: &str) -> String {
+    let upper = sql.to_ascii_uppercase();
+    let needle = "RENAME COLUMN IF EXISTS";
+    let mut rewritten = String::with_capacity(sql.len());
+    let mut cursor = 0;
+    let mut changed = false;
+    while let Some(relative) = upper[cursor..].find(needle) {
+        let start = cursor + relative;
+        rewritten.push_str(&sql[cursor..start]);
+        rewritten.push_str("RENAME COLUMN");
+        cursor = start + needle.len();
+        changed = true;
+    }
+    if !changed {
+        return sql.to_string();
+    }
+    rewritten.push_str(&sql[cursor..]);
+    rewritten
+}
+
 fn rewrite_alter_add_column_if_not_exists(sql: &str) -> String {
     let upper = sql.to_ascii_uppercase();
     let needle = "ADD COLUMN IF NOT EXISTS";

@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "id": "alter_rename_column_if_exists_minimized",
+  "provenance": {
+    "kind": "minimized-from-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "antlr/grammars-v4",
+      "commit": "2c8f74860509c39629ef23451eee670a23d4b280",
+      "path": "sql/mariadb/examples/fast/ddl_alter.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/2c8f74860509c39629ef23451eee670a23d4b280/sql/mariadb/examples/fast/ddl_alter.sql",
+      "sha256": "6855c7472f478c1e0f6001ee54f8054ead273413e12548baa8525f3574bf1837",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/mariadb/examples/fast/ddl_alter.sql:151",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "MariaDB ALTER TABLE supports RENAME COLUMN IF EXISTS so a migration can rename a legacy column without failing when the source column is already absent.",
+      "mysql_mariadb_translation": "Minimized to one table, one value row, one successful rename, and one repeated IF EXISTS rename against the now-absent source column. The final projection verifies the idempotent no-op without copying source SQL."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "alter-table",
+    "rename-column-if-exists",
+    "idempotent-ddl",
+    "dml-final-state"
+  ],
+  "fixture_notes": "The first rename changes old_name to new_name. The second rename targets the absent old_name and must succeed without changing the row.",
+  "determinism_notes": "The single primary-key row and final projection are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE rename_probe (id INT PRIMARY KEY, old_name VARCHAR(24) NOT NULL)",
+    "INSERT INTO rename_probe (id, old_name) VALUES (1, 'stable')"
+  ],
+  "steps": [
+    {
+      "sql": "ALTER TABLE rename_probe RENAME COLUMN old_name TO new_name",
+      "ordered": true
+    },
+    {
+      "sql": "ALTER TABLE rename_probe RENAME COLUMN IF EXISTS old_name TO new_name",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT id, new_name FROM rename_probe ORDER BY id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
