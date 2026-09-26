@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "named_window_temporal_ranking",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "cncf/devstats",
+      "commit": "ab4573a3a1e135a830133adb9b8e5f0bd162b187",
+      "path": "util_sql/analysis_query.sql",
+      "url": "https://github.com/cncf/devstats/blob/ab4573a3a1e135a830133adb9b8e5f0bd162b187/util_sql/analysis_query.sql",
+      "sha256": "4f0094241d5f92995ab4d714c667f35084f1906328a030945cfe85264ddcd69a",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "util_sql/analysis_query.sql:52-101",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A reporting query joins events to effective-dated affiliation rows, groups activity counts, ranks actors with ROW_NUMBER over a named window, and filters the ranked result through an outer top-N condition.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored activity-window report. Fixed reporting windows join timestamped events, a temporal LEFT JOIN selects the affiliation valid at each event time, a grouped CTE counts distinct events, and a second CTE applies a named ROW_NUMBER window before a per-window top-N filter. Source tables, values, aliases, and reporting context are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "cte",
+    "named-window",
+    "row-number",
+    "temporal-left-join",
+    "count-distinct",
+    "partitioned-top-n",
+    "deterministic-tie-break"
+  ],
+  "fixture_notes": "Window alpha ranks actor 10 first with two events. Window beta ranks actor 20 first with two events, then retains actor 30 by actor ID tie-break; actors without a matching non-independent affiliation remain through the LEFT JOIN with NULL company names.",
+  "determinism_notes": "Window boundaries, event timestamps, affiliations, counts, and actor IDs are fixed. Ranking orders by event count descending and actor ID ascending; final rows are ordered by window and rank. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE activity_windows (window_id INT PRIMARY KEY, window_label VARCHAR(24) NOT NULL, starts_at DATETIME NOT NULL, ends_at DATETIME NOT NULL, top_n INT NOT NULL)",
+    "CREATE TABLE activity_events (event_id INT PRIMARY KEY, actor_id INT NOT NULL, occurred_at DATETIME NOT NULL, event_kind VARCHAR(16) NOT NULL)",
+    "CREATE TABLE actor_affiliations (affiliation_id INT PRIMARY KEY, actor_id INT NOT NULL, company_name VARCHAR(32) NOT NULL, valid_from DATETIME NOT NULL, valid_to DATETIME NOT NULL)",
+    "INSERT INTO activity_windows VALUES (1, 'alpha', '2026-01-01 00:00:00', '2026-01-02 00:00:00', 1), (2, 'beta', '2026-01-02 00:00:00', '2026-01-03 00:00:00', 2)",
+    "INSERT INTO activity_events VALUES (101, 10, '2026-01-01 01:00:00', 'push'), (102, 10, '2026-01-01 02:00:00', 'issue'), (103, 20, '2026-01-01 03:00:00', 'push'), (104, 30, '2026-01-01 04:00:00', 'push'), (105, 20, '2026-01-02 01:00:00', 'push'), (106, 20, '2026-01-02 02:00:00', 'issue'), (107, 30, '2026-01-02 03:00:00', 'push'), (108, 40, '2026-01-02 04:00:00', 'push')",
+    "INSERT INTO actor_affiliations VALUES (1, 10, 'Northstar', '2025-12-01 00:00:00', '2026-01-02 00:00:00'), (2, 20, 'Bluebird', '2025-12-15 00:00:00', '2026-01-03 00:00:00'), (3, 30, 'Independent', '2025-12-01 00:00:00', '2026-01-03 00:00:00'), (4, 40, '', '2025-12-01 00:00:00', '2026-01-03 00:00:00')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH activity_counts AS (SELECT w.window_id, w.window_label, e.actor_id, a.company_name, COUNT(DISTINCT e.event_id) AS event_count FROM activity_windows w JOIN activity_events e ON e.occurred_at >= w.starts_at AND e.occurred_at < w.ends_at LEFT JOIN actor_affiliations a ON a.actor_id = e.actor_id AND a.valid_from <= e.occurred_at AND a.valid_to > e.occurred_at AND a.company_name <> 'Independent' AND a.company_name <> '' GROUP BY w.window_id, w.window_label, e.actor_id, a.company_name), ranked_activity AS (SELECT window_id, window_label, actor_id, company_name, event_count, ROW_NUMBER() OVER actor_activity AS activity_rank FROM activity_counts WINDOW actor_activity AS (PARTITION BY window_id ORDER BY event_count DESC, actor_id ASC)) SELECT r.window_id, r.window_label, r.actor_id, r.company_name, r.event_count, r.activity_rank FROM ranked_activity r JOIN activity_windows w ON w.window_id = r.window_id WHERE r.activity_rank <= w.top_n ORDER BY r.window_id, r.activity_rank",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "WITH activity_counts AS (SELECT w.window_id, w.window_label, e.actor_id, a.company_name, COUNT(DISTINCT e.event_id) AS event_count FROM activity_windows w JOIN activity_events e ON e.occurred_at >= w.starts_at AND e.occurred_at < w.ends_at LEFT JOIN actor_affiliations a ON a.actor_id = e.actor_id AND a.valid_from <= e.occurred_at AND a.valid_to > e.occurred_at AND a.company_name <> 'Independent' AND a.company_name <> '' GROUP BY w.window_id, w.window_label, e.actor_id, a.company_name), ranked_activity AS (SELECT window_id, window_label, actor_id, company_name, event_count, ROW_NUMBER() OVER actor_activity AS activity_rank FROM activity_counts WINDOW actor_activity AS (PARTITION BY window_id ORDER BY event_count DESC, actor_id ASC)) SELECT r.window_id, r.window_label, r.actor_id, r.company_name, r.event_count, r.activity_rank FROM ranked_activity r JOIN activity_windows w ON w.window_id = r.window_id WHERE r.activity_rank <= w.top_n ORDER BY r.window_id, r.activity_rank",
+      "ordered": true
+    }
+  ]
+}
