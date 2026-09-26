@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "production_counter_delta_clamp",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "united-manufacturing-hub/umh-factory-demo",
+      "commit": "86d041bbc67f0e74f9df0a3864fbdf624c7f4f09",
+      "path": "sql/views.sql",
+      "url": "https://github.com/united-manufacturing-hub/umh-factory-demo/blob/86d041bbc67f0e74f9df0a3864fbdf624c7f4f09/sql/views.sql",
+      "sha256": "b78845ff57d032a625d31defec1be00c2c72c12e2d13333df9728f3668dbbc1f",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/views.sql:L301-L317",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A first CTE uses partitioned LAG to expose the prior counter, and a grouped second CTE computes nonnegative per-day deltas with COALESCE, GREATEST, CASE, and SUM for multiple metric names.",
+      "mysql_mariadb_translation": "Reauthored as a counter-quality report over new asset readings. Good and scrap counters are partitioned by asset and metric, resets and missing values are clamped to zero before grouped daily totals, and two assets make partition boundaries observable. The source schema, identifiers, data, enterprise hierarchy, and view definition are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "partitioned-lag",
+    "null-defaulting",
+    "greatest-clamp",
+    "conditional-sum",
+    "grouped-cte",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Asset 51's good counter rises by 25, resets from 125 to 110 and contributes zero, then becomes NULL and still contributes zero. Its scrap counter changes from 5 to NULL, then 8, then 7, yielding daily deltas 0, 8, and 0. Asset 52 independently starts good at 20 and rises to 30 while scrap starts NULL and reaches 4.",
+  "determinism_notes": "Asset IDs, metric names, dates, counter values, partition ordering, grouping keys, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE counter_readings (reading_id INT PRIMARY KEY, asset_id INT NOT NULL, reading_date DATE NOT NULL, metric_name VARCHAR(16) NOT NULL, end_value INT NULL)",
+    "INSERT INTO counter_readings VALUES (1, 51, '2026-08-01', 'good_count', 100), (2, 51, '2026-08-01', 'scrap_count', 5), (3, 51, '2026-08-02', 'good_count', 125), (4, 51, '2026-08-02', 'scrap_count', NULL), (5, 51, '2026-08-03', 'good_count', 110), (6, 51, '2026-08-03', 'scrap_count', 8), (7, 51, '2026-08-04', 'good_count', NULL), (8, 51, '2026-08-04', 'scrap_count', 7), (9, 52, '2026-08-01', 'good_count', 20), (10, 52, '2026-08-01', 'scrap_count', NULL), (11, 52, '2026-08-02', 'good_count', 30), (12, 52, '2026-08-02', 'scrap_count', 4)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH daily_with_prev AS (SELECT asset_id, reading_date, metric_name, end_value, LAG(end_value) OVER (PARTITION BY asset_id, metric_name ORDER BY reading_date) AS prev_value FROM counter_readings), daily_deltas AS (SELECT asset_id, reading_date, SUM(CASE WHEN metric_name = 'good_count' THEN GREATEST(COALESCE(end_value, 0) - COALESCE(prev_value, 0), 0) ELSE 0 END) AS good_parts, SUM(CASE WHEN metric_name = 'scrap_count' THEN GREATEST(COALESCE(end_value, 0) - COALESCE(prev_value, 0), 0) ELSE 0 END) AS scrap_parts FROM daily_with_prev GROUP BY asset_id, reading_date) SELECT asset_id, reading_date, good_parts, scrap_parts FROM daily_deltas ORDER BY asset_id, reading_date",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "WITH daily_with_prev AS (SELECT asset_id, reading_date, metric_name, end_value, LAG(end_value) OVER (PARTITION BY asset_id, metric_name ORDER BY reading_date) AS prev_value FROM counter_readings), daily_deltas AS (SELECT asset_id, reading_date, SUM(CASE WHEN metric_name = 'good_count' THEN GREATEST(COALESCE(end_value, 0) - COALESCE(prev_value, 0), 0) ELSE 0 END) AS good_parts, SUM(CASE WHEN metric_name = 'scrap_count' THEN GREATEST(COALESCE(end_value, 0) - COALESCE(prev_value, 0), 0) ELSE 0 END) AS scrap_parts FROM daily_with_prev GROUP BY asset_id, reading_date) SELECT asset_id, reading_date, good_parts, scrap_parts FROM daily_deltas ORDER BY asset_id, reading_date",
+      "ordered": true
+    }
+  ]
+}
