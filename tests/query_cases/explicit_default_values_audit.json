@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "id": "explicit_default_values_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "herbiehp/unicenta",
+      "commit": "0367f011ef5820505805646f4146e782ee11fee5",
+      "path": "src-pos/com/openbravo/pos/scripts/MySQL-upgrade-3.55.sql",
+      "url": "https://github.com/herbiehp/unicenta/blob/0367f011ef5820505805646f4146e782ee11fee5/src-pos/com/openbravo/pos/scripts/MySQL-upgrade-3.55.sql",
+      "sha256": "d2a6bcc50b3890d8110d3e1082a2b0f898cff5449298d55d98bd00923912c0cb",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "src-pos/com/openbravo/pos/scripts/MySQL-upgrade-3.55.sql: explicit VALUES (DEFAULT) insert expressions",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL migration supplies DEFAULT explicitly for selected columns inside a multi-row VALUES insert while providing ordinary values for other columns.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored task-seed audit. Fixed rows use explicit DEFAULT expressions for queue state and retry count in one row, while a second row overrides state; final reads expose every materialized default without copying the source schema, identifiers, or data."
+    },
+    "independently_authored": true
+  },
+  "features": ["explicit-default-values", "multi-row-insert", "column-defaults", "deterministic-order"],
+  "fixture_notes": "Task 901 uses both declared defaults, task 902 overrides only the state, and both rows provide explicit labels so default materialization is visible.",
+  "determinism_notes": "Task IDs, labels, defaults, inserted values, and ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE task_seed_audit (task_id INT PRIMARY KEY, task_label VARCHAR(24) NOT NULL, task_state VARCHAR(16) NOT NULL DEFAULT 'queued', retry_count INT NOT NULL DEFAULT 0)",
+    "INSERT INTO task_seed_audit (task_id, task_label, task_state, retry_count) VALUES (901, 'alpha-seed', DEFAULT, DEFAULT), (902, 'beta-seed', 'running', DEFAULT)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT task_id, task_label, task_state, retry_count FROM task_seed_audit ORDER BY task_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
