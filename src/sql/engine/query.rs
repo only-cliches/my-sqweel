@@ -7638,6 +7638,28 @@ fn window_function_arguments(function: &sqlparser::ast::Function) -> Result<Vec<
 fn window_exprs(expr: &Expr) -> Vec<&Expr> {
     match expr {
         Expr::Function(function) if function.over.is_some() => vec![expr],
+        Expr::Function(function) => {
+            let FunctionArguments::List(arguments) = &function.args else {
+                return Vec::new();
+            };
+            arguments
+                .args
+                .iter()
+                .flat_map(|argument| {
+                    let arg = match argument {
+                        FunctionArg::Named { arg, .. }
+                        | FunctionArg::ExprNamed { arg, .. }
+                        | FunctionArg::Unnamed(arg) => arg,
+                    };
+                    match arg {
+                        FunctionArgExpr::Expr(expr) => window_exprs(expr),
+                        FunctionArgExpr::Wildcard | FunctionArgExpr::QualifiedWildcard(_) => {
+                            Vec::new()
+                        }
+                    }
+                })
+                .collect()
+        }
         Expr::BinaryOp { left, right, .. } => {
             let mut expressions = window_exprs(left);
             expressions.extend(window_exprs(right));

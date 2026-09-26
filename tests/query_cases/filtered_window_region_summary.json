@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "filtered_window_region_summary",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "mdiazmat/clinical-trials-analyzer",
+      "commit": "a9ad375bb2fb0e434dc3858c5098b09235672e5f",
+      "path": "sql/queries.sql",
+      "url": "https://github.com/mdiazmat/clinical-trials-analyzer/blob/a9ad375bb2fb0e434dc3858c5098b09235672e5f/sql/queries.sql",
+      "sha256": "37a5230c70c2ff7a725d4e107c0c3508ccf7aa641538ec0baac74fd5c22cb546",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "sql/queries.sql:37-42",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A grouped dashboard query combines conditional aggregate FILTER expressions with a window over grouped COUNT values to calculate each category's share of the filtered population.",
+      "mysql_mariadb_translation": "Reauthored as a regional service-ticket summary. PostgreSQL FILTER aggregates become SUM(CASE ...) and the grouped COUNT remains the input to a total-population window; bounded effort uses a conditional AVG. PostgreSQL casts, source tables, and dashboard labels are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "conditional-aggregate",
+    "grouped-count",
+    "window-over-grouped-aggregate",
+    "conditional-average",
+    "rounded-percentage",
+    "deterministic-order"
+  ],
+  "fixture_notes": "East, North, and West have three, two, and one in-period tickets. Resolved counts and bounded-effort averages exercise conditional aggregates, while the window percentage divides each region count by the total six-ticket population. An older ticket is filtered out before grouping.",
+  "determinism_notes": "Region labels, dates, statuses, effort values, and IDs are fixed; the report is ordered by region code. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE service_tickets (ticket_id INT PRIMARY KEY, region_code VARCHAR(16) NOT NULL, ticket_state VARCHAR(16) NOT NULL, effort_hours INT NOT NULL, opened_on DATE NOT NULL)",
+    "INSERT INTO service_tickets VALUES (101, 'East', 'resolved', 8, '2026-01-04'), (102, 'East', 'open', 14, '2026-01-09'), (103, 'East', 'resolved', 0, '2026-01-15'), (201, 'North', 'resolved', 20, '2026-02-02'), (202, 'North', 'blocked', 150, '2026-02-11'), (301, 'West', 'open', 40, '2026-03-03'), (401, 'West', 'resolved', 9, '2025-12-31')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT region_code, COUNT(*) AS total_tickets, SUM(CASE WHEN ticket_state = 'resolved' THEN 1 ELSE 0 END) AS resolved_tickets, ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER (), 1) AS region_share_pct, ROUND(AVG(CASE WHEN effort_hours BETWEEN 1 AND 100 THEN effort_hours END), 1) AS avg_bounded_effort FROM service_tickets WHERE opened_on >= '2026-01-01' GROUP BY region_code ORDER BY region_code",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT region_code, COUNT(*) AS total_tickets FROM service_tickets WHERE opened_on >= '2026-01-01' GROUP BY region_code ORDER BY region_code",
+      "ordered": true
+    }
+  ]
+}

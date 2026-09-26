@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "filtered_window_region_summary_minimized",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "mdiazmat/clinical-trials-analyzer",
+      "commit": "a9ad375bb2fb0e434dc3858c5098b09235672e5f",
+      "path": "sql/queries.sql",
+      "url": "https://github.com/mdiazmat/clinical-trials-analyzer/blob/a9ad375bb2fb0e434dc3858c5098b09235672e5f/sql/queries.sql",
+      "sha256": "37a5230c70c2ff7a725d4e107c0c3508ccf7aa641538ec0baac74fd5c22cb546",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "Minimized from filtered_window_region_summary",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A grouped conditional aggregate is combined with a window SUM over grouped COUNT values, exposing the total denominator to every grouped row.",
+      "mysql_mariadb_translation": "Reduced to three in-period tickets in two regions. SUM(CASE ...) preserves the filtered count, while ROUND(COUNT(*) / SUM(COUNT(*)) OVER (), 1) isolates the grouped-window denominator behavior."
+    },
+    "independently_authored": true,
+    "minimized_from": "filtered_window_region_summary"
+  },
+  "features": [
+    "conditional-aggregate",
+    "window-over-grouped-aggregate",
+    "rounded-percentage",
+    "minimized-regression",
+    "deterministic-order"
+  ],
+  "fixture_notes": "East has two tickets and North has one; each grouped row must see the total of three through the nested COUNT window.",
+  "determinism_notes": "Region labels, statuses, and IDs are fixed, and the report is ordered by region code. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE service_ticket_min (ticket_id INT PRIMARY KEY, region_code VARCHAR(16) NOT NULL, ticket_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO service_ticket_min VALUES (1, 'East', 'resolved'), (2, 'East', 'open'), (3, 'North', 'resolved')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT region_code, COUNT(*) AS total_tickets, SUM(CASE WHEN ticket_state = 'resolved' THEN 1 ELSE 0 END) AS resolved_tickets, ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER (), 1) AS region_share_pct FROM service_ticket_min GROUP BY region_code ORDER BY region_code",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT region_code, COUNT(*) AS total_tickets FROM service_ticket_min GROUP BY region_code ORDER BY region_code",
+      "ordered": true
+    }
+  ]
+}

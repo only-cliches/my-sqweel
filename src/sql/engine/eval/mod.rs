@@ -505,6 +505,23 @@ pub(super) fn aggregate_select_result(
                 eval,
                 &mut row,
             )?;
+            if let Some(expr) = match item {
+                SelectItem::UnnamedExpr(expr) | SelectItem::ExprWithAlias { expr, .. } => {
+                    Some(expr)
+                }
+                _ => None,
+            } && expr_has_window(expr)
+            {
+                materialize_aggregate_exprs(
+                    expr,
+                    group,
+                    base,
+                    last_insert_id,
+                    &order_hint_map,
+                    eval,
+                    &mut row,
+                )?;
+            }
         }
         if let Some(having) = &select.having {
             let mut context = base.clone();
