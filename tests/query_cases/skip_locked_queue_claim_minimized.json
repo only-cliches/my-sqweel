@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "id": "skip_locked_queue_claim_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "skip_locked_queue_claim",
+    "source": {
+      "repository": "graphile/worker",
+      "commit": "4cda192c5df254392a1dff350e5d73f7d2c18a85",
+      "path": "sql/000009.sql",
+      "url": "https://github.com/graphile/worker/blob/4cda192c5df254392a1dff350e5d73f7d2c18a85/sql/000009.sql",
+      "sha256": "89ce8e17f9693cd7b4fc4a7ba12eebd6dcb24790c26faa16cd9827c948a44da7",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from skip_locked_queue_claim; source sql/000009.sql:37-40",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A deterministic limited queue read ends with FOR UPDATE SKIP LOCKED to claim an eligible row without waiting on another transaction's lock.",
+      "mysql_mariadb_translation": "Reduced to one ready queue row and one locking SELECT. Ordering, LIMIT, FOR UPDATE, and SKIP LOCKED remain while updates, worker filters, and application-specific predicates are removed."
+    },
+    "independently_authored": true,
+    "minimized_from": "skip_locked_queue_claim"
+  },
+  "features": [
+    "for-update",
+    "skip-locked",
+    "limit-one-claim",
+    "minimized-regression"
+  ],
+  "fixture_notes": "The single ready row is selected by the reference server; MySqweel currently reports unsupported locking modifiers instead of returning it.",
+  "determinism_notes": "One fixed queue row and one ordered locking read use no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE mini_dispatch_queue (job_id INT PRIMARY KEY, priority INT NOT NULL, job_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO mini_dispatch_queue VALUES (901, 1, 'ready')"
+  ],
+  "steps": [
+    {
+      "sql": "START TRANSACTION",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT job_id FROM mini_dispatch_queue WHERE job_state = 'ready' ORDER BY priority ASC, job_id ASC LIMIT 1 FOR UPDATE SKIP LOCKED",
+      "ordered": true
+    },
+    {
+      "sql": "ROLLBACK",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT job_id, priority, job_state FROM mini_dispatch_queue ORDER BY job_id",
+      "ordered": true
+    }
+  ]
+}

@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "id": "skip_locked_queue_claim",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "repository": "graphile/worker",
+      "commit": "4cda192c5df254392a1dff350e5d73f7d2c18a85",
+      "path": "sql/000009.sql",
+      "url": "https://github.com/graphile/worker/blob/4cda192c5df254392a1dff350e5d73f7d2c18a85/sql/000009.sql",
+      "sha256": "89ce8e17f9693cd7b4fc4a7ba12eebd6dcb24790c26faa16cd9827c948a44da7",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/000009.sql:21-40",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A queue claim query filters eligible jobs, orders by priority and schedule with an ID tie-breaker, limits the claim to one row, and locks it with FOR UPDATE SKIP LOCKED.",
+      "mysql_mariadb_translation": "Reauthored as an independent dispatch queue claim. Fixed ready jobs are selected by priority, scheduled time, and ID with LIMIT 1 FOR UPDATE SKIP LOCKED; the selected job is marked claimed and committed. PostgreSQL-specific arrays, JSON operators, schema interpolation, expiry calculations, and worker procedures are omitted."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "for-update",
+    "skip-locked",
+    "limit-one-claim",
+    "priority-ordering",
+    "transaction-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Job 102 has the highest claim priority and is selected despite job 101 being scheduled earlier. Job 103 is lower priority. The selected row is updated and committed while the other jobs remain ready.",
+  "determinism_notes": "Job IDs, priorities, schedule timestamps, states, and ordering tie-breakers are fixed; one connection executes the transaction sequentially with no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE dispatch_queue (job_id INT PRIMARY KEY, job_label VARCHAR(32) NOT NULL, priority INT NOT NULL, scheduled_at DATETIME NOT NULL, job_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO dispatch_queue VALUES (101, 'nightly-index', 5, '2026-08-01 08:00:00', 'ready'), (102, 'urgent-rebuild', 1, '2026-08-01 09:00:00', 'ready'), (103, 'routine-export', 9, '2026-08-01 07:00:00', 'ready')"
+  ],
+  "steps": [
+    {
+      "sql": "START TRANSACTION",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT job_id, job_label, priority, scheduled_at FROM dispatch_queue WHERE job_state = 'ready' ORDER BY priority ASC, scheduled_at ASC, job_id ASC LIMIT 1 FOR UPDATE SKIP LOCKED",
+      "ordered": true
+    },
+    {
+      "sql": "UPDATE dispatch_queue SET job_state = 'claimed' WHERE job_id = 102",
+      "ordered": false
+    },
+    {
+      "sql": "COMMIT",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT job_id, job_label, priority, job_state FROM dispatch_queue ORDER BY job_id",
+      "ordered": true
+    }
+  ]
+}
