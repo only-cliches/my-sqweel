@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "distinct_on_latest_event",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "E2Quant/e2q",
+      "commit": "fef664e234652eba5909b119eeba3ed1f32f8502",
+      "path": "cfg/e2q_postgresql.sql",
+      "url": "https://github.com/E2Quant/e2q/blob/fef664e234652eba5909b119eeba3ed1f32f8502/cfg/e2q_postgresql.sql",
+      "sha256": "fbff3b87eb7082949011a8e0bded3499db62f3cb436ea9d39af50ae67440a414",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "cfg/e2q_postgresql.sql:3276-3281",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A PostgreSQL DISTINCT ON subquery selects one deterministic row per session after grouping and applying a maximum identifier tie-break.",
+      "mysql_mariadb_translation": "Reauthored as an account-event audit. A ROW_NUMBER window partitions fixed event rows by account and orders by observed time descending with event ID as the tie-break; the outer query keeps row number one for each account. The source schema, identifiers, values, joins, and trading domain are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "distinct-on-translation",
+    "row-number",
+    "first-per-group",
+    "deterministic-tie-break",
+    "nullable-score",
+    "cte",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Account 11 has two events at the same observed time, so event 1002 must win by the descending event ID tie-break. Account 12 selects its later event, and account 13 exercises a single event with a NULL score. The outer result contains exactly one event per account.",
+  "determinism_notes": "Account IDs, event IDs, timestamps, ordering columns, and final ordering are fixed; there are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE account_events (event_id INT PRIMARY KEY, account_id INT NOT NULL, event_kind VARCHAR(16) NOT NULL, observed_at DATETIME NOT NULL, score INT NULL)",
+    "INSERT INTO account_events VALUES (1001, 11, 'review', '2026-08-01 09:00:00', 40), (1002, 11, 'upgrade', '2026-08-01 09:00:00', 90), (2001, 12, 'review', '2026-08-02 12:00:00', 70), (2002, 12, 'renewal', '2026-08-03 08:30:00', 65), (3001, 13, 'review', '2026-08-04 15:45:00', NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH ranked_events AS (SELECT event_id, account_id, event_kind, observed_at, score, ROW_NUMBER() OVER (PARTITION BY account_id ORDER BY observed_at DESC, event_id DESC) AS row_no FROM account_events) SELECT account_id, event_id, event_kind, observed_at, score FROM ranked_events WHERE row_no = 1 ORDER BY account_id",
+      "ordered": true
+    }
+  ]
+}
