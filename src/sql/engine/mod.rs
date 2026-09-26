@@ -65,6 +65,136 @@ pub(crate) const JSON_NULL_SENTINEL: &str = "\0my_sqweel_json_null";
 pub(crate) const JSON_AGGREGATE_TEXT_SENTINEL: &str = "\0my_sqweel_json_agg_text";
 pub(crate) const JSON_EXTRACT_TEXT_SENTINEL: &str = "\0my_sqweel_json_extract:";
 
+fn rewrite_group_concat_limits_for_parser(sql: &str) -> String {
+    const FUNCTION: &str = "GROUP_CONCAT";
+    const MARKER: &str = "__MYQWEEL_GROUP_CONCAT_LIMIT_";
+    let upper = sql.to_ascii_uppercase();
+    let mut search = 0;
+    let mut rewritten = String::with_capacity(sql.len());
+
+    while let Some(relative) = upper[search..].find(FUNCTION) {
+        let start = search + relative;
+        let open = start + FUNCTION.len();
+        if (start > 0
+            && (sql.as_bytes()[start - 1].is_ascii_alphanumeric()
+                || sql.as_bytes()[start - 1] == b'_'))
+            || sql.as_bytes().get(open) != Some(&b'(')
+        {
+            search = open;
+            continue;
+        }
+        let Some(close) = matching_parenthesis(sql, open) else {
+            break;
+        };
+        let body = &sql[open + 1..close];
+        let Some(limit_position) = top_level_keyword_position(body, "LIMIT") else {
+            search = close + 1;
+            continue;
+        };
+        let before_limit = body[..limit_position].trim_end();
+        let limit_text = body[limit_position + "LIMIT".len()..].trim();
+        if limit_text.is_empty() || !limit_text.bytes().all(|byte| byte.is_ascii_digit()) {
+            search = close + 1;
+            continue;
+        }
+        let clause_position = ["ORDER BY", "SEPARATOR"]
+            .iter()
+            .filter_map(|keyword| top_level_keyword_position(before_limit, keyword))
+            .min();
+        let marker = format!("'{MARKER}{limit_text}'");
+        let rewritten_body = if let Some(position) = clause_position {
+            format!(
+                "{}, {} {}",
+                before_limit[..position].trim_end(),
+                marker,
+                before_limit[position..].trim_start()
+            )
+        } else {
+            format!("{before_limit}, {marker}")
+        };
+        rewritten.push_str(&sql[search..open + 1]);
+        rewritten.push_str(&rewritten_body);
+        rewritten.push(')');
+        search = close + 1;
+    }
+    rewritten.push_str(&sql[search..]);
+    rewritten
+}
+
+fn matching_parenthesis(sql: &str, open: usize) -> Option<usize> {
+    let bytes = sql.as_bytes();
+    let mut depth = 0_usize;
+    let mut quote = None;
+    let mut index = open;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if let Some(active_quote) = quote {
+            if byte == b'\\' {
+                index += 2;
+                continue;
+            }
+            if byte == active_quote {
+                quote = None;
+            }
+        } else {
+            match byte {
+                b'\'' | b'"' | b'`' => quote = Some(byte),
+                b'(' => depth += 1,
+                b')' => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        return Some(index);
+                    }
+                }
+                _ => {}
+            }
+        }
+        index += 1;
+    }
+    None
+}
+
+fn top_level_keyword_position(text: &str, keyword: &str) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let keyword_bytes = keyword.as_bytes();
+    let mut depth = 0_usize;
+    let mut quote = None;
+    let mut index = 0;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if let Some(active_quote) = quote {
+            if byte == b'\\' {
+                index += 2;
+                continue;
+            }
+            if byte == active_quote {
+                quote = None;
+            }
+            index += 1;
+            continue;
+        }
+        match byte {
+            b'\'' | b'"' | b'`' => quote = Some(byte),
+            b'(' => depth += 1,
+            b')' => depth = depth.saturating_sub(1),
+            _ if depth == 0
+                && index + keyword_bytes.len() <= bytes.len()
+                && text[index..index + keyword_bytes.len()].eq_ignore_ascii_case(keyword)
+                && (index == 0
+                    || !bytes[index - 1].is_ascii_alphanumeric() && bytes[index - 1] != b'_')
+                && (index + keyword_bytes.len() == bytes.len()
+                    || !bytes[index + keyword_bytes.len()].is_ascii_alphanumeric()
+                        && bytes[index + keyword_bytes.len()] != b'_') =>
+            {
+                return Some(index);
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    None
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SeedMode {
@@ -1171,6 +1301,7 @@ impl RawEngine {
             .replace(" on update current_timestamp", "")
             .replace(" ZEROFILL", "")
             .replace(" zerofill", "");
+        parse_sql = rewrite_group_concat_limits_for_parser(&parse_sql);
         parse_sql = strip_select_modifiers_anywhere(&parse_sql);
         parse_sql = rewrite_set_statement_for_parser(&parse_sql);
         parse_sql = query::strip_explain_index_hints(&parse_sql);

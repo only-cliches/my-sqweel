@@ -1280,6 +1280,7 @@ struct AggregateCall {
     distinct: bool,
     order_by: Vec<GroupConcatOrder>,
     separator: String,
+    limit: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -1349,6 +1350,7 @@ fn aggregate_call(expr: &Expr) -> Option<AggregateCall> {
         distinct,
         order_by: Vec::new(),
         separator: ",".to_string(),
+        limit: None,
     })
 }
 
@@ -1384,6 +1386,14 @@ fn parse_order_by_clause(text: &str) -> Vec<GroupConcatOrder> {
 
 fn parse_group_concat_call(args: Vec<String>) -> AggregateCall {
     let mut body = args.join(", ");
+    let limit_parts = split_top_level_keyword(&body, "LIMIT")
+        .map(|(left, right)| (left.to_string(), right.trim().to_string()));
+    let mut limit = if let Some((left, right)) = limit_parts {
+        body = left;
+        right.parse::<usize>().ok()
+    } else {
+        None
+    };
     let mut separator = ",".to_string();
     if let Some((left, right)) = split_top_level_keyword(&body, "SEPARATOR") {
         let left = left.to_string();
@@ -1402,6 +1412,22 @@ fn parse_group_concat_call(args: Vec<String>) -> AggregateCall {
     };
 
     let mut args = split_sql_args(&body);
+    let marker_prefix = "__MYQWEEL_GROUP_CONCAT_LIMIT_";
+    let marker_limit = args.iter().enumerate().find_map(|(index, arg)| {
+        let trimmed = arg
+            .trim()
+            .trim_matches(['`', '\'', '"'])
+            .to_ascii_uppercase();
+        trimmed
+            .strip_prefix(marker_prefix)
+            .and_then(|value| value.parse::<usize>().ok())
+            .map(|limit| (index, limit))
+    });
+    if let Some((index, marker_limit)) = marker_limit {
+        args.remove(index);
+        limit.get_or_insert(marker_limit);
+    }
+
     let mut distinct = false;
     if let Some(first) = args.first_mut() {
         let trimmed = first.trim();
@@ -1417,6 +1443,7 @@ fn parse_group_concat_call(args: Vec<String>) -> AggregateCall {
         distinct,
         order_by,
         separator,
+        limit,
     }
 }
 
@@ -1439,13 +1466,13 @@ fn parse_json_arrayagg_call(args: Vec<String>) -> AggregateCall {
             *first = trimmed[9..].trim().to_string();
         }
     }
-
     AggregateCall {
         kind: AggregateKind::JsonArrayAgg,
         args: args.into_iter().map(CompiledScalarExpr::new).collect(),
         distinct,
         order_by,
         separator: ",".to_string(),
+        limit: None,
     }
 }
 
@@ -1585,10 +1612,12 @@ fn eval_aggregate_call_rows<'a>(
             values.push(value);
         }
     }
-
     if call.distinct {
         let mut seen = HashSet::new();
         values.retain(|value| seen.insert(encode_json_value(value)));
+    }
+    if let Some(limit) = call.limit {
+        values.truncate(limit);
     }
 
     match call.kind {
