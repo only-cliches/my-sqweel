@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "id": "collation_coercibility_audit_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "zufuliu/notepad4",
+      "commit": "95086d924e2ff30779b46696d191ea97ffbeac3b",
+      "path": "tools/lang/MySQL.sql",
+      "url": "https://github.com/zufuliu/notepad4/blob/95086d924e2ff30779b46696d191ea97ffbeac3b/tools/lang/MySQL.sql",
+      "sha256": "f60d37c6d959617ba20b9d552abf22d6b396f8d000dc2e61b6ff13d8e5f612c",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "tools/lang/MySQL.sql:help_topic entries 396 and 401",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL expression reports the explicit collation and coercibility of one string expression.",
+      "mysql_mariadb_translation": "Reduced independently authored scalar regression retaining COLLATION and COERCIBILITY over one explicitly binary-collated string literal; table setup and report rows are removed."
+    },
+    "independently_authored": true,
+    "minimized_from": "collation_coercibility_audit"
+  },
+  "features": ["collation-function", "coercibility-function", "explicit-collate", "minimized-regression"],
+  "fixture_notes": "One fixed string literal isolates explicit collation-name reporting and the strongest coercibility rank.",
+  "determinism_notes": "The literal and collation are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT COLLATION('probe' COLLATE utf8mb4_bin) AS explicit_collation, COERCIBILITY('probe' COLLATE utf8mb4_bin) AS explicit_coercibility",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}

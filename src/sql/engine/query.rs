@@ -1704,8 +1704,8 @@ impl RawEngine {
                         metadata.unsigned = true;
                         MysqlColumnType::BigInt
                     }
-                    "GET_LOCK" | "RELEASE_LOCK" => MysqlColumnType::Integer,
-                    "ASCII" | "ORD" => MysqlColumnType::Integer,
+                    "GET_LOCK" | "RELEASE_LOCK" | "COERCIBILITY" => MysqlColumnType::Integer,
+                    "COLLATION" => MysqlColumnType::VarChar,
                     "CONCAT" | "CONCAT_WS" => {
                         let argument_types = function_arguments(function)
                             .unwrap_or_default()
@@ -4061,6 +4061,42 @@ impl RawEngine {
                 &cast_data_type_name(data_type),
             ),
             Expr::Function(function) => {
+                let function_name = function
+                    .name
+                    .0
+                    .last()
+                    .map(|name| name.value.to_ascii_uppercase())
+                    .unwrap_or_default();
+                if matches!(function_name.as_str(), "COLLATION" | "COERCIBILITY")
+                    && let Some(argument) = function_argument(function, 0)
+                {
+                    let value = self.eval_expr_ctx(argument, data, last_insert_id)?;
+                    if value == Value::Null {
+                        return Ok(Value::Null);
+                    }
+                    let explicit_collation = match argument {
+                        Expr::Collate { collation, .. } => Some(collation.to_string()),
+                        _ => None,
+                    };
+                    if function_name == "COLLATION" {
+                        return Ok(Value::String(
+                            explicit_collation.unwrap_or_else(|| "utf8mb4_general_ci".to_string()),
+                        ));
+                    }
+                    let coercibility = if explicit_collation.is_some() {
+                        0
+                    } else if matches!(
+                        argument,
+                        Expr::Value(
+                            SqlValue::SingleQuotedString(_) | SqlValue::DoubleQuotedString(_)
+                        )
+                    ) {
+                        4
+                    } else {
+                        2
+                    };
+                    return Ok(Value::Number(Number::from(coercibility)));
+                }
                 if function
                     .name
                     .0

@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "collation_coercibility_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "zufuliu/notepad4",
+      "commit": "95086d924e2ff30779b46696d191ea97ffbeac3b",
+      "path": "tools/lang/MySQL.sql",
+      "url": "https://github.com/zufuliu/notepad4/blob/95086d924e2ff30779b46696d191ea97ffbeac3b/tools/lang/MySQL.sql",
+      "sha256": "f60d37c6d959617ba20b9d552abf22d6b396f8d000dc2e61b6ff13d8e5f612c",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "tools/lang/MySQL.sql:help_topic entries 396 and 401",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL help catalog documents COERCIBILITY and COLLATION scalar expressions for inspecting string collation metadata.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored label audit that projects column, concatenated, and explicitly COLLATE-qualified string metadata; source catalog rows, schema, and literals are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["collation-function", "coercibility-function", "explicit-collate", "concat", "deterministic-order"],
+  "fixture_notes": "Three fixed labels exercise a table column, a derived CONCAT expression, and an explicit binary collation. The audit exposes both reported collation names and coercibility ranks for each expression.",
+  "determinism_notes": "Label IDs, values, collations, and ordering are fixed; the report uses no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE label_collation_audit (label_id INT PRIMARY KEY, label_text VARCHAR(16) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL)",
+    "INSERT INTO label_collation_audit VALUES (301, 'alpha'), (302, 'bravo'), (303, 'charlie')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT label_id, COLLATION(label_text) AS column_collation, COERCIBILITY(label_text) AS column_coercibility, COLLATION(CONCAT(label_text, '!')) AS derived_collation, COERCIBILITY(CONCAT(label_text, '!')) AS derived_coercibility, COLLATION(label_text COLLATE utf8mb4_bin) AS explicit_collation, COERCIBILITY(label_text COLLATE utf8mb4_bin) AS explicit_coercibility FROM label_collation_audit ORDER BY label_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT label_id, label_text FROM label_collation_audit ORDER BY label_id",
+      "ordered": true
+    }
+  ]
+}

@@ -1067,13 +1067,13 @@ pub(crate) const MARIADB_FUNCTION_SCOPE: &[FunctionScopeEntry] = &[
     },
     FunctionScopeEntry {
         name: "COERCIBILITY",
-        status: "out-of-scope",
-        rationale: "MariaDB catalog entry is not a scalar function supported by the engine evaluator",
+        status: "implemented",
+        rationale: "deterministic evaluator and query-engine collation metadata support",
     },
     FunctionScopeEntry {
         name: "COLLATION",
-        status: "out-of-scope",
-        rationale: "MariaDB catalog entry is not a scalar function supported by the engine evaluator",
+        status: "implemented",
+        rationale: "deterministic evaluator and query-engine collation metadata support",
     },
     FunctionScopeEntry {
         name: "COLUMN_CHECK",
