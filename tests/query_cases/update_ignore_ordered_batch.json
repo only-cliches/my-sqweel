@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "update_ignore_ordered_batch",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/4777.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/4777.sql",
+      "sha256": "018d15c407d16a320b27d781aa8e3aed9fdb11a3f83f56fc7e2ff9b0f64be114",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/docker/fuzz_root/mysql_initlib/4777.sql:22-26,49",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL regression corpus exercises bounded UPDATE statements with ORDER BY and LIMIT alongside UPDATE IGNORE mutations that must tolerate conflicts.",
+      "mysql_mariadb_translation": "Reauthored as a dispatch queue batch: UPDATE IGNORE selects the two lowest-ranked queued rows, attempts one conflicting unique-key reassignment, and applies the non-conflicting state change while leaving the conflicting row unchanged. The fuzz corpus tables, rows, and crash-oriented statements are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "update-ignore",
+    "order-by-limit",
+    "unique-conflict",
+    "bounded-mutation",
+    "partial-mutation",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Rows 1 and 2 are the two lowest-ranked queued rows. Row 1 attempts to take row 2's unique rank and must be ignored; row 2 receives a free rank and is claimed. Later queued rows remain untouched by LIMIT 2.",
+  "determinism_notes": "Queue ranks and primary keys are fixed, ORDER BY rank plus queue ID determines the selected batch, and the final read is ordered by queue ID. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE dispatch_queue (queue_id INT PRIMARY KEY, dispatch_rank INT NOT NULL UNIQUE, queue_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO dispatch_queue VALUES (1, 10, 'queued'), (2, 20, 'queued'), (3, 30, 'queued'), (4, 40, 'queued')"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE IGNORE dispatch_queue SET dispatch_rank = CASE WHEN queue_id = 1 THEN 20 ELSE dispatch_rank + 100 END, queue_state = 'claimed' WHERE queue_state = 'queued' ORDER BY dispatch_rank ASC, queue_id ASC LIMIT 2",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT queue_id, dispatch_rank, queue_state FROM dispatch_queue ORDER BY queue_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT COUNT(*) AS claimed_count, MIN(dispatch_rank) AS lowest_claimed_rank FROM dispatch_queue WHERE queue_state = 'claimed'",
+      "ordered": true
+    }
+  ]
+}
