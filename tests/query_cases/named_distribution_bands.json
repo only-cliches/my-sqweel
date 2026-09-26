@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "named_distribution_bands",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "scenarios/window-analytics/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/scenarios/window-analytics/mysql.sql",
+      "sha256": "cfe5bd07baa23d84ab54915477310fee678124ea795371c0f5dc4de108ffdd18",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "scenarios/window-analytics/mysql.sql: cumulative distribution section",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL analytics query reuses one ordered window specification for RANK, PERCENT_RANK, CUME_DIST, and NTILE distribution calculations.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored compensation-band report. One named department-and-score window is reused for rank, percentile rank, cumulative distribution, and quartile assignment over fixed employee scores; the source tables, labels, values, and reporting context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "named-window",
+    "rank-window",
+    "percent-rank-window",
+    "cume-dist-window",
+    "ntile-window",
+    "partitioned-distribution",
+    "deterministic-tie-order"
+  ],
+  "fixture_notes": "Departments 11 and 22 have five and three fixed employees. Scores include a tie in department 11; employee ID is the final window ordering key so every distribution value is deterministic.",
+  "determinism_notes": "Department IDs, employee IDs, scores, named-window ordering, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE compensation_scores (employee_id INT PRIMARY KEY, department_id INT NOT NULL, score INT NOT NULL)",
+    "INSERT INTO compensation_scores VALUES (1101, 11, 72), (1102, 11, 88), (1103, 11, 88), (1104, 11, 94), (1105, 11, 61), (2201, 22, 70), (2202, 22, 82), (2203, 22, 95)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT department_id, employee_id, score, RANK() OVER score_order AS score_rank, ROUND(PERCENT_RANK() OVER score_order, 4) AS percentile_rank, ROUND(CUME_DIST() OVER score_order, 4) AS cumulative_distribution, NTILE(4) OVER score_order AS quartile FROM compensation_scores WINDOW score_order AS (PARTITION BY department_id ORDER BY score ASC, employee_id ASC) ORDER BY department_id, score ASC, employee_id ASC",
+      "ordered": true
+    }
+  ]
+}

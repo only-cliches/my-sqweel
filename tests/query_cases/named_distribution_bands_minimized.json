@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "named_distribution_bands_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "scenarios/window-analytics/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/scenarios/window-analytics/mysql.sql",
+      "sha256": "cfe5bd07baa23d84ab54915477310fee678124ea795371c0f5dc4de108ffdd18",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from scenarios/window-analytics/mysql.sql: cumulative distribution section",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "ROUND applied to the DOUBLE result of a PERCENT_RANK window must retain MariaDB's DOUBLE result metadata.",
+      "mysql_mariadb_translation": "Reduced to two independently authored scored rows and one inline partition window. The single rounded PERCENT_RANK projection isolates nested window-function type propagation while removing the named-window reuse, other distribution functions, and domain fields."
+    },
+    "independently_authored": true,
+    "minimized_from": "named_distribution_bands"
+  },
+  "features": [
+    "partitioned-window",
+    "rounded-percent-rank",
+    "double-metadata",
+    "minimized-regression",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Two fixed scores in one department produce percentile ranks 0 and 1. The rounded projection must remain DOUBLE rather than becoming DECIMAL through the outer ROUND call.",
+  "determinism_notes": "Employee IDs and scores are fixed, the inline window has a unique score order, and the final result is ordered by employee ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE compensation_score_min (employee_id INT PRIMARY KEY, department_id INT NOT NULL, score INT NOT NULL)",
+    "INSERT INTO compensation_score_min VALUES (3101, 31, 60), (3102, 31, 90)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT employee_id, PERCENT_RANK() OVER (PARTITION BY department_id ORDER BY score ASC, employee_id ASC) AS raw_percentile_rank, ROUND(PERCENT_RANK() OVER (PARTITION BY department_id ORDER BY score ASC, employee_id ASC), 4) AS percentile_rank FROM compensation_score_min ORDER BY employee_id",
+      "ordered": true
+    }
+  ]
+}

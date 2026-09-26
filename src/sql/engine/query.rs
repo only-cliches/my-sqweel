@@ -1972,6 +1972,23 @@ impl RawEngine {
                                     .iter()
                                     .any(|name| argument_text.contains(name))
                                 });
+                            // ROUND/TRUNCATE preserve DOUBLE metadata for
+                            // floating-point expressions such as ranking windows.
+                            if !approximate {
+                                approximate = arguments
+                                    .first()
+                                    .and_then(Option::as_ref)
+                                    .is_some_and(|argument| {
+                                        self.expression_metadata(
+                                            select,
+                                            argument,
+                                            String::new(),
+                                            first_row,
+                                        )
+                                        .column_type
+                                            == MysqlColumnType::Double
+                                    });
+                            }
                         }
                         if approximate {
                             MysqlColumnType::Double
