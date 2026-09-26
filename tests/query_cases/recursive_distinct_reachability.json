@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "id": "recursive_distinct_reachability",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "PahanDba/mysql_dba",
+      "commit": "fe336f32e605fc8bec7e7c975cc7c9b8111d7857",
+      "path": "Monitoring/lead_blockers/lead_blockers_mariadb.sql",
+      "url": "https://github.com/PahanDba/mysql_dba/blob/fe336f32e605fc8bec7e7c975cc7c9b8111d7857/Monitoring/lead_blockers/lead_blockers_mariadb.sql",
+      "sha256": "a845030dab7dfe70167e0d4f83c0f757e6580cbf1d0d5f9afcedb11796877af8",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Monitoring/lead_blockers/lead_blockers_mariadb.sql:78-89",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A recursive CTE uses UNION DISTINCT to transitively follow directed blocker edges, suppressing duplicate paths and terminating despite cyclic or converging relationships.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored service dependency reachability report. A recursive CTE starts from one service, follows dependency edges with UNION DISTINCT, and returns each reachable service once even when paths converge and one edge closes a cycle. The source monitoring tables, identifiers, and operational query are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "recursive-cte",
+    "union-distinct",
+    "transitive-join",
+    "cycle-termination",
+    "duplicate-path-elimination",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Service 901 reaches 902 and 903 directly, reaches 904 through both 902 and 903, and reaches 905 through 904. The 905-to-902 edge creates a cycle; UNION DISTINCT must emit each reachable service once and terminate. Service 999 is disconnected and must not appear.",
+  "determinism_notes": "Service IDs and directed dependency edges are fixed; the result is ordered by root and reachable service ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE service_nodes (service_id INT PRIMARY KEY, service_name VARCHAR(24) NOT NULL)",
+    "CREATE TABLE service_dependencies (dependency_id INT PRIMARY KEY, parent_service_id INT NOT NULL, child_service_id INT NOT NULL)",
+    "INSERT INTO service_nodes (service_id, service_name) VALUES (901, 'gateway'), (902, 'accounts'), (903, 'billing'), (904, 'ledger'), (905, 'archive'), (999, 'isolated')",
+    "INSERT INTO service_dependencies (dependency_id, parent_service_id, child_service_id) VALUES (1, 901, 902), (2, 901, 903), (3, 902, 904), (4, 903, 904), (5, 904, 905), (6, 905, 902)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH RECURSIVE reachable (root_service_id, service_id) AS (SELECT 901 AS root_service_id, 901 AS service_id UNION DISTINCT SELECT r.root_service_id, d.child_service_id FROM reachable r INNER JOIN service_dependencies d ON d.parent_service_id = r.service_id) SELECT r.root_service_id, r.service_id, n.service_name FROM reachable r INNER JOIN service_nodes n ON n.service_id = r.service_id ORDER BY r.root_service_id, r.service_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT dependency_id, parent_service_id, child_service_id FROM service_dependencies ORDER BY dependency_id",
+      "ordered": true
+    }
+  ]
+}

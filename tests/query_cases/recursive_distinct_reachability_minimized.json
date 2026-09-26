@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "recursive_distinct_reachability_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "recursive_distinct_reachability",
+    "source": {
+      "kind": "github",
+      "repository": "PahanDba/mysql_dba",
+      "commit": "fe336f32e605fc8bec7e7c975cc7c9b8111d7857",
+      "path": "Monitoring/lead_blockers/lead_blockers_mariadb.sql",
+      "url": "https://github.com/PahanDba/mysql_dba/blob/fe336f32e605fc8bec7e7c975cc7c9b8111d7857/Monitoring/lead_blockers/lead_blockers_mariadb.sql",
+      "sha256": "a845030dab7dfe70167e0d4f83c0f757e6580cbf1d0d5f9afcedb11796877af8",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Monitoring/lead_blockers/lead_blockers_mariadb.sql:78-89",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A recursive UNION DISTINCT CTE carries a root identifier while following one directed edge per iteration.",
+      "mysql_mariadb_translation": "Reduced independently to one root service and a two-edge chain. The result must retain root_service_id 901 for every reachable node, isolating recursive column propagation from cycles, joins to labels, and converging paths.",
+      "independently_authored": true,
+      "minimized_from": "recursive_distinct_reachability"
+    }
+  },
+  "features": [
+    "recursive-cte",
+    "union-distinct",
+    "recursive-column-propagation",
+    "minimized-regression"
+  ],
+  "fixture_notes": "The root service 901 reaches 902 and then 903. Every output row must retain root_service_id 901; a changed root value isolates recursive column remapping.",
+  "determinism_notes": "Two fixed dependency edges and one ordered result make the recursive propagation deterministic; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE mini_dependencies (edge_id INT PRIMARY KEY, parent_service_id INT NOT NULL, child_service_id INT NOT NULL)",
+    "INSERT INTO mini_dependencies (edge_id, parent_service_id, child_service_id) VALUES (1, 901, 902), (2, 902, 903)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH RECURSIVE reachable (root_service_id, service_id) AS (SELECT 901 AS root_service_id, 901 AS service_id UNION DISTINCT SELECT r.root_service_id, d.child_service_id FROM reachable r INNER JOIN mini_dependencies d ON d.parent_service_id = r.service_id) SELECT root_service_id, service_id FROM reachable ORDER BY root_service_id, service_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
