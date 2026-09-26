@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "id": "self_join_string_toggle_update",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "Rodney-Smith/RaspberryPints",
+      "commit": "262d20b3f422769e8146fb0234b7825d2dd7b50a",
+      "path": "sql/update.sql",
+      "url": "https://github.com/Rodney-Smith/RaspberryPints/blob/262d20b3f422769e8146fb0234b7825d2dd7b50a/sql/update.sql",
+      "sha256": "2dd572f8c2bdc896ce6cb2f3b87265880827955042950f29091dba3abcbedab3",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/update.sql:L1540-L1541",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A self-joined UPDATE derives a companion option name with TRIM, CONCAT, SUBSTRING, and LENGTH, then uses a joined toggle and CASE expression to change the base numeric value.",
+      "mysql_mariadb_translation": "Reauthored as a dashboard-option normalization. Count options derive their show-toggle names from a suffix, enabled toggles preserve or negate the numeric value, and disabled or missing toggles leave rows unchanged. The source schema, labels, identifiers, and values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "self-join-update",
+    "trim-concat-substring-length",
+    "case-assignment",
+    "left-join-null-filter",
+    "like-filter",
+    "deterministic-order"
+  ],
+  "fixture_notes": "panel_count is negated by an enabled show_panel value of 0; chart_count is preserved by show_chart=1; table_count is not changed because show_table is disabled; orphan_count has no companion toggle.",
+  "determinism_notes": "Option IDs, names, values, toggle states, and final ordering are fixed. The update is single-connection and uses no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE dashboard_options (option_id INT PRIMARY KEY, option_name VARCHAR(64) NOT NULL, option_value VARCHAR(16) NOT NULL, enabled TINYINT NOT NULL)",
+    "INSERT INTO dashboard_options VALUES (1, 'show_panel', '0', 1), (2, 'panel_count', '4', 1), (3, 'show_chart', '1', 1), (4, 'chart_count', '6', 1), (5, 'orphan_count', '9', 1), (6, 'show_table', '0', 0), (7, 'table_count', '3', 1)"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE dashboard_options AS base LEFT JOIN dashboard_options AS toggle ON TRIM(toggle.option_name) = CONCAT('show_', SUBSTRING(base.option_name, 1, LENGTH(base.option_name) - 6)) SET base.option_value = CAST(base.option_value AS SIGNED) * CASE WHEN toggle.option_value = '0' THEN -1 ELSE 1 END WHERE base.option_id > 0 AND base.option_name LIKE '%_count' AND toggle.option_name IS NOT NULL AND toggle.enabled = 1",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT option_id, option_name, option_value, enabled FROM dashboard_options ORDER BY option_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT option_name, option_value FROM dashboard_options WHERE option_name LIKE '%_count' ORDER BY option_id",
+      "ordered": true
+    }
+  ]
+}
