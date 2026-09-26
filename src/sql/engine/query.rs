@@ -3177,6 +3177,14 @@ impl RawEngine {
         let mut current_nulls = left.nulls;
 
         for join in &root.joins {
+            if matches!(join.relation, TableFactor::JsonTable { .. }) {
+                let (joined, right_nulls) =
+                    self.join_correlated_json_table(&current, &join.relation, &join.join_operator)?;
+                current = joined;
+                current_nulls = merge_join_rows(&current_nulls, &right_nulls);
+                continue;
+            }
+
             let right = self.rows_for_table_factor(&join.relation)?;
             let mut next = Vec::new();
             let mut matched_right = vec![false; right.rows.len()];
@@ -3269,6 +3277,38 @@ impl RawEngine {
                 Err(error) => Some(Err(error)),
             })
             .collect()
+    }
+    fn join_correlated_json_table(
+        &self,
+        current: &[Map<String, Value>],
+        relation: &TableFactor,
+        operator: &JoinOperator,
+    ) -> Result<(Vec<Map<String, Value>>, Map<String, Value>)> {
+        let mut next = Vec::new();
+        let mut right_nulls = Map::new();
+        for candidate in current {
+            let right = self.rows_for_table_factor_with_context(relation, candidate)?;
+            if right_nulls.is_empty() {
+                right_nulls = right.nulls.clone();
+            }
+            let mut matched = false;
+            for right_row in &right.rows {
+                let combined = merge_join_rows(candidate, right_row);
+                if self.join_factor_matches(operator, candidate, right_row, &combined)? {
+                    matched = true;
+                    next.push(combined);
+                }
+            }
+            if !matched
+                && matches!(
+                    operator,
+                    JoinOperator::LeftOuter(_) | JoinOperator::FullOuter(_)
+                )
+            {
+                next.push(merge_join_rows(candidate, &right.nulls));
+            }
+        }
+        Ok((next, right_nulls))
     }
 
     pub(super) fn rows_for_table_factor(&self, factor: &TableFactor) -> Result<TableFactorRows> {
@@ -6306,7 +6346,9 @@ fn materialize_json_table_rows(
                 } else {
                     json_extract_path(root, &path).unwrap_or(Value::Null)
                 };
-                let value = if value == Value::Null {
+                let value = if value == Value::Null
+                    || matches!(&value, Value::String(text) if eval::is_json_null(text))
+                {
                     Value::Null
                 } else if column.r#type.to_string().eq_ignore_ascii_case("JSON") {
                     value

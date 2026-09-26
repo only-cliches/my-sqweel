@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "id": "recursive_json_hierarchy_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "waooAI/waoowaoo",
+      "commit": "dfec20e32298ed675050329e4a41477024148399",
+      "path": "prisma/migrations/20260713013000_canonicalize_edit_execution_character_identity/migration.sql",
+      "url": "https://github.com/waooAI/waoowaoo/blob/dfec20e32298ed675050329e4a41477024148399/prisma/migrations/20260713013000_canonicalize_edit_execution_character_identity/migration.sql",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from recursive_json_hierarchy",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A recursive CTE consumes a JSON_TABLE-derived stage relation and joins that relation again to walk parent-child rows.",
+      "mysql_mariadb_translation": "Reduced to one JSON_TABLE-derived root and child stage, retaining recursive traversal and deterministic depth output while removing nested actor expansion and JSON aggregation."
+    },
+    "independently_authored": true,
+    "minimized_from": "recursive_json_hierarchy"
+  },
+  "features": ["json-table", "recursive-tree-cte", "minimized-regression"],
+  "fixture_notes": "Template 701 contains one root and one child stage. The minimized query must emit both stages with depths zero and one.",
+  "determinism_notes": "Fixed template JSON and stage IDs provide deterministic expansion and ordering; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE workflow_templates_min (template_id INT PRIMARY KEY, template_json JSON NOT NULL)",
+    "INSERT INTO workflow_templates_min VALUES (701, '{\"stages\":[{\"id\":11,\"parent\":null,\"name\":\"Root\",\"actors\":[\"owner\"]},{\"id\":12,\"parent\":11,\"name\":\"Child\",\"actors\":[\"reviewer\"]}]}')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH RECURSIVE stages AS (SELECT t.template_id, s.stage_id, s.parent_id, s.stage_name, s.actors FROM workflow_templates_min AS t INNER JOIN JSON_TABLE(t.template_json, '$.stages[*]' COLUMNS (stage_id INT PATH '$.id', parent_id INT PATH '$.parent', stage_name VARCHAR(32) PATH '$.name', actors JSON PATH '$.actors')) AS s), stage_tree (template_id, stage_id, parent_id, stage_name, depth) AS (SELECT template_id, stage_id, parent_id, stage_name, 0 FROM stages WHERE parent_id IS NULL UNION ALL SELECT child.template_id, child.stage_id, child.parent_id, child.stage_name, parent.depth + 1 FROM stage_tree AS parent INNER JOIN stages AS child ON child.template_id = parent.template_id AND child.parent_id = parent.stage_id) SELECT stage_id, parent_id, depth FROM stage_tree ORDER BY stage_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}

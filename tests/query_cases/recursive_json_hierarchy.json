@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "id": "recursive_json_hierarchy",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "waooAI/waoowaoo",
+      "commit": "dfec20e32298ed675050329e4a41477024148399",
+      "path": "prisma/migrations/20260713013000_canonicalize_edit_execution_character_identity/migration.sql",
+      "url": "https://github.com/waooAI/waoowaoo/blob/dfec20e32298ed675050329e4a41477024148399/prisma/migrations/20260713013000_canonicalize_edit_execution_character_identity/migration.sql",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "migration.sql: JSON_TABLE guards plus recursive JSON rewrite CTE",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL migration expands nested JSON collections with JSON_TABLE and uses a recursive CTE to traverse and rewrite hierarchical items.",
+      "mysql_mariadb_translation": "Reauthored as a workflow-stage report. JSON_TABLE first materializes stage and actor arrays, a recursive CTE walks parent-linked stages, and grouped JSON_ARRAYAGG emits deterministic actor lists per stage. The migration guards, application schema, JSON names, and source values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "json-table",
+    "nested-json-array",
+    "recursive-tree-cte",
+    "grouped-json-arrayagg",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Template 700 has Intake as the root, Review and Archive beneath it, and Approval beneath Review. Every stage contains at least one actor so the grouped JSON_ARRAYAGG result remains a concrete ordered array; actor names are alphabetized inside each aggregate and stages are ordered by their constructed path.",
+  "determinism_notes": "Template, stage, parent, and actor values are fixed. JSON_TABLE expansion, recursive depth/path construction, aggregate-local actor ordering, and final path ordering use deterministic keys; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE workflow_templates (template_id INT PRIMARY KEY, template_json JSON NOT NULL)",
+    "INSERT INTO workflow_templates VALUES (700, '{\"stages\":[{\"id\":10,\"parent\":null,\"name\":\"Intake\",\"actors\":[\"owner\",\"reviewer\"]},{\"id\":20,\"parent\":10,\"name\":\"Review\",\"actors\":[\"reviewer\"]},{\"id\":30,\"parent\":20,\"name\":\"Approval\",\"actors\":[\"director\",\"owner\"]},{\"id\":40,\"parent\":10,\"name\":\"Archive\",\"actors\":[\"ops\"]}]}')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH RECURSIVE stages AS (SELECT t.template_id, s.stage_id, s.parent_id, s.stage_name, s.actors FROM workflow_templates AS t INNER JOIN JSON_TABLE(t.template_json, '$.stages[*]' COLUMNS (stage_id INT PATH '$.id', parent_id INT PATH '$.parent', stage_name VARCHAR(32) PATH '$.name', actors JSON PATH '$.actors')) AS s), stage_actors AS (SELECT stages.template_id, stages.stage_id, a.actor_name FROM stages INNER JOIN JSON_TABLE(stages.actors, '$[*]' COLUMNS (actor_name VARCHAR(32) PATH '$')) AS a), stage_tree (template_id, stage_id, parent_id, stage_name, depth, stage_path) AS (SELECT template_id, stage_id, parent_id, stage_name, 0, CAST(stage_name AS CHAR(255)) FROM stages WHERE parent_id IS NULL UNION ALL SELECT child.template_id, child.stage_id, child.parent_id, child.stage_name, parent.depth + 1, CONCAT(parent.stage_path, '/', child.stage_name) FROM stage_tree AS parent INNER JOIN stages AS child ON child.template_id = parent.template_id AND child.parent_id = parent.stage_id) SELECT tree.stage_id, tree.parent_id, tree.depth, tree.stage_path, JSON_ARRAYAGG(actor.actor_name ORDER BY actor.actor_name) AS actors FROM stage_tree AS tree INNER JOIN stage_actors AS actor ON actor.template_id = tree.template_id AND actor.stage_id = tree.stage_id GROUP BY tree.stage_id, tree.parent_id, tree.depth, tree.stage_path ORDER BY stage_path, stage_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT template_id, JSON_LENGTH(template_json, '$.stages') AS stage_count FROM workflow_templates ORDER BY template_id",
+      "ordered": true
+    }
+  ]
+}
