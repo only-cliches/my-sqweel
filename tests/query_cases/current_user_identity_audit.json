@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "id": "current_user_identity_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "HariSekhon/SQL-scripts",
+      "commit": "30d80bbd33f0e6c26c230f26575cb671c41c3e7d",
+      "path": "mysql_info.sql",
+      "url": "https://github.com/HariSekhon/SQL-scripts/blob/30d80bbd33f0e6c26c230f26575cb671c41c3e7d/mysql_info.sql",
+      "sha256": "abcd6b82d35b28ae74d826cb0db1522f97c7d9e230f6cc4e5bd5e6f686a05a1e",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "mysql_info.sql:27-31",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL/MariaDB connection audit selects CURRENT_USER alongside session identity functions to expose the authenticated account and connection context.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored service-session audit. A fixed probe row is projected with CURRENT_USER(), isolating the authenticated account identity from the source script's volatile version, clock, UUID, and client-address fields."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "current-user",
+    "authenticated-identity",
+    "session-context",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The single probe row makes the authenticated identity observable without relying on volatile timestamps, version strings, UUIDs, or client-address formatting.",
+  "determinism_notes": "The probe ID and projection are fixed; the harness uses a fixed root identity and no clocks, randomness, sleeps, or concurrent schedules are involved.",
+  "setup": [
+    "CREATE TABLE session_identity_probes (probe_id INT PRIMARY KEY, probe_label VARCHAR(32) NOT NULL)",
+    "INSERT INTO session_identity_probes VALUES (1201, 'service-audit')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT probe_id, probe_label, CURRENT_USER() AS authenticated_user FROM session_identity_probes ORDER BY probe_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT probe_id, probe_label FROM session_identity_probes ORDER BY probe_id",
+      "ordered": true
+    }
+  ]
+}
