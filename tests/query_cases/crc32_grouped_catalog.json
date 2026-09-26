@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "crc32_grouped_catalog",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "alexksikes/CloudMining",
+      "commit": "8eba3b597d59c8b2c6011aceb55e5a5213c34cbf",
+      "path": "scraping/dblp/build_dblp_base.sql",
+      "url": "https://github.com/alexksikes/CloudMining/blob/8eba3b597d59c8b2c6011aceb55e5a5213c34cbf/scraping/dblp/build_dblp_base.sql",
+      "sha256": "c9752a8afbebd5f35c517db9ca55d41fc32f8ce996fd2d153772a5f83130e8d7",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "scraping/dblp/build_dblp_base.sql:30-40",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL migration inserts a grouped lookup table from a source relation, computes CRC32 over a text key, filters NULL keys, and orders the source-derived rows before insertion.",
+      "mysql_mariadb_translation": "Reauthored as an independent source-label fingerprint catalog. CRC32 groups repeated labels, MIN chooses a deterministic representative, COUNT records multiplicity, and INSERT ... SELECT persists only non-NULL labels; the source tables, identifiers, data, and search-index context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "crc32",
+    "grouped-insert-select",
+    "computed-group-key",
+    "null-filter",
+    "aggregate-count",
+    "deterministic-order",
+    "dml-final-state"
+  ],
+  "fixture_notes": "Labels 401 and 403 repeat alpha and must become one fingerprint row with count two; beta and gamma become separate rows; label 404 is NULL and must not be inserted. MIN makes the representative stable even if source row order changes.",
+  "determinism_notes": "Source IDs and labels are fixed, grouping uses CRC32, representatives use MIN, insertion order is explicit, and the final catalog is ordered by its unique fingerprint with no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE source_labels (label_id INT PRIMARY KEY, label_text VARCHAR(64) NULL)",
+    "CREATE TABLE label_fingerprints (fingerprint BIGINT UNSIGNED PRIMARY KEY, representative_label VARCHAR(64) NOT NULL, source_count INT NOT NULL)",
+    "INSERT INTO source_labels VALUES (401, 'alpha'), (402, 'beta'), (403, 'alpha'), (404, NULL), (405, 'gamma')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO label_fingerprints (fingerprint, representative_label, source_count) SELECT CRC32(label_text), MIN(label_text), COUNT(*) FROM source_labels WHERE label_text IS NOT NULL GROUP BY CRC32(label_text) ORDER BY MIN(label_text)"
+    },
+    {
+      "sql": "SELECT fingerprint, representative_label, source_count FROM label_fingerprints ORDER BY fingerprint",
+      "ordered": true
+    }
+  ]
+}
