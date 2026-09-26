@@ -1296,6 +1296,14 @@ pub(crate) fn parse_json_document_value(value: Value) -> Value {
                 .map(mark_json_nulls)
                 .unwrap_or(Value::String(text.to_string()))
         }
+        Value::String(value) if value.starts_with(JSON_MUTATION_TEXT_SENTINEL) => {
+            let text = value
+                .strip_prefix(JSON_MUTATION_TEXT_SENTINEL)
+                .unwrap_or_default();
+            serde_json::from_str::<Value>(text)
+                .map(mark_json_nulls)
+                .unwrap_or(Value::String(text.to_string()))
+        }
         Value::String(value) if value.starts_with(JSON_AGGREGATE_TEXT_SENTINEL) => {
             let text = value.trim_start_matches(JSON_AGGREGATE_TEXT_SENTINEL);
             serde_json::from_str::<Value>(text)

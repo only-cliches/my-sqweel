@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "json_array_insert_value_guard_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "open-metadata/OpenMetadata",
+      "commit": "b0a971e82ecdfcce757e23b47f95437feea8b876",
+      "path": "bootstrap/sql/migrations/native/1.13.0/mysql/postDataMigrationSQLScript.sql",
+      "url": "https://github.com/open-metadata/OpenMetadata/blob/b0a971e82ecdfcce757e23b47f95437feea8b876/bootstrap/sql/migrations/native/1.13.0/mysql/postDataMigrationSQLScript.sql",
+      "sha256": "f8a732fc96d1895cec6c0c694809b493336921b09a2c659cbc3ef1e5e695cc7c",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "postDataMigrationSQLScript.sql:91-105, JSON_ARRAY_INSERT policy update",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL migration conditionally inserts a JSON object into an indexed rules array with JSON_ARRAY_INSERT while using a JSON scalar predicate to identify the policy.",
+      "mysql_mariadb_translation": "Reduced to one independently authored JSON policy document, one missing indexed rule, one guarded JSON_ARRAY_INSERT update, and one complete final document read so mutation wire formatting is isolated from duplicate rows and idempotence control.",
+      "independently_authored": true
+    },
+    "parent_case": "json_array_insert_value_guard"
+  },
+  "features": [
+    "json-array-insert",
+    "json-value-predicate",
+    "json-column-wire-format",
+    "minimized-regression",
+    "deterministic-order"
+  ],
+  "fixture_notes": "One EdgePolicy document starts with a single read rule. The update must insert one structured container rule at index 1 and the final JSON document is selected verbatim to expose MariaDB's mutation text formatting.",
+  "determinism_notes": "The policy ID, JSON document, inserted rule, and statement are fixed; the final read is ordered by the primary key with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE policy_document_min (policy_id INT PRIMARY KEY, document JSON NOT NULL)",
+    "INSERT INTO policy_document_min (policy_id, document) VALUES (501, '{\"name\":\"EdgePolicy\",\"rules\":[{\"name\":\"read\",\"effect\":\"allow\"}]}')"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE policy_document_min SET document = JSON_ARRAY_INSERT(document, '$.rules[1]', JSON_OBJECT('name', 'container', 'effect', 'allow')) WHERE JSON_VALUE(document, '$.name') = 'EdgePolicy' AND COALESCE(JSON_VALUE(document, '$.rules[1].name'), '') <> 'container'",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT policy_id, document FROM policy_document_min ORDER BY policy_id",
+      "ordered": true
+    }
+  ]
+}

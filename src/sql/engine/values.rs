@@ -199,7 +199,8 @@ pub(super) fn eval_insert_update_value(
                     }) {
                         return result;
                     }
-                    return eval_expr(expr, existing, 0);
+                    let value = eval_expr(expr, existing, 0)?;
+                    return preserve_json_mutation_assignment(expr, value);
                 }
             };
             let FunctionArguments::List(arguments) = &function.args else {
@@ -217,6 +218,45 @@ pub(super) fn eval_insert_update_value(
         }
         _ => eval_expr(expr, existing, 0),
     }
+}
+
+pub(super) fn preserve_json_mutation_assignment(expr: &Expr, value: Value) -> Result<Value> {
+    let Expr::Function(function) = expr else {
+        return Ok(value);
+    };
+    let name = function
+        .name
+        .0
+        .last()
+        .map(|identifier| identifier.value.to_ascii_uppercase())
+        .unwrap_or_default();
+    if is_json_mutation_name(name.as_str()) {
+        preserve_json_mutation_text(value)
+    } else {
+        Ok(value)
+    }
+}
+
+fn preserve_json_mutation_text(value: Value) -> Result<Value> {
+    match value {
+        Value::Array(_) | Value::Object(_) => Ok(Value::String(format!(
+            "{JSON_MUTATION_TEXT_SENTINEL}{}",
+            json_wire_text(&value)?
+        ))),
+        other => Ok(other),
+    }
+}
+
+fn is_json_mutation_name(name: &str) -> bool {
+    matches!(
+        name,
+        "JSON_SET"
+            | "JSON_INSERT"
+            | "JSON_REPLACE"
+            | "JSON_ARRAY_APPEND"
+            | "JSON_ARRAY_INSERT"
+            | "JSON_REMOVE"
+    )
 }
 
 fn incoming_value_expr(expr: &Expr, incoming: &Map<String, Value>) -> Result<Option<Value>> {
@@ -448,6 +488,7 @@ pub(super) fn coerce_value_for_column(value: Value, hint: &ColumnHint) -> Value 
 
     if ascii_contains_ignore_case(sql_type, "json") {
         return match value {
+            Value::String(s) if s.starts_with(JSON_MUTATION_TEXT_SENTINEL) => Value::String(s),
             Value::String(s) => match serde_json::from_str::<Value>(&s) {
                 // Preserve the serialized form of JSON strings. Otherwise a
                 // JSON document such as `"text"` becomes the indistinguishable
@@ -640,7 +681,12 @@ pub(super) fn validate_mysql_column_value(
     if declared.starts_with("JSON")
         && let Value::String(value) = value
         && !is_json_null(value)
-        && serde_json::from_str::<Value>(value).is_err()
+        && {
+            let text = value
+                .strip_prefix(JSON_MUTATION_TEXT_SENTINEL)
+                .unwrap_or(value);
+            serde_json::from_str::<Value>(text).is_err()
+        }
     {
         return Err(anyhow!("invalid JSON text for column '{column}'"));
     }
@@ -793,6 +839,10 @@ pub(super) fn json_scalar_to_string(value: &Value) -> String {
         Value::String(value) if is_json_null(value) => "null".to_string(),
         Value::String(value) if value.starts_with(JSON_EXTRACT_TEXT_SENTINEL) => value
             .strip_prefix(JSON_EXTRACT_TEXT_SENTINEL)
+            .unwrap_or_default()
+            .to_string(),
+        Value::String(value) if value.starts_with(JSON_MUTATION_TEXT_SENTINEL) => value
+            .strip_prefix(JSON_MUTATION_TEXT_SENTINEL)
             .unwrap_or_default()
             .to_string(),
         Value::String(value) => value.clone(),

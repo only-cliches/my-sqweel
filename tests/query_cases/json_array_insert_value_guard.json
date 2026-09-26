@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "json_array_insert_value_guard",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "open-metadata/OpenMetadata",
+      "commit": "b0a971e82ecdfcce757e23b47f95437feea8b876",
+      "path": "bootstrap/sql/migrations/native/1.13.0/mysql/postDataMigrationSQLScript.sql",
+      "url": "https://github.com/open-metadata/OpenMetadata/blob/b0a971e82ecdfcce757e23b47f95437feea8b876/bootstrap/sql/migrations/native/1.13.0/mysql/postDataMigrationSQLScript.sql",
+      "sha256": "f8a732fc96d1895cec6c0c694809b493336921b09a2c659cbc3ef1e5e695cc7c",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "postDataMigrationSQLScript.sql:91-105, JSON_ARRAY_INSERT policy update",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL migration conditionally inserts a JSON object into an indexed rules array with JSON_ARRAY_INSERT while using a JSON scalar predicate to identify the policy and avoid inserting an existing rule.",
+      "mysql_mariadb_translation": "Reauthored as an independent policy-document repair. JSON_VALUE selects one policy by name, a missing-or-different indexed rule is guarded with COALESCE, and JSON_ARRAY_INSERT adds a structured rule at the second array position; a repeated update proves the guard is idempotent without copying the source schema, values, or policy text.",
+      "independently_authored": true
+    }
+  },
+  "features": [
+    "json-array-insert",
+    "json-value-predicate",
+    "json-object-construction",
+    "conditional-update",
+    "idempotent-mutation",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Policy 501 matches by JSON name and lacks a second rule, so it receives the structured container rule at index 1. Repeating the update must not insert a duplicate; policy 502 already has that rule and policy 503 has a different name, so both remain unchanged.",
+  "determinism_notes": "Policy IDs, JSON documents, inserted rule fields, and statement order are fixed. Final documents are ordered by the primary key, with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE policy_documents (policy_id INT PRIMARY KEY, document JSON NOT NULL)",
+    "INSERT INTO policy_documents (policy_id, document) VALUES (501, '{\"name\":\"EdgePolicy\",\"rules\":[{\"name\":\"read\",\"effect\":\"allow\"}]}'), (502, '{\"name\":\"EdgePolicy\",\"rules\":[{\"name\":\"read\",\"effect\":\"allow\"},{\"name\":\"container\",\"effect\":\"allow\"}]}'), (503, '{\"name\":\"OtherPolicy\",\"rules\":[{\"name\":\"read\",\"effect\":\"allow\"}]}')"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE policy_documents SET document = JSON_ARRAY_INSERT(document, '$.rules[1]', JSON_OBJECT('name', 'container', 'effect', 'allow')) WHERE JSON_VALUE(document, '$.name') = 'EdgePolicy' AND COALESCE(JSON_VALUE(document, '$.rules[1].name'), '') <> 'container'",
+      "ordered": true
+    },
+    {
+      "sql": "UPDATE policy_documents SET document = JSON_ARRAY_INSERT(document, '$.rules[1]', JSON_OBJECT('name', 'container', 'effect', 'allow')) WHERE JSON_VALUE(document, '$.name') = 'EdgePolicy' AND COALESCE(JSON_VALUE(document, '$.rules[1].name'), '') <> 'container'",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT policy_id, document FROM policy_documents ORDER BY policy_id",
+      "ordered": true
+    }
+  ]
+}

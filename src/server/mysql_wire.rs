@@ -1277,6 +1277,12 @@ fn write_row<W: io::Read + io::Write>(
                 }
             }
             Value::String(value)
+                if let Some(text) =
+                    value.strip_prefix(crate::sql::engine::JSON_MUTATION_TEXT_SENTINEL) =>
+            {
+                rw.write_col(text)?;
+            }
+            Value::String(value)
                 if json_columns[index] && value == crate::sql::engine::JSON_NULL_SENTINEL =>
             {
                 rw.write_col("null")?;

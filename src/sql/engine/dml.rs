@@ -989,10 +989,13 @@ impl RawEngine {
                 ) {
                     sql_default_value()
                 } else {
-                    self.eval_expr_ctx(
+                    preserve_json_mutation_assignment(
                         &assignment.value,
-                        &value_context,
-                        self.last_insert_id.load(AtomicOrdering::Relaxed),
+                        self.eval_expr_ctx(
+                            &assignment.value,
+                            &value_context,
+                            self.last_insert_id.load(AtomicOrdering::Relaxed),
+                        )?,
                     )?
                 };
                 updated_data.insert(col, value);
@@ -1229,10 +1232,13 @@ impl RawEngine {
                 ) {
                     sql_default_value()
                 } else {
-                    self.eval_expr_ctx(
+                    preserve_json_mutation_assignment(
                         &assignment.value,
-                        &value_context,
-                        self.last_insert_id.load(AtomicOrdering::Relaxed),
+                        self.eval_expr_ctx(
+                            &assignment.value,
+                            &value_context,
+                            self.last_insert_id.load(AtomicOrdering::Relaxed),
+                        )?,
                     )?
                 };
                 updated_data.insert(col, value);
