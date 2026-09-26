@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "id": "replace_set_refresh",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "cmllr/redundancy",
+      "commit": "125d851b6cebbf6cc06ae1e879bb811cb1fc8741",
+      "path": "Dump.sql",
+      "url": "https://github.com/cmllr/redundancy/blob/125d851b6cebbf6cc06ae1e879bb811cb1fc8741/Dump.sql",
+      "sha256": "7eb9b26f2538d6bfae51a5cf090cbcde7e2d2e80604d60fab5d0542633a4db33",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Dump.sql: REPLACE INTO Settings configuration refresh",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL dump uses REPLACE INTO to refresh a uniquely keyed configuration row, fully replacing the conflicting row rather than applying an in-place update.",
+      "mysql_mariadb_translation": "Reauthored as a service-configuration refresh using MariaDB's assignment-style REPLACE INTO ... SET form. A unique-key conflict removes the old row and inserts a replacement with a new primary key, while a second SET-form replacement inserts a new configuration key. The source schema, identifiers, values, and application context are not copied.",
+      "independently_authored": true
+    }
+  },
+  "features": [
+    "replace-into",
+    "set-assignment-insert",
+    "unique-key-replacement",
+    "primary-key-change",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The existing theme row uses unique config_key 'theme' and primary key 20; replacing it with primary key 30 must remove ID 20 entirely. The timezone key is new and receives the next auto-increment ID after the explicit replacement.",
+  "determinism_notes": "All keys, IDs, values, and statements are fixed. The explicit replacement ID establishes the following auto-increment value, and the final read is ordered by the primary key; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE service_config (config_id INT AUTO_INCREMENT PRIMARY KEY, config_key VARCHAR(32) NOT NULL UNIQUE, config_kind VARCHAR(16) NOT NULL, config_value VARCHAR(64) NOT NULL)",
+    "INSERT INTO service_config (config_id, config_key, config_kind, config_value) VALUES (20, 'theme', 'text', 'legacy'), (21, 'region', 'text', 'west')"
+  ],
+  "steps": [
+    {
+      "sql": "REPLACE INTO service_config SET config_id = 30, config_key = 'theme', config_kind = 'text', config_value = 'modern'",
+      "ordered": true
+    },
+    {
+      "sql": "REPLACE INTO service_config SET config_key = 'timezone', config_kind = 'text', config_value = 'UTC'",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT config_id, config_key, config_kind, config_value FROM service_config ORDER BY config_id",
+      "ordered": true
+    }
+  ]
+}
