@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "id": "grouped_derived_view",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "repository": "nerdsinspace/nocomment-master",
+      "commit": "10311fa08d837464e2b5427c12814bd5dcd732c2",
+      "path": "schema.sql",
+      "url": "https://github.com/nerdsinspace/nocomment-master/blob/10311fa08d837464e2b5427c12814bd5dcd732c2/schema.sql",
+      "sha256": "c61d2ff60d920e74709ce4c78f5a5cf333f8195b8f3ddd9f6910ee571507af03",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "schema.sql:296-302 (assoc view)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A view joins descriptive parent data to a derived relation that groups association rows by two keys and computes a SUM for each pair.",
+      "mysql_mariadb_translation": "Reauthored as an independent operator-cluster score view. A derived aggregate groups fixed link weights by operator and cluster, then the view joins operator handles; the source schema, names, values, and application context are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "grouped-derived-table",
+    "aggregate-view",
+    "inner-join",
+    "multi-key-grouping",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Operator 11 has two links to cluster 3 and one link to cluster 8, so both grouped totals are visible; operator 12 has duplicate links to cluster 3; operator 13 has no links and must not appear in the inner-joined view. The final read exposes aggregate totals through the view rather than querying the source tables directly.",
+  "determinism_notes": "Operator IDs, cluster IDs, link weights, view columns, and final ordering are fixed; there are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE review_operators (operator_id INT PRIMARY KEY, operator_handle VARCHAR(32) NOT NULL UNIQUE)",
+    "CREATE TABLE cluster_links (link_id INT PRIMARY KEY, operator_id INT NOT NULL, cluster_id INT NOT NULL, weight INT NOT NULL)",
+    "INSERT INTO review_operators VALUES (11, 'atlas'), (12, 'beacon'), (13, 'cipher')",
+    "INSERT INTO cluster_links VALUES (101, 11, 3, 4), (102, 11, 3, 6), (103, 11, 8, 5), (104, 12, 3, 7), (105, 12, 3, 2)"
+  ],
+  "steps": [
+    {
+      "sql": "CREATE OR REPLACE VIEW operator_cluster_scores AS SELECT o.operator_handle, grouped.cluster_id, grouped.total_weight FROM (SELECT operator_id, cluster_id, SUM(weight) AS total_weight FROM cluster_links GROUP BY operator_id, cluster_id) AS grouped INNER JOIN review_operators AS o ON o.operator_id = grouped.operator_id",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT operator_handle, cluster_id, total_weight FROM operator_cluster_scores ORDER BY operator_handle, cluster_id",
+      "ordered": true
+    }
+  ]
+}
