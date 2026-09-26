@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "id": "json_objectagg_user_variable",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "aws-samples/sample-aws-genai-db-modernizer",
+      "commit": "32436d230b746503813179d7858f6930cc9fd0c3",
+      "path": "scripts/collect-mysql.sql",
+      "url": "https://github.com/aws-samples/sample-aws-genai-db-modernizer/blob/32436d230b746503813179d7858f6930cc9fd0c3/scripts/collect-mysql.sql",
+      "sha256": "bf8c42d4874e9cb61cdccac5720cec3200230337fc3072d40141689aa86c33ba",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "scripts/collect-mysql.sql:187-216",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A derived aggregate query assigns JSON_OBJECTAGG output to a session user variable, then JSON_EXTRACT reads a member from the stored object.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored system-metric snapshot. Fixed metric rows are ordered before JSON_OBJECTAGG assigns one JSON object to a session variable, and a later projection extracts an existing member and checks a missing member; the schema, rows, aliases, and reporting purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "json-objectagg",
+    "session-user-variable",
+    "derived-table",
+    "json-unquote",
+    "missing-json-member",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The snapshot stores CPU, region, and status metrics in one JSON object. The final projection extracts and unquotes the CPU member, verifies a missing member returns NULL, and leaves the aggregate stored only in the session variable.",
+  "determinism_notes": "Metric IDs, names, values, aggregate input ordering, and projection order are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE system_metrics (metric_id INT PRIMARY KEY, metric_name VARCHAR(24) NOT NULL, metric_value VARCHAR(32) NOT NULL)",
+    "INSERT INTO system_metrics VALUES (301, 'cpu', '82'), (302, 'region', 'us-east'), (303, 'status', 'warm')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT JSON_OBJECTAGG(metric_name, metric_value) INTO @metric_summary FROM (SELECT metric_name, metric_value FROM system_metrics ORDER BY metric_id) AS ordered_metrics",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT JSON_EXTRACT(@metric_summary, '$.cpu') AS cpu_value, JSON_EXTRACT(@metric_summary, '$.missing') AS missing_value",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT JSON_EXTRACT(@metric_summary, '$.cpu') AS cpu_value, JSON_EXTRACT(@metric_summary, '$.missing') AS missing_value",
+      "ordered": true
+    }
+  ]
+}

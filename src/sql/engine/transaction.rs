@@ -1735,6 +1735,7 @@ impl RawEngine {
             last_found_rows: AtomicU64::new(self.last_found_rows.load(AtomicOrdering::Relaxed)),
             sql_mode: Mutex::new(self.sql_mode.lock().clone()),
             user_variables: self.user_variables.clone(),
+            user_variable_types: self.user_variable_types.clone(),
             prepared_statements: self.prepared_statements.clone(),
             views: self.views.clone(),
             // Only parsed SQL syntax is cached, never plans or evaluated results.
@@ -1746,6 +1747,7 @@ impl RawEngine {
     }
     fn clear_session(&self) {
         self.user_variables.clear();
+        self.user_variable_types.clear();
         if let Some(zone) = &self.cfg.default_time_zone {
             self.set_session_time_zone(zone.clone());
         }
@@ -1761,6 +1763,11 @@ impl RawEngine {
         for item in &source.user_variables {
             self.user_variables
                 .insert(item.key().clone(), item.value().clone());
+        }
+        self.user_variable_types.clear();
+        for item in &source.user_variable_types {
+            self.user_variable_types
+                .insert(item.key().clone(), *item.value());
         }
         self.prepared_statements.clear();
         for item in &source.prepared_statements {

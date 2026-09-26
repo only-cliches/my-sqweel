@@ -1517,6 +1517,20 @@ impl RawEngine {
         output_name: String,
         first_row: Option<&Map<String, Value>>,
     ) -> ColumnMetadata {
+        if let Expr::Identifier(identifier) = expr
+            && identifier.value.starts_with('@')
+            && !identifier.value.starts_with("@@")
+        {
+            let mut metadata = ColumnMetadata::from_value(
+                output_name,
+                first_row.and_then(|row| row.get(&identifier.value)),
+            );
+            if let Some(column_type) = self.user_variable_type(&identifier.value) {
+                metadata.column_type = column_type;
+            }
+            return metadata;
+        }
+
         if let Some((table, hint)) = self.resolve_expression_column(select, expr) {
             let mut metadata = ColumnMetadata::from_declared(output_name, table, &hint);
             if select_nullable_tables(select)
@@ -2188,7 +2202,29 @@ impl RawEngine {
                             MysqlColumnType::VarChar
                         }
                     }
-                    "JSON_UNQUOTE" => MysqlColumnType::VarChar,
+                    "JSON_UNQUOTE" => {
+                        let argument = function_arguments(function)
+                            .ok()
+                            .and_then(|arguments| arguments.into_iter().next().flatten())
+                            .map(|argument| {
+                                self.expression_metadata(
+                                    select,
+                                    &argument,
+                                    String::new(),
+                                    first_row,
+                                )
+                                .column_type
+                            });
+                        match argument {
+                            Some(MysqlColumnType::Json | MysqlColumnType::LongBlob) => {
+                                MysqlColumnType::LongBlob
+                            }
+                            Some(MysqlColumnType::Blob | MysqlColumnType::MediumBlob) => {
+                                MysqlColumnType::MediumBlob
+                            }
+                            _ => MysqlColumnType::VarChar,
+                        }
+                    }
                     "JSON_KEYS" => {
                         let argument = function_arguments(function)
                             .ok()
@@ -2215,8 +2251,36 @@ impl RawEngine {
                     "JSON_ARRAY" => MysqlColumnType::VarChar,
                     "JSON_ARRAY_APPEND" | "JSON_ARRAY_INSERT" => MysqlColumnType::LongBlob,
                     "JSON_MERGE" | "JSON_MERGE_PRESERVE" => MysqlColumnType::LongBlob,
-                    "JSON_EXTRACT"
-                    | "JSON_INSERT"
+                    "JSON_EXTRACT" => {
+                        let uses_user_variable = function.to_string().contains('@');
+                        let argument = function_arguments(function)
+                            .ok()
+                            .and_then(|arguments| arguments.into_iter().next().flatten())
+                            .map(|argument| {
+                                self.expression_metadata(
+                                    select,
+                                    &argument,
+                                    String::new(),
+                                    first_row,
+                                )
+                                .column_type
+                            });
+                        if uses_user_variable
+                            || argument.is_some_and(|column_type| {
+                                matches!(
+                                    column_type,
+                                    MysqlColumnType::Blob
+                                        | MysqlColumnType::MediumBlob
+                                        | MysqlColumnType::LongBlob
+                                )
+                            })
+                        {
+                            MysqlColumnType::MediumBlob
+                        } else {
+                            MysqlColumnType::Json
+                        }
+                    }
+                    "JSON_INSERT"
                     | "JSON_MERGE_PATCH"
                     | "JSON_OBJECT"
                     | "JSON_REMOVE"
@@ -3960,13 +4024,16 @@ impl RawEngine {
                 }) {
                     return result;
                 }
-                if let Some(time_zone) = self.user_variables.get("__time_zone") {
-                    let mut context = data.clone();
-                    context.insert("__time_zone".to_string(), time_zone.clone());
-                    eval_function_text(&function.to_string(), &context, last_insert_id)
-                } else {
-                    eval_function_text(&function.to_string(), data, last_insert_id)
+                let mut context = data.clone();
+                for entry in &self.user_variables {
+                    context
+                        .entry(format!("@{}", entry.key()))
+                        .or_insert_with(|| entry.value().clone());
                 }
+                if let Some(time_zone) = self.user_variables.get("__time_zone") {
+                    context.insert("__time_zone".to_string(), time_zone.clone());
+                }
+                eval_function_text(&function.to_string(), &context, last_insert_id)
             }
             _ => eval_expr(expr, data, last_insert_id),
         }

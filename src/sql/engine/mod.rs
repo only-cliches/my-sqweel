@@ -647,6 +647,7 @@ pub(super) struct RawEngine {
     last_found_rows: AtomicU64,
     sql_mode: Mutex<String>,
     user_variables: DashMap<String, Value>,
+    user_variable_types: DashMap<String, MysqlColumnType>,
     prepared_statements: DashMap<String, String>,
     views: DashMap<String, String>,
     parsed_select_cache: Arc<Mutex<ParsedSelectCache>>,
@@ -710,6 +711,7 @@ impl RawEngine {
             last_found_rows: AtomicU64::new(0),
             sql_mode: Mutex::new(String::new()),
             user_variables: DashMap::with_shard_amount(2),
+            user_variable_types: DashMap::with_shard_amount(2),
             prepared_statements: DashMap::with_shard_amount(2),
             views: DashMap::with_shard_amount(2),
             parsed_select_cache: Arc::new(Mutex::new(ParsedSelectCache::new(256))),
@@ -747,6 +749,12 @@ impl RawEngine {
             .get(&name.to_ascii_lowercase())
             .map(|value| value.clone())
             .unwrap_or(Value::Null)
+    }
+
+    pub(super) fn user_variable_type(&self, name: &str) -> Option<MysqlColumnType> {
+        self.user_variable_types
+            .get(&name.to_ascii_lowercase())
+            .map(|value| *value)
     }
 
     pub(crate) fn set_sql_safe_updates(&self, enabled: bool) {
@@ -2619,17 +2627,43 @@ impl RawEngine {
                     .next()
                     .unwrap_or_default();
                 let row = result.rows.first();
+                let rows_affected = u64::from(row.is_some());
                 for (index, target) in targets.into_iter().enumerate() {
+                    let target = target.to_ascii_lowercase();
                     let value = row
                         .and_then(|row| {
                             result.columns.get(index).and_then(|column| row.get(column))
                         })
                         .cloned()
                         .unwrap_or(Value::Null);
-                    self.user_variables
-                        .insert(target.to_ascii_lowercase(), value);
+                    let is_json_aggregate = matches!(
+                        &value,
+                        Value::String(text) if text.starts_with(JSON_AGGREGATE_TEXT_SENTINEL)
+                    );
+                    self.user_variables.insert(target.clone(), value);
+                    if is_json_aggregate {
+                        self.user_variable_types
+                            .insert(target, MysqlColumnType::LongBlob);
+                    } else if let Some(metadata) = result.column_metadata.get(index) {
+                        let column_type = if matches!(
+                            metadata.column_type,
+                            MysqlColumnType::Blob | MysqlColumnType::Json
+                        ) {
+                            // MariaDB promotes a JSON aggregate captured in a
+                            // session variable to LONG_BLOB.
+                            MysqlColumnType::LongBlob
+                        } else {
+                            metadata.column_type
+                        };
+                        self.user_variable_types.insert(target, column_type);
+                    } else {
+                        self.user_variable_types.remove(&target);
+                    }
                 }
-                return Ok(Some(QueryResult::default()));
+                return Ok(Some(QueryResult {
+                    rows_affected,
+                    ..QueryResult::default()
+                }));
             }
         }
 
