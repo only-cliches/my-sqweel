@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "ignore_index_for_group_dispatch",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "linq2db/linq2db.baselines",
+      "commit": "f38d2d2c6b90da0f0dbcf48e6f7bfb617dd6fde4",
+      "path": "MariaDB.11/Tests/Extensions/MySqlTests/Tests.Extensions.MySqlTests.IndexHintIgnoreIndexForGroupByTest(MariaDB.11).sql",
+      "url": "https://github.com/linq2db/linq2db.baselines/blob/f38d2d2c6b90da0f0dbcf48e6f7bfb617dd6fde4/MariaDB.11/Tests/Extensions/MySqlTests/Tests.Extensions.MySqlTests.IndexHintIgnoreIndexForGroupByTest%28MariaDB.11%29.sql",
+      "sha256": "17a0efb421fd6cfa7d50a642fcb285b2e028f382d1139b2c8f561839c24caed1",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "IndexHintIgnoreIndexForGroupByTest(MariaDB.11).sql:6",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB read excludes multiple named indexes with IGNORE INDEX FOR GROUP BY while grouping rows into an ordered aggregate result.",
+      "mysql_mariadb_translation": "Reauthored as a dispatch parcel summary. IGNORE INDEX FOR GROUP BY excludes the label and state indexes for an active-parcel aggregation, with deterministic group ordering. The source schema, rows, aliases, and application context are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "ignore-index-for-group-by",
+    "multiple-group-index-exclusions",
+    "filtered-aggregate",
+    "group-by",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Active parcels produce one count for each label; the inactive parcel is excluded before grouping. The group-by exclusion hint must not alter aggregate values or group ordering.",
+  "determinism_notes": "Parcel IDs, states, labels, and quantities are fixed, both excluded indexes exist, and the grouped output is explicitly ordered by label. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE dispatch_ignore_group_parcels (parcel_id INT PRIMARY KEY, parcel_state VARCHAR(12) NOT NULL, parcel_label VARCHAR(32) NOT NULL, quantity INT NOT NULL, INDEX idx_ignore_group_label (parcel_label), INDEX idx_ignore_group_state (parcel_state))",
+    "INSERT INTO dispatch_ignore_group_parcels VALUES (1401, 'active', 'alpha', 2), (1402, 'inactive', 'alpha', 5), (1403, 'active', 'alpha', 3), (1404, 'active', 'beta', 4)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT parcel_label, COUNT(*) AS parcel_count, SUM(quantity) AS total_quantity FROM dispatch_ignore_group_parcels IGNORE INDEX FOR GROUP BY (idx_ignore_group_label, idx_ignore_group_state) WHERE parcel_state = 'active' GROUP BY parcel_label ORDER BY parcel_label",
+      "ordered": true
+    }
+  ]
+}
