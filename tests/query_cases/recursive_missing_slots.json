@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "recursive_missing_slots",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "scenarios/gap-detection/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/scenarios/gap-detection/mysql.sql",
+      "sha256": "5bef89cd19b284c92ee4ce19007598a7ee9ae67c171631a80f6b6d48fe8a94fb",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "scenarios/gap-detection/mysql.sql:117-126",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A recursive CTE expands the integer range between the minimum and maximum stored identifiers, then a LEFT JOIN with an IS NULL filter returns only missing identifiers.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored maintenance-slot audit. A recursive CTE expands the fixed slot range for a service queue, a LEFT JOIN identifies unclaimed slots, and the result is ordered by slot number. The table, identifiers, rows, and operational purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "recursive-cte",
+    "left-join",
+    "anti-join-null-filter",
+    "scalar-subqueries",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Queue 31 has claimed slots 400, 401, 403, 404, and 407, so the generated range must report 402, 405, and 406 while excluding the occupied endpoints. Queue 32 has one claimed slot and therefore contributes no missing slots because the range has no interior gap.",
+  "determinism_notes": "Queue IDs, slot numbers, and claim labels are fixed; the recursive range and final result use explicit numeric ordering. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE queue_slots (slot_id INT PRIMARY KEY, queue_id INT NOT NULL, claim_label VARCHAR(24) NOT NULL)",
+    "INSERT INTO queue_slots (slot_id, queue_id, claim_label) VALUES (400, 31, 'alpha'), (401, 31, 'bravo'), (403, 31, 'charlie'), (404, 31, 'delta'), (407, 31, 'echo'), (520, 32, 'solo')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH RECURSIVE expected_slots (slot_id) AS (SELECT MIN(slot_id) FROM queue_slots WHERE queue_id = 31 UNION ALL SELECT slot_id + 1 FROM expected_slots WHERE slot_id < (SELECT MAX(slot_id) FROM queue_slots WHERE queue_id = 31)) SELECT expected_slots.slot_id AS missing_slot FROM expected_slots LEFT JOIN queue_slots actual ON actual.queue_id = 31 AND actual.slot_id = expected_slots.slot_id WHERE actual.slot_id IS NULL ORDER BY expected_slots.slot_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT slot_id, queue_id, claim_label FROM queue_slots ORDER BY queue_id, slot_id",
+      "ordered": true
+    }
+  ]
+}
