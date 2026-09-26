@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "show_warnings_after_insert_ignore_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "show_warnings_after_insert_ignore",
+    "source": {
+      "kind": "github",
+      "repository": "connor11528/cs-fundamentals",
+      "commit": "c4a4bb0e11813702b82f2eedd710299187b69428",
+      "path": "sql/udemy-mysql-bootcamp/03-inserting-data.sql",
+      "url": "https://github.com/connor11528/cs-fundamentals/blob/c4a4bb0e11813702b82f2eedd710299187b69428/sql/udemy-mysql-bootcamp/03-inserting-data.sql",
+      "sha256": "d7d8aba566696bf3276fef45e33d4bad0e479560a9d253a8251ca6346d3d7df5",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/udemy-mysql-bootcamp/03-inserting-data.sql:23-38",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "The smallest diagnostic path is a duplicate-skipping insert followed by SHOW WARNINGS.",
+      "mysql_mariadb_translation": "Reduced to one existing primary-key row, one INSERT IGNORE duplicate, and one SHOW WARNINGS statement, removing the successful insert and final catalog projection while preserving the warning path."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "show-warnings",
+    "insert-ignore",
+    "duplicate-key-warning",
+    "minimized-regression"
+  ],
+  "fixture_notes": "A duplicate-only INSERT IGNORE must leave the existing row unchanged and expose its warning through SHOW WARNINGS.",
+  "determinism_notes": "The single key, duplicate value, and sequential statements are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE warning_probe (probe_id INT PRIMARY KEY, probe_label VARCHAR(16) NOT NULL)",
+    "INSERT INTO warning_probe VALUES (2001, 'original')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT IGNORE INTO warning_probe VALUES (2001, 'duplicate')",
+      "ordered": true
+    },
+    {
+      "sql": "SHOW WARNINGS",
+      "ordered": true
+    }
+  ]
+}

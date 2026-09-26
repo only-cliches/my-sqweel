@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "id": "show_warnings_after_insert_ignore",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "connor11528/cs-fundamentals",
+      "commit": "c4a4bb0e11813702b82f2eedd710299187b69428",
+      "path": "sql/udemy-mysql-bootcamp/03-inserting-data.sql",
+      "url": "https://github.com/connor11528/cs-fundamentals/blob/c4a4bb0e11813702b82f2eedd710299187b69428/sql/udemy-mysql-bootcamp/03-inserting-data.sql",
+      "sha256": "d7d8aba566696bf3276fef45e33d4bad0e479560a9d253a8251ca6346d3d7df5",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/udemy-mysql-bootcamp/03-inserting-data.sql:23-38",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL data-loading script follows INSERT operations with SHOW WARNINGS to inspect statement diagnostics.",
+      "mysql_mariadb_translation": "Reauthored as an idempotent catalog load. INSERT IGNORE skips one duplicate key while accepting one new row, SHOW WARNINGS exposes the duplicate diagnostic, and a final ordered read verifies the target state. The source tables, values, and teaching context are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "show-warnings",
+    "insert-ignore",
+    "duplicate-key-warning",
+    "statement-diagnostics",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Catalog item 1901 already exists and is ignored; item 1902 is inserted. SHOW WARNINGS must expose the duplicate-key diagnostic from the preceding INSERT IGNORE.",
+  "determinism_notes": "Keys, labels, values, and statement order are fixed; warning output is ordered by its returned columns, and no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE catalog_entries (entry_id INT PRIMARY KEY, entry_code VARCHAR(16) NOT NULL, entry_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO catalog_entries VALUES (1901, 'base-item', 'active')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT IGNORE INTO catalog_entries VALUES (1901, 'duplicate-item', 'blocked'), (1902, 'new-item', 'active')",
+      "ordered": true
+    },
+    {
+      "sql": "SHOW WARNINGS",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT entry_id, entry_code, entry_state FROM catalog_entries ORDER BY entry_id",
+      "ordered": true
+    }
+  ]
+}

@@ -448,6 +448,7 @@ impl RawEngine {
         let mut first_insert_id = 0_u64;
         let mut duplicate_update_id = 0_u64;
         let mut returned_rows = Vec::new();
+        let mut warnings = Vec::new();
         let mut pending_rows_written = 0_usize;
         let mut pending_cells_written = 0_usize;
         for mut data in rows {
@@ -540,6 +541,39 @@ impl RawEngine {
 
             if !conflict_keys.is_empty() {
                 if options.on_duplicate.is_empty() && options.ignore {
+                    let key_name = if conflict_keys.contains(&key) {
+                        "PRIMARY".to_string()
+                    } else {
+                        unique_schema
+                            .as_ref()
+                            .and_then(|schema| {
+                                schema.unique.iter().find_map(|columns| {
+                                    schema_unique_key(schema, &data, columns)
+                                        .filter(|candidate| {
+                                            table_rows.values().any(|row| {
+                                                schema_unique_key(schema, &row.data, columns)
+                                                    .as_ref()
+                                                    == Some(candidate)
+                                            })
+                                        })
+                                        .and_then(|_| {
+                                            schema.indexes.iter().find_map(|index| {
+                                                (index.unique && index.columns == *columns)
+                                                    .then(|| index.name.clone())
+                                            })
+                                        })
+                                })
+                            })
+                            .unwrap_or_else(|| "PRIMARY".to_string())
+                    };
+                    warnings.push(QueryWarning {
+                        level: "Warning".to_string(),
+                        code: 1062,
+                        message: format!(
+                            "Duplicate entry '{}' for key '{key_name}'",
+                            json_scalar_to_string(&row_id)
+                        ),
+                    });
                     continue;
                 }
 
@@ -697,13 +731,15 @@ impl RawEngine {
                 .store(statement_insert_id, AtomicOrdering::Relaxed);
         }
 
-        self.returning_result(
+        let mut result = self.returning_result(
             table,
             options.returning,
             returned_rows,
             affected,
             statement_insert_id,
-        )
+        )?;
+        result.warnings = warnings;
+        Ok(result)
     }
 
     pub(super) fn resolve_insert_columns(

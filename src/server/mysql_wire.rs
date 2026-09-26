@@ -17,7 +17,7 @@ use chrono::{Datelike, Timelike};
 use serde_json::{Map, Value};
 
 use crate::sql::engine::{
-    AuthScope, Engine, EngineSession, MysqlColumnType, QueryResult, QueryWarning,
+    AuthScope, ColumnMetadata, Engine, EngineSession, MysqlColumnType, QueryResult, QueryWarning,
     row_keys_for_columns,
 };
 
@@ -776,8 +776,26 @@ fn show_warnings_result(warnings: &[QueryWarning]) -> QueryResult {
             row
         })
         .collect();
+    let column_metadata = vec![
+        ColumnMetadata {
+            name: "Level".to_string(),
+            column_type: MysqlColumnType::VarChar,
+            ..ColumnMetadata::default()
+        },
+        ColumnMetadata {
+            name: "Code".to_string(),
+            column_type: MysqlColumnType::Integer,
+            ..ColumnMetadata::default()
+        },
+        ColumnMetadata {
+            name: "Message".to_string(),
+            column_type: MysqlColumnType::VarChar,
+            ..ColumnMetadata::default()
+        },
+    ];
     QueryResult {
         columns,
+        column_metadata,
         rows,
         ..QueryResult::default()
     }
