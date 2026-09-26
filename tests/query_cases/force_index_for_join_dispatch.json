@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "force_index_for_join_dispatch",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "linq2db/linq2db.baselines",
+      "commit": "f38d2d2c6b90da0f0dbcf48e6f7bfb617dd6fde4",
+      "path": "MariaDB.11/Tests/Extensions/MySqlTests/Tests.Extensions.MySqlTests.IndexHintForceIndexForJoinTest(MariaDB.11).sql",
+      "url": "https://github.com/linq2db/linq2db.baselines/blob/f38d2d2c6b90da0f0dbcf48e6f7bfb617dd6fde4/MariaDB.11/Tests/Extensions/MySqlTests/Tests.Extensions.MySqlTests.IndexHintForceIndexForJoinTest%28MariaDB.11%29.sql",
+      "sha256": "ca006c5cff52200f69331cb9bfc843d070008fd2671d65391198e7533fa3ac53",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "IndexHintForceIndexForJoinTest(MariaDB.11).sql:6",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL/MariaDB join relation forces multiple named indexes with FORCE INDEX FOR JOIN while participating in a joined read.",
+      "mysql_mariadb_translation": "Reauthored as a dispatch report joining route and parcel tables. Each relation forces its join-purpose indexes, filters active routes, and returns deterministic parcel rows. The source schema, aliases, rows, and application context are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "force-index-for-join",
+    "multiple-index-forcing",
+    "inner-join",
+    "filtered-select",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Routes 801 and 802 are active and each contributes parcels; route 803 is inactive and must be filtered before joining. Both joined relations force their join-purpose indexes without changing result semantics.",
+  "determinism_notes": "Route and parcel IDs are fixed, both forced indexes exist, and the final result has a unique parcel-ID ordering. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE dispatch_force_join_routes (route_id INT PRIMARY KEY, route_state VARCHAR(12) NOT NULL, zone_code VARCHAR(12) NOT NULL, INDEX idx_force_join_route_zone (zone_code))",
+    "CREATE TABLE dispatch_force_join_parcels (parcel_id INT PRIMARY KEY, route_id INT NOT NULL, parcel_label VARCHAR(32) NOT NULL, INDEX idx_force_join_parcel_route (route_id))",
+    "INSERT INTO dispatch_force_join_routes VALUES (801, 'active', 'north'), (802, 'active', 'south'), (803, 'paused', 'west')",
+    "INSERT INTO dispatch_force_join_parcels VALUES (901, 801, 'crate-A'), (902, 802, 'crate-B'), (903, 803, 'crate-C')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT r.route_id, r.zone_code, p.parcel_id, p.parcel_label FROM dispatch_force_join_routes AS r FORCE INDEX FOR JOIN (idx_force_join_route_zone) INNER JOIN dispatch_force_join_parcels AS p FORCE INDEX FOR JOIN (idx_force_join_parcel_route) ON p.route_id = r.route_id WHERE r.route_state = 'active' ORDER BY p.parcel_id",
+      "ordered": true
+    }
+  ]
+}
