@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "self_join_dual_target_update",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "shreejit04/etl-processing",
+      "commit": "ba1b33f069def5fecaa9c742a896260498f67576",
+      "path": "update.sql",
+      "url": "https://github.com/shreejit04/etl-processing/blob/ba1b33f069def5fecaa9c742a896260498f67576/update.sql",
+      "sha256": "bd28c3d2dcb42ca7d2185184e32574733c86acf3c470ce9367d998bd78c0c2ff",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "update.sql:66-71",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL self-join UPDATE lists two aliases of the same dimension table and uses the newer version to identify and close an older version.",
+      "mysql_mariadb_translation": "Reauthored as a subscription-version rollover. One multi-target self-join UPDATE closes the older active version and marks the newer version current in the same statement; a service with one version and a different service with two versions verify matched and untouched paths. The source schema, names, values, date expressions, and ETL context are not copied.",
+      "independently_authored": true
+    }
+  },
+  "features": [
+    "multi-target-update",
+    "self-join-update",
+    "version-rollover",
+    "date-predicate",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Service 501 has an older active version 110 and newer active version 111; the statement must update both aliases, closing 110 and marking 111 current. Service 502 has only one active version and remains unchanged.",
+  "determinism_notes": "Version IDs, service IDs, dates, states, and the final primary-key order are fixed. There are no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE subscription_versions (version_id INT PRIMARY KEY, service_id INT NOT NULL, valid_from DATE NOT NULL, valid_until DATE NULL, version_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO subscription_versions VALUES (110, 501, '2026-01-01', NULL, 'active'), (111, 501, '2026-02-01', NULL, 'active'), (210, 502, '2026-01-15', NULL, 'active')"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE subscription_versions AS older, subscription_versions AS newer SET older.valid_until = '2026-01-31', older.version_state = 'closed', newer.version_state = 'current' WHERE older.service_id = newer.service_id AND newer.valid_from > older.valid_from AND older.version_state = 'active' AND newer.version_state = 'active'",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT version_id, service_id, valid_from, valid_until, version_state FROM subscription_versions ORDER BY version_id",
+      "ordered": true
+    }
+  ]
+}

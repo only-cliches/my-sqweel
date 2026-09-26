@@ -833,6 +833,207 @@ impl RawEngine {
         Ok(normalized)
     }
 
+    fn multi_target_same_table_update(
+        &self,
+        table: &TableWithJoins,
+        assignments: &[Assignment],
+        selection: Option<&Expr>,
+        returning: Option<&[SelectItem]>,
+    ) -> Result<Option<QueryResult>> {
+        if table.joins.len() != 1 {
+            return Ok(None);
+        }
+        let table_name = table_factor_name(&table.relation)?;
+        let (_, left_alias) = table_factor_name_and_alias(&table.relation)?;
+        let join = &table.joins[0];
+        let right_table = table_factor_name(&join.relation)?;
+        let (_, right_alias) = table_factor_name_and_alias(&join.relation)?;
+        if !table_name.eq_ignore_ascii_case(&right_table) {
+            return Ok(None);
+        }
+
+        let targets_right = |assignment: &Assignment| {
+            let parts = assignment
+                .target
+                .to_string()
+                .replace('`', "")
+                .split('.')
+                .map(str::to_ascii_lowercase)
+                .collect::<Vec<_>>();
+            parts.len() >= 2
+                && parts[..parts.len() - 1].iter().any(|qualifier| {
+                    qualifier == &right_table.to_ascii_lowercase()
+                        || right_alias
+                            .as_deref()
+                            .is_some_and(|alias| qualifier == &alias.to_ascii_lowercase())
+                })
+        };
+        if !assignments.iter().any(targets_right) {
+            return Ok(None);
+        }
+
+        let current_rows = self
+            .rows
+            .get(&table_name)
+            .map(|rows| rows.clone())
+            .unwrap_or_default();
+        let mut pending = BTreeMap::<String, Map<String, Value>>::new();
+
+        for (left_key, left_row) in &current_rows {
+            let left_plan = self
+                .schemas
+                .get(&table_name)
+                .map(|schema| super::query::RowMaterializationPlan::from_schema(&schema));
+            let left_data = left_plan.as_ref().map_or_else(
+                || self.current_schema_row(&table_name, &left_row.data),
+                |plan| self.current_schema_row_with_plan(&left_row.data, plan),
+            );
+            let mut left_map = left_data.clone();
+            add_qualified_columns(&mut left_map, &table_name, &left_data);
+            if let Some(alias) = &left_alias {
+                add_qualified_columns(&mut left_map, alias, &left_data);
+            }
+
+            let Some((right_key, right_row, match_context)) =
+                current_rows.iter().find_map(|(right_key, right_row)| {
+                    let right_data = self.current_schema_row(&right_table, &right_row.data);
+                    let mut combined = left_map.clone();
+                    add_qualified_columns(&mut combined, &right_table, &right_data);
+                    if let Some(alias) = &right_alias {
+                        add_qualified_columns(&mut combined, alias, &right_data);
+                    }
+                    if self.join_matches_ctx(&join.join_operator, &combined).ok()?
+                        && self.matches_selection_ctx(selection, &combined, 0).ok()?
+                    {
+                        Some((right_key.clone(), right_row.clone(), combined))
+                    } else {
+                        None
+                    }
+                })
+            else {
+                continue;
+            };
+
+            let mut left_updated = left_row.data.clone();
+            let mut right_updated = right_row.data.clone();
+            for assignment in assignments {
+                let is_right = targets_right(assignment);
+                let (relation, updated_data) = if is_right {
+                    (&join.relation, &mut right_updated)
+                } else {
+                    (&table.relation, &mut left_updated)
+                };
+                let value_context = self.update_assignment_context(
+                    relation,
+                    &table_name,
+                    updated_data,
+                    &match_context,
+                )?;
+                let col = assignment_target_name(assignment);
+                if self
+                    .schemas
+                    .get(&table_name)
+                    .and_then(|schema| schema.columns.get(&col).cloned())
+                    .is_some_and(|hint| hint.generated.is_some())
+                {
+                    return Err(anyhow!(
+                        "the value specified for generated column '{col}' is not allowed"
+                    ));
+                }
+                if !self
+                    .schemas
+                    .get(&table_name)
+                    .is_some_and(|schema| schema.columns.contains_key(&col))
+                {
+                    return Err(anyhow!("unknown column: {col}"));
+                }
+                let value = if matches!(
+                    &assignment.value,
+                    Expr::Identifier(identifier) if identifier.value.eq_ignore_ascii_case("DEFAULT")
+                ) {
+                    sql_default_value()
+                } else {
+                    self.eval_expr_ctx(
+                        &assignment.value,
+                        &value_context,
+                        self.last_insert_id.load(AtomicOrdering::Relaxed),
+                    )?
+                };
+                updated_data.insert(col, value);
+            }
+            self.apply_defaults(&table_name, &mut left_updated)?;
+            self.apply_generated_columns(&table_name, &mut left_updated)?;
+            self.apply_schema_types(&table_name, &mut left_updated)?;
+            self.apply_defaults(&table_name, &mut right_updated)?;
+            self.apply_generated_columns(&table_name, &mut right_updated)?;
+            self.apply_schema_types(&table_name, &mut right_updated)?;
+            self.validate_check_constraints(&table_name, &left_updated)?;
+            self.validate_check_constraints(&table_name, &right_updated)?;
+            self.validate_foreign_key_row(&table_name, &left_updated)?;
+            self.validate_foreign_key_row(&table_name, &right_updated)?;
+            pending.insert(left_key.clone(), left_updated);
+            pending.insert(right_key, right_updated);
+        }
+
+        let mut next_rows = current_rows.clone();
+        let mut changed_rows = BTreeMap::new();
+        let mut deleted_keys = BTreeSet::new();
+        let mut parent_updates = Vec::new();
+        let mut returned_rows = Vec::new();
+        let mut updated = 0_u64;
+        let mut pending_cells_written = 0_usize;
+        for (old_key, data) in pending {
+            let Some(current_row) = current_rows.get(&old_key) else {
+                continue;
+            };
+            let (row_id, new_key) = self.updated_row_identity(&table_name, current_row, &data);
+            let mut updated_row = current_row.clone();
+            updated_row.id = row_id;
+            updated_row.data = data;
+            updated_row.version += 1;
+            updated_row.updated_at = Utc::now();
+            let changed_cells = changed_cell_count(&current_row.data, &updated_row.data);
+            if changed_cells == 0 {
+                continue;
+            }
+            pending_cells_written += changed_cells;
+            updated += 1;
+            parent_updates.push((current_row.data.clone(), updated_row.data.clone()));
+            next_rows.remove(&old_key);
+            if new_key != old_key {
+                deleted_keys.insert(old_key.clone());
+            }
+            if next_rows.contains_key(&new_key) {
+                return Err(anyhow!("primary key conflict on {table_name}: {new_key}"));
+            }
+            next_rows.insert(new_key.clone(), updated_row.clone());
+            changed_rows.insert(new_key, updated_row.clone());
+            returned_rows.push(updated_row.data);
+        }
+        self.validate_unique_constraints(&table_name, &next_rows)?;
+        self.apply_parent_update_actions(&table_name, &parent_updates)?;
+        self.rows.insert(table_name.clone(), next_rows.into());
+        for key in &deleted_keys {
+            if let Some(row) = current_rows.get(key) {
+                self.remove_row_from_indexes(&table_name, key, &row.data);
+            }
+        }
+        for (key, row) in &changed_rows {
+            if let Some(previous) = current_rows.get(key) {
+                self.remove_row_from_indexes(&table_name, key, &previous.data);
+            }
+            self.add_row_to_indexes(&table_name, key, &row.data);
+        }
+        record_query_writes(updated as usize, pending_cells_written);
+        Ok(Some(self.returning_result(
+            &table_name,
+            returning,
+            returned_rows,
+            updated,
+            0,
+        )?))
+    }
+
     pub(super) fn update_rows(
         &self,
         table: TableWithJoins,
@@ -844,6 +1045,14 @@ impl RawEngine {
         limit: Option<Expr>,
     ) -> Result<QueryResult> {
         let table = Self::normalize_right_join_update(table, &assignments)?;
+        if let Some(result) = self.multi_target_same_table_update(
+            &table,
+            &assignments,
+            selection.as_ref(),
+            returning.as_deref(),
+        )? {
+            return Ok(result);
+        }
         if from.is_some() {
             return Err(anyhow!("UPDATE ... FROM is not supported yet"));
         }
