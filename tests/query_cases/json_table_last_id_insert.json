@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "id": "json_table_last_id_insert",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "sqlpage/SQLPage",
+      "commit": "f92e1d7b06ca293b72c8166734c30ab3bbc98c84",
+      "path": "examples/mysql json handling/index.sql",
+      "url": "https://github.com/sqlpage/SQLPage/blob/f92e1d7b06ca293b72c8166734c30ab3bbc98c84/examples/mysql%20json%20handling/index.sql",
+      "sha256": "16f67337a9ec37ca41add1775c89f262a6048aa1e6d65197814c772991da3280",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "index.sql: JSON_TABLE membership insert after LAST_INSERT_ID account creation",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "An application inserts an auto-increment parent row, then expands a JSON array with JSON_TABLE and inserts child membership rows using the same-connection LAST_INSERT_ID value.",
+      "mysql_mariadb_translation": "Reauthored as a team enrollment workflow. A new account is inserted, its generated key is read and reused while JSON_TABLE expands two selected team IDs into membership rows, and ordered final reads verify both parent and child state. The source schema, names, values, and UI workflow are not copied.",
+      "independently_authored": true
+    }
+  },
+  "features": [
+    "auto-increment",
+    "last-insert-id",
+    "json-table",
+    "insert-select",
+    "same-connection-state",
+    "relational-membership-load",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The empty account table allocates account_id 1 for the new enrollment. LAST_INSERT_ID must remain 1 while JSON_TABLE emits team IDs 11 and 13 into the membership table; the final reads verify the parent and both child rows.",
+  "determinism_notes": "Team IDs, account data, JSON membership values, and statement order are fixed. Final reads are ordered by primary keys, with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE enrollment_accounts (account_id INT AUTO_INCREMENT PRIMARY KEY, account_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE enrollment_teams (team_id INT PRIMARY KEY, team_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE enrollment_memberships (account_id INT NOT NULL, team_id INT NOT NULL, PRIMARY KEY (account_id, team_id))",
+    "INSERT INTO enrollment_teams (team_id, team_name) VALUES (11, 'atlas'), (13, 'beacon'), (17, 'cinder')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO enrollment_accounts (account_name) VALUES ('Rhea')",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT LAST_INSERT_ID() AS created_account_id",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO enrollment_memberships (account_id, team_id) SELECT LAST_INSERT_ID(), jt.team_id FROM JSON_TABLE('[{\"team_id\":11},{\"team_id\":13}]', '$[*]' COLUMNS (team_id INT PATH '$.team_id')) AS jt",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT account_id, account_name FROM enrollment_accounts ORDER BY account_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT m.account_id, m.team_id, t.team_name FROM enrollment_memberships AS m INNER JOIN enrollment_teams AS t ON t.team_id = m.team_id ORDER BY m.account_id, m.team_id",
+      "ordered": true
+    }
+  ]
+}
