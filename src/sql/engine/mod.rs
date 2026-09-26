@@ -1152,7 +1152,7 @@ impl RawEngine {
             .replace(" on update current_timestamp", "")
             .replace(" ZEROFILL", "")
             .replace(" zerofill", "");
-        parse_sql = strip_select_modifiers(&parse_sql);
+        parse_sql = strip_select_modifiers_anywhere(&parse_sql);
         parse_sql = rewrite_set_statement_for_parser(&parse_sql);
         parse_sql = query::strip_explain_index_hints(&parse_sql);
         parse_sql = rewrite_trim_direction(&parse_sql);
@@ -5022,6 +5022,15 @@ fn strip_select_modifiers(sql: &str) -> String {
         }
     }
     result
+}
+
+fn strip_select_modifiers_anywhere(sql: &str) -> String {
+    let upper = sql.to_ascii_uppercase();
+    let Some(select_at) = find_top_level_keyword(&upper, "SELECT") else {
+        return sql.to_string();
+    };
+    let (prefix, select_sql) = sql.split_at(select_at);
+    format!("{prefix}{}", strip_select_modifiers(select_sql))
 }
 
 fn rewrite_trim_direction(sql: &str) -> String {

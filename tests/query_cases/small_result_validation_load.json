@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "id": "small_result_validation_load",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "SNAS/openbmp-mysql-consumer",
+      "commit": "23e1ad1c379d982643680ce87f946d9a1182f1b4",
+      "path": "database/mysql-openbmp-current.sql",
+      "url": "https://github.com/SNAS/openbmp-mysql-consumer/blob/23e1ad1c379d982643680ce87f946d9a1182f1b4/database/mysql-openbmp-current.sql",
+      "sha256": "3ec2fd71d95cc6b55733da0e3a9f6d17655cdf57ab3ec1b10b1959c228995fc4",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "database/mysql-openbmp-current.sql:508-515",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL INSERT IGNORE SELECT uses SQL_SMALL_RESULT with a derived source row and multiple LEFT JOIN lookups to populate a validation table while preserving missing lookup values.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored route-validation load. Ready route candidates are projected through a derived table, enriched by optional policy and registry lookups, and inserted with SQL_SMALL_RESULT; an existing validation key is ignored, a new key is inserted, and a paused candidate is filtered out."
+    },
+    "independently_authored": true
+  },
+  "features": ["sql-small-result", "insert-ignore", "insert-select", "derived-table", "left-join", "nullable-lookups", "duplicate-key-skip", "dml-final-state"],
+  "fixture_notes": "Candidate 101 already exists in validation_entries and must retain its old lookup values when INSERT IGNORE skips it. Candidate 102 is new, has a NULL policy lookup and a populated registry lookup, and must be inserted. Paused candidate 103 must not be loaded.",
+  "determinism_notes": "Candidate keys and lookup values are fixed; final rows are ordered by the unique route ID and no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE route_candidates (route_id INT PRIMARY KEY, prefix VARCHAR(32) NOT NULL, prefix_bits INT NOT NULL, origin_as INT NOT NULL, route_tag VARCHAR(32) NOT NULL, is_ipv4 TINYINT NOT NULL, state VARCHAR(16) NOT NULL)",
+    "CREATE TABLE policy_registry (prefix VARCHAR(32) NOT NULL, prefix_bits INT NOT NULL, origin_as INT NOT NULL, policy_origin_as INT NULL, PRIMARY KEY (prefix, prefix_bits, origin_as))",
+    "CREATE TABLE route_registry (prefix VARCHAR(32) NOT NULL, prefix_bits INT NOT NULL, origin_as INT NOT NULL, registry_origin_as INT NULL, registry_name VARCHAR(24) NULL, PRIMARY KEY (prefix, prefix_bits, origin_as))",
+    "CREATE TABLE validation_entries (route_id INT PRIMARY KEY, prefix VARCHAR(32) NOT NULL, prefix_bits INT NOT NULL, origin_as INT NOT NULL, policy_origin_as INT NULL, registry_origin_as INT NULL, registry_name VARCHAR(24) NULL, route_tag VARCHAR(32) NOT NULL, is_ipv4 TINYINT NOT NULL)",
+    "INSERT INTO route_candidates VALUES (101, '198.51.100.0', 24, 64510, 'edge-a', 1, 'ready'), (102, '203.0.113.0', 24, 64511, 'edge-b', 1, 'ready'), (103, '192.0.2.0', 24, 64512, 'edge-c', 1, 'paused')",
+    "INSERT INTO policy_registry VALUES ('198.51.100.0', 24, 64510, 64520), ('192.0.2.0', 24, 64512, 64522)",
+    "INSERT INTO route_registry VALUES ('198.51.100.0', 24, 64510, 64530, 'regional'), ('203.0.113.0', 24, 64511, 64531, 'national'), ('192.0.2.0', 24, 64512, 64532, 'regional')",
+    "INSERT INTO validation_entries VALUES (101, '198.51.100.0', 24, 64510, 60000, NULL, 'legacy', 'old-edge-a', 1)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT IGNORE INTO validation_entries (route_id, prefix, prefix_bits, origin_as, policy_origin_as, registry_origin_as, registry_name, route_tag, is_ipv4) SELECT SQL_SMALL_RESULT c.route_id, c.prefix, c.prefix_bits, c.origin_as, p.policy_origin_as, r.registry_origin_as, r.registry_name, c.route_tag, c.is_ipv4 FROM (SELECT route_id, prefix, prefix_bits, origin_as, route_tag, is_ipv4 FROM route_candidates WHERE state = 'ready') c LEFT JOIN policy_registry p ON p.prefix = c.prefix AND p.prefix_bits = c.prefix_bits AND p.origin_as = c.origin_as LEFT JOIN route_registry r ON r.prefix = c.prefix AND r.prefix_bits = c.prefix_bits AND r.origin_as = c.origin_as"
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT route_id, prefix, prefix_bits, origin_as, policy_origin_as, registry_origin_as, registry_name, route_tag, is_ipv4 FROM validation_entries ORDER BY route_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT route_id, state FROM route_candidates ORDER BY route_id",
+      "ordered": true
+    }
+  ]
+}

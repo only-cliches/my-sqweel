@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "small_result_validation_load_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "SNAS/openbmp-mysql-consumer",
+      "commit": "23e1ad1c379d982643680ce87f946d9a1182f1b4",
+      "path": "database/mysql-openbmp-current.sql",
+      "url": "https://github.com/SNAS/openbmp-mysql-consumer/blob/23e1ad1c379d982643680ce87f946d9a1182f1b4/database/mysql-openbmp-current.sql",
+      "sha256": "3ec2fd71d95cc6b55733da0e3a9f6d17655cdf57ab3ec1b10b1959c228995fc4",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "database/mysql-openbmp-current.sql:508-515",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "An INSERT IGNORE SELECT must accept SQL_SMALL_RESULT after an outer SELECT inside a derived-table and LEFT JOIN statement.",
+      "mysql_mariadb_translation": "Reduced to two ready candidates, one optional policy lookup, one duplicate target key, and one new target row to isolate nested SELECT modifier normalization and NULL-preserving insertion."
+    },
+    "independently_authored": true,
+    "minimized_from": "small_result_validation_load"
+  },
+  "features": ["sql-small-result", "insert-ignore", "insert-select", "derived-table", "left-join", "minimized-regression"],
+  "fixture_notes": "Candidate 201 conflicts with the existing target row and must remain unchanged; candidate 202 is new and has no policy match, so it must insert with a NULL policy value.",
+  "determinism_notes": "Candidate IDs and values are fixed; the final target read is ordered by the primary key with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE mini_route_candidates (route_id INT PRIMARY KEY, prefix VARCHAR(32) NOT NULL, origin_as INT NOT NULL, state VARCHAR(16) NOT NULL)",
+    "CREATE TABLE mini_policy_registry (prefix VARCHAR(32) NOT NULL, origin_as INT NOT NULL, policy_origin_as INT NULL, PRIMARY KEY (prefix, origin_as))",
+    "CREATE TABLE mini_validation_entries (route_id INT PRIMARY KEY, prefix VARCHAR(32) NOT NULL, origin_as INT NOT NULL, policy_origin_as INT NULL)",
+    "INSERT INTO mini_route_candidates VALUES (201, '198.51.100.0', 64510, 'ready'), (202, '203.0.113.0', 64511, 'ready')",
+    "INSERT INTO mini_policy_registry VALUES ('198.51.100.0', 64510, 64520)",
+    "INSERT INTO mini_validation_entries VALUES (201, '198.51.100.0', 64510, 60000)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT IGNORE INTO mini_validation_entries (route_id, prefix, origin_as, policy_origin_as) SELECT SQL_SMALL_RESULT c.route_id, c.prefix, c.origin_as, p.policy_origin_as FROM (SELECT route_id, prefix, origin_as FROM mini_route_candidates WHERE state = 'ready') c LEFT JOIN mini_policy_registry p ON p.prefix = c.prefix AND p.origin_as = c.origin_as"
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT route_id, prefix, origin_as, policy_origin_as FROM mini_validation_entries ORDER BY route_id",
+      "ordered": true
+    }
+  ]
+}
