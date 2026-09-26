@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "view_check_option_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "view_check_option",
+    "source": {
+      "repository": "mysql/mysql-shell",
+      "commit": "977806ff9412abf13da82a1d6ed49e2b909bc121",
+      "path": "unittest/data/sql/mysqldump_t.sql",
+      "url": "https://github.com/mysql/mysql-shell/blob/977806ff9412abf13da82a1d6ed49e2b909bc121/unittest/data/sql/mysqldump_t.sql",
+      "sha256": "f578cbcd21827d5ccd62cd3f55e88caa16d9287727f442b5c452646877856983",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from view_check_option; source unittest/data/sql/mysqldump_t.sql:32",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "CREATE VIEW accepts a row predicate followed by WITH CHECK OPTION and leaves the filtered view queryable.",
+      "mysql_mariadb_translation": "Reduced to one base table, one filtered view definition, and one ordered read. View DML, multiple rows, and the application dump context are removed while the check-option view syntax remains isolated."
+    },
+    "independently_authored": true,
+    "minimized_from": "view_check_option"
+  },
+  "features": [
+    "view",
+    "with-check-option",
+    "minimized-regression"
+  ],
+  "fixture_notes": "The view must be created successfully and expose only the one visible row; MySqweel currently rejects the CREATE VIEW statement before the read can execute.",
+  "determinism_notes": "One fixed base row, one fixed predicate, and one ordered read use no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE mini_board_tasks (task_id INT PRIMARY KEY, task_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO mini_board_tasks VALUES (901, 'visible')"
+  ],
+  "steps": [
+    {
+      "sql": "CREATE OR REPLACE VIEW visible_tasks AS SELECT task_id, task_state FROM mini_board_tasks WHERE task_state = 'visible' WITH CHECK OPTION",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT task_id, task_state FROM visible_tasks ORDER BY task_id",
+      "ordered": true
+    }
+  ]
+}

@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "id": "view_check_option",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "repository": "mysql/mysql-shell",
+      "commit": "977806ff9412abf13da82a1d6ed49e2b909bc121",
+      "path": "unittest/data/sql/mysqldump_t.sql",
+      "url": "https://github.com/mysql/mysql-shell/blob/977806ff9412abf13da82a1d6ed49e2b909bc121/unittest/data/sql/mysqldump_t.sql",
+      "sha256": "f578cbcd21827d5ccd62cd3f55e88caa16d9287727f442b5c452646877856983",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "unittest/data/sql/mysqldump_t.sql:27-32",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A view filters rows through a predicate and declares WITH CHECK OPTION so writes through the view cannot create rows that fail the predicate.",
+      "mysql_mariadb_translation": "Reauthored as an independent task-board visibility view. Open tasks are exposed through a view with WITH CHECK OPTION; a valid insert succeeds, while an insert and update that would leave the view predicate produce MariaDB check-option errors. The source dump tables, names, and values are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "view",
+    "with-check-option",
+    "view-dml",
+    "write-predicate-enforcement",
+    "error-result",
+    "deterministic-final-state"
+  ],
+  "fixture_notes": "Task 601 starts open and remains visible. Task 603 is inserted through the view with an open state. The closed insert and transition of task 601 to closed must each return MariaDB's check-option error and leave the base table unchanged.",
+  "determinism_notes": "Task IDs, labels, states, view predicate, DML values, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE board_tasks (task_id INT PRIMARY KEY, task_label VARCHAR(32) NOT NULL, task_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO board_tasks VALUES (601, 'index-docs', 'open'), (602, 'archive-logs', 'closed')"
+  ],
+  "steps": [
+    {
+      "sql": "CREATE OR REPLACE VIEW open_tasks AS SELECT task_id, task_label, task_state FROM board_tasks WHERE task_state = 'open' WITH CHECK OPTION",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT task_id, task_label, task_state FROM open_tasks ORDER BY task_id",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO open_tasks (task_id, task_label, task_state) VALUES (603, 'refresh-index', 'open')",
+      "ordered": false
+    },
+    {
+      "sql": "INSERT INTO open_tasks (task_id, task_label, task_state) VALUES (604, 'archive-cache', 'closed')",
+      "ordered": false,
+      "expect_error": true
+    },
+    {
+      "sql": "UPDATE open_tasks SET task_state = 'closed' WHERE task_id = 601",
+      "ordered": false,
+      "expect_error": true
+    },
+    {
+      "sql": "SELECT task_id, task_label, task_state FROM open_tasks ORDER BY task_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT task_id, task_label, task_state FROM board_tasks ORDER BY task_id",
+      "ordered": true
+    }
+  ]
+}
