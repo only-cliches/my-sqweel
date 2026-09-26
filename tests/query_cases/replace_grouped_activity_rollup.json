@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "replace_grouped_activity_rollup",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "USEPA/EPA_MOVES_Model",
+      "commit": "25dc6c833dd8c88198f82cee93ca30be1456df8b",
+      "path": "database/PreAggDAY.sql",
+      "url": "https://github.com/USEPA/EPA_MOVES_Model/blob/25dc6c833dd8c88198f82cee93ca30be1456df8b/database/PreAggDAY.sql",
+      "sha256": "1fe543828acee31dd3714242c5b732db7a5dd062a4c3db489120cdc523d15f52",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "database/PreAggDAY.sql:L143-L147",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL REPLACE INTO statement loads grouped SELECT output into a keyed summary table, replacing conflicting aggregate keys and inserting new groups.",
+      "mysql_mariadb_translation": "Reauthored as an activity rollup refresh. Fixed event rows are filtered by a reporting date, grouped by day and channel, and loaded with REPLACE INTO so one existing rollup is replaced while new aggregate groups are inserted."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "replace-into-select",
+    "grouped-aggregate-refresh",
+    "composite-key-replacement",
+    "date-filter",
+    "deterministic-final-state"
+  ],
+  "fixture_notes": "The existing email rollup for 2026-05-01 is replaced by the grouped event total 7 and count 2. SMS on the same day and email on 2026-05-02 are new groups. A pre-period event is excluded, and an unrelated fax rollup remains unchanged.",
+  "determinism_notes": "Days, channels, event IDs, units, date predicate, grouping keys, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE daily_activity_rollups (rollup_day DATE NOT NULL, channel VARCHAR(16) NOT NULL, total_units INT NOT NULL, event_count INT NOT NULL, PRIMARY KEY (rollup_day, channel))",
+    "CREATE TABLE activity_events (event_id INT PRIMARY KEY, activity_day DATE NOT NULL, channel VARCHAR(16) NOT NULL, units INT NOT NULL)",
+    "INSERT INTO daily_activity_rollups VALUES ('2026-05-01', 'email', 999, 99), ('2026-05-01', 'fax', 12, 1)",
+    "INSERT INTO activity_events VALUES (1, '2026-04-30', 'email', 100), (2, '2026-05-01', 'email', 3), (3, '2026-05-01', 'email', 4), (4, '2026-05-01', 'sms', 5), (5, '2026-05-02', 'email', 2), (6, '2026-05-02', 'email', 6)"
+  ],
+  "steps": [
+    {
+      "sql": "REPLACE INTO daily_activity_rollups (rollup_day, channel, total_units, event_count) SELECT activity_day, channel, SUM(units), COUNT(*) FROM activity_events WHERE activity_day >= '2026-05-01' GROUP BY activity_day, channel",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT rollup_day, channel, total_units, event_count FROM daily_activity_rollups ORDER BY rollup_day, channel",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT rollup_day, channel, total_units, event_count FROM daily_activity_rollups ORDER BY rollup_day, channel",
+      "ordered": true
+    }
+  ]
+}
