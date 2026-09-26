@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "id": "distinct_label_directory",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "EnterpriseDB/mysql_fdw",
+      "commit": "40d54a0288588f52fcd060966f63dcb862e3e56d",
+      "path": "sql/select.sql",
+      "url": "https://github.com/EnterpriseDB/mysql_fdw/blob/40d54a0288588f52fcd060966f63dcb862e3e56d/sql/select.sql",
+      "sha256": "409b3b050ae729c46c7c22b014d3aec0b19c4c6ecd12fd6ca59cf8ddbbabcfe3",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/select.sql:62",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL SELECT DISTINCT projection removes duplicate values and orders the resulting set by the projected column.",
+      "mysql_mariadb_translation": "Reauthored as a service-label directory. Fixed service rows contain repeated labels and one NULL label; SELECT DISTINCT must emit each present label once and preserve the single NULL value under deterministic ordering. The source table, columns, rows, and foreign-data-wrapper context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "distinct-projection",
+    "duplicate-elimination",
+    "null",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Five service rows reduce to three non-NULL labels plus one NULL result. Repeated labels must collapse while the NULL label remains one distinct value.",
+  "determinism_notes": "Service IDs and labels are fixed; the distinct result is ordered by the projected label with MariaDB's NULL-first ordering. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE service_label_rows (service_id INT PRIMARY KEY, service_label VARCHAR(24) NULL)",
+    "INSERT INTO service_label_rows VALUES (101, 'edge'), (102, 'core'), (103, 'edge'), (104, NULL), (105, 'archive'), (106, NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT DISTINCT service_label FROM service_label_rows ORDER BY service_label",
+      "ordered": true
+    }
+  ]
+}
