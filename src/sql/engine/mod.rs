@@ -1161,6 +1161,7 @@ impl RawEngine {
         parse_sql = rewrite_outer_parenthesized_select(&parse_sql);
         parse_sql = rewrite_parenthesized_union_branch(&parse_sql);
         parse_sql = rewrite_straight_join(&parse_sql);
+        parse_sql = rewrite_chained_join_constraints(&parse_sql);
         parse_sql = rewrite_alter_drop_foreign_key(&parse_sql);
         parse_sql = rewrite_alter_add_column_if_not_exists(&parse_sql);
         parse_sql = rewrite_parenthesized_alter_columns(&parse_sql);
@@ -5395,6 +5396,94 @@ fn rewrite_straight_join(sql: &str) -> String {
     }
     result.push_str(&sql[cursor..]);
     result
+}
+
+fn rewrite_chained_join_constraints(sql: &str) -> String {
+    let upper = sql.to_ascii_uppercase();
+    let Some(from_at) = find_top_level_keyword(&upper, "FROM") else {
+        return sql.to_string();
+    };
+    let clause_end = [
+        "WHERE",
+        "GROUP BY",
+        "HAVING",
+        "ORDER BY",
+        "LIMIT",
+        "INTO",
+        "PROCEDURE",
+        "UNION",
+    ]
+    .iter()
+    .filter_map(|keyword| {
+        top_level_keyword_positions(&upper, keyword)
+            .into_iter()
+            .find(|position| *position > from_at)
+    })
+    .min()
+    .unwrap_or(sql.len());
+    let from_clause = &sql[from_at..clause_end];
+    let joins = top_level_keyword_positions(from_clause, "JOIN");
+    let ons = top_level_keyword_positions(from_clause, "ON");
+    if joins.len() < 2 || ons.len() != joins.len() || ons[0] < joins[joins.len() - 1] {
+        return sql.to_string();
+    }
+
+    let mut rewritten = String::with_capacity(sql.len());
+    rewritten.push_str(&sql[..from_at]);
+    rewritten.push_str(&from_clause[..joins[0]]);
+    for (join_index, join_start) in joins.iter().enumerate() {
+        let relation_start = join_start + "JOIN".len();
+        let relation_end = joins.get(join_index + 1).copied().unwrap_or(ons[0]);
+        let condition_index = ons.len() - join_index - 1;
+        let condition_start = ons[condition_index] + "ON".len();
+        let condition_end = if condition_index + 1 < ons.len() {
+            ons[condition_index + 1]
+        } else {
+            from_clause.len()
+        };
+        rewritten.push_str(if join_index == 0 { "JOIN " } else { " JOIN " });
+        rewritten.push_str(from_clause[relation_start..relation_end].trim());
+        rewritten.push_str(" ON ");
+        rewritten.push_str(from_clause[condition_start..condition_end].trim());
+    }
+    rewritten.push(' ');
+    rewritten.push_str(&sql[clause_end..]);
+    rewritten
+}
+
+fn top_level_keyword_positions(sql: &str, keyword: &str) -> Vec<usize> {
+    let bytes = sql.as_bytes();
+    let keyword_bytes = keyword.as_bytes();
+    let mut positions = Vec::new();
+    let mut depth = 0usize;
+    let mut quote = None;
+    let mut index = 0usize;
+    while index + keyword_bytes.len() <= bytes.len() {
+        let character = bytes[index] as char;
+        match quote {
+            Some(current) if character == current => quote = None,
+            Some(_) => {}
+            None => match character {
+                '\'' | '"' | '`' => quote = Some(character),
+                '(' => depth += 1,
+                ')' => depth = depth.saturating_sub(1),
+                _ if depth == 0
+                    && bytes[index..index + keyword_bytes.len()]
+                        .eq_ignore_ascii_case(keyword_bytes)
+                    && (index == 0 || !bytes[index - 1].is_ascii_alphanumeric())
+                    && (index + keyword_bytes.len() == bytes.len()
+                        || !bytes[index + keyword_bytes.len()].is_ascii_alphanumeric()) =>
+                {
+                    positions.push(index);
+                    index += keyword_bytes.len();
+                    continue;
+                }
+                _ => {}
+            },
+        }
+        index += 1;
+    }
+    positions
 }
 
 fn strip_create_table_index_prefixes(sql: &str) -> String {

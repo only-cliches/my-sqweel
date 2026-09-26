@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "id": "straight_join_event_routes_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "antlr/grammars-v4",
+      "commit": "2c8f74860509c39629ef23451eee670a23d4b280",
+      "path": "sql/mysql/Oracle/examples/dml_select.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/2c8f74860509c39629ef23451eee670a23d4b280/sql/mysql/Oracle/examples/dml_select.sql",
+      "sha256": "e64c03f67dddb82c3c8131aa3ac0899bedc3ae60d51661d2850218511767fb3a",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/mysql/Oracle/examples/dml_select.sql:120",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A chained STRAIGHT_JOIN query places both inner-join ON predicates after the final joined table.",
+      "mysql_mariadb_translation": "Reduced to one active route, one parcel, and one ready event so the parser must normalize two chained ON predicates without unrelated filters or ordering."
+    },
+    "independently_authored": true,
+    "minimized_from": "straight_join_event_routes"
+  },
+  "features": ["straight-join", "chained-inner-joins", "nested-on-predicates", "minimized-regression"],
+  "fixture_notes": "The single joined row must survive both chained predicates; the query shape, not data volume, isolates the regression.",
+  "determinism_notes": "Each table has one fixed row and the result is explicitly ordered by event ID with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE mini_event_routes (route_id INT PRIMARY KEY, route_code VARCHAR(16) NOT NULL)",
+    "CREATE TABLE mini_event_parcels (parcel_id INT PRIMARY KEY, route_id INT NOT NULL, parcel_code VARCHAR(16) NOT NULL)",
+    "CREATE TABLE mini_route_events (event_id INT PRIMARY KEY, parcel_id INT NOT NULL, event_code VARCHAR(16) NOT NULL)",
+    "INSERT INTO mini_event_routes VALUES (1, 'north')",
+    "INSERT INTO mini_event_parcels VALUES (301, 1, 'N-01')",
+    "INSERT INTO mini_route_events VALUES (401, 301, 'loaded')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT STRAIGHT_JOIN r.route_code, p.parcel_id, e.event_id FROM mini_event_routes r STRAIGHT_JOIN mini_event_parcels p STRAIGHT_JOIN mini_route_events e ON e.parcel_id = p.parcel_id ON p.route_id = r.route_id ORDER BY e.event_id",
+      "ordered": true
+    }
+  ]
+}
