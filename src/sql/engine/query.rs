@@ -2287,9 +2287,9 @@ impl RawEngine {
                             MysqlColumnType::Json
                         }
                     }
+                    "JSON_OBJECT" => MysqlColumnType::VarChar,
                     "JSON_INSERT"
                     | "JSON_MERGE_PATCH"
-                    | "JSON_OBJECT"
                     | "JSON_REMOVE"
                     | "JSON_REPLACE"
                     | "JSON_SEARCH"

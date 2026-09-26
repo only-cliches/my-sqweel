@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "recursive_json_object_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "mysql/mysql-shell-plugins",
+      "commit": "79aec063d691559d653c1af95f4f78a7cef12b61",
+      "path": "mrs_plugin/db_schema/mrs.msm.project/development/sections/150-10_views.sql",
+      "url": "https://github.com/mysql/mysql-shell-plugins/blob/79aec063d691559d653c1af95f4f78a7cef12b61/mrs_plugin/db_schema/mrs.msm.project/development/sections/150-10_views.sql",
+      "sha256": "9582d55c1efe20a7506a4e93a977cec1754d9146028f894071cc67651feb1525",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "mrs_plugin/db_schema/mrs.msm.project/development/sections/150-10_views.sql:L27-L35",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A recursive-view row carries a JSON_OBJECT summary payload for each hierarchy node.",
+      "mysql_mariadb_translation": "Reduced to one fixed scalar JSON_OBJECT projection so the MariaDB VAR_STRING metadata contract is isolated from recursion, joins, and hierarchy state."
+    },
+    "independently_authored": true,
+    "minimized_from": "recursive_json_tree_manifest"
+  },
+  "features": [
+    "json-object",
+    "result-metadata",
+    "minimized-regression"
+  ],
+  "fixture_notes": "One fixed JSON object is sufficient to expose the result type mismatch: MariaDB reports VAR_STRING while the pre-fix MySqweel metadata reported BLOB.",
+  "determinism_notes": "The query uses only fixed literals and no tables, clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT JSON_OBJECT('node', 'Solo', 'depth', 0, 'parent_id', NULL) AS node_summary",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT JSON_OBJECT('node', 'Solo', 'depth', 0, 'parent_id', NULL) AS node_summary",
+      "ordered": true
+    }
+  ]
+}

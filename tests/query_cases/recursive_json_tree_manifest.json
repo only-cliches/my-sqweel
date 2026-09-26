@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "recursive_json_tree_manifest",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "mysql/mysql-shell-plugins",
+      "commit": "79aec063d691559d653c1af95f4f78a7cef12b61",
+      "path": "mrs_plugin/db_schema/mrs.msm.project/development/sections/150-10_views.sql",
+      "url": "https://github.com/mysql/mysql-shell-plugins/blob/79aec063d691559d653c1af95f4f78a7cef12b61/mrs_plugin/db_schema/mrs.msm.project/development/sections/150-10_views.sql",
+      "sha256": "9582d55c1efe20a7506a4e93a977cec1754d9146028f894071cc67651feb1525",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "mrs_plugin/db_schema/mrs.msm.project/development/sections/150-10_views.sql:L17-L62",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A recursive CTE walks a parent-reference tree and constructs a JSON_OBJECT payload for each root and descendant row while carrying depth and hierarchy fields through UNION ALL.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored organization-tree manifest. A small fixed node table produces root and descendant rows, carries a slash-delimited path and depth through recursion, and emits one JSON_OBJECT summary per node including its parent marker. The source view, metadata schema, identifiers, and JSON fields are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "recursive-tree-cte",
+    "json-object-projection",
+    "union-all-recursion",
+    "path-accumulation",
+    "nullable-parent",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Platform is the root; API and Web are its children, and Auth is a grandchild of API. Operations is a second root. Every node must appear once with the correct depth, path, and JSON summary, while roots retain a NULL parent marker.",
+  "determinism_notes": "Node IDs, parent links, names, recursion depth, path construction, and final node ordering are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE org_nodes (node_id INT PRIMARY KEY, parent_id INT NULL, node_name VARCHAR(32) NOT NULL)",
+    "INSERT INTO org_nodes VALUES (100, NULL, 'Platform'), (110, 100, 'API'), (111, 110, 'Auth'), (120, 100, 'Web'), (200, NULL, 'Operations')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH RECURSIVE org_tree (node_id, parent_id, node_name, depth, node_path, node_summary) AS (SELECT node_id, parent_id, node_name, 0, CAST(node_name AS CHAR(255)), JSON_OBJECT('node', node_name, 'depth', 0, 'parent_id', parent_id) FROM org_nodes WHERE parent_id IS NULL UNION ALL SELECT child.node_id, child.parent_id, child.node_name, parent.depth + 1, CONCAT(parent.node_path, '/', child.node_name), JSON_OBJECT('node', child.node_name, 'depth', parent.depth + 1, 'parent_id', child.parent_id) FROM org_tree AS parent INNER JOIN org_nodes AS child ON child.parent_id = parent.node_id) SELECT node_id, parent_id, depth, node_path, node_summary FROM org_tree ORDER BY node_path, node_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "WITH RECURSIVE org_tree (node_id, parent_id, node_name, depth, node_path, node_summary) AS (SELECT node_id, parent_id, node_name, 0, CAST(node_name AS CHAR(255)), JSON_OBJECT('node', node_name, 'depth', 0, 'parent_id', parent_id) FROM org_nodes WHERE parent_id IS NULL UNION ALL SELECT child.node_id, child.parent_id, child.node_name, parent.depth + 1, CONCAT(parent.node_path, '/', child.node_name), JSON_OBJECT('node', child.node_name, 'depth', parent.depth + 1, 'parent_id', child.parent_id) FROM org_tree AS parent INNER JOIN org_nodes AS child ON child.parent_id = parent.node_id) SELECT node_id, depth, node_path, node_summary FROM org_tree ORDER BY node_path, node_id",
+      "ordered": true
+    }
+  ]
+}
