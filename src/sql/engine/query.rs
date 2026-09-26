@@ -1772,7 +1772,7 @@ impl RawEngine {
                             metadata.column_type
                         }
                     }
-                    "REGEXP_REPLACE" => MysqlColumnType::LongBlob,
+                    "REGEXP_REPLACE" | "EXTRACTVALUE" => MysqlColumnType::LongBlob,
                     "REGEXP_SUBSTR" => MysqlColumnType::VarChar,
                     "REGEXP_INSTR" => MysqlColumnType::Integer,
                     "IS_IPV4" | "IS_IPV6" | "IS_IPV4_COMPAT" | "IS_IPV4_MAPPED" => {

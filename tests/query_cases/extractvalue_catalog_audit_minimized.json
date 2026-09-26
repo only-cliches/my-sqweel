@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "id": "extractvalue_catalog_audit_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "entando/app-engine",
+      "commit": "499e2e3a0bff76907c30853728a8a662e91902e6",
+      "path": "webapp/upgrade/4.3.2-to-6.3.2/mysql/port.sql",
+      "url": "https://github.com/entando/app-engine/blob/499e2e3a0bff76907c30853728a8a662e91902e6/webapp/upgrade/4.3.2-to-6.3.2/mysql/port.sql",
+      "sha256": "9bb38a26f4130cc4c7f5dab21de37d07f5fd63ff566759f209c2a7900c40672b",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "webapp/upgrade/4.3.2-to-6.3.2/mysql/port.sql: XML content extraction expressions",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "EXTRACTVALUE returns text selected by an XPath over an XML document, including repeated and positional child nodes.",
+      "mysql_mariadb_translation": "Reduced to one independently authored XML literal and two scalar XPath projections, isolating repeated-node concatenation and positional selection without table state or migration logic.",
+      "minimized_from": "extractvalue_catalog_audit"
+    },
+    "independently_authored": true
+  },
+  "features": ["extractvalue", "xml-xpath", "minimized-regression"],
+  "fixture_notes": "The fixed document has two item nodes; the first projection returns both labels separated by a space and the second returns only the second state.",
+  "determinism_notes": "The XML literal and XPath expressions are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT EXTRACTVALUE('<registry><item><label>north</label><state>open</state></item><item><label>south</label><state>closed</state></item></registry>', '/registry/item/label') AS labels, EXTRACTVALUE('<registry><item><label>north</label><state>open</state></item><item><label>south</label><state>closed</state></item></registry>', '/registry/item[2]/state') AS second_state",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}

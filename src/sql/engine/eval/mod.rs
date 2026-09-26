@@ -3863,6 +3863,236 @@ where
         _ => None,
     }
 }
+#[derive(Debug)]
+struct XmlNode {
+    name: String,
+    attributes: HashMap<String, String>,
+    children: Vec<XmlNode>,
+    text: String,
+}
+
+fn eval_extractvalue(xml: Value, xpath: Value) -> Value {
+    let (Value::String(xml), Value::String(xpath)) = (xml, xpath) else {
+        return Value::Null;
+    };
+    let Some(root) = parse_xml_node(&xml) else {
+        return Value::Null;
+    };
+    let path = xpath.trim();
+    if let Some(inner) = path
+        .strip_prefix("count(")
+        .and_then(|value| value.strip_suffix(')'))
+    {
+        return Value::Number(Number::from(find_xml_nodes(&root, inner).len() as u64));
+    }
+    if let Some(attribute) = path.strip_prefix('@') {
+        return Value::String(root.attributes.get(attribute).cloned().unwrap_or_default());
+    }
+    let nodes = find_xml_nodes(&root, path);
+    if nodes.is_empty() {
+        return Value::String(String::new());
+    }
+    Value::String(
+        nodes
+            .iter()
+            .map(|node| xml_text(node))
+            .collect::<Vec<_>>()
+            .join(" "),
+    )
+}
+
+fn parse_xml_node(xml: &str) -> Option<XmlNode> {
+    let mut position = 0;
+    parse_xml_node_at(xml, &mut position)
+}
+
+fn parse_xml_node_at(xml: &str, position: &mut usize) -> Option<XmlNode> {
+    skip_xml_whitespace(xml, position);
+    if !xml
+        .as_bytes()
+        .get(*position)
+        .is_some_and(|byte| *byte == b'<')
+    {
+        return None;
+    }
+    *position += 1;
+    let name_start = *position;
+    while xml
+        .as_bytes()
+        .get(*position)
+        .is_some_and(|byte| !b">/ \t\r\n".contains(byte))
+    {
+        *position += 1;
+    }
+    let name = xml.get(name_start..*position)?.to_string();
+    let mut attributes = HashMap::new();
+    let mut self_closing = false;
+    loop {
+        skip_xml_whitespace(xml, position);
+        if xml.as_bytes().get(*position) == Some(&b'/') {
+            self_closing = true;
+            *position += 1;
+            skip_xml_whitespace(xml, position);
+        }
+        if xml.as_bytes().get(*position) != Some(&b'>') {
+            let attribute_start = *position;
+            while xml
+                .as_bytes()
+                .get(*position)
+                .is_some_and(|byte| !b"=/> \t\r\n".contains(byte))
+            {
+                *position += 1;
+            }
+            let attribute = xml.get(attribute_start..*position)?.to_string();
+            skip_xml_whitespace(xml, position);
+            if xml.as_bytes().get(*position) != Some(&b'=') {
+                return None;
+            }
+            *position += 1;
+            skip_xml_whitespace(xml, position);
+            let quote = *xml.as_bytes().get(*position)?;
+            if quote != b'\'' && quote != b'"' {
+                return None;
+            }
+            *position += 1;
+            let value_start = *position;
+            while xml.as_bytes().get(*position) != Some(&quote) {
+                *position += 1;
+            }
+            attributes.insert(
+                attribute,
+                decode_xml_entities(xml.get(value_start..*position)?),
+            );
+            *position += 1;
+        } else {
+            *position += 1;
+            break;
+        }
+    }
+    if self_closing {
+        return Some(XmlNode {
+            name,
+            attributes,
+            children: Vec::new(),
+            text: String::new(),
+        });
+    }
+    let mut children = Vec::new();
+    let mut text = String::new();
+    loop {
+        if xml.as_bytes().get(*position..*position + 2) == Some(b"</") {
+            *position += 2;
+            let close_start = *position;
+            while xml.as_bytes().get(*position) != Some(&b'>') {
+                *position += 1;
+            }
+            if xml.get(close_start..*position)? != name {
+                return None;
+            }
+            *position += 1;
+            break;
+        }
+        if xml.as_bytes().get(*position) == Some(&b'<') {
+            children.push(parse_xml_node_at(xml, position)?);
+        } else {
+            let text_start = *position;
+            while xml
+                .as_bytes()
+                .get(*position)
+                .is_some_and(|byte| *byte != b'<')
+            {
+                *position += 1;
+            }
+            text.push_str(&decode_xml_entities(xml.get(text_start..*position)?));
+        }
+    }
+    Some(XmlNode {
+        name,
+        attributes,
+        children,
+        text,
+    })
+}
+
+fn find_xml_nodes<'a>(root: &'a XmlNode, xpath: &str) -> Vec<&'a XmlNode> {
+    let mut parts = xpath.trim().trim_start_matches('/').split('/').peekable();
+    let Some(first) = parts.next() else {
+        return Vec::new();
+    };
+    let Some((name, index)) = xml_path_part(first) else {
+        return Vec::new();
+    };
+    if name != root.name {
+        return Vec::new();
+    }
+    let mut current = vec![root];
+    while let Some(part) = parts.next() {
+        let Some((name, index)) = xml_path_part(part) else {
+            return Vec::new();
+        };
+        let mut next = current
+            .iter()
+            .flat_map(|node| node.children.iter().filter(|child| child.name == name))
+            .collect::<Vec<_>>();
+        if let Some(index) = index {
+            next = next
+                .into_iter()
+                .nth(index.saturating_sub(1))
+                .into_iter()
+                .collect();
+        }
+        current = next;
+    }
+    if let Some(index) = index {
+        current = current
+            .into_iter()
+            .nth(index.saturating_sub(1))
+            .into_iter()
+            .collect();
+    }
+    current
+}
+
+fn xml_path_part(part: &str) -> Option<(&str, Option<usize>)> {
+    let (name, index) = if let Some((name, suffix)) = part.split_once('[') {
+        (
+            name,
+            suffix
+                .strip_suffix(']')
+                .and_then(|value| value.parse().ok()),
+        )
+    } else {
+        (part, None)
+    };
+    (!name.is_empty()).then_some((name, index))
+}
+
+fn xml_text(node: &XmlNode) -> String {
+    let mut text = node.text.clone();
+    for child in &node.children {
+        text.push_str(&xml_text(child));
+    }
+    text
+}
+
+fn skip_xml_whitespace(xml: &str, position: &mut usize) {
+    while xml
+        .as_bytes()
+        .get(*position)
+        .is_some_and(|byte| byte.is_ascii_whitespace())
+    {
+        *position += 1;
+    }
+}
+
+fn decode_xml_entities(value: &str) -> String {
+    value
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
+}
 
 pub(super) fn eval_function_text(
     text: &str,
@@ -4133,7 +4363,19 @@ pub(super) fn eval_function_text(
             .transpose()
             .map(|value| value.unwrap_or(Value::Null)),
         "VALUE" => Ok(Value::Null),
-        "EXTRACTVALUE" => Ok(Value::Null),
+        "EXTRACTVALUE" => {
+            let xml = args
+                .first()
+                .map(|arg| eval_scalar_text(arg, data, last_insert_id))
+                .transpose()?
+                .unwrap_or(Value::Null);
+            let xpath = args
+                .get(1)
+                .map(|arg| eval_scalar_text(arg, data, last_insert_id))
+                .transpose()?
+                .unwrap_or(Value::Null);
+            Ok(eval_extractvalue(xml, xpath))
+        }
         "COALESCE" => {
             for arg in args {
                 let value = eval_scalar_text(&arg, data, last_insert_id)?;

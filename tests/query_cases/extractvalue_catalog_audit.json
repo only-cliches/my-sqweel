@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "extractvalue_catalog_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "entando/app-engine",
+      "commit": "499e2e3a0bff76907c30853728a8a662e91902e6",
+      "path": "webapp/upgrade/4.3.2-to-6.3.2/mysql/port.sql",
+      "url": "https://github.com/entando/app-engine/blob/499e2e3a0bff76907c30853728a8a662e91902e6/webapp/upgrade/4.3.2-to-6.3.2/mysql/port.sql",
+      "sha256": "9bb38a26f4130cc4c7f5dab21de37d07f5fd63ff566759f209c2a7900c40672b",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "webapp/upgrade/4.3.2-to-6.3.2/mysql/port.sql: XML content comparison and extraction expressions",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL migration extracts selected values from XML text with EXTRACTVALUE XPath expressions while comparing document content.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored catalog audit. Fixed XML documents expose repeated child text and a positional child lookup through EXTRACTVALUE; the source migration tables, XML payloads, and application context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["extractvalue", "xml-xpath", "repeated-node-text", "positional-node-selection", "deterministic-order"],
+  "fixture_notes": "Catalog 401 has two entries and catalog 402 has one entry. The repeated name path returns space-separated text, while the positional state path returns the second entry only and NULL when absent.",
+  "determinism_notes": "Catalog IDs, XML documents, XPath expressions, and ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE xml_catalog_audit (catalog_id INT PRIMARY KEY, catalog_document TEXT NOT NULL)",
+    "INSERT INTO xml_catalog_audit VALUES (401, '<catalog><entry><name>alpha</name><state>ready</state></entry><entry><name>beta</name><state>hold</state></entry></catalog>'), (402, '<catalog><entry><name>gamma</name><state>ready</state></entry></catalog>')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT catalog_id, EXTRACTVALUE(catalog_document, '/catalog/entry/name') AS entry_names, EXTRACTVALUE(catalog_document, '/catalog/entry[2]/state') AS second_state FROM xml_catalog_audit ORDER BY catalog_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT catalog_id, catalog_document FROM xml_catalog_audit ORDER BY catalog_id",
+      "ordered": true
+    }
+  ]
+}
