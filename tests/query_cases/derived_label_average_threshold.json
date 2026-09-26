@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "id": "derived_label_average_threshold",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "cemsayilar/Deloitte_Analytics_Cognitive",
+      "commit": "313d0c7dcb398565a532c0248db60dee0bd90ff3",
+      "path": "sql_case.sql",
+      "url": "https://github.com/cemsayilar/Deloitte_Analytics_Cognitive/blob/313d0c7dcb398565a532c0248db60dee0bd90ff3/sql_case.sql",
+      "sha256": "b9972e753808a92491786f6d349cb1a722a4fad27d303494d62ff6f5573a70be",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql_case.sql:L37-L43",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped report left joins its fact rows to a derived dimension projection and applies a HAVING threshold to AVG over the fact values.",
+      "mysql_mariadb_translation": "Reauthored as a billing-center rate report. Worker rates left join to an enabled center-label derived table, groups by the nullable label, and retains only groups whose average hourly rate reaches the threshold; an unlabeled high-rate group keeps NULL-label behavior observable."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "left-join-derived-table",
+    "grouped-average",
+    "having-aggregate-threshold",
+    "nullable-dimension-label",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Alpha averages 10000 cents and Beta averages 8000 cents, so both pass the 8000-cent threshold. Gamma is disabled in the derived label projection and its 7000-cent workers are filtered out. An unlabeled center with a 15000-cent worker survives as a NULL-label group, exercising NULL grouping without changing the threshold semantics.",
+  "determinism_notes": "Center codes, labels, worker rates, enablement flags, grouping, threshold, and final NULL-first ordering are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE center_labels (label_id INT PRIMARY KEY, center_code VARCHAR(16) NOT NULL, center_name VARCHAR(32) NOT NULL, enabled TINYINT NOT NULL)",
+    "CREATE TABLE center_workers (worker_id INT PRIMARY KEY, center_code VARCHAR(16) NOT NULL, hourly_rate_cents INT NOT NULL)",
+    "INSERT INTO center_labels VALUES (1, 'ALPHA', 'Alpha Center', 1), (2, 'BETA', 'Beta Center', 1), (3, 'GAMMA', 'Gamma Center', 0)",
+    "INSERT INTO center_workers VALUES (101, 'ALPHA', 12000), (102, 'ALPHA', 8000), (201, 'BETA', 7000), (202, 'BETA', 9000), (301, 'GAMMA', 7000), (302, 'GAMMA', 7000), (401, 'ORPHAN', 15000)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT labels.center_name, COUNT(workers.worker_id) AS worker_count, AVG(workers.hourly_rate_cents) AS average_rate_cents FROM center_workers AS workers LEFT JOIN (SELECT center_code, center_name FROM center_labels WHERE enabled = 1) AS labels ON workers.center_code = labels.center_code GROUP BY labels.center_name HAVING AVG(workers.hourly_rate_cents) >= 8000 ORDER BY labels.center_name",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT labels.center_name, COUNT(workers.worker_id) AS worker_count, AVG(workers.hourly_rate_cents) AS average_rate_cents FROM center_workers AS workers LEFT JOIN (SELECT center_code, center_name FROM center_labels WHERE enabled = 1) AS labels ON workers.center_code = labels.center_code GROUP BY labels.center_name HAVING AVG(workers.hourly_rate_cents) >= 8000 ORDER BY labels.center_name",
+      "ordered": true
+    }
+  ]
+}

@@ -1545,7 +1545,13 @@ impl RawEngine {
             return metadata;
         }
 
-        if let Some(metadata) = self.derived_column_metadata(select, expr, first_row) {
+        if let Some(mut metadata) = self.derived_column_metadata(select, expr, first_row) {
+            if select_nullable_tables(select)
+                .iter()
+                .any(|table| table.eq_ignore_ascii_case(&metadata.table))
+            {
+                metadata.nullable = true;
+            }
             return metadata;
         }
 
@@ -2710,13 +2716,14 @@ impl RawEngine {
                 {
                     continue;
                 }
-                if let Some(metadata) = self.derived_values_metadata(
+                if let Some(mut metadata) = self.derived_values_metadata(
                     select,
                     &subquery.body,
                     &alias.columns,
                     column,
                     first_row,
                 ) {
+                    metadata.table = alias.name.value.clone();
                     return Some(metadata);
                 }
                 let Some((inner, inner_expr, inner_name)) =
@@ -2724,7 +2731,10 @@ impl RawEngine {
                 else {
                     continue;
                 };
-                return Some(self.expression_metadata(inner, inner_expr, inner_name, first_row));
+                let mut metadata =
+                    self.expression_metadata(inner, inner_expr, inner_name, first_row);
+                metadata.table = alias.name.value.clone();
+                return Some(metadata);
             }
         }
         None
@@ -7176,10 +7186,13 @@ fn select_nullable_tables(select: &Select) -> BTreeSet<String> {
 }
 
 fn table_factor_base_name(factor: &TableFactor) -> Option<String> {
-    let TableFactor::Table { name, .. } = factor else {
-        return None;
-    };
-    name.0.last().map(|name| name.value.clone())
+    match factor {
+        TableFactor::Table { name, .. } => name.0.last().map(|name| name.value.clone()),
+        TableFactor::Derived { alias, .. } | TableFactor::JsonTable { alias, .. } => {
+            alias.as_ref().map(|alias| alias.name.value.clone())
+        }
+        _ => None,
+    }
 }
 
 fn mysql_column_metadata_types(sql_type: Option<&str>) -> (String, String) {

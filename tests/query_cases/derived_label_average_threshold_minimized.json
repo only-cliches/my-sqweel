@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "id": "derived_label_average_threshold_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "derived_label_average_threshold",
+    "source": {
+      "kind": "github",
+      "repository": "cemsayilar/Deloitte_Analytics_Cognitive",
+      "commit": "313d0c7dcb398565a532c0248db60dee0bd90ff3",
+      "path": "sql_case.sql",
+      "url": "https://github.com/cemsayilar/Deloitte_Analytics_Cognitive/blob/313d0c7dcb398565a532c0248db60dee0bd90ff3/sql_case.sql",
+      "sha256": "b9972e753808a92491786f6d349cb1a722a4fad27d303494d62ff6f5573a70be",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from derived_label_average_threshold",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A nullable result from a LEFT JOIN to a derived dimension must remain serializable when the derived dimension column itself is declared NOT NULL.",
+      "mysql_mariadb_translation": "Reduced to one labeled worker and one orphan worker, retaining the derived-table LEFT JOIN, grouped AVG, and threshold while removing disabled labels and extra groups."
+    },
+    "independently_authored": true,
+    "minimized_from": "derived_label_average_threshold"
+  },
+  "features": [
+    "left-join-derived-table",
+    "grouped-average",
+    "having-aggregate-threshold",
+    "nullable-derived-column",
+    "minimized-regression"
+  ],
+  "fixture_notes": "The labeled worker produces one named group and the orphan worker produces a NULL derived-label group that still passes the average threshold. MariaDB serializes both rows; the pre-fix MySqweel wire metadata incorrectly marked the derived label non-NULL and rejected the NULL row with error 1048.",
+  "determinism_notes": "Two fixed worker rows and one fixed label determine the grouped result. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE mini_center_labels (center_code VARCHAR(16) PRIMARY KEY, center_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE mini_center_workers (worker_id INT PRIMARY KEY, center_code VARCHAR(16) NOT NULL, hourly_rate_cents INT NOT NULL)",
+    "INSERT INTO mini_center_labels VALUES ('ALPHA', 'Alpha Center')",
+    "INSERT INTO mini_center_workers VALUES (101, 'ALPHA', 9000), (201, 'ORPHAN', 15000)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT labels.center_name, AVG(workers.hourly_rate_cents) AS average_rate_cents FROM mini_center_workers AS workers LEFT JOIN (SELECT center_code, center_name FROM mini_center_labels) AS labels ON workers.center_code = labels.center_code GROUP BY labels.center_name HAVING AVG(workers.hourly_rate_cents) >= 8000 ORDER BY labels.center_name",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT labels.center_name, AVG(workers.hourly_rate_cents) AS average_rate_cents FROM mini_center_workers AS workers LEFT JOIN (SELECT center_code, center_name FROM mini_center_labels) AS labels ON workers.center_code = labels.center_code GROUP BY labels.center_name HAVING AVG(workers.hourly_rate_cents) >= 8000 ORDER BY labels.center_name",
+      "ordered": true
+    }
+  ]
+}
