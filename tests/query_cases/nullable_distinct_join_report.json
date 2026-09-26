@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "nullable_distinct_join_report",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "dataegret/pg-utils",
+      "commit": "0835aa25b815b0589cf66f88537bb7952fb50543",
+      "path": "sql/sync_tablespaces.sql",
+      "url": "https://github.com/dataegret/pg-utils/blob/0835aa25b815b0589cf66f88537bb7952fb50543/sql/sync_tablespaces.sql",
+      "sha256": "5ec25e610503e3d292088a07e560ab8cbef1cd1572bf9c2aff391c6e2d9e1e67",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "sql/sync_tablespaces.sql:3",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A PostgreSQL catalog query uses IS DISTINCT FROM to retain rows whose nullable values differ, including the cases where exactly one side is NULL.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored deployment drift report. A joined expected-state table is filtered with NOT (actual_region <=> expected_region), which is MariaDB's null-safe translation of IS DISTINCT FROM; the schema, rows, identifiers, and operational context are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "nullable-distinctness",
+    "null-safe-inequality",
+    "inner-join",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Deployments 101 and 102 have matching non-NULL and NULL regions respectively; deployments 103 and 104 have one-sided or differing regions and must be reported as drift. Every deployment has exactly one expectation row.",
+  "determinism_notes": "Deployment IDs, region literals, join keys, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE deployment_observations (deployment_id INT PRIMARY KEY, service_code VARCHAR(16) NOT NULL, actual_region VARCHAR(16) NULL)",
+    "CREATE TABLE deployment_expectations (deployment_id INT PRIMARY KEY, expected_region VARCHAR(16) NULL)",
+    "INSERT INTO deployment_observations VALUES (101, 'billing', 'us-east'), (102, 'search', NULL), (103, 'queue', 'us-east'), (104, 'reports', NULL)",
+    "INSERT INTO deployment_expectations VALUES (101, 'us-east'), (102, NULL), (103, 'eu-west'), (104, 'us-west')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT o.deployment_id, o.service_code, o.actual_region, e.expected_region FROM deployment_observations o JOIN deployment_expectations e ON e.deployment_id = o.deployment_id WHERE NOT (o.actual_region <=> e.expected_region) ORDER BY o.deployment_id",
+      "ordered": true
+    }
+  ]
+}
