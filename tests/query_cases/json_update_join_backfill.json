@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "id": "json_update_join_backfill",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "open-metadata/OpenMetadata",
+      "commit": "b0a971e82ecdfcce757e23b47f95437feea8b876",
+      "path": "bootstrap/sql/migrations/native/2.0.3/mysql/postDataMigrationSQLScript.sql",
+      "url": "https://github.com/open-metadata/OpenMetadata/blob/b0a971e82ecdfcce757e23b47f95437feea8b876/bootstrap/sql/migrations/native/2.0.3/mysql/postDataMigrationSQLScript.sql",
+      "sha256": "3b2947c32fcf126f3ad56b7aa8177f12c3bf7fa91c748186e872ccd0f929de87",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "postDataMigrationSQLScript.sql: joined entity_extension JSON_SET backfill",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL/MariaDB UPDATE JOIN restricts JSON-document updates to rows connected to an installed-entity registry, then overwrites a nested configuration value with JSON_SET.",
+      "mysql_mariadb_translation": "Reauthored as an asset-configuration backfill. Active registry rows join their configuration documents and receive a fixed worker_threads value, while inactive and unregistered assets remain unchanged. The source schema, identifiers, values, and application migration are not copied.",
+      "independently_authored": true
+    }
+  },
+  "features": [
+    "update-join",
+    "json-set",
+    "json-column",
+    "joined-filter",
+    "nested-configuration-overwrite",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Assets 101 and 103 are active and must receive worker_threads=10, including replacement of asset 101's existing value. Asset 102 is inactive and asset 104 has no registry row, so both remain unchanged.",
+  "determinism_notes": "Asset IDs, registry states, JSON documents, and the update statement are fixed; the final read is ordered by the primary key. There are no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE asset_configs (asset_id INT PRIMARY KEY, settings JSON NOT NULL)",
+    "CREATE TABLE asset_registry (asset_id INT PRIMARY KEY, asset_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO asset_configs (asset_id, settings) VALUES (101, '{\"worker_threads\":2,\"region\":\"north\"}'), (102, '{\"worker_threads\":4,\"region\":\"south\"}'), (103, '{\"region\":\"east\"}'), (104, '{\"worker_threads\":7,\"region\":\"west\"}')",
+    "INSERT INTO asset_registry (asset_id, asset_state) VALUES (101, 'active'), (102, 'inactive'), (103, 'active')"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE asset_configs AS c INNER JOIN asset_registry AS r ON r.asset_id = c.asset_id SET c.settings = JSON_SET(c.settings, '$.worker_threads', 10) WHERE r.asset_state = 'active'",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT asset_id, JSON_UNQUOTE(JSON_EXTRACT(settings, '$.worker_threads')) AS worker_threads, JSON_UNQUOTE(JSON_EXTRACT(settings, '$.region')) AS region FROM asset_configs ORDER BY asset_id",
+      "ordered": true
+    }
+  ]
+}
