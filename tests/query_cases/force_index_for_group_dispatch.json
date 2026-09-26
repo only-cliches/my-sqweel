@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "force_index_for_group_dispatch",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "linq2db/linq2db.baselines",
+      "commit": "f38d2d2c6b90da0f0dbcf48e6f7bfb617dd6fde4",
+      "path": "MySql.8.0/Tests/Extensions/MySqlTests/Tests.Extensions.MySqlTests.IndexHintForceIndexForGroupByTest(MySql.8.0).sql",
+      "url": "https://github.com/linq2db/linq2db.baselines/blob/f38d2d2c6b90da0f0dbcf48e6f7bfb617dd6fde4/MySql.8.0/Tests/Extensions/MySqlTests/Tests.Extensions.MySqlTests.IndexHintForceIndexForGroupByTest%28MySql.8.0%29.sql",
+      "sha256": "c9275842ad2ab6fa0722ae00dfdb724704f6b7cdc01d52ebc258679ce879dea6",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "IndexHintForceIndexForGroupByTest(MySql.8.0).sql:6",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL read forces multiple named indexes with FORCE INDEX FOR GROUP BY while grouping rows into an ordered aggregate result.",
+      "mysql_mariadb_translation": "Reauthored as a dispatch parcel summary. FORCE INDEX FOR GROUP BY names the label and state indexes for an active-parcel aggregation, with deterministic group ordering. The source schema, rows, aliases, and application context are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "force-index-for-group-by",
+    "multiple-group-index-forcing",
+    "filtered-aggregate",
+    "group-by",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Active parcels produce one count for each label; the inactive parcel is excluded before grouping. The group-by forcing hint must not alter aggregate values or group ordering.",
+  "determinism_notes": "Parcel IDs, states, labels, and quantities are fixed, both forced indexes exist, and the grouped output is explicitly ordered by label. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE dispatch_force_group_parcels (parcel_id INT PRIMARY KEY, parcel_state VARCHAR(12) NOT NULL, parcel_label VARCHAR(32) NOT NULL, quantity INT NOT NULL, INDEX idx_force_group_label (parcel_label), INDEX idx_force_group_state (parcel_state))",
+    "INSERT INTO dispatch_force_group_parcels VALUES (1501, 'active', 'alpha', 2), (1502, 'inactive', 'alpha', 5), (1503, 'active', 'alpha', 3), (1504, 'active', 'beta', 4)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT parcel_label, COUNT(*) AS parcel_count, SUM(quantity) AS total_quantity FROM dispatch_force_group_parcels FORCE INDEX FOR GROUP BY (idx_force_group_label, idx_force_group_state) WHERE parcel_state = 'active' GROUP BY parcel_label ORDER BY parcel_label",
+      "ordered": true
+    }
+  ]
+}
