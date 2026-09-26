@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "recursive_dimension_matrix_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "walkccc/LeetCode",
+      "commit": "9b85aa15e086d0b5dc1ead7184bca547942e6ff6",
+      "path": "solutions/3118. Friday Purchase III/3118.sql",
+      "url": "https://github.com/walkccc/LeetCode/blob/9b85aa15e086d0b5dc1ead7184bca547942e6ff6/solutions/3118.%20Friday%20Purchase%20III/3118.sql",
+      "sha256": "adb7620848df76cbb55006867cf95a6f3c0abe5212531357a97bacce3d0ee14d",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "solutions/3118. Friday Purchase III/3118.sql:L14-L27",
+      "source_dialect": "mysql",
+      "observed_pattern": "A grouped zero-fill report wraps a decimal SUM in IFNULL so missing combinations emit a numeric zero instead of NULL.",
+      "mysql_mariadb_translation": "Reduced to one decimal source row and the IFNULL(SUM(decimal), 0) projection. The recursive calendar, dimension cross join, joins, and unrelated source tables are removed to isolate MariaDB's decimal scale contract for the null fallback."
+    },
+    "independently_authored": true,
+    "minimized_from": "recursive_dimension_matrix"
+  },
+  "features": [
+    "decimal-sum",
+    "ifnull-fallback",
+    "result-scale",
+    "minimized-regression"
+  ],
+  "fixture_notes": "The single DECIMAL(8,2) value 12.50 must remain formatted as 12.50 when IFNULL preserves the SUM result's decimal scale.",
+  "determinism_notes": "One fixed row and one scalar projection are used; no clocks, randomness, sleeps, or concurrent schedules are involved.",
+  "setup": [
+    "CREATE TABLE decimal_inputs (input_id INT PRIMARY KEY, amount DECIMAL(8,2) NOT NULL)",
+    "INSERT INTO decimal_inputs VALUES (1, 12.50)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT IFNULL(SUM(amount), 0) AS total_amount FROM decimal_inputs",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT IFNULL(SUM(amount), 0) AS total_amount FROM decimal_inputs",
+      "ordered": true
+    }
+  ]
+}

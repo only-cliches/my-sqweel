@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "id": "recursive_dimension_matrix",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "walkccc/LeetCode",
+      "commit": "9b85aa15e086d0b5dc1ead7184bca547942e6ff6",
+      "path": "solutions/3118. Friday Purchase III/3118.sql",
+      "url": "https://github.com/walkccc/LeetCode/blob/9b85aa15e086d0b5dc1ead7184bca547942e6ff6/solutions/3118.%20Friday%20Purchase%20III/3118.sql",
+      "sha256": "adb7620848df76cbb55006867cf95a6f3c0abe5212531357a97bacce3d0ee14d",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "solutions/3118. Friday Purchase III/3118.sql:L1-L27",
+      "source_dialect": "mysql",
+      "observed_pattern": "A recursive CTE generates a fixed weekly calendar, a small membership CTE supplies a complete dimension, and CROSS JOIN plus LEFT JOIN and IFNULL(SUM(...), 0) preserves zero-activity combinations.",
+      "mysql_mariadb_translation": "Reauthored as a subscription-tier weekly revenue matrix. Four fixed Fridays are generated recursively, two tiers form the complete dimension, and account/order joins aggregate sparse decimal revenue while retaining zero rows for missing tier-week combinations. The source tables, names, dates, memberships, and values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "recursive-date-cte",
+    "dimension-cte",
+    "cross-join-matrix",
+    "left-join-zero-fill",
+    "grouped-decimal-sum",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Four Fridays and two subscription tiers produce eight matrix rows. Standard revenue is 12.50 on week 1 and 7.25 on week 3; premium revenue is 25.00 on week 2 and 40.00 on week 4. Every other tier-week combination must remain present with revenue 0.00.",
+  "determinism_notes": "The recursive date bound, tier literals, account IDs, order dates, amounts, grouping keys, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE subscription_accounts (account_id INT PRIMARY KEY, tier VARCHAR(16) NOT NULL)",
+    "CREATE TABLE weekly_orders (order_id INT PRIMARY KEY, account_id INT NOT NULL, order_date DATE NOT NULL, amount DECIMAL(8,2) NOT NULL)",
+    "INSERT INTO subscription_accounts VALUES (701, 'standard'), (702, 'premium'), (703, 'premium')",
+    "INSERT INTO weekly_orders VALUES (9001, 701, '2026-07-03', 12.50), (9002, 702, '2026-07-10', 25.00), (9003, 701, '2026-07-17', 7.25), (9004, 703, '2026-07-24', 40.00)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH RECURSIVE report_weeks (week_no, week_date) AS (SELECT 1, CAST('2026-07-03' AS DATE) UNION ALL SELECT week_no + 1, DATE_ADD(week_date, INTERVAL 7 DAY) FROM report_weeks WHERE week_no < 4), tiers (tier) AS (SELECT 'standard' UNION ALL SELECT 'premium') SELECT w.week_no, w.week_date, t.tier, IFNULL(SUM(o.amount), 0) AS total_revenue FROM report_weeks AS w CROSS JOIN tiers AS t LEFT JOIN subscription_accounts AS a ON a.tier = t.tier LEFT JOIN weekly_orders AS o ON o.account_id = a.account_id AND o.order_date = w.week_date GROUP BY w.week_no, w.week_date, t.tier ORDER BY w.week_no, t.tier",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "WITH RECURSIVE report_weeks (week_no, week_date) AS (SELECT 1, CAST('2026-07-03' AS DATE) UNION ALL SELECT week_no + 1, DATE_ADD(week_date, INTERVAL 7 DAY) FROM report_weeks WHERE week_no < 4), tiers (tier) AS (SELECT 'standard' UNION ALL SELECT 'premium') SELECT w.week_no, t.tier, IFNULL(SUM(o.amount), 0) AS total_revenue FROM report_weeks AS w CROSS JOIN tiers AS t LEFT JOIN subscription_accounts AS a ON a.tier = t.tier LEFT JOIN weekly_orders AS o ON o.account_id = a.account_id AND o.order_date = w.week_date GROUP BY w.week_no, t.tier ORDER BY w.week_no, t.tier",
+      "ordered": true
+    }
+  ]
+}

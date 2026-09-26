@@ -2313,12 +2313,19 @@ impl RawEngine {
                             MysqlColumnType::Integer
                         }
                     }
-                    "COALESCE" | "IFNULL" | "NVL" | "NVL2" => self.widest_function_argument_type(
-                        function,
-                        select,
-                        first_row,
-                        metadata.column_type,
-                    ),
+                    "COALESCE" | "IFNULL" | "NVL" | "NVL2" => {
+                        let argument_type = self.widest_function_argument_type(
+                            function,
+                            select,
+                            first_row,
+                            metadata.column_type,
+                        );
+                        if argument_type == MysqlColumnType::Decimal {
+                            metadata.decimals =
+                                self.widest_function_argument_decimals(function, select, first_row);
+                        }
+                        argument_type
+                    }
                     "LAG" | "LEAD" | "FIRST_VALUE" | "LAST_VALUE" | "NTH_VALUE" => {
                         // MariaDB returns the type of the first argument
                         // from these value-returning window functions.
@@ -2766,6 +2773,25 @@ impl RawEngine {
             return first_type;
         }
         best
+    }
+
+    fn widest_function_argument_decimals(
+        &self,
+        function: &sqlparser::ast::Function,
+        select: &Select,
+        first_row: Option<&Map<String, Value>>,
+    ) -> u8 {
+        let Ok(arguments) = window_function_arguments(function) else {
+            return 0;
+        };
+        arguments
+            .into_iter()
+            .flatten()
+            .map(|argument| self.expression_metadata(select, &argument, String::new(), first_row))
+            .filter(|metadata| metadata.column_type == MysqlColumnType::Decimal)
+            .map(|metadata| metadata.decimals)
+            .max()
+            .unwrap_or_default()
     }
 
     fn order_column_hint(&self, select: &Select, expr: &Expr) -> Option<ColumnHint> {
