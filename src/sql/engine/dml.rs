@@ -386,6 +386,26 @@ impl RawEngine {
                     prepared_rows.push(data);
                 }
             }
+            SetExpr::SetOperation { .. } => {
+                let select_result = self.select_query((*query).clone())?;
+                let source_keys = row_keys_for_columns(&select_result.columns);
+                let columns = if explicit_columns.is_empty() {
+                    select_result.columns.clone()
+                } else {
+                    explicit_columns.clone()
+                };
+                for row in select_result.rows {
+                    let mut data = Map::new();
+                    for (idx, column) in columns.iter().enumerate() {
+                        let value = source_keys
+                            .get(idx)
+                            .and_then(|source_key| row.get(source_key).cloned())
+                            .unwrap_or(Value::Null);
+                        data.insert(column.clone(), value);
+                    }
+                    prepared_rows.push(data);
+                }
+            }
             _ => return Err(anyhow!("only VALUES and SELECT insert are supported")),
         }
 

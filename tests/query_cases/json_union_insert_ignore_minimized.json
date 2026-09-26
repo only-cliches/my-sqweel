@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "id": "json_union_insert_ignore_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "rommapp/romm",
+      "commit": "c4f4d22687533cb9beee49099fe4150acfafccab",
+      "path": "backend/alembic/versions/0112_publisher_developer_split.py",
+      "url": "https://github.com/rommapp/romm/blob/c4f4d22687533cb9beee49099fe4150acfafccab/backend/alembic/versions/0112_publisher_developer_split.py",
+      "sha256": "593d2df14175553dc1810d5ef19f155ed70e8de30136dfc69bfcc9d40dca9f7b",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from json_union_insert_ignore",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "INSERT IGNORE combines two correlated JSON_TABLE projections with UNION ALL before inserting relational facet rows.",
+      "mysql_mariadb_translation": "Reduced to one catalog document, one genre value, one tag value, and one existing target row while retaining the two JSON_TABLE branches, UNION ALL, and duplicate-key skip path. DISTINCT, extra documents, empty arrays, and unrelated target rows are removed."
+    },
+    "independently_authored": true,
+    "minimized_from": "json_union_insert_ignore"
+  },
+  "features": [
+    "json-table",
+    "union-all",
+    "insert-ignore",
+    "minimized-regression"
+  ],
+  "fixture_notes": "The existing genre row must remain unchanged, while the new tag row must be inserted by the union source.",
+  "determinism_notes": "One fixed document and one ordered final read; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE mini_catalog (entry_id INT PRIMARY KEY, genres JSON NOT NULL, tags JSON NOT NULL)",
+    "CREATE TABLE mini_facets (entry_id INT NOT NULL, facet_kind VARCHAR(16) NOT NULL, facet_name VARCHAR(32) NOT NULL, PRIMARY KEY (entry_id, facet_kind, facet_name))",
+    "INSERT INTO mini_catalog (entry_id, genres, tags) VALUES (7, '[\"strategy\"]', '[\"featured\"]')",
+    "INSERT INTO mini_facets (entry_id, facet_kind, facet_name) VALUES (7, 'genre', 'strategy')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT IGNORE INTO mini_facets (entry_id, facet_kind, facet_name) SELECT c.entry_id, 'genre', g.value FROM mini_catalog AS c CROSS JOIN JSON_TABLE(c.genres, '$[*]' COLUMNS (value VARCHAR(32) PATH '$')) AS g UNION ALL SELECT c.entry_id, 'tag', t.value FROM mini_catalog AS c CROSS JOIN JSON_TABLE(c.tags, '$[*]' COLUMNS (value VARCHAR(32) PATH '$')) AS t",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT entry_id, facet_kind, facet_name FROM mini_facets ORDER BY entry_id, facet_kind, facet_name",
+      "ordered": true
+    }
+  ]
+}
