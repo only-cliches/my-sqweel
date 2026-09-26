@@ -19,6 +19,7 @@ impl RawEngine {
             .unwrap_or_default();
         let limit = query.limit;
         let offset = query.offset;
+        let fetch = query.fetch;
 
         let result_columns: Vec<String>;
         let result_metadata: Vec<ColumnMetadata>;
@@ -29,6 +30,7 @@ impl RawEngine {
                     &order_by,
                     limit.as_ref(),
                     offset.as_ref(),
+                    fetch.as_ref(),
                 );
             }
             SetExpr::SetOperation {
@@ -282,6 +284,7 @@ impl RawEngine {
         order_by: &[OrderByExpr],
         limit: Option<&Expr>,
         offset: Option<&Offset>,
+        fetch: Option<&Fetch>,
     ) -> Result<QueryResult> {
         self.validate_select_column_references(&select, order_by)?;
         let needs_aggregation = !matches!(
@@ -325,7 +328,15 @@ impl RawEngine {
                 return Ok(self.with_select_metadata(&select, result));
             }
 
-            return self.finish_select_rows(&select, rows, order_by, limit, offset, last_insert_id);
+            return self.finish_select_rows(
+                &select,
+                rows,
+                order_by,
+                limit,
+                offset,
+                fetch,
+                last_insert_id,
+            );
         }
 
         if select.from.is_empty() {
@@ -486,6 +497,7 @@ impl RawEngine {
                 order_by,
                 limit,
                 offset,
+                fetch,
                 last_insert_id,
             );
         }
@@ -508,7 +520,15 @@ impl RawEngine {
             )? {
                 return Ok(self.with_select_metadata(&select, result));
             }
-            return self.finish_select_rows(&select, rows, order_by, limit, offset, last_insert_id);
+            return self.finish_select_rows(
+                &select,
+                rows,
+                order_by,
+                limit,
+                offset,
+                fetch,
+                last_insert_id,
+            );
         }
         let root_name_full = if matches!(
             root.relation,
@@ -631,6 +651,7 @@ impl RawEngine {
                 order_by,
                 limit,
                 offset,
+                fetch,
                 last_insert_id,
             )?;
             if finished.rows.is_empty() {
@@ -662,6 +683,7 @@ impl RawEngine {
                 order_by,
                 limit,
                 offset,
+                fetch,
                 self.last_insert_id.load(AtomicOrdering::Relaxed),
             );
         }
@@ -704,7 +726,15 @@ impl RawEngine {
             return Ok(self.with_select_metadata(&select, result));
         }
 
-        self.finish_select_rows(&select, rows, order_by, limit, offset, last_insert_id)
+        self.finish_select_rows(
+            &select,
+            rows,
+            order_by,
+            limit,
+            offset,
+            fetch,
+            last_insert_id,
+        )
     }
 
     pub(super) fn inject_user_variables(
@@ -742,6 +772,7 @@ impl RawEngine {
         order_by: &[OrderByExpr],
         limit: Option<&Expr>,
         offset: Option<&Offset>,
+        fetch: Option<&Fetch>,
         last_insert_id: u64,
     ) -> Result<QueryResult> {
         self.materialize_window_values(select, &mut rows, last_insert_id)?;
@@ -752,8 +783,11 @@ impl RawEngine {
             .iter()
             .map(|order| self.order_column_hint(select, &order.expr))
             .collect::<Vec<_>>();
-        let max_ordered_rows = if select.distinct.is_none() {
-            limit_offset_end(limit, offset)?
+        let fetch_limit = fetch.and_then(|fetch| fetch.quantity.as_ref());
+        let effective_limit = limit.or(fetch_limit);
+        let with_ties = fetch.is_some_and(|fetch| fetch.with_ties);
+        let max_ordered_rows = if select.distinct.is_none() && !with_ties {
+            limit_offset_end(effective_limit, offset)?
         } else {
             None
         };
@@ -764,6 +798,15 @@ impl RawEngine {
             max_ordered_rows,
             |expr, row| self.eval_expr_ctx(expr, row, last_insert_id),
         )?;
+        if with_ties {
+            apply_fetch_with_ties(
+                &mut rows,
+                fetch.expect("fetch must exist when WITH TIES is enabled"),
+                order_by,
+                offset,
+                |expr, row| self.eval_expr_ctx(expr, row, last_insert_id),
+            )?;
+        }
         let mut rows = rows
             .into_iter()
             .map(|row| self.project_row_ctx(&select.projection, &row, last_insert_id))
@@ -771,7 +814,9 @@ impl RawEngine {
         if select.distinct.is_some() {
             deduplicate_rows(&mut rows);
         }
-        apply_limit_offset(&mut rows, limit, offset)?;
+        if !with_ties {
+            apply_limit_offset(&mut rows, effective_limit, offset)?;
+        }
 
         let columns = self.select_result_columns(select, rows.first());
         let column_metadata = self.select_result_metadata(select, &columns, rows.first());
@@ -4036,7 +4081,7 @@ impl RawEngine {
         )? {
             return Ok(self.with_select_metadata(select, result));
         }
-        self.finish_select_rows(select, rows, &order_by, limit, offset, 0)
+        self.finish_select_rows(select, rows, &order_by, limit, offset, None, 0)
     }
 
     pub(super) fn join_matches_ctx(
@@ -8650,4 +8695,55 @@ fn key_column_usage_row(
     row.insert("referenced_table_name".to_string(), ref_table);
     row.insert("referenced_column_name".to_string(), ref_column);
     row
+}
+fn apply_fetch_with_ties<F>(
+    rows: &mut Vec<Map<String, Value>>,
+    fetch: &Fetch,
+    order_by: &[OrderByExpr],
+    offset: Option<&Offset>,
+    mut eval: F,
+) -> Result<()>
+where
+    F: FnMut(&Expr, &Map<String, Value>) -> Result<Value>,
+{
+    let take = fetch
+        .quantity
+        .as_ref()
+        .map(expr_to_usize)
+        .transpose()?
+        .unwrap_or(rows.len());
+    let start = offset.map(offset_to_usize).transpose()?.unwrap_or(0);
+    if take == 0 || start >= rows.len() {
+        rows.clear();
+        return Ok(());
+    }
+
+    let boundary_index = start.saturating_add(take).saturating_sub(1);
+    if boundary_index >= rows.len() {
+        if start > 0 {
+            rows.drain(..start);
+        }
+        return Ok(());
+    }
+
+    let boundary = order_by
+        .iter()
+        .map(|order| eval(&order.expr, &rows[boundary_index]))
+        .collect::<Result<Vec<_>>>()?;
+    let mut end = boundary_index + 1;
+    while end < rows.len() {
+        let peer = order_by
+            .iter()
+            .map(|order| eval(&order.expr, &rows[end]))
+            .collect::<Result<Vec<_>>>()?;
+        if peer != boundary {
+            break;
+        }
+        end += 1;
+    }
+    rows.truncate(end);
+    if start > 0 {
+        rows.drain(..start);
+    }
+    Ok(())
 }

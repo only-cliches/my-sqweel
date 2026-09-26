@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "id": "fetch_with_ties_dispatch_minimized",
+  "provenance": {
+    "kind": "minimized-differential-case",
+    "source_case": "fetch_with_ties_dispatch",
+    "minimized_from": "The original dispatch leaderboard's FETCH WITH TIES mismatch reduced to three fixed jobs with one second-place peer tie, isolating row-limit tie expansion.",
+    "source_dialect": "postgresql",
+    "independently_authored": true
+  },
+  "features": ["fetch-first", "with-ties", "tie-preservation", "minimized-regression"],
+  "fixture_notes": "Three fixed jobs have priorities 90, 80, and 80; FETCH FIRST two ROWS WITH TIES must return all three rows.",
+  "determinism_notes": "The priorities and limit are fixed; the result is compared unordered because tied rows have no total ordering key. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE mini_dispatch_priority (job_id INT PRIMARY KEY, priority INT NOT NULL)",
+    "INSERT INTO mini_dispatch_priority VALUES (1, 90), (2, 80), (3, 80)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT job_id, priority FROM mini_dispatch_priority ORDER BY priority DESC FETCH FIRST 2 ROWS WITH TIES",
+      "ordered": false
+    }
+  ]
+}

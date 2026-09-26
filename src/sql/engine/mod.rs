@@ -16,7 +16,7 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Number, Value, json};
 use sqlparser::ast::{
-    Assignment, BinaryOperator, DateTimeField, Expr, FunctionArg, FunctionArgExpr,
+    Assignment, BinaryOperator, DateTimeField, Expr, Fetch, FunctionArg, FunctionArgExpr,
     FunctionArgumentClause, FunctionArguments, GroupByExpr, Ident, Join, JoinConstraint,
     JoinOperator, ObjectName, Offset, OnInsert, OrderByExpr, Query, Select, SelectItem, SetExpr,
     Statement, TableConstraint, TableFactor, TableWithJoins, TransactionAccessMode,

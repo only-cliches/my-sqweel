@@ -28,8 +28,8 @@ impl Visitor for SupportValidator {
         }) {
             return unsupported("common table expression modifier");
         }
-        if query.fetch.is_some() {
-            return unsupported("FETCH");
+        if query.fetch.as_ref().is_some_and(|fetch| fetch.percent) {
+            return unsupported("FETCH PERCENT");
         }
         if query.locks.iter().any(|lock| {
             !matches!(lock.lock_type, LockType::Share | LockType::Update)

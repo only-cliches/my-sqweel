@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "id": "fetch_with_ties_dispatch",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "query/pagination/postgres.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/query/pagination/postgres.sql",
+      "sha256": "314c6a92559985fd3f8a1e9be102898d5bfbeb2a79135b99db878dd283097319",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "query/pagination/postgres.sql: FETCH FIRST ... WITH TIES example",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A ranked query orders rows by a score and uses FETCH FIRST ... WITH TIES so the page includes every row tied with the final selected score.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored dispatch leaderboard. Fixed depot jobs are ranked by descending priority; FETCH FIRST two ROWS WITH TIES should retain all jobs sharing the second-place priority, while the schema, labels, values, and business purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["fetch-first", "with-ties", "ordered-pagination", "tie-preservation", "deterministic-order"],
+  "fixture_notes": "North has priorities 90, 80, 80, and 60, so a two-row page with ties must return three jobs. South has priorities 70 and 50 and verifies the same syntax with no tie expansion.",
+  "determinism_notes": "Job IDs uniquely break ordering ties after priority; all priorities and page bounds are fixed with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE dispatch_priority (job_id INT PRIMARY KEY, depot_code VARCHAR(16) NOT NULL, priority INT NOT NULL)",
+    "INSERT INTO dispatch_priority VALUES (101, 'north', 90), (102, 'north', 80), (103, 'north', 80), (104, 'north', 60), (201, 'south', 70), (202, 'south', 50)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT job_id, depot_code, priority FROM dispatch_priority WHERE depot_code = 'north' ORDER BY priority DESC FETCH FIRST 2 ROWS WITH TIES",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT job_id, depot_code, priority FROM dispatch_priority WHERE depot_code = 'south' ORDER BY priority DESC FETCH FIRST 2 ROWS WITH TIES",
+      "ordered": false
+    }
+  ]
+}
