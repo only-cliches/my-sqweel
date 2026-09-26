@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "id": "system_versioned_asset_history_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "system_versioned_asset_history",
+    "source": {
+      "kind": "github",
+      "repository": "antlr/grammars-v4",
+      "commit": "e199816b3f1a7a49ea1ad84fb6b87c382ea36a33",
+      "path": "sql/mariadb/examples/fast/ddl_create.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/e199816b3f1a7a49ea1ad84fb6b87c382ea36a33/sql/mariadb/examples/fast/ddl_create.sql",
+      "sha256": "a527e2374a757928e38ef3e1842e1e104ab7f0dc61727d8802319740466ece1c",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/mariadb/examples/fast/ddl_create.sql:240",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "The smallest failing temporal feature is a table definition ending in WITH SYSTEM VERSIONING.",
+      "mysql_mariadb_translation": "Reduced to one independently authored system-versioned table and one current read, removing updates and historical projection while preserving the temporal DDL path."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "system-versioned-table",
+    "minimized-regression"
+  ],
+  "fixture_notes": "One versioned table and one row isolate system-versioning DDL support.",
+  "determinism_notes": "The schema, row, and ordered read are fixed; no generated period columns are projected and no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE versioned_probe (probe_id INT PRIMARY KEY, probe_label VARCHAR(24) NOT NULL) ENGINE=InnoDB WITH SYSTEM VERSIONING",
+    "INSERT INTO versioned_probe VALUES (1801, 'temporal-probe')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT probe_id, probe_label FROM versioned_probe ORDER BY probe_id",
+      "ordered": true
+    }
+  ]
+}

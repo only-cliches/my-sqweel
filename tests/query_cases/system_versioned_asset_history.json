@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "system_versioned_asset_history",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "antlr/grammars-v4",
+      "commit": "e199816b3f1a7a49ea1ad84fb6b87c382ea36a33",
+      "path": "sql/mariadb/examples/fast/ddl_create.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/e199816b3f1a7a49ea1ad84fb6b87c382ea36a33/sql/mariadb/examples/fast/ddl_create.sql",
+      "sha256": "a527e2374a757928e38ef3e1842e1e104ab7f0dc61727d8802319740466ece1c",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/mariadb/examples/fast/ddl_create.sql:240",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB table enables system versioning so later reads can expose both the current row and its historical versions.",
+      "mysql_mariadb_translation": "Reauthored as an asset-state history audit. A system-versioned table receives one state update; a current read and a FOR SYSTEM_TIME ALL read distinguish the latest state from the retained prior state. The source table, columns, values, and DDL context are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "system-versioned-table",
+    "temporal-history",
+    "for-system-time-all",
+    "update-history",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Asset 1701 starts in staging and is updated to deployed. The ordinary read exposes deployed, while FOR SYSTEM_TIME ALL exposes both retained states without selecting generated period timestamps.",
+  "determinism_notes": "The asset key, labels, state values, and explicit ordering are fixed; generated temporal timestamps are not projected, and there are no clocks, randomness, sleeps, or concurrent schedules in fixture SQL.",
+  "setup": [
+    "CREATE TABLE asset_state_history (asset_id INT PRIMARY KEY, asset_label VARCHAR(32) NOT NULL, asset_state VARCHAR(16) NOT NULL) ENGINE=InnoDB WITH SYSTEM VERSIONING",
+    "INSERT INTO asset_state_history VALUES (1701, 'edge-router', 'staging')"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE asset_state_history SET asset_state = 'deployed' WHERE asset_id = 1701"
+    },
+    {
+      "sql": "SELECT asset_id, asset_label, asset_state FROM asset_state_history ORDER BY asset_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT asset_id, asset_label, asset_state FROM asset_state_history FOR SYSTEM_TIME ALL ORDER BY asset_id, asset_state",
+      "ordered": true
+    }
+  ]
+}
