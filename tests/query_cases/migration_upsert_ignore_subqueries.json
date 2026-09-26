@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "id": "migration_upsert_ignore_subqueries",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "formalms/formalms",
+      "commit": "446a77a9b9cbb20dacf008a2d53b2658fb5f5634",
+      "path": "db/6364.sql",
+      "url": "https://github.com/formalms/formalms/blob/446a77a9b9cbb20dacf008a2d53b2658fb5f5634/db/6364.sql",
+      "sha256": "9e6eb63854843d2406424542625b43316100cc3252bd4f4070240c495a5f169b",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "db/6364.sql:1-31",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A migration batch refreshes an existing row with INSERT ... ON DUPLICATE KEY UPDATE, then uses INSERT IGNORE with scalar subqueries to derive foreign-key-like values while skipping a duplicate unique label.",
+      "mysql_mariadb_translation": "Reauthored as a release checkpoint migration. A deterministic upsert refreshes an existing checkpoint, then INSERT IGNORE derives checkpoint values through scalar subqueries; one duplicate label is preserved and one new label is inserted. The source schema, application labels, timestamps, and rows are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "on-duplicate-key-update",
+    "values-function",
+    "insert-ignore",
+    "scalar-subqueries-in-values",
+    "unique-conflict-skip",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The checkpoint row already exists and is refreshed by the upsert. The first derived label conflicts on label_key and must remain unchanged; the second derived label is new and must be inserted.",
+  "determinism_notes": "All identifiers and values are fixed; scalar subqueries each return one row, and final rows are ordered by primary key. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE release_checkpoints (checkpoint_key VARCHAR(32) PRIMARY KEY, sequence_no INT NOT NULL, release_tag VARCHAR(32) NOT NULL)",
+    "CREATE TABLE release_labels (label_id INT PRIMARY KEY, label_key VARCHAR(32) NOT NULL UNIQUE, label_value VARCHAR(64) NOT NULL)",
+    "INSERT INTO release_checkpoints VALUES ('platform', 4, 'r4')",
+    "INSERT INTO release_labels VALUES (10, 'release_tag', 'legacy')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO release_checkpoints (checkpoint_key, sequence_no, release_tag) VALUES ('platform', 5, 'r5') ON DUPLICATE KEY UPDATE sequence_no = VALUES(sequence_no), release_tag = VALUES(release_tag)",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT IGNORE INTO release_labels (label_id, label_key, label_value) VALUES ((SELECT sequence_no FROM release_checkpoints WHERE checkpoint_key = 'platform'), 'release_tag', (SELECT release_tag FROM release_checkpoints WHERE checkpoint_key = 'platform')), ((SELECT sequence_no FROM release_checkpoints WHERE checkpoint_key = 'platform') + 1, 'release_channel', 'stable')",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT checkpoint_key, sequence_no, release_tag FROM release_checkpoints ORDER BY checkpoint_key",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT label_id, label_key, label_value FROM release_labels ORDER BY label_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT COUNT(*) AS label_count, COUNT(DISTINCT label_key) AS unique_label_count FROM release_labels",
+      "ordered": true
+    }
+  ]
+}
