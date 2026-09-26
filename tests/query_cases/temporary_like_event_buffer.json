@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "id": "temporary_like_event_buffer",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "advanced/temp-tables/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/advanced/temp-tables/mysql.sql",
+      "sha256": "cf45efc919af60217b50431f943990284b03c688676820c1d1887a0e5df8ff14",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "advanced/temp-tables/mysql.sql:29-42",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL session clones a permanent table definition into a temporary table with CREATE TEMPORARY TABLE ... LIKE, then performs ordinary inserts, updates, and reads against the temporary relation.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored shipment-event buffer. A permanent event table supplies the cloned schema, a temporary buffer receives a filtered batch, one event state is updated inside the session, and final reads verify that the temporary workflow does not mutate the permanent source."
+    },
+    "independently_authored": true
+  },
+  "features": ["temporary-table-like", "session-local-staging", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "The temporary buffer clones the event table definition, stages two selected events, marks the queued event as dispatched, and is dropped. The permanent event rows remain unchanged.",
+  "determinism_notes": "Event IDs, batch membership, state transitions, and ordering are fixed; there are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE shipment_events (event_id INT PRIMARY KEY, shipment_id INT NOT NULL, event_state VARCHAR(16) NOT NULL, event_note VARCHAR(32) NULL)",
+    "INSERT INTO shipment_events VALUES (11, 7001, 'queued', 'dock north'), (12, 7001, 'held', 'customs review'), (13, 7002, 'queued', 'dock south')"
+  ],
+  "steps": [
+    {
+      "sql": "CREATE TEMPORARY TABLE event_buffer LIKE shipment_events",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO event_buffer SELECT event_id, shipment_id, event_state, event_note FROM shipment_events WHERE shipment_id = 7001 ORDER BY event_id",
+      "ordered": true
+    },
+    {
+      "sql": "UPDATE event_buffer SET event_state = 'dispatched' WHERE event_state = 'queued'",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT event_id, shipment_id, event_state, event_note FROM event_buffer ORDER BY event_id",
+      "ordered": true
+    },
+    {
+      "sql": "DROP TEMPORARY TABLE event_buffer",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT event_id, shipment_id, event_state, event_note FROM shipment_events ORDER BY event_id",
+      "ordered": true
+    }
+  ]
+}

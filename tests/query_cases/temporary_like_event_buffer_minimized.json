@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "id": "temporary_like_event_buffer_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "advanced/temp-tables/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/advanced/temp-tables/mysql.sql",
+      "sha256": "cf45efc919af60217b50431f943990284b03c688676820c1d1887a0e5df8ff14",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "advanced/temp-tables/mysql.sql:29-35",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "CREATE TEMPORARY TABLE ... LIKE clones an existing table definition before rows are inserted into the temporary relation.",
+      "mysql_mariadb_translation": "Reduced to one independently authored source table, one temporary LIKE clone, one inserted row, and one ordered read. The case isolates temporary schema cloning and row visibility without update logic or multiple source rows."
+    },
+    "independently_authored": true,
+    "minimized_from": "temporary_like_event_buffer"
+  },
+  "features": ["temporary-table-like", "session-local-staging", "deterministic-order"],
+  "fixture_notes": "A one-row temporary clone receives one copied event and exposes it through an ordered read.",
+  "determinism_notes": "The source row and temporary read order are fixed; there are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE mini_event_source (event_id INT PRIMARY KEY, event_state VARCHAR(16) NOT NULL, event_note VARCHAR(32) NULL)",
+    "INSERT INTO mini_event_source VALUES (91, 'queued', 'dock east')"
+  ],
+  "steps": [
+    {
+      "sql": "CREATE TEMPORARY TABLE mini_event_buffer LIKE mini_event_source",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO mini_event_buffer SELECT event_id, event_state, event_note FROM mini_event_source",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT event_id, event_state, event_note FROM mini_event_buffer ORDER BY event_id",
+      "ordered": true
+    },
+    {
+      "sql": "DROP TEMPORARY TABLE mini_event_buffer",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT event_id, event_state, event_note FROM mini_event_source ORDER BY event_id",
+      "ordered": true
+    }
+  ]
+}
