@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "insert_select_returning_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "learning-mysql-2nd/learning-mysql-2nd",
+      "commit": "11eeb0229eae77fec564d2485e976aaf7a94c027",
+      "path": "ch07/snippets.sql",
+      "url": "https://github.com/learning-mysql-2nd/learning-mysql-2nd/blob/11eeb0229eae77fec564d2485e976aaf7a94c027/ch07/snippets.sql",
+      "sha256": "f4e7b3218f17492216afa8bd508a5f10b48fe28698704a5237b1607da04d176a",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "ch07/snippets.sql: INSERT INTO ... SELECT example in the 'Inserting Data Using Queries' section",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL write selects rows from a source relation into a target relation with INSERT INTO ... SELECT.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored inventory reconciliation. A grouped stock feed is inserted into a target ledger, duplicate SKUs accumulate incoming units, and RETURNING exposes the inserted or updated rows; source tables, values, identifiers, and application context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["insert-select", "duplicate-key-update", "returning", "grouped-source", "deterministic-order"],
+  "fixture_notes": "The source feed aggregates two north-bay rows for SKU A-17 and one new SKU B-24. Existing A-17 accumulates the grouped quantity; B-24 is inserted. RETURNING and the final read are ordered by SKU.",
+  "determinism_notes": "SKU labels, source rows, quantities, and grouping are fixed; duplicate-key targets are unique and every result uses lexical SKU ordering. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE stock_feed (feed_id INT PRIMARY KEY, warehouse_code VARCHAR(16) NOT NULL, sku VARCHAR(16) NOT NULL, units INT NOT NULL)",
+    "CREATE TABLE stock_ledger (sku VARCHAR(16) PRIMARY KEY, units INT NOT NULL)",
+    "INSERT INTO stock_feed VALUES (1, 'north', 'A-17', 3), (2, 'north', 'A-17', 4), (3, 'north', 'B-24', 6)",
+    "INSERT INTO stock_ledger VALUES ('A-17', 10)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO stock_ledger (sku, units) SELECT sku, SUM(units) FROM stock_feed WHERE warehouse_code = 'north' GROUP BY sku ON DUPLICATE KEY UPDATE units = stock_ledger.units + VALUES(units) RETURNING sku, units",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT sku, units FROM stock_ledger ORDER BY sku",
+      "ordered": true
+    }
+  ]
+}
