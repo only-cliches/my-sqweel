@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "id": "having_exists_group_filter",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "repository": "EnterpriseDB/mysql_fdw",
+      "commit": "40d54a0288588f52fcd060966f63dcb862e3e56d",
+      "path": "sql/select.sql",
+      "url": "https://github.com/EnterpriseDB/mysql_fdw/blob/40d54a0288588f52fcd060966f63dcb862e3e56d/sql/select.sql",
+      "sha256": "409b3b050ae729c46c7c22b014d3aec0b19c4c6ecd12fd6ca59cf8ddbbabcfe3",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/select.sql:415-418",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped aggregate retains groups through a correlated EXISTS predicate in HAVING, comparing the outer grouping key with rows from the same relation.",
+      "mysql_mariadb_translation": "Reauthored as an independent ledger-bucket report. Each bucket is aggregated, then HAVING EXISTS keeps only buckets containing a qualifying billable entry; a fixed integer amount column and deterministic bucket ordering replace the foreign-table test harness."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "grouped-aggregate",
+    "having-exists",
+    "correlated-subquery",
+    "self-relation-correlation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "North and West contain billable entries and remain after HAVING EXISTS; South has entries but none are billable and must be filtered out. Multiple rows per bucket make the grouped total observable independently of the existence witness.",
+  "determinism_notes": "Entry IDs, bucket codes, amounts, and kinds are fixed; the grouped result is ordered by bucket code with no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE ledger_entries (entry_id INT PRIMARY KEY, bucket_code VARCHAR(16) NOT NULL, amount INT NOT NULL, entry_kind VARCHAR(16) NOT NULL)",
+    "INSERT INTO ledger_entries VALUES (1001, 'North', 12, 'billable'), (1002, 'North', 3, 'adjustment'), (1003, 'South', 9, 'adjustment'), (1004, 'South', 4, 'refund'), (1005, 'West', 7, 'billable'), (1006, 'West', 2, 'refund')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT e.bucket_code, SUM(e.amount) AS total_amount FROM ledger_entries e GROUP BY e.bucket_code HAVING EXISTS (SELECT 1 FROM ledger_entries witness WHERE witness.bucket_code = e.bucket_code AND witness.entry_kind = 'billable') ORDER BY e.bucket_code",
+      "ordered": true
+    }
+  ]
+}
