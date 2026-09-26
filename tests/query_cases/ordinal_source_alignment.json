@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "ordinal_source_alignment",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "repository": "fhirbase/fhirbase-plv8",
+      "commit": "3419b442c1c4d410cab860175117d274ee7dad61",
+      "path": "perf/generate.sql",
+      "url": "https://github.com/fhirbase/fhirbase-plv8/blob/3419b442c1c4d410cab860175117d274ee7dad61/perf/generate.sql",
+      "sha256": "2592d0b3c601a311ef61a828fcfba3278e27ae77aa339b4921152625c9781d9c",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "perf/generate.sql:57-76",
+      "source_dialect": "postgresql",
+      "observed_pattern": "Several independently ordered source relations receive ROW_NUMBER ordinals and are joined by the shared ordinal to assemble one positional output row.",
+      "mysql_mariadb_translation": "Reauthored as a dispatch-label assembly. Three fixed lookup streams are independently numbered by stable source keys, then joined with USING on the ordinal to produce one aligned label per position; PostgreSQL JSON generation, random ordering, and procedural wrappers are intentionally omitted."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "cte",
+    "row-number",
+    "positional-using-join",
+    "multi-source-alignment",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Three two-row lookup streams are aligned by their deterministic ROW_NUMBER values. Each output position must combine the label, depot, and urgency from the same ordinal rather than matching their source IDs.",
+  "determinism_notes": "Every source stream has unique fixed source IDs and explicit ROW_NUMBER ordering; the final result is ordered by ordinal with no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE dispatch_labels (label_id INT PRIMARY KEY, label_text VARCHAR(24) NOT NULL)",
+    "CREATE TABLE dispatch_depots (depot_id INT PRIMARY KEY, depot_code VARCHAR(16) NOT NULL)",
+    "CREATE TABLE dispatch_urgencies (urgency_id INT PRIMARY KEY, urgency_label VARCHAR(16) NOT NULL)",
+    "INSERT INTO dispatch_labels VALUES (11, 'Prepare'), (22, 'Release')",
+    "INSERT INTO dispatch_depots VALUES (101, 'North'), (202, 'South')",
+    "INSERT INTO dispatch_urgencies VALUES (301, 'Routine'), (302, 'Critical')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH label_source AS (SELECT label_text, ROW_NUMBER() OVER (ORDER BY label_id) AS ordinal FROM dispatch_labels), depot_source AS (SELECT depot_code, ROW_NUMBER() OVER (ORDER BY depot_id) AS ordinal FROM dispatch_depots), urgency_source AS (SELECT urgency_label, ROW_NUMBER() OVER (ORDER BY urgency_id) AS ordinal FROM dispatch_urgencies) SELECT label_source.ordinal, label_source.label_text, depot_source.depot_code, urgency_source.urgency_label FROM label_source JOIN depot_source USING (ordinal) JOIN urgency_source USING (ordinal) ORDER BY label_source.ordinal",
+      "ordered": true
+    }
+  ]
+}
