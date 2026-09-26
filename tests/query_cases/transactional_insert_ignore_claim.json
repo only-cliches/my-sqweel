@@ -1,0 +1,98 @@
+{
+  "version": 1,
+  "id": "transactional_insert_ignore_claim",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "repository": "Joryun/seckill",
+      "commit": "ecb41016e30ed915c79f8709095abc6620637ca6",
+      "path": "sql/seckill.sql",
+      "url": "https://github.com/Joryun/seckill/blob/ecb41016e30ed915c79f8709095abc6620637ca6/sql/seckill.sql",
+      "sha256": "5748432c0c91c90a0371a47557b0ff9cdf2dee0ff9ab750708f619b37f3ce204",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/seckill.sql:73-96",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A transaction attempts an INSERT IGNORE, inspects ROW_COUNT to distinguish a newly accepted claim from a duplicate, then updates guarded inventory and rolls back when a later mutation cannot proceed.",
+      "mysql_mariadb_translation": "Reauthored as an independent reservation claim flow. One transaction inserts a new customer claim, reads ROW_COUNT, decrements available inventory, and commits; a second transaction exercises a duplicate INSERT IGNORE, performs a speculative guarded decrement, reads the intermediate state, and rolls back so the duplicate path leaves inventory unchanged. Procedures, variables, time checks, and application tables are omitted."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "insert-ignore",
+    "row-count",
+    "transaction",
+    "guarded-update",
+    "rollback-final-state",
+    "unique-conflict",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Customer 77 successfully claims item 501 and reduces inventory from two to one. A second claim for the same customer/item conflicts with the unique key; the speculative decrement is visible before ROLLBACK but the final inventory remains one and only the first claim exists.",
+  "determinism_notes": "Claim IDs, customer IDs, item IDs, inventory quantities, transaction statements, and final reads are fixed; one connection executes the steps sequentially with no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE reservation_inventory (item_id INT PRIMARY KEY, item_label VARCHAR(32) NOT NULL, available_units INT NOT NULL)",
+    "CREATE TABLE reservation_claims (claim_id INT PRIMARY KEY, item_id INT NOT NULL, customer_id INT NOT NULL, UNIQUE KEY uq_claim_customer_item (customer_id, item_id))",
+    "INSERT INTO reservation_inventory VALUES (501, 'limited-pass', 2)"
+  ],
+  "steps": [
+    {
+      "sql": "START TRANSACTION",
+      "ordered": false
+    },
+    {
+      "sql": "INSERT IGNORE INTO reservation_claims (claim_id, item_id, customer_id) VALUES (7001, 501, 77)",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT ROW_COUNT() AS accepted_claims",
+      "ordered": true
+    },
+    {
+      "sql": "UPDATE reservation_inventory SET available_units = available_units - 1 WHERE item_id = 501 AND available_units > 0",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT item_id, available_units FROM reservation_inventory ORDER BY item_id",
+      "ordered": true
+    },
+    {
+      "sql": "COMMIT",
+      "ordered": false
+    },
+    {
+      "sql": "START TRANSACTION",
+      "ordered": false
+    },
+    {
+      "sql": "INSERT IGNORE INTO reservation_claims (claim_id, item_id, customer_id) VALUES (7002, 501, 77)",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT ROW_COUNT() AS accepted_claims",
+      "ordered": true
+    },
+    {
+      "sql": "UPDATE reservation_inventory SET available_units = available_units - 1 WHERE item_id = 501 AND available_units > 0",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT item_id, available_units FROM reservation_inventory ORDER BY item_id",
+      "ordered": true
+    },
+    {
+      "sql": "ROLLBACK",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT claim_id, item_id, customer_id FROM reservation_claims ORDER BY claim_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT item_id, item_label, available_units FROM reservation_inventory ORDER BY item_id",
+      "ordered": true
+    }
+  ]
+}

@@ -1086,21 +1086,25 @@ impl RawEngine {
         Some(self.select_query(*query).ok()?.rows.len() as u64)
     }
 
-    fn found_rows_column_name(&self, sql: &str) -> String {
+    fn select_expression_column_name(&self, sql: &str, fallback: &str) -> String {
         let parse_sql = self.rewrite_sql_for_parser(sql);
         let Ok(mut statements) = super::parse(&parse_sql) else {
-            return "found_rows()".to_string();
+            return fallback.to_string();
         };
         let Some(Statement::Query(query)) = statements.pop() else {
-            return "found_rows()".to_string();
+            return fallback.to_string();
         };
         let SetExpr::Select(select) = *query.body else {
-            return "found_rows()".to_string();
+            return fallback.to_string();
         };
         match select.projection.first() {
             Some(SelectItem::ExprWithAlias { alias, .. }) => alias.value.clone(),
-            _ => "found_rows()".to_string(),
+            _ => fallback.to_string(),
         }
+    }
+
+    fn found_rows_column_name(&self, sql: &str) -> String {
+        self.select_expression_column_name(sql, "found_rows()")
     }
 
     fn can_parse_without_compat_rewrites(&self, sql: &str) -> bool {
@@ -4087,9 +4091,10 @@ impl RawEngine {
             } else {
                 Value::Number(Number::from(value))
             };
+            let column = self.select_expression_column_name(trimmed, "row_count()");
             return Ok(Some(QueryResult {
-                columns: vec!["row_count()".to_string()],
-                rows: vec![Map::from_iter([("row_count()".to_string(), value)])],
+                columns: vec![column.clone()],
+                rows: vec![Map::from_iter([(column, value)])],
                 ..QueryResult::default()
             }));
         }

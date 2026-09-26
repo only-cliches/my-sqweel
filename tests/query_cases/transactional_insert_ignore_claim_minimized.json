@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "id": "transactional_insert_ignore_claim_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "transactional_insert_ignore_claim",
+    "source": {
+      "repository": "Joryun/seckill",
+      "commit": "ecb41016e30ed915c79f8709095abc6620637ca6",
+      "path": "sql/seckill.sql",
+      "url": "https://github.com/Joryun/seckill/blob/ecb41016e30ed915c79f8709095abc6620637ca6/sql/seckill.sql",
+      "sha256": "5748432c0c91c90a0371a47557b0ff9cdf2dee0ff9ab750708f619b37f3ce204",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from transactional_insert_ignore_claim; source sql/seckill.sql:75-78",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "ROW_COUNT() is selected with an explicit alias immediately after INSERT IGNORE so the caller can distinguish a duplicate from an accepted row.",
+      "mysql_mariadb_translation": "Reduced to one existing unique row, one duplicate INSERT IGNORE, and one aliased ROW_COUNT() projection. Transactional inventory updates and the original application flow are removed while the result-column naming contract remains observable."
+    },
+    "independently_authored": true,
+    "minimized_from": "transactional_insert_ignore_claim"
+  },
+  "features": [
+    "insert-ignore",
+    "row-count",
+    "explicit-expression-alias",
+    "minimized-regression",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The duplicate claim is ignored, then ROW_COUNT() must return zero under the explicit accepted_rows column alias. The existing row must remain unchanged.",
+  "determinism_notes": "One fixed unique row and one duplicate INSERT IGNORE use no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE claim_probe (claim_id INT PRIMARY KEY, claim_key VARCHAR(24) NOT NULL UNIQUE)",
+    "INSERT INTO claim_probe VALUES (8001, 'already-claimed')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT IGNORE INTO claim_probe (claim_id, claim_key) VALUES (8002, 'already-claimed')",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT ROW_COUNT() AS accepted_rows",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT claim_id, claim_key FROM claim_probe ORDER BY claim_id",
+      "ordered": true
+    }
+  ]
+}
