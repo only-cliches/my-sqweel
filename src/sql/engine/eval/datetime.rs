@@ -1007,7 +1007,7 @@ pub(crate) fn eval_date_add_sub(
     let Some(interval_arg) = interval_arg else {
         return Ok(Value::Null);
     };
-    let Some(interval) = parse_mysql_interval(interval_arg) else {
+    let Some(interval) = resolve_mysql_interval(interval_arg, data, last_insert_id) else {
         return Ok(Value::Null);
     };
     let Some(date) = parse_mysql_datetime_value(&date_value) else {
@@ -1093,7 +1093,11 @@ pub(super) enum MysqlIntervalUnit {
     Year,
 }
 
-pub(super) fn parse_mysql_interval(raw: &str) -> Option<MysqlInterval> {
+pub(super) fn resolve_mysql_interval(
+    raw: &str,
+    data: &Map<String, Value>,
+    last_insert_id: u64,
+) -> Option<MysqlInterval> {
     let trimmed = raw.trim();
     let body = strip_ascii_prefix(trimmed, "INTERVAL")?.trim();
     let (amount_text, unit_text) = split_interval_amount_and_unit(body)?;
@@ -1123,7 +1127,11 @@ pub(super) fn parse_mysql_interval(raw: &str) -> Option<MysqlInterval> {
         .trim_matches('\'')
         .trim_matches('"')
         .parse::<i64>()
-        .ok()?;
+        .ok()
+        .or_else(|| {
+            let value = eval_scalar_text(amount_text, data, last_insert_id).ok();
+            value.and_then(|value| value_to_i64(&value))
+        })?;
     let unit = parse_mysql_interval_unit(unit_text.trim())?;
     Some(MysqlInterval { amount, unit })
 }
@@ -1142,18 +1150,28 @@ fn split_interval_amount_and_unit(text: &str) -> Option<(&str, &str)> {
     }
     let mut in_single = false;
     let mut in_double = false;
+    let mut depth = 0_i32;
+    let mut split_positions = Vec::new();
     for (idx, ch) in trimmed.char_indices() {
         match ch {
             '\'' if !in_double => in_single = !in_single,
             '"' if !in_single => in_double = !in_double,
-            ch if ch.is_whitespace() && !in_single && !in_double => {
-                let amount = trimmed[..idx].trim();
-                let unit = trimmed[idx..].trim();
-                if !amount.is_empty() && !unit.is_empty() {
-                    return Some((amount, unit));
-                }
+            '(' if !in_single && !in_double => depth += 1,
+            ')' if !in_single && !in_double => depth -= 1,
+            ch if ch.is_whitespace() && !in_single && !in_double && depth == 0 => {
+                split_positions.push(idx);
             }
             _ => {}
+        }
+    }
+    for idx in split_positions.into_iter().rev() {
+        let amount = trimmed[..idx].trim();
+        let unit = trimmed[idx..].trim();
+        if !amount.is_empty()
+            && (parse_mysql_interval_unit(unit).is_some()
+                || unit.eq_ignore_ascii_case("HOUR TO MINUTE"))
+        {
+            return Some((amount, unit));
         }
     }
     None

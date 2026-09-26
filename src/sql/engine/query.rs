@@ -7724,6 +7724,7 @@ fn window_exprs(expr: &Expr) -> Vec<&Expr> {
             }
             expressions
         }
+        Expr::Interval(interval) => window_exprs(&interval.value),
         Expr::IsNull(inner) => window_exprs(inner),
         Expr::UnaryOp { expr, .. } | Expr::Nested(expr) => window_exprs(expr),
         _ => Vec::new(),

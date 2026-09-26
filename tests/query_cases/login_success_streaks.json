@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "id": "login_success_streaks",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "gh0stintheshe11/LeetCode-Solutions",
+      "commit": "7f6f9251125dfb067af9852a19739626580fe9c7",
+      "path": "solutions/longest-winning-streak/MySQL.sql",
+      "url": "https://github.com/gh0stintheshe11/LeetCode-Solutions/blob/7f6f9251125dfb067af9852a19739626580fe9c7/solutions/longest-winning-streak/MySQL.sql",
+      "sha256": "a2256d91e4059618629a767ab116f591630e7ccca92f05ac31cef36906422e94",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "solutions/longest-winning-streak/MySQL.sql:1-25, RankedMatches and WinningStreaks CTEs",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A CTE assigns two ROW_NUMBER windows to identify consecutive same-result runs, aggregates each run, and left joins the longest qualifying run back to every entity so entities without a qualifying result receive zero.",
+      "mysql_mariadb_translation": "Reauthored as a fixed account-login audit. Successful login dates are grouped by the DATE_SUB date-minus-row-number gap key, each account's longest consecutive success run is aggregated, and a LEFT JOIN with COALESCE retains an account having no successful login. The source tables, names, values, and gaming context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "cte",
+    "row-number",
+    "date-sub-interval",
+    "grouped-run-length",
+    "left-join",
+    "coalesce",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Account 10 has a three-day success run after a failed login, account 20 has only isolated successes, account 30 has no successes, and account 40 has a three-day run followed by a gap. The final report must preserve account 30 with a zero streak.",
+  "determinism_notes": "Account IDs and login dates are unique, all windows order by account and login date, and the final report orders by account ID. Fixed dates only; no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE login_accounts (account_id INT PRIMARY KEY, account_label VARCHAR(24) NOT NULL)",
+    "CREATE TABLE account_logins (login_id INT PRIMARY KEY, account_id INT NOT NULL, login_day DATE NOT NULL, login_result VARCHAR(16) NOT NULL, UNIQUE KEY account_login_day (account_id, login_day))",
+    "INSERT INTO login_accounts VALUES (10, 'north'), (20, 'south'), (30, 'west'), (40, 'east')",
+    "INSERT INTO account_logins VALUES (1001, 10, '2026-04-01', 'success'), (1002, 10, '2026-04-02', 'success'), (1003, 10, '2026-04-03', 'failure'), (1004, 10, '2026-04-04', 'success'), (1005, 10, '2026-04-05', 'success'), (1006, 10, '2026-04-06', 'success'), (2001, 20, '2026-04-01', 'success'), (2002, 20, '2026-04-03', 'success'), (2003, 20, '2026-04-05', 'success'), (3001, 30, '2026-04-01', 'failure'), (3002, 30, '2026-04-02', 'failure'), (4001, 40, '2026-04-01', 'success'), (4002, 40, '2026-04-02', 'success'), (4003, 40, '2026-04-03', 'success'), (4004, 40, '2026-04-05', 'success')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH numbered_successes AS (SELECT account_id, login_day, DATE_SUB(login_day, INTERVAL ROW_NUMBER() OVER (PARTITION BY account_id ORDER BY login_day) DAY) AS streak_key FROM account_logins WHERE login_result = 'success'), streak_counts AS (SELECT account_id, streak_key, COUNT(*) AS streak_length FROM numbered_successes GROUP BY account_id, streak_key), longest_successes AS (SELECT account_id, MAX(streak_length) AS longest_success_streak FROM streak_counts GROUP BY account_id) SELECT a.account_id, a.account_label, COALESCE(s.longest_success_streak, 0) AS longest_success_streak FROM login_accounts a LEFT JOIN longest_successes s ON s.account_id = a.account_id ORDER BY a.account_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT account_id, account_label FROM login_accounts ORDER BY account_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT account_id, login_day, login_result FROM account_logins ORDER BY account_id, login_day",
+      "ordered": true
+    }
+  ]
+}
