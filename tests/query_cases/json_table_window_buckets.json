@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "json_table_window_buckets",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "Apress/mysql-8-query-perf-tuning",
+      "commit": "adddf19474178674bd3a45087142ffb23a231157",
+      "path": "Chapter_16/listing_16_6.sql",
+      "url": "https://github.com/Apress/mysql-8-query-perf-tuning/blob/adddf19474178674bd3a45087142ffb23a231157/Chapter_16/listing_16_6.sql",
+      "sha256": "5f70506b278a78d5610f00e1aeb5f5897b88ee1109bb66f64b2476425eb618fe",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Chapter_16/listing_16_6.sql:L1-L21",
+      "source_dialect": "mysql",
+      "observed_pattern": "A JSON_TABLE expansion turns histogram bucket arrays into typed rows, then a windowed difference reports each bucket's incremental frequency alongside cumulative values and counts.",
+      "mysql_mariadb_translation": "Reauthored as a bucket-distribution audit over a new JSON column. Two fixed snapshot documents expand nested bucket arrays with FOR ORDINALITY, typed decimal values, and counts; a partitioned LAG difference computes incremental percentages. The source information-schema histogram, identifiers, labels, and data are not copied. MariaDB's two-argument LAG form is used with COALESCE for the first bucket."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "correlated-json-table",
+    "nested-array-projection",
+    "for-ordinality",
+    "partitioned-lag-window",
+    "decimal-rounding",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Snapshot 41 has three buckets with cumulative percentages 25, 62.5, and 100 and therefore incremental frequencies 25, 37.5, and 37.5. Snapshot 42 has two buckets with cumulative percentages 40 and 100 and incremental frequencies 40 and 60.",
+  "determinism_notes": "Snapshot IDs, JSON bucket order, decimal values, counts, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE bucket_snapshots (snapshot_id INT PRIMARY KEY, bucket_json JSON NOT NULL)",
+    "INSERT INTO bucket_snapshots VALUES (41, '{\"buckets\":[[\"bronze\",0.2500,4],[\"silver\",0.6250,6],[\"gold\",1.0000,10]]}'), (42, '{\"buckets\":[[\"bronze\",0.4000,2],[\"silver\",1.0000,5]]}')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT s.snapshot_id, b.bucket_no, b.bucket_name, ROUND(b.cumulative * 100, 2) AS cumulative_pct, ROUND((b.cumulative - COALESCE(LAG(b.cumulative) OVER (PARTITION BY s.snapshot_id ORDER BY b.bucket_no), 0)) * 100, 2) AS frequency_pct, b.item_count FROM bucket_snapshots AS s, JSON_TABLE(s.bucket_json, '$.buckets[*]' COLUMNS (bucket_no FOR ORDINALITY, bucket_name VARCHAR(16) PATH '$[0]', cumulative DECIMAL(6,4) PATH '$[1]', item_count INT PATH '$[2]')) AS b ORDER BY s.snapshot_id, b.bucket_no",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT s.snapshot_id, b.bucket_no, ROUND((b.cumulative - COALESCE(LAG(b.cumulative) OVER (PARTITION BY s.snapshot_id ORDER BY b.bucket_no), 0)) * 100, 2) AS frequency_pct FROM bucket_snapshots AS s, JSON_TABLE(s.bucket_json, '$.buckets[*]' COLUMNS (bucket_no FOR ORDINALITY, cumulative DECIMAL(6,4) PATH '$[1]')) AS b ORDER BY s.snapshot_id, b.bucket_no",
+      "ordered": true
+    }
+  ]
+}
