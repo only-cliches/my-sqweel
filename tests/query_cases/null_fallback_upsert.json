@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "id": "null_fallback_upsert",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "repository": "fivenet-app/fivenet",
+      "commit": "279a6782e8806b9a6b545821b5ac107fa65bdb23",
+      "path": "query/migrations/1781855039_user_accounts_mapping.up.sql",
+      "url": "https://github.com/fivenet-app/fivenet/blob/279a6782e8806b9a6b545821b5ac107fa65bdb23/query/migrations/1781855039_user_accounts_mapping.up.sql",
+      "sha256": "e126a35738bf5b3b7de18c8ece5f2ed9cc42c614a3cc4b2aa366b2c91a28cc2c",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "query/migrations/1781855039_user_accounts_mapping.up.sql:14-21",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "An INSERT ... SELECT joins rows through a COALESCE(NULLIF(...), SUBSTRING_INDEX(...)) fallback key and uses ON DUPLICATE KEY UPDATE to refresh an existing mapping.",
+      "mysql_mariadb_translation": "Reauthored as an independent profile-account mapping refresh. A non-empty preferred code wins, an empty preferred code falls back to the suffix of a namespaced identifier, blank fallback keys are excluded, and an existing profile mapping is refreshed while a new mapping is inserted. The source schema, identifiers, and application domain are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "insert-select",
+    "inner-join",
+    "coalesce",
+    "nullif",
+    "substring-index",
+    "on-duplicate-key-update",
+    "nullable-fallback",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Profile 501 uses its preferred code, profile 502 uses the identifier suffix because its preferred code is empty, profile 503 is excluded because both fallback sources produce an empty key, and profile 504 refreshes an existing mapping through the duplicate-key path.",
+  "determinism_notes": "Profile and account IDs are fixed, each resolved account key is unique, and the final mapping read is ordered by profile ID with no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE mapping_profiles (profile_id INT PRIMARY KEY, preferred_code VARCHAR(24) NULL, external_identifier VARCHAR(48) NOT NULL)",
+    "CREATE TABLE mapping_accounts (account_id INT PRIMARY KEY, account_key VARCHAR(24) NOT NULL UNIQUE)",
+    "CREATE TABLE profile_account_links (profile_id INT PRIMARY KEY, account_id INT NOT NULL)",
+    "INSERT INTO mapping_profiles VALUES (501, 'ACCT-NORTH', 'steam:unused-north'), (502, '', 'steam:ACCT-SOUTH'), (503, NULL, 'steam:'), (504, 'ACCT-NORTH', 'steam:unused-refresh')",
+    "INSERT INTO mapping_accounts VALUES (601, 'ACCT-NORTH'), (602, 'ACCT-SOUTH'), (603, 'ACCT-OLD')",
+    "INSERT INTO profile_account_links VALUES (504, 603)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO profile_account_links (profile_id, account_id) SELECT p.profile_id, a.account_id FROM mapping_profiles p JOIN mapping_accounts a ON a.account_key = COALESCE(NULLIF(p.preferred_code, ''), SUBSTRING_INDEX(p.external_identifier, ':', -1)) WHERE COALESCE(NULLIF(p.preferred_code, ''), SUBSTRING_INDEX(p.external_identifier, ':', -1)) <> '' ON DUPLICATE KEY UPDATE account_id = VALUES(account_id)",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT profile_id, account_id FROM profile_account_links ORDER BY profile_id",
+      "ordered": true
+    }
+  ]
+}
