@@ -2139,10 +2139,14 @@ impl RawEngine {
                                 )
                                 .column_type
                             });
-                        if argument == Some(MysqlColumnType::Json) {
-                            MysqlColumnType::LongBlob
-                        } else {
-                            MysqlColumnType::VarChar
+                        match argument {
+                            Some(MysqlColumnType::Json) => MysqlColumnType::LongBlob,
+                            Some(
+                                MysqlColumnType::Blob
+                                | MysqlColumnType::MediumBlob
+                                | MysqlColumnType::LongBlob,
+                            ) => MysqlColumnType::MediumBlob,
+                            _ => MysqlColumnType::VarChar,
                         }
                     }
                     "JSON_VALUE" => {

@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "id": "json_pretty_user_variable",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Shannon-Data/ShannonBase",
+      "commit": "98cfb7a4d7be3445650a458c988335842d8e6b78",
+      "path": "scripts/sys_schema/procedures/ml_model_active.sql",
+      "url": "https://github.com/Shannon-Data/ShannonBase/blob/98cfb7a4d7be3445650a458c988335842d8e6b78/scripts/sys_schema/procedures/ml_model_active.sql",
+      "sha256": "956a3332885acdc1f9f281678d812486c814cc98eb1f09f04c257332e866658f",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "scripts/sys_schema/procedures/ml_model_active.sql:55",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL diagnostic query passes a session user variable containing a JSON document to JSON_PRETTY for human-readable rendering.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored model-status snapshot. A fixed JSON column is selected into a session variable, then JSON_PRETTY renders the stored object; the schema, values, aliases, and operational context are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "json-pretty",
+    "session-user-variable",
+    "json-column",
+    "long-blob-metadata",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The session variable stores a model name, enabled flag, and nested version object from a JSON column. JSON_PRETTY must render the stored JSON document with four-space indentation and MariaDB MEDIUM_BLOB metadata.",
+  "determinism_notes": "The JSON document, assignment, and projection are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE model_snapshots (snapshot_id INT PRIMARY KEY, model_info JSON NOT NULL)",
+    "INSERT INTO model_snapshots VALUES (1, '{\"model\":\"atlas\",\"enabled\":true,\"version\":{\"major\":2,\"minor\":7}}')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT model_info INTO @model_info FROM model_snapshots WHERE snapshot_id = 1",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT JSON_PRETTY(@model_info) AS pretty_model",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT JSON_PRETTY(@model_info) AS pretty_model",
+      "ordered": true
+    }
+  ]
+}

@@ -753,7 +753,7 @@ impl RawEngine {
 
     pub(super) fn user_variable_type(&self, name: &str) -> Option<MysqlColumnType> {
         self.user_variable_types
-            .get(&name.to_ascii_lowercase())
+            .get(name.trim_start_matches('@').to_ascii_lowercase().as_str())
             .map(|value| *value)
     }
 
@@ -2640,8 +2640,15 @@ impl RawEngine {
                         &value,
                         Value::String(text) if text.starts_with(JSON_AGGREGATE_TEXT_SENTINEL)
                     );
+                    let is_json_document = matches!(
+                        &value,
+                        Value::String(text)
+                            if serde_json::from_str::<Value>(text).is_ok_and(|json| {
+                                matches!(json, Value::Object(_) | Value::Array(_))
+                            })
+                    );
                     self.user_variables.insert(target.clone(), value);
-                    if is_json_aggregate {
+                    if is_json_aggregate || is_json_document {
                         self.user_variable_types
                             .insert(target, MysqlColumnType::LongBlob);
                     } else if let Some(metadata) = result.column_metadata.get(index) {
