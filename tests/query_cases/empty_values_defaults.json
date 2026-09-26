@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "id": "empty_values_defaults",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "deepflowio/deepflow",
+      "commit": "9a1219fa5cf1471ba2ec8742019661567d98002e",
+      "path": "server/controller/db/metadb/migrator/schema/rawsql/mysql/issu/6.3.1.28.sql",
+      "url": "https://github.com/deepflowio/deepflow/blob/9a1219fa5cf1471ba2ec8742019661567d98002e/server/controller/db/metadb/migrator/schema/rawsql/mysql/issu/6.3.1.28.sql",
+      "sha256": "d2cf9cdb4b7ec5fe78e4193f8289d91323263a44eb7be8b5c348dd816b18bc4d",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "6.3.1.28.sql: INSERT INTO ch_view_change () VALUES ()",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL migration inserts a row by specifying an empty column list and an empty VALUES tuple so column defaults and auto-increment behavior create the change marker.",
+      "mysql_mariadb_translation": "Reauthored as a refresh-job ledger. An empty-column insert creates a default queued job with the next deterministic identifier inside a transaction, while a second explicit insert contrasts default-generated and caller-supplied values. The source table, migration version, identifiers, and values are not copied.",
+      "independently_authored": true
+    }
+  },
+  "features": [
+    "empty-column-insert",
+    "default-values",
+    "auto-increment",
+    "transaction",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The seeded refresh has ID 8, so the empty-column insert must create ID 9 with queued/zero/auto defaults; the following explicit row must receive ID 10 and retain its supplied values.",
+  "determinism_notes": "The seed ID, defaults, inserted values, and statement order are fixed. The two inserts run in one transaction and the final read is ordered by the auto-increment key; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE refresh_jobs (refresh_id INT AUTO_INCREMENT PRIMARY KEY, refresh_state VARCHAR(16) NOT NULL DEFAULT 'queued', retry_count INT NOT NULL DEFAULT 0, marker VARCHAR(16) NOT NULL DEFAULT 'auto')",
+    "INSERT INTO refresh_jobs (refresh_id, refresh_state, retry_count, marker) VALUES (8, 'running', 2, 'seeded')"
+  ],
+  "steps": [
+    {
+      "sql": "START TRANSACTION",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO refresh_jobs () VALUES ()",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO refresh_jobs (refresh_state, retry_count, marker) VALUES ('manual', 1, 'operator')",
+      "ordered": true
+    },
+    {
+      "sql": "COMMIT",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT refresh_id, refresh_state, retry_count, marker FROM refresh_jobs ORDER BY refresh_id",
+      "ordered": true
+    }
+  ]
+}
