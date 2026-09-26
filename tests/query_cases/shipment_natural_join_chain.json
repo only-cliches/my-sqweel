@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "shipment_natural_join_chain",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "EnterpriseDB/mysql_fdw",
+      "commit": "40d54a0288588f52fcd060966f63dcb862e3e56d",
+      "path": "sql/select.sql",
+      "url": "https://github.com/EnterpriseDB/mysql_fdw/blob/40d54a0288588f52fcd060966f63dcb862e3e56d/sql/select.sql",
+      "sha256": "409b3b050ae729c46c7c22b014d3aec0b19c4c6ecd12fd6ca59cf8ddbbabcfe3",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/select.sql:248-251",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL three-way NATURAL JOIN chain joins successive relations through their shared column names.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored shipment report. Manifest, package, and event tables share shipment_id and hub_code, so each NATURAL JOIN must enforce both shared columns; mismatched hubs and an unlisted shipment verify that the chain does not collapse to a single-key join."
+    },
+    "independently_authored": true
+  },
+  "features": ["natural-join", "three-way-join-chain", "implicit-multi-column-match", "deterministic-order"],
+  "fixture_notes": "Shipment 101 matches all three tables on shipment_id and hub_code. Shipment 102 has a package with the wrong hub, and shipment 103 has no package, so only shipment 101 appears.",
+  "determinism_notes": "Shipment IDs and event IDs are fixed and the report is ordered by both. There are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE shipment_manifest (shipment_id INT PRIMARY KEY, hub_code VARCHAR(8) NOT NULL, route_code VARCHAR(8) NOT NULL, customer_name VARCHAR(16) NOT NULL)",
+    "CREATE TABLE shipment_packages (package_id INT PRIMARY KEY, shipment_id INT NOT NULL, hub_code VARCHAR(8) NOT NULL, package_label VARCHAR(16) NOT NULL)",
+    "CREATE TABLE shipment_events (event_id INT PRIMARY KEY, shipment_id INT NOT NULL, hub_code VARCHAR(8) NOT NULL, event_kind VARCHAR(16) NOT NULL)",
+    "INSERT INTO shipment_manifest VALUES (101, 'NORTH', 'R-1', 'Acme'), (102, 'NORTH', 'R-2', 'Bravo'), (103, 'SOUTH', 'R-3', 'Cedar')",
+    "INSERT INTO shipment_packages VALUES (501, 101, 'NORTH', 'P-101'), (502, 102, 'SOUTH', 'P-102'), (503, 104, 'SOUTH', 'P-104')",
+    "INSERT INTO shipment_events VALUES (801, 101, 'NORTH', 'loaded'), (802, 101, 'NORTH', 'departed'), (803, 102, 'NORTH', 'loaded')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT shipment_id, hub_code, route_code, package_label, event_id, event_kind FROM shipment_manifest NATURAL JOIN shipment_packages NATURAL JOIN shipment_events ORDER BY shipment_id, event_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT shipment_id, hub_code, route_code, customer_name FROM shipment_manifest ORDER BY shipment_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT package_id, shipment_id, hub_code, package_label FROM shipment_packages ORDER BY package_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT event_id, shipment_id, hub_code, event_kind FROM shipment_events ORDER BY event_id",
+      "ordered": true
+    }
+  ]
+}

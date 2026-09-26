@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "id": "shipment_natural_join_chain_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "EnterpriseDB/mysql_fdw",
+      "commit": "40d54a0288588f52fcd060966f63dcb862e3e56d",
+      "path": "sql/select.sql",
+      "url": "https://github.com/EnterpriseDB/mysql_fdw/blob/40d54a0288588f52fcd060966f63dcb862e3e56d/sql/select.sql",
+      "sha256": "409b3b050ae729c46c7c22b014d3aec0b19c4c6ecd12fd6ca59cf8ddbbabcfe3",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/select.sql:248-251",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A three-way NATURAL JOIN chain reuses shared column names across successive relations.",
+      "mysql_mariadb_translation": "Minimized to three independently authored tables sharing id and zone_code. One row matches all three relations on both shared names; a same-id row with a different zone_code must be rejected."
+    },
+    "independently_authored": true,
+    "minimized_from": "shipment_natural_join_chain"
+  },
+  "features": ["natural-join", "three-way-join-chain", "implicit-multi-column-match", "deterministic-order"],
+  "fixture_notes": "Only id 1 matches all three tables because both id and zone_code agree; id 2 is rejected by the middle table's mismatched zone_code.",
+  "determinism_notes": "One fixed matching row is selected in id order. There are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE chain_left (id INT NOT NULL, zone_code VARCHAR(8) NOT NULL, left_value VARCHAR(16) NOT NULL)",
+    "CREATE TABLE chain_middle (id INT NOT NULL, zone_code VARCHAR(8) NOT NULL, middle_value VARCHAR(16) NOT NULL)",
+    "CREATE TABLE chain_right (id INT NOT NULL, zone_code VARCHAR(8) NOT NULL, right_value VARCHAR(16) NOT NULL)",
+    "INSERT INTO chain_left VALUES (1, 'NORTH', 'left-a'), (2, 'NORTH', 'left-b')",
+    "INSERT INTO chain_middle VALUES (1, 'NORTH', 'middle-a'), (2, 'SOUTH', 'middle-b')",
+    "INSERT INTO chain_right VALUES (1, 'NORTH', 'right-a'), (2, 'NORTH', 'right-b')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT id, zone_code, left_value, middle_value, right_value FROM chain_left NATURAL JOIN chain_middle NATURAL JOIN chain_right ORDER BY id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT id, zone_code, left_value FROM chain_left ORDER BY id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT id, zone_code, middle_value FROM chain_middle ORDER BY id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT id, zone_code, right_value FROM chain_right ORDER BY id",
+      "ordered": true
+    }
+  ]
+}
