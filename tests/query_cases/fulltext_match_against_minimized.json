@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "id": "fulltext_match_against_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "fulltext_match_against",
+    "source": {
+      "kind": "github",
+      "repository": "ja-vazquez/Python_compendium",
+      "commit": "2b72892301a356326c2de91875162f4cadfb646e",
+      "path": "SQL/SQL_basic.sql",
+      "url": "https://github.com/ja-vazquez/Python_compendium/blob/2b72892301a356326c2de91875162f4cadfb646e/SQL/SQL_basic.sql",
+      "sha256": "c9a05be544b00040908196dd6eaaf1d673142a94a830571d80ef2c3305f26f89",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "SQL/SQL_basic.sql:177-194",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "The smallest failing semantic is a MATCH ... AGAINST lookup over a FULLTEXT-indexed text column.",
+      "mysql_mariadb_translation": "Reduced to one indexed memo row and one natural-language MATCH ... AGAINST query; unrelated boolean-mode and second-column behavior were removed while preserving the parser and execution mismatch."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "fulltext-index",
+    "match-against",
+    "minimized-regression"
+  ],
+  "fixture_notes": "One memo row and one fulltext lookup retain the original unsupported MATCH ... AGAINST path without unrelated search behavior.",
+  "determinism_notes": "The table definition, memo text, search term, and primary-key ordering are fixed; there are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE indexed_memos (memo_id INT PRIMARY KEY, memo_text TEXT NOT NULL, FULLTEXT KEY ft_memo_text (memo_text)) ENGINE=InnoDB",
+    "INSERT INTO indexed_memos VALUES (801, 'Quartz beacon notes the harbor channel.')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT memo_id FROM indexed_memos WHERE MATCH(memo_text) AGAINST ('quartz beacon') ORDER BY memo_id",
+      "ordered": true
+    }
+  ]
+}

@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "fulltext_match_against",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "ja-vazquez/Python_compendium",
+      "commit": "2b72892301a356326c2de91875162f4cadfb646e",
+      "path": "SQL/SQL_basic.sql",
+      "url": "https://github.com/ja-vazquez/Python_compendium/blob/2b72892301a356326c2de91875162f4cadfb646e/SQL/SQL_basic.sql",
+      "sha256": "c9a05be544b00040908196dd6eaaf1d673142a94a830571d80ef2c3305f26f89",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "SQL/SQL_basic.sql:177-194",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "MySQL/MariaDB FULLTEXT search uses MATCH over indexed text columns with AGAINST for multi-word natural-language matching and AGAINST ... IN BOOLEAN MODE for required and excluded terms.",
+      "mysql_mariadb_translation": "Reauthored as a harbor-notes search. A FULLTEXT index covers note titles and bodies; one query selects notes matching two terms, and a boolean-mode query requires one term while excluding another. The schema, notes, search terms, and result ordering are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "fulltext-index",
+    "match-against",
+    "natural-language-search",
+    "boolean-fulltext-search",
+    "required-term",
+    "excluded-term",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Two harbor notes contain the quartz beacon terms, but only one avoids the excluded storm term. Queries return identifiers and labels rather than relevance scores so the semantic result set remains deterministic.",
+  "determinism_notes": "Primary keys, text, search terms, and ORDER BY clauses are fixed; the fixture has no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE harbor_notes (note_id INT PRIMARY KEY, note_title VARCHAR(128) NOT NULL, note_body TEXT NOT NULL, FULLTEXT KEY ft_harbor_notes (note_title, note_body)) ENGINE=InnoDB",
+    "INSERT INTO harbor_notes VALUES (701, 'Harbor lantern log', 'Quartz beacon marks the safe channel beyond the pier.'), (702, 'Harbor storm report', 'Quartz beacon faded when the storm crossed the outer reef.'), (703, 'Garden inventory', 'Copper labels mark seedlings behind the greenhouse.')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT note_id, note_title FROM harbor_notes WHERE MATCH(note_title, note_body) AGAINST ('quartz beacon') ORDER BY note_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT note_id, note_title FROM harbor_notes WHERE MATCH(note_title, note_body) AGAINST ('+quartz -storm' IN BOOLEAN MODE) ORDER BY note_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT note_id, note_title FROM harbor_notes ORDER BY note_id",
+      "ordered": true
+    }
+  ]
+}
