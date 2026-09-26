@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "bin_padded_flags",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wgzhao/Addax",
+      "commit": "df379b3e8529fe583e96ae0a5d61defd05b8621b",
+      "path": "e2e/cases/190_bit_postgresql2mysql/verify.mysql.sql",
+      "url": "https://github.com/wgzhao/Addax/blob/df379b3e8529fe583e96ae0a5d61defd05b8621b/e2e/cases/190_bit_postgresql2mysql/verify.mysql.sql",
+      "sha256": "85c272ab26bb5e1c95a0f7f4051dfb57c30c195375840b45d0a3e43d11fd1cd3",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "e2e/cases/190_bit_postgresql2mysql/verify.mysql.sql: LPAD(BIN(...), width, '0') projections",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL verification query renders numeric bit values with BIN and restores fixed display width with LPAD, while preserving a NULL marker through IFNULL.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored flag-display report over integer feature masks. It combines BIN, LPAD, IFNULL, CONCAT_WS, and deterministic ordering across zero, sparse, high-bit, and NULL values; the source schema, columns, literals, and application context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "bin-binary-rendering",
+    "lpad-fixed-width",
+    "ifnull-null-marker",
+    "concat-ws-projection",
+    "zero-value",
+    "high-bit-value",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Each fixed mask represents a feature-register snapshot. LPAD makes leading zeroes observable, IFNULL supplies a stable marker for the absent register, and the unique snapshot ID fixes result order.",
+  "determinism_notes": "All masks and labels are fixed literals, output is ordered by the primary key, and no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE feature_registers (snapshot_id INT PRIMARY KEY, register_name VARCHAR(24) NOT NULL, mask_value INT NULL)",
+    "INSERT INTO feature_registers VALUES (701, 'cold-start', 0), (702, 'sparse', 5), (703, 'high-bit', 128), (704, 'absent', NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT snapshot_id, register_name, CONCAT_WS('|', register_name, IFNULL(LPAD(BIN(mask_value), 8, '0'), '<null>')) AS rendered_mask FROM feature_registers ORDER BY snapshot_id",
+      "ordered": true
+    }
+  ]
+}
