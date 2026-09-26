@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "history_fold_upsert",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "open-metadata/OpenMetadata",
+      "commit": "1d7143035fc1e2e7b33cf732817414f0f5940d9c",
+      "path": "bootstrap/sql/migrations/native/2.1.0/mysql/postDataMigrationSQLScript.sql",
+      "url": "https://github.com/open-metadata/OpenMetadata/blob/1d7143035fc1e2e7b33cf732817414f0f5940d9c/bootstrap/sql/migrations/native/2.1.0/mysql/postDataMigrationSQLScript.sql",
+      "sha256": "2a00da107d3e1372058fa3cff7af1d233f119101d88e06f5372aaa59016c2b66",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "postDataMigrationSQLScript.sql: history fold into an upserted summary row",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A migration groups historical rows to derive first and latest timestamps, selects the latest record with a deterministic MAX identifier tie-break, extracts a JSON attribute, and inserts or updates one summary row per entity.",
+      "mysql_mariadb_translation": "Reauthored as a deployment-status summary. Two CTEs fold fixed event history into one latest status per deployment, JSON_EXTRACT supplies severity, and INSERT ... ON DUPLICATE KEY UPDATE refreshes the summary while retaining its earliest observed timestamp through LEAST. The source schema, identifiers, values, and application migration are not copied.",
+      "independently_authored": true
+    }
+  },
+  "features": [
+    "common-table-expression",
+    "grouped-history-fold",
+    "latest-row-max-tie-break",
+    "json-extract-unquote",
+    "insert-select",
+    "on-duplicate-key-update",
+    "least-upsert-merge",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Deployment 501 has two history rows at its latest timestamp, so history_id 12 must win the MAX tie-break; its existing summary keeps the earlier first_seen timestamp while receiving the latest status and severity. Deployment 502 is inserted from history.",
+  "determinism_notes": "All timestamps, identifiers, JSON payloads, and statements are fixed. The latest-row tie-break is explicit, statements run sequentially on one connection, and the final summary is ordered by deployment_id. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE deployment_history (history_id INT PRIMARY KEY, deployment_id INT NOT NULL, state_code VARCHAR(16) NOT NULL, observed_at DATETIME NOT NULL, details JSON NOT NULL)",
+    "CREATE TABLE deployment_summary (deployment_id INT PRIMARY KEY, state_code VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, first_seen DATETIME NOT NULL, last_seen DATETIME NOT NULL, latest_history_id INT NOT NULL)",
+    "INSERT INTO deployment_history (history_id, deployment_id, state_code, observed_at, details) VALUES (10, 501, 'queued', '2026-06-01 09:00:00', '{\"severity\":\"low\"}'), (11, 501, 'running', '2026-06-02 10:00:00', '{\"severity\":\"medium\"}'), (12, 501, 'failed', '2026-06-02 10:00:00', '{\"severity\":\"high\"}'), (20, 502, 'complete', '2026-06-03 08:30:00', '{\"severity\":\"low\"}')",
+    "INSERT INTO deployment_summary (deployment_id, state_code, severity, first_seen, last_seen, latest_history_id) VALUES (501, 'legacy', 'unknown', '2026-05-31 12:00:00', '2026-05-31 12:00:00', 3)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO deployment_summary (deployment_id, state_code, severity, first_seen, last_seen, latest_history_id) WITH history_bounds AS (SELECT deployment_id, MIN(observed_at) AS first_seen, MAX(observed_at) AS last_seen FROM deployment_history GROUP BY deployment_id), latest_history AS (SELECT b.deployment_id, b.first_seen, b.last_seen, MAX(h.history_id) AS latest_history_id FROM history_bounds AS b INNER JOIN deployment_history AS h ON h.deployment_id = b.deployment_id AND h.observed_at = b.last_seen GROUP BY b.deployment_id, b.first_seen, b.last_seen) SELECT h.deployment_id, h.state_code, JSON_UNQUOTE(JSON_EXTRACT(h.details, '$.severity')), l.first_seen, l.last_seen, h.history_id FROM latest_history AS l INNER JOIN deployment_history AS h ON h.history_id = l.latest_history_id WHERE h.deployment_id IS NOT NULL ON DUPLICATE KEY UPDATE state_code = VALUES(state_code), severity = VALUES(severity), first_seen = LEAST(deployment_summary.first_seen, VALUES(first_seen)), last_seen = VALUES(last_seen), latest_history_id = VALUES(latest_history_id)",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT deployment_id, state_code, severity, first_seen, last_seen, latest_history_id FROM deployment_summary ORDER BY deployment_id",
+      "ordered": true
+    }
+  ]
+}

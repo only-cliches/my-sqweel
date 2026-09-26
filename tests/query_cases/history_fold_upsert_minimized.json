@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "id": "history_fold_upsert_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "open-metadata/OpenMetadata",
+      "commit": "1d7143035fc1e2e7b33cf732817414f0f5940d9c",
+      "path": "bootstrap/sql/migrations/native/2.1.0/mysql/postDataMigrationSQLScript.sql",
+      "url": "https://github.com/open-metadata/OpenMetadata/blob/1d7143035fc1e2e7b33cf732817414f0f5940d9c/bootstrap/sql/migrations/native/2.1.0/mysql/postDataMigrationSQLScript.sql",
+      "sha256": "2a00da107d3e1372058fa3cff7af1d233f119101d88e06f5372aaa59016c2b66",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from history_fold_upsert",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "An INSERT ... SELECT upsert compares an existing target timestamp with an incoming CTE-derived timestamp through LEAST while also consuming VALUES() in the duplicate-key clause.",
+      "mysql_mariadb_translation": "Reduced to one history row, one existing summary row, one CTE-backed insert-select, and the LEAST merge expression; JSON extraction, latest-row grouping, and the inserted-only path are removed to isolate qualified existing-column resolution in ON DUPLICATE KEY UPDATE."
+    },
+    "independently_authored": true,
+    "minimized_from": "history_fold_upsert"
+  },
+  "features": [
+    "common-table-expression",
+    "insert-select",
+    "on-duplicate-key-update",
+    "qualified-existing-column",
+    "least-upsert-merge",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The existing summary timestamp is earlier than the incoming timestamp, so MariaDB must preserve the existing value rather than overwrite it.",
+  "determinism_notes": "All values are fixed, the statement runs on one connection, and the final row is ordered by its primary key. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE summary_min (summary_id INT PRIMARY KEY, first_seen DATETIME NOT NULL, latest_label VARCHAR(16) NOT NULL)",
+    "INSERT INTO summary_min (summary_id, first_seen, latest_label) VALUES (7, '2026-05-31 12:00:00', 'old')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO summary_min (summary_id, first_seen, latest_label) WITH incoming(summary_id, first_seen, latest_label) AS (SELECT 7, '2026-06-01 09:00:00', 'new') SELECT summary_id, first_seen, latest_label FROM incoming ON DUPLICATE KEY UPDATE first_seen = LEAST(summary_min.first_seen, VALUES(first_seen)), latest_label = VALUES(latest_label)",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT summary_id, first_seen, latest_label FROM summary_min ORDER BY summary_id",
+      "ordered": true
+    }
+  ]
+}

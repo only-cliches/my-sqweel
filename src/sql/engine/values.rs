@@ -249,12 +249,6 @@ fn incoming_qualified_column_expr(expr: &Expr, incoming: &Map<String, Value>) ->
     incoming
         .iter()
         .find_map(|(name, value)| name.eq_ignore_ascii_case(&key).then_some(value.clone()))
-        .or_else(|| {
-            let column = parts.last()?.value.as_str();
-            incoming.iter().find_map(|(name, value)| {
-                name.eq_ignore_ascii_case(column).then_some(value.clone())
-            })
-        })
 }
 
 pub(super) fn assignment_target_name(assignment: &Assignment) -> String {
