@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "id": "insert_default_values_returning_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "insert_default_values_returning",
+    "source": {
+      "kind": "github",
+      "repository": "procrastinate-org/procrastinate",
+      "commit": "35f3ca98d979cf5afecb6df902e9a750680edea0",
+      "path": "procrastinate/sql/schema.sql",
+      "url": "https://github.com/procrastinate-org/procrastinate/blob/35f3ca98d979cf5afecb6df902e9a750680edea0/procrastinate/sql/schema.sql",
+      "sha256": "c70ec4b400a60ad9592787653aae5ae77ae41bf801d56b5bd2712751a07f2009",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "procrastinate/sql/schema.sql:521-529",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "The smallest semantic is a default-only INSERT that returns its generated auto-increment identifier.",
+      "mysql_mariadb_translation": "Reduced to one auto-increment column with a default label and one INSERT ... () VALUES () RETURNING query; unrelated pre-existing rows and non-key defaults were removed while preserving the default-only write path."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "default-only-insert",
+    "auto-increment",
+    "insert-returning",
+    "minimized-regression"
+  ],
+  "fixture_notes": "One default-only insert must allocate identifier 1 and return the generated key plus its default label.",
+  "determinism_notes": "The default label and single generated row are fixed; there are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE default_jobs (job_id INT NOT NULL AUTO_INCREMENT PRIMARY KEY, job_label VARCHAR(16) NOT NULL DEFAULT 'queued')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO default_jobs () VALUES () RETURNING job_id, job_label",
+      "ordered": true
+    }
+  ]
+}

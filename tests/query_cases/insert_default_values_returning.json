@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "id": "insert_default_values_returning",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "procrastinate-org/procrastinate",
+      "commit": "35f3ca98d979cf5afecb6df902e9a750680edea0",
+      "path": "procrastinate/sql/schema.sql",
+      "url": "https://github.com/procrastinate-org/procrastinate/blob/35f3ca98d979cf5afecb6df902e9a750680edea0/procrastinate/sql/schema.sql",
+      "sha256": "c70ec4b400a60ad9592787653aae5ae77ae41bf801d56b5bd2712751a07f2009",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "procrastinate/sql/schema.sql:521-529",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A default-only INSERT creates a worker row and uses RETURNING to expose the generated identifier from the same write operation.",
+      "mysql_mariadb_translation": "Reauthored as a job-queue enqueue operation. An auto-increment queue table supplies all column values through defaults, INSERT ... () VALUES () RETURNING exposes the generated job and defaults, and a final read verifies the inserted row alongside a pre-existing running job. The source routine, schema, names, and values are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "default-only-insert",
+    "auto-increment",
+    "insert-returning",
+    "column-defaults",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Job 1000 is pre-existing and running. The default-only insert must allocate job 1001, return its generated identifier and default queued state, and leave the existing job unchanged.",
+  "determinism_notes": "The explicit initial key, column defaults, fixed initial row, and final primary-key ordering are deterministic; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE queue_jobs (job_id INT NOT NULL AUTO_INCREMENT PRIMARY KEY, job_state VARCHAR(16) NOT NULL DEFAULT 'queued', attempts INT NOT NULL DEFAULT 0)",
+    "INSERT INTO queue_jobs (job_id, job_state, attempts) VALUES (1000, 'running', 2)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO queue_jobs () VALUES () RETURNING job_id, job_state, attempts",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT job_id, job_state, attempts FROM queue_jobs ORDER BY job_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT job_id, job_state, attempts FROM queue_jobs ORDER BY job_id",
+      "ordered": true
+    }
+  ]
+}
