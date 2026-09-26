@@ -1168,8 +1168,11 @@ impl RawEngine {
         }
         let schema = self.schemas.get(&table_name).map(|schema| schema.clone());
         sort_delete_candidates(&mut candidates, &delete.order_by, schema.as_deref())?;
-        if let Some(limit) = &delete.limit {
-            candidates.truncate(expr_to_usize(limit)?);
+        let delete_limit = delete.limit.as_ref().map(expr_to_usize).transpose()?;
+        if !update_ignore_mode() {
+            if let Some(limit) = delete_limit {
+                candidates.truncate(limit);
+            }
         }
 
         if !candidates.is_empty() {
@@ -1180,7 +1183,10 @@ impl RawEngine {
             let mut deletable_keys = BTreeSet::new();
             let mut warnings = Vec::new();
             if update_ignore_mode() {
-                for key in &candidate_keys {
+                for (key, _, _) in &candidates {
+                    if delete_limit.is_some_and(|limit| deletable_keys.len() >= limit) {
+                        break;
+                    }
                     match self
                         .apply_parent_delete_actions(&table_name, &BTreeSet::from([key.clone()]))
                     {
@@ -1211,6 +1217,7 @@ impl RawEngine {
                     deleted += 1;
                 }
             }
+            let rows_affected = deleted;
             self.rows.insert(table_name.clone(), next_rows.into());
             for key in &deleted_keys {
                 if let Some(row) = current_rows.get(key) {
@@ -1222,7 +1229,7 @@ impl RawEngine {
                 &table_name,
                 returning.as_deref(),
                 returned_rows,
-                deleted,
+                rows_affected,
                 0,
             )?;
             result.warnings.extend(warnings);

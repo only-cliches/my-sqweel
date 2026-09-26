@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "id": "delete_low_priority_ignore_fk_minimized",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "antlr/grammars-v4",
+      "commit": "2c8f74860509c39629ef23451eee670a23d4b280",
+      "path": "sql/mariadb/examples/fast/dml_delete.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/2c8f74860509c39629ef23451eee670a23d4b280/sql/mariadb/examples/fast/dml_delete.sql",
+      "sha256": "62329095424f65c4213801a8cc24b7525a679590e941b67624790f4efe462ee8",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from delete_low_priority_ignore_fk",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "DELETE LOW_PRIORITY IGNORE with ORDER BY and LIMIT must continue past a foreign-key failure until the bounded number of deletable rows is reached.",
+      "mysql_mariadb_translation": "Reduced to three ranked parent rows and one child reference: the first candidate is protected by the foreign key, while the next two candidates must be deleted so LIMIT 2 counts successful deletions rather than examined rows."
+    },
+    "independently_authored": true,
+    "minimized_from": "delete_low_priority_ignore_fk"
+  },
+  "features": [
+    "delete-low-priority",
+    "delete-ignore",
+    "order-by-limit",
+    "foreign-key-conflict",
+    "bounded-deletion",
+    "minimized-regression",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Parent 1 is referenced and is skipped; parents 2 and 3 are the two successful deletions required by LIMIT 2.",
+  "determinism_notes": "Ranks and IDs are fixed, and the final parent and child reads are ordered by primary key. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE purge_parent_min (parent_id INT PRIMARY KEY, purge_rank INT NOT NULL UNIQUE)",
+    "CREATE TABLE purge_child_min (child_id INT PRIMARY KEY, parent_id INT NOT NULL, CONSTRAINT fk_purge_child_min FOREIGN KEY (parent_id) REFERENCES purge_parent_min (parent_id))",
+    "INSERT INTO purge_parent_min VALUES (1, 10), (2, 20), (3, 30)",
+    "INSERT INTO purge_child_min VALUES (101, 1)"
+  ],
+  "steps": [
+    {
+      "sql": "DELETE LOW_PRIORITY IGNORE FROM purge_parent_min ORDER BY purge_rank ASC, parent_id ASC LIMIT 2",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT parent_id, purge_rank FROM purge_parent_min ORDER BY parent_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT child_id, parent_id FROM purge_child_min ORDER BY child_id",
+      "ordered": true
+    }
+  ]
+}

@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "id": "delete_low_priority_ignore_fk",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "antlr/grammars-v4",
+      "commit": "2c8f74860509c39629ef23451eee670a23d4b280",
+      "path": "sql/mariadb/examples/fast/dml_delete.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/2c8f74860509c39629ef23451eee670a23d4b280/sql/mariadb/examples/fast/dml_delete.sql",
+      "sha256": "62329095424f65c4213801a8cc24b7525a679590e941b67624790f4efe462ee8",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/mariadb/examples/fast/dml_delete.sql:4-5",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "MariaDB DELETE syntax combines low-priority and ignore modifiers with bounded ORDER BY/LIMIT deletion forms; IGNORE is intended to continue past row-level deletion errors.",
+      "mysql_mariadb_translation": "Reauthored as a warehouse purge batch. DELETE LOW_PRIORITY IGNORE selects the two lowest-ranked parent rows, suppresses the foreign-key failure for the referenced row, and deletes the unreferenced row while later candidates remain. The grammar examples, schema, identifiers, and values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "delete-low-priority",
+    "delete-ignore",
+    "order-by-limit",
+    "foreign-key-conflict",
+    "bounded-deletion",
+    "partial-mutation",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Parent 1 is the lowest-ranked candidate but is referenced and must survive the ignored foreign-key error. Parent 2 is the second candidate and must be deleted. Parent 3 remains outside LIMIT 2.",
+  "determinism_notes": "Ranks and IDs are fixed, ORDER BY rank plus parent ID determines the candidate batch, and final reads are ordered by primary keys. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE purge_parents (parent_id INT PRIMARY KEY, purge_rank INT NOT NULL UNIQUE, parent_state VARCHAR(16) NOT NULL)",
+    "CREATE TABLE purge_children (child_id INT PRIMARY KEY, parent_id INT NOT NULL, CONSTRAINT fk_purge_child_parent FOREIGN KEY (parent_id) REFERENCES purge_parents (parent_id))",
+    "INSERT INTO purge_parents VALUES (1, 10, 'queued'), (2, 20, 'queued'), (3, 30, 'queued')",
+    "INSERT INTO purge_children VALUES (101, 1)"
+  ],
+  "steps": [
+    {
+      "sql": "DELETE LOW_PRIORITY IGNORE FROM purge_parents WHERE parent_state = 'queued' ORDER BY purge_rank ASC, parent_id ASC LIMIT 2",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT parent_id, purge_rank, parent_state FROM purge_parents ORDER BY parent_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT child_id, parent_id FROM purge_children ORDER BY child_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT COUNT(*) AS remaining_parents, MIN(purge_rank) AS lowest_remaining_rank FROM purge_parents",
+      "ordered": true
+    }
+  ]
+}

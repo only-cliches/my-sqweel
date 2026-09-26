@@ -6272,11 +6272,25 @@ fn cast_warning_inputs(sql: &str) -> Vec<(String, String, bool)> {
 
 fn is_update_ignore_statement(sql: &str) -> bool {
     let mut tokens = sql.split_whitespace();
-    tokens.next().is_some_and(|token| {
-        token.eq_ignore_ascii_case("UPDATE") || token.eq_ignore_ascii_case("DELETE")
-    }) && tokens
-        .next()
-        .is_some_and(|token| token.eq_ignore_ascii_case("IGNORE"))
+    let Some(first) = tokens.next() else {
+        return false;
+    };
+    let Some(second) = tokens.next() else {
+        return false;
+    };
+    if first.eq_ignore_ascii_case("UPDATE") {
+        return second.eq_ignore_ascii_case("IGNORE");
+    }
+    if !first.eq_ignore_ascii_case("DELETE") {
+        return false;
+    }
+    if second.eq_ignore_ascii_case("IGNORE") {
+        return true;
+    }
+    (second.eq_ignore_ascii_case("LOW_PRIORITY") || second.eq_ignore_ascii_case("QUICK"))
+        && tokens
+            .next()
+            .is_some_and(|token| token.eq_ignore_ascii_case("IGNORE"))
 }
 
 pub type SharedEngine = Arc<Engine>;
