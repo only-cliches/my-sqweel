@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "ipv4_mapping_predicate_audit_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "ipv4_mapping_predicate_audit",
+    "source": {
+      "kind": "github",
+      "repository": "actiontech/dble-test-suite",
+      "commit": "19c95415de567f6b32072be7c501ec1db83c4e1f",
+      "path": "behave_dble/sqls/sqls_util/syntax/union.sql",
+      "url": "https://github.com/actiontech/dble-test-suite/blob/19c95415de567f6b32072be7c501ec1db83c4e1f/behave_dble/sqls/sqls_util/syntax/union.sql",
+      "sha256": "49778e42bc0f56f6ae4e24949f8ade2aaca618237dc95e03faba50ecce0ade63",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "behave_dble/sqls/sqls_util/syntax/union.sql:297",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A scalar probe applies IS_IPV4_MAPPED to an INET6_ATON-produced IPv4-mapped address.",
+      "mysql_mariadb_translation": "Reduced from the address-family audit to one fixed mapped IPv6 literal and direct integer predicate projections, removing table rows, invalid inputs, and the broader classification report while retaining the original function composition.",
+      "independently_authored": true
+    }
+  },
+  "features": [
+    "is-ipv4-compat",
+    "is-ipv4-mapped",
+    "inet6-aton",
+    "minimized-regression",
+    "deterministic-order"
+  ],
+  "fixture_notes": "One mapped IPv6 address isolates both predicate results and integer metadata after the original mismatch exposed unsupported functions.",
+  "determinism_notes": "The single fixed address and primary-key ordering are deterministic; there are no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE mini_address_family (address_id INT PRIMARY KEY, address_text VARCHAR(64) NOT NULL)",
+    "INSERT INTO mini_address_family VALUES (1501, '::ffff:192.0.2.44')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT address_id, IS_IPV4_COMPAT(INET6_ATON(address_text)) AS compat_flag, IS_IPV4_MAPPED(INET6_ATON(address_text)) AS mapped_flag FROM mini_address_family ORDER BY address_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}

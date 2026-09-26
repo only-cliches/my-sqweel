@@ -330,6 +330,41 @@ pub(super) fn eval_is_ipv6_value(value: Value) -> Result<Value> {
             )) as u8,
     )))
 }
+pub(super) fn eval_is_ipv4_compat(
+    value_arg: Option<&String>,
+    data: &Map<String, Value>,
+    last_insert_id: u64,
+) -> Result<Value> {
+    eval_is_ipv4_compat_value(eval_arg(value_arg, data, last_insert_id)?)
+}
+
+pub(super) fn eval_is_ipv4_compat_value(value: Value) -> Result<Value> {
+    Ok(Value::Number(Number::from(
+        binary_value_bytes(&value).is_some_and(|bytes| {
+            bytes.len() == 16
+                && bytes[..12].iter().all(|byte| *byte == 0)
+                && bytes[12..].iter().any(|byte| *byte != 0)
+        }) as u8,
+    )))
+}
+
+pub(super) fn eval_is_ipv4_mapped(
+    value_arg: Option<&String>,
+    data: &Map<String, Value>,
+    last_insert_id: u64,
+) -> Result<Value> {
+    eval_is_ipv4_mapped_value(eval_arg(value_arg, data, last_insert_id)?)
+}
+
+pub(super) fn eval_is_ipv4_mapped_value(value: Value) -> Result<Value> {
+    Ok(Value::Number(Number::from(
+        binary_value_bytes(&value).is_some_and(|bytes| {
+            bytes.len() == 16
+                && bytes[..10].iter().all(|byte| *byte == 0)
+                && bytes[10..12] == [0xff, 0xff]
+        }) as u8,
+    )))
+}
 
 pub(super) fn eval_inet_aton(
     value_arg: Option<&String>,

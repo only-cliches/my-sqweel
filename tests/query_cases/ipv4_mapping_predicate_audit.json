@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "ipv4_mapping_predicate_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "actiontech/dble-test-suite",
+      "commit": "19c95415de567f6b32072be7c501ec1db83c4e1f",
+      "path": "behave_dble/sqls/sqls_util/syntax/union.sql",
+      "url": "https://github.com/actiontech/dble-test-suite/blob/19c95415de567f6b32072be7c501ec1db83c4e1f/behave_dble/sqls/sqls_util/syntax/union.sql",
+      "sha256": "49778e42bc0f56f6ae4e24949f8ade2aaca618237dc95e03faba50ecce0ade63",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "behave_dble/sqls/sqls_util/syntax/union.sql:294-298",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL compatibility query applies IS_IPV4_COMPAT and IS_IPV4_MAPPED to binary IPv6 values produced by INET6_ATON.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored address-family audit. Fixed text addresses are converted with INET6_ATON and classified as IPv4-compatible, IPv4-mapped, or ordinary IPv6; invalid and NULL inputs verify the surrounding CASE and NULL behavior. The source UNION wrapper, schema, values, and test-suite context are not copied.",
+      "independently_authored": true
+    }
+  },
+  "features": [
+    "is-ipv4-compat",
+    "is-ipv4-mapped",
+    "inet6-aton",
+    "address-family-classification",
+    "null-propagation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Rows 1401 and 1402 use IPv4-compatible and IPv4-mapped IPv6 forms, row 1403 is ordinary IPv6, row 1404 is IPv4 text, row 1405 is malformed, and row 1406 is SQL NULL. MariaDB predicate results over INET6_ATON outputs define the classification contract.",
+  "determinism_notes": "Address IDs and text values are fixed and the final report is ordered by primary key. There are no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE address_family_audit (address_id INT PRIMARY KEY, address_text VARCHAR(64) NULL)",
+    "INSERT INTO address_family_audit VALUES (1401, '::192.0.2.44'), (1402, '::ffff:192.0.2.44'), (1403, '2001:db8::44'), (1404, '192.0.2.44'), (1405, '::ffff:192.0.2.zz'), (1406, NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT address_id, address_text, IS_IPV4_COMPAT(INET6_ATON(address_text)) AS compat_flag, IS_IPV4_MAPPED(INET6_ATON(address_text)) AS mapped_flag FROM address_family_audit ORDER BY address_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}

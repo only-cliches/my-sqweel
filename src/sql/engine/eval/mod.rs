@@ -3728,6 +3728,22 @@ where
                 .unwrap_or(Value::Null);
             eval_is_ipv6_value(value)
         })()),
+        "IS_IPV4_COMPAT" => Some((|| {
+            let value = args
+                .first()
+                .map(eval_arg)
+                .transpose()?
+                .unwrap_or(Value::Null);
+            eval_is_ipv4_compat_value(value)
+        })()),
+        "IS_IPV4_MAPPED" => Some((|| {
+            let value = args
+                .first()
+                .map(eval_arg)
+                .transpose()?
+                .unwrap_or(Value::Null);
+            eval_is_ipv4_mapped_value(value)
+        })()),
 
         "INET_ATON" => Some((|| {
             let value = args
@@ -4253,6 +4269,8 @@ pub(super) fn eval_function_text(
             eval_regexp_replace_values(&values)
         }
         "IS_IPV4" => eval_is_ipv4(args.first(), data, last_insert_id),
+        "IS_IPV4_COMPAT" => eval_is_ipv4_compat(args.first(), data, last_insert_id),
+        "IS_IPV4_MAPPED" => eval_is_ipv4_mapped(args.first(), data, last_insert_id),
         "INET_NTOA" => eval_inet_ntoa(args.first(), data, last_insert_id),
         "REGEXP_SUBSTR" => {
             let values = args
