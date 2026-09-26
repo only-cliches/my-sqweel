@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "ignore_index_for_join_dispatch",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "linq2db/linq2db.baselines",
+      "commit": "f38d2d2c6b90da0f0dbcf48e6f7bfb617dd6fde4",
+      "path": "MariaDB.11/Tests/Extensions/MySqlTests/Tests.Extensions.MySqlTests.IndexHintIgnoreIndexForJoinTest(MariaDB.11).sql",
+      "url": "https://github.com/linq2db/linq2db.baselines/blob/f38d2d2c6b90da0f0dbcf48e6f7bfb617dd6fde4/MariaDB.11/Tests/Extensions/MySqlTests/Tests.Extensions.MySqlTests.IndexHintIgnoreIndexForJoinTest%28MariaDB.11%29.sql",
+      "sha256": "cc6b307914beba6b62d9c654b114598b678737918ab7db086476df61bacda7e5",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "IndexHintIgnoreIndexForJoinTest(MariaDB.11).sql:6",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL/MariaDB join relation excludes multiple named indexes with IGNORE INDEX FOR JOIN while participating in a joined read.",
+      "mysql_mariadb_translation": "Reauthored as a dispatch report joining route and parcel tables. Each relation excludes its join-purpose indexes, filters active routes, and returns deterministic parcel rows. The source schema, aliases, rows, and application context are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "ignore-index-for-join",
+    "multiple-index-exclusions",
+    "inner-join",
+    "filtered-select",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Routes 601 and 602 are active and each contributes parcels; route 603 is inactive and must be filtered before joining. Both joined relations exclude their join-purpose indexes without changing result semantics.",
+  "determinism_notes": "Route and parcel IDs are fixed, both excluded indexes exist, and the final result has a unique parcel-ID ordering. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE dispatch_ignore_join_routes (route_id INT PRIMARY KEY, route_state VARCHAR(12) NOT NULL, zone_code VARCHAR(12) NOT NULL, INDEX idx_ignore_join_route_zone (zone_code))",
+    "CREATE TABLE dispatch_ignore_join_parcels (parcel_id INT PRIMARY KEY, route_id INT NOT NULL, parcel_label VARCHAR(32) NOT NULL, INDEX idx_ignore_join_parcel_route (route_id))",
+    "INSERT INTO dispatch_ignore_join_routes VALUES (601, 'active', 'north'), (602, 'active', 'south'), (603, 'paused', 'west')",
+    "INSERT INTO dispatch_ignore_join_parcels VALUES (701, 601, 'crate-A'), (702, 602, 'crate-B'), (703, 603, 'crate-C')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT r.route_id, r.zone_code, p.parcel_id, p.parcel_label FROM dispatch_ignore_join_routes AS r IGNORE INDEX FOR JOIN (idx_ignore_join_route_zone) INNER JOIN dispatch_ignore_join_parcels AS p IGNORE INDEX FOR JOIN (idx_ignore_join_parcel_route) ON p.route_id = r.route_id WHERE r.route_state = 'active' ORDER BY p.parcel_id",
+      "ordered": true
+    }
+  ]
+}
