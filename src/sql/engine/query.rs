@@ -1627,6 +1627,9 @@ impl RawEngine {
                 };
                 metadata = ColumnMetadata::from_declared(output_name, "", &hint);
             }
+            Expr::Collate { expr, .. } => {
+                metadata = self.expression_metadata(select, expr, output_name, first_row);
+            }
             Expr::Extract { .. } => {
                 metadata.column_type = MysqlColumnType::Integer;
             }
@@ -3704,6 +3707,7 @@ impl RawEngine {
                 | Expr::TypedString { .. }
                 | Expr::IntroducedString { .. }
                 | Expr::Convert { .. }
+                | Expr::Collate { .. }
         ) && let Some(value) = data.get(&projection_expr_column_name(expr))
         {
             return Ok(value.clone());
@@ -3786,6 +3790,10 @@ impl RawEngine {
                     .map(|row| projected_row_value(row, &result.columns))
                     .collect();
                 eval_quantified_values(left, compare_op, candidates, true)
+            }
+            Expr::Collate { expr, collation } => {
+                let value = self.eval_expr_ctx(expr, data, last_insert_id)?;
+                Ok(eval::apply_collation(value, &collation.to_string()))
             }
             Expr::Nested(expr) => self.eval_expr_ctx(expr, data, last_insert_id),
             Expr::UnaryOp { op, expr } if op.to_string() == "-" => {
@@ -8205,6 +8213,7 @@ fn validate_expr_columns(expr: &Expr, scope: &ColumnScope) -> Result<()> {
         | Expr::IsNotNull(expr)
         | Expr::IsUnknown(expr)
         | Expr::IsNotUnknown(expr)
+        | Expr::Collate { expr, .. }
         | Expr::Cast { expr, .. }
         | Expr::Extract { expr, .. }
         | Expr::Ceil { expr, .. }

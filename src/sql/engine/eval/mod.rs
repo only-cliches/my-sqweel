@@ -2345,6 +2345,23 @@ pub(super) fn mysql_eq(left: &Value, right: &Value) -> bool {
     mysql_cmp_non_null(left, right) == Ordering::Equal
 }
 
+pub(super) fn apply_collation(value: Value, collation: &str) -> Value {
+    if value == Value::Null {
+        return Value::Null;
+    }
+    let collation = collation.trim_matches('`').to_ascii_lowercase();
+    if !collation.ends_with("_bin") {
+        return value;
+    }
+    let text = json_scalar_to_string(&value);
+    let encoded = text
+        .as_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    Value::String(format!("{MYSQL_BINARY_SENTINEL}{encoded}"))
+}
+
 fn binary_display_value(value: &str) -> Option<String> {
     let hex = value.strip_prefix(MYSQL_BINARY_SENTINEL)?;
     let bytes = hex
@@ -2397,7 +2414,11 @@ fn mysql_cmp_non_null(left: &Value, right: &Value) -> Ordering {
             } else {
                 right.trim_end_matches(' ').to_string()
             };
-            left.to_lowercase().cmp(&right.to_lowercase())
+            if left_binary || right_binary {
+                left.cmp(&right)
+            } else {
+                left.to_lowercase().cmp(&right.to_lowercase())
+            }
         }
         (Value::Number(_), Value::Number(_))
         | (Value::Number(_), Value::String(_))
@@ -2951,15 +2972,14 @@ pub(super) fn eval_expr(
     }
     if !matches!(
         expr,
-        Expr::Value(_) | Expr::TypedString { .. } | Expr::IntroducedString { .. }
+        Expr::Value(_)
+            | Expr::TypedString { .. }
+            | Expr::IntroducedString { .. }
+            | Expr::Collate { .. }
     ) && let Some(value) = data.get(&projection_expr_column_name(expr))
     {
         return Ok(value.clone());
     }
-    if let Some(value) = system_variable_expr_value(expr) {
-        return Ok(value);
-    }
-
     match expr {
         Expr::Value(v) => sql_value_to_json(v),
         Expr::TypedString { value, .. } => Ok(Value::String(value.clone())),
@@ -2971,6 +2991,10 @@ pub(super) fn eval_expr(
             .map(Value::Array),
         Expr::Identifier(_) | Expr::CompoundIdentifier(_) => expr_field_value(expr, data),
         Expr::Nested(expr) => eval_expr(expr, data, last_insert_id),
+        Expr::Collate { expr, collation } => {
+            let value = eval_expr(expr, data, last_insert_id)?;
+            Ok(apply_collation(value, &collation.to_string()))
+        }
         Expr::UnaryOp { op, expr } if op.to_string() == "-" => {
             let value = eval_expr(expr, data, last_insert_id)?;
             if value == Value::Null {

@@ -165,6 +165,7 @@ impl Visitor for SupportValidator {
             | Expr::UnaryOp { .. }
             | Expr::Convert { .. }
             | Expr::Cast { .. }
+            | Expr::Collate { .. }
             | Expr::Extract { .. }
             | Expr::Ceil { .. }
             | Expr::Floor { .. }

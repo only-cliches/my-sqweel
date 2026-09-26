@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "explicit_collation_label_filter",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "writeas/htmlhouse",
+      "commit": "31a919f8b7fd000fbb1d8e91bad9a62313045852",
+      "path": "init.sql",
+      "url": "https://github.com/writeas/htmlhouse/blob/31a919f8b7fd000fbb1d8e91bad9a62313045852/init.sql",
+      "sha256": "c0c47b2375b971a32733a1d2925e0c8cfd62efbda160baba39b4b32972cc1fe1",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "init.sql:2-21",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB schema declares UTF-8 text columns and tables with the explicit utf8mb4_bin collation so stored text comparisons use binary code-point ordering rather than the default case-insensitive collation.",
+      "mysql_mariadb_translation": "Reauthored as an independent label-comparison report. The table keeps a case-insensitive default collation, while each projection applies explicit utf8mb4_bin and utf8mb4_general_ci collations to the same nullable labels so binary and folded equality can be compared side by side; the source tables, columns, values, and HTML-house context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "explicit-collation",
+    "binary-text-comparison",
+    "case-insensitive-text-comparison",
+    "null-propagation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Labels 201-203 differ only by case, label 204 is unrelated, and label 205 is NULL. utf8mb4_bin must match only the exact-case Alpha row; utf8mb4_general_ci must match all three case variants and preserve NULL as SQL NULL.",
+  "determinism_notes": "Label IDs and text literals are fixed, both collations are explicit, and the result is ordered by the unique label ID with no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE collation_labels (label_id INT PRIMARY KEY, label_text VARCHAR(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NULL)",
+    "INSERT INTO collation_labels VALUES (201, 'Alpha'), (202, 'alpha'), (203, 'ALPHA'), (204, 'Beta'), (205, NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT label_id, label_text, label_text COLLATE utf8mb4_bin = 'Alpha' AS binary_match, label_text COLLATE utf8mb4_general_ci = 'Alpha' AS folded_match FROM collation_labels ORDER BY label_id",
+      "ordered": true
+    }
+  ]
+}

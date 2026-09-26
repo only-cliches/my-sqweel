@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "explicit_collation_label_filter_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "explicit_collation_label_filter",
+    "source": {
+      "kind": "github",
+      "repository": "writeas/htmlhouse",
+      "commit": "31a919f8b7fd000fbb1d8e91bad9a62313045852",
+      "path": "init.sql",
+      "url": "https://github.com/writeas/htmlhouse/blob/31a919f8b7fd000fbb1d8e91bad9a62313045852/init.sql",
+      "sha256": "c0c47b2375b971a32733a1d2925e0c8cfd62efbda160baba39b4b32972cc1fe1",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "init.sql:2-21",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A text expression with an explicit binary collation must compare case-sensitively against a string literal.",
+      "mysql_mariadb_translation": "Reduced independently to one UTF-8 label row and one utf8mb4_bin equality projection; the source schema, values, and application context are removed while the collation-sensitive comparison remains observable."
+    },
+    "independently_authored": true,
+    "minimized_from": "explicit_collation_label_filter"
+  },
+  "features": [
+    "explicit-binary-collation",
+    "case-sensitive-equality",
+    "minimized-regression"
+  ],
+  "fixture_notes": "The stored lowercase label must not equal the differently cased Alpha literal under utf8mb4_bin; this isolates the original mismatch from the case-folded comparison and multiple rows.",
+  "determinism_notes": "One fixed label and one fixed literal make the comparison deterministic with no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE mini_collation_labels (label_id INT PRIMARY KEY, label_text VARCHAR(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL)",
+    "INSERT INTO mini_collation_labels VALUES (301, 'alpha')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT label_text COLLATE utf8mb4_bin = 'Alpha' AS binary_match FROM mini_collation_labels",
+      "ordered": true
+    }
+  ]
+}
