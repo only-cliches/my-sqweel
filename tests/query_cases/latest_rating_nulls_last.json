@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "latest_rating_nulls_last",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "odota/core",
+      "commit": "7b4256f34dc7e59177d717de428f8e73d4cb603d",
+      "path": "sql/leaderboard.sql",
+      "url": "https://github.com/odota/core/blob/7b4256f34dc7e59177d717de428f8e73d4cb603d/sql/leaderboard.sql",
+      "sha256": "f559abd201a77d9dc7beb9ff13ccc34111b4869942a6fabc205431bcb455d488",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/leaderboard.sql:1-12",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A leaderboard joins each entity to its latest per-entity rating and orders the resulting ranks with NULL values last.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored service leaderboard. A derived MAX timestamp selects each player's latest rating, then a boolean NULL-order key followed by descending rating and player ID implements the source's NULLS LAST ordering in MariaDB-compatible SQL. The source schema, names, values, and game context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "latest-per-group",
+    "derived-aggregate",
+    "inner-join",
+    "nulls-last-ordering",
+    "deterministic-tie-order",
+    "dml-final-state"
+  ],
+  "fixture_notes": "Player 301 has an older high rating and a newer 1800 rating, player 302's latest rating is NULL, and player 303 has the highest current rating. The NULL latest rating must sort after numeric ratings while the latest timestamp prevents the older value from appearing.",
+  "determinism_notes": "Player IDs, rating timestamps, values, and ordering keys are fixed; the report uses no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE service_players (player_id INT PRIMARY KEY, player_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE service_ratings (rating_id INT PRIMARY KEY, player_id INT NOT NULL, rated_at DATETIME NOT NULL, rating INT NULL)",
+    "INSERT INTO service_players (player_id, player_name) VALUES (301, 'Aster'), (302, 'Beryl'), (303, 'Cobalt')",
+    "INSERT INTO service_ratings (rating_id, player_id, rated_at, rating) VALUES (1, 301, '2026-01-01 08:00:00', 2100), (2, 301, '2026-02-01 08:00:00', 1800), (3, 302, '2026-01-15 08:00:00', 1700), (4, 302, '2026-02-15 08:00:00', NULL), (5, 303, '2026-02-10 08:00:00', 2200)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT p.player_id, p.player_name, r.rating, r.rated_at FROM service_ratings r INNER JOIN (SELECT player_id, MAX(rated_at) AS rated_at FROM service_ratings GROUP BY player_id) latest ON latest.player_id = r.player_id AND latest.rated_at = r.rated_at INNER JOIN service_players p ON p.player_id = r.player_id ORDER BY (r.rating IS NULL), r.rating DESC, p.player_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
