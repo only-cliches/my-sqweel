@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "id": "cte_window_delta_update",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "tomswartz07/covid19-pennsylvania",
+      "commit": "f2151735c849a5e3e551766e67fbaeab6f6dbee0",
+      "path": "daily-update.sql",
+      "url": "https://github.com/tomswartz07/covid19-pennsylvania/blob/f2151735c849a5e3e551766e67fbaeab6f6dbee0/daily-update.sql",
+      "sha256": "337226a33c9de5111d6f23aaca0e68cd2ebab4de8b1021ae50ee8333b62d09a4",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "daily-update.sql:L12-L19",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A CTE computes a row-to-row delta with LAG over an ordered series, then an UPDATE joins that derived result back to fill only missing target values.",
+      "mysql_mariadb_translation": "Reauthored as a sensor-total backfill. MariaDB's compatible derived relation computes daily deltas with LAG, and a joined UPDATE fills only missing deltas after the initial reading while preserving a precomputed checkpoint. The PostgreSQL CTE wrapper, casts, schema names, source rows, and domain labels are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "derived-window-update",
+    "lag-window",
+    "update-join",
+    "null-guard",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Reading 1 has no prior row and remains NULL; readings 2 and 3 receive deltas 30 and 26; reading 4 already has a checkpoint delta and must remain 77 despite the computed value 44.",
+  "determinism_notes": "Reading dates, totals, IDs, and final ordering are fixed. The derived window relation and update use one connection with no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE sensor_totals (reading_id INT PRIMARY KEY, reading_day DATE NOT NULL, observed_total INT NOT NULL, daily_delta INT NULL)",
+    "INSERT INTO sensor_totals VALUES (1, '2026-04-01', 100, NULL), (2, '2026-04-02', 130, NULL), (3, '2026-04-03', 156, NULL), (4, '2026-04-04', 200, 77)"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE sensor_totals AS target JOIN (SELECT reading_id, observed_total - LAG(observed_total) OVER (ORDER BY reading_day) AS computed_delta FROM sensor_totals) AS source ON source.reading_id = target.reading_id SET target.daily_delta = source.computed_delta WHERE target.reading_id > 1 AND target.daily_delta IS NULL",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT reading_id, reading_day, observed_total, daily_delta FROM sensor_totals ORDER BY reading_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT reading_id, daily_delta FROM sensor_totals WHERE reading_id > 1 ORDER BY reading_id",
+      "ordered": true
+    }
+  ]
+}
