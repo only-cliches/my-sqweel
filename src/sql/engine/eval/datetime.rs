@@ -1101,7 +1101,9 @@ pub(super) fn resolve_mysql_interval(
     let trimmed = raw.trim();
     let body = strip_ascii_prefix(trimmed, "INTERVAL")?.trim();
     let (amount_text, unit_text) = split_interval_amount_and_unit(body)?;
-    if unit_text.trim().eq_ignore_ascii_case("HOUR TO MINUTE") {
+    let is_hour_minute = unit_text.trim().eq_ignore_ascii_case("HOUR TO MINUTE")
+        || unit_text.trim().eq_ignore_ascii_case("HOUR_MINUTE");
+    if is_hour_minute {
         let amount_text = amount_text.trim().trim_matches('\'').trim_matches('"');
         let negative = amount_text.starts_with('-');
         let amount_text = amount_text.trim_start_matches(['+', '-']);
@@ -1167,10 +1169,12 @@ fn split_interval_amount_and_unit(text: &str) -> Option<(&str, &str)> {
     for idx in split_positions.into_iter().rev() {
         let amount = trimmed[..idx].trim();
         let unit = trimmed[idx..].trim();
-        if !amount.is_empty()
-            && (parse_mysql_interval_unit(unit).is_some()
-                || unit.eq_ignore_ascii_case("HOUR TO MINUTE"))
-        {
+        let is_compound =
+            unit.eq_ignore_ascii_case("HOUR TO MINUTE") || unit.eq_ignore_ascii_case("HOUR_MINUTE");
+        let is_simple = !amount.chars().any(char::is_whitespace)
+            && !unit.chars().any(char::is_whitespace)
+            && parse_mysql_interval_unit(unit).is_some();
+        if !amount.is_empty() && (is_simple || is_compound) {
             return Some((amount, unit));
         }
     }
