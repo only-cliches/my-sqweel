@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "id": "insert_ignore_derived_price_refresh",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "chenditc/investment_data",
+      "commit": "b8c129b4d9b838f050eac8b1135111b3b79fc894",
+      "path": "tushare/regular_update.sql",
+      "url": "https://github.com/chenditc/investment_data/blob/b8c129b4d9b838f050eac8b1135111b3b79fc894/tushare/regular_update.sql",
+      "sha256": "7f20840bb2b1ea9623a1281cfaf4e36bed0d241e2aabd3bae7972e2544d725ae",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "tushare/regular_update.sql:L30-L51",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "An INSERT IGNORE loads target rows from a filtered derived source selected after a scalar MAX-date checkpoint, then LEFT JOINs a code-mapping table and computes a rounded adjusted value before insertion.",
+      "mysql_mariadb_translation": "Reauthored as a price-normalization refresh. A derived future-price slice starts after the latest benchmark snapshot, a LEFT JOIN maps source codes and scale factors, ROUND computes normalized cents, and a duplicate target snapshot is ignored while an unmapped source preserves nullable mapping output."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "insert-ignore",
+    "insert-select",
+    "derived-table",
+    "scalar-max-checkpoint",
+    "left-join-mapping",
+    "rounded-arithmetic",
+    "nullable-mapping",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The latest existing BENCH snapshot is 2026-04-02, so the derived source excludes an older raw row. The 2026-04-03 BENCH row conflicts with an existing target key and is ignored; ALT is inserted with rounded scaling; an unmapped source inserts a NULL mapped code and adjusted value. Final rows are ordered by snapshot ID.",
+  "determinism_notes": "All dates, IDs, codes, prices, mapping scales, scalar checkpoint predicates, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE normalized_prices (snapshot_id INT PRIMARY KEY AUTO_INCREMENT, snapshot_day DATE NOT NULL, mapped_code VARCHAR(16) NULL, close_cents INT NOT NULL, adjusted_cents DECIMAL(10,2) NULL, UNIQUE KEY uq_snapshot_code (snapshot_day, mapped_code))",
+    "CREATE TABLE price_code_map (source_code VARCHAR(16) PRIMARY KEY, mapped_code VARCHAR(16) NOT NULL, scale_factor DECIMAL(5,2) NOT NULL)",
+    "CREATE TABLE raw_prices (price_id INT PRIMARY KEY, snapshot_day DATE NOT NULL, source_code VARCHAR(16) NOT NULL, close_cents INT NOT NULL, adjusted_cents DECIMAL(10,2) NOT NULL)",
+    "INSERT INTO normalized_prices (snapshot_id, snapshot_day, mapped_code, close_cents, adjusted_cents) VALUES (1, '2026-04-01', 'BENCH', 1000, 100.00), (2, '2026-04-02', 'BENCH', 1050, 105.00), (3, '2026-04-03', 'BENCH', 1090, 109.00)",
+    "INSERT INTO price_code_map VALUES ('SRC-BENCH', 'BENCH', 1.10), ('SRC-ALT', 'ALT', 0.90)",
+    "INSERT INTO raw_prices VALUES (10, '2026-04-02', 'SRC-BENCH', 1040, 104.00), (11, '2026-04-03', 'SRC-BENCH', 1100, 121.00), (12, '2026-04-03', 'SRC-ALT', 900, 81.00), (13, '2026-04-03', 'SRC-ORPHAN', 700, 70.00)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT IGNORE INTO normalized_prices (snapshot_day, mapped_code, close_cents, adjusted_cents) SELECT future_prices.snapshot_day, code_map.mapped_code, future_prices.close_cents, ROUND(future_prices.adjusted_cents / code_map.scale_factor, 2) FROM (SELECT price_id, snapshot_day, source_code, close_cents, adjusted_cents FROM raw_prices WHERE snapshot_day > (SELECT MAX(snapshot_day) FROM normalized_prices WHERE mapped_code = 'BENCH')) AS future_prices LEFT JOIN price_code_map AS code_map ON future_prices.source_code = code_map.source_code ORDER BY future_prices.price_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT snapshot_id, snapshot_day, mapped_code, close_cents, adjusted_cents FROM normalized_prices ORDER BY snapshot_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT snapshot_id, snapshot_day, mapped_code, close_cents, adjusted_cents FROM normalized_prices ORDER BY snapshot_id",
+      "ordered": true
+    }
+  ]
+}
