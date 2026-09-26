@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "id": "use_index_dispatch_inventory",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "antlr/grammars-v4",
+      "commit": "2c8f74860509c39629ef23451eee670a23d4b280",
+      "path": "sql/mariadb/examples/fast/dml_select.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/2c8f74860509c39629ef23451eee670a23d4b280/sql/mariadb/examples/fast/dml_select.sql",
+      "sha256": "b9128ffb5b50bea79c534bc24a127d9d626fd2d21be8cb0a45deafd8d6c84f79",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/mariadb/examples/fast/dml_select.sql:224-226",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL/MariaDB read names one or more permitted indexes with USE INDEX while applying predicates and deterministic ordering.",
+      "mysql_mariadb_translation": "Reauthored as a dispatch inventory report. USE INDEX selects the state index for an open-bin filter, while a second hinted read names the primary index for deterministic ID ordering. The source schema, rows, aliases, and operational context are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "use-index",
+    "named-index-hint",
+    "primary-index-hint",
+    "filtered-select",
+    "order-by",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Bins 201 and 203 are open and returned by the state-index hinted query; bin 202 is closed. A second query uses the primary-index hint and returns all bins in ID order. Hints must not alter selected rows or ordering.",
+  "determinism_notes": "Bin IDs and states are fixed, both named indexes exist, and every result has an explicit unique ordering. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE dispatch_bins (bin_id INT PRIMARY KEY, bin_state VARCHAR(12) NOT NULL, bin_label VARCHAR(32) NOT NULL, INDEX idx_dispatch_state (bin_state))",
+    "INSERT INTO dispatch_bins VALUES (201, 'open', 'north'), (202, 'closed', 'hold'), (203, 'open', 'south')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT bin_id, bin_label FROM dispatch_bins USE INDEX (idx_dispatch_state) WHERE bin_state = 'open' ORDER BY bin_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT bin_id, bin_state FROM dispatch_bins USE INDEX (PRIMARY) ORDER BY bin_id",
+      "ordered": true
+    }
+  ]
+}
