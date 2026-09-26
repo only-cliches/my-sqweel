@@ -39,7 +39,7 @@
   ],
   "steps": [
     {
-      "sql": "WITH RECURSIVE component_tree AS (SELECT component_id, component_name, parent_component_id, 0 AS depth, CAST(LPAD(component_id, 5, '0') AS CHAR(1000)) AS sort_path, CAST(component_name AS CHAR(1000)) AS breadcrumb FROM project_components WHERE parent_component_id IS NULL UNION ALL SELECT c.component_id, c.component_name, c.parent_component_id, t.depth + 1, CONCAT(t.sort_path, '/', LPAD(c.component_id, 5, '0')), CONCAT(t.breadcrumb, ' / ', c.component_name) FROM project_components c JOIN component_tree t ON c.parent_component_id = t.component_id) SELECT component_id, CONCAT(REPEAT('  ', depth), component_name) AS display_name, depth, breadcrumb FROM component_tree ORDER BY sort_path",
+      "sql": "WITH RECURSIVE component_tree AS (SELECT component_id, component_name, parent_component_id, 0 AS depth, CAST(LPAD(component_id, 5, '0') AS CHAR(1000)) AS sort_path, CAST(component_name AS CHAR(1000)) AS breadcrumb FROM project_components WHERE parent_component_id IS NULL UNION ALL SELECT c.component_id, c.component_name, c.parent_component_id, t.depth + 1, CONCAT(t.sort_path, '/', LPAD(c.component_id, 5, '0')), CONCAT(t.breadcrumb, ' / ', c.component_name) FROM project_components c JOIN component_tree t ON c.parent_component_id = t.component_id) SELECT component_id, CONCAT(REPEAT(CONCAT(' ', ' '), depth), component_name) AS display_name, depth, breadcrumb FROM component_tree ORDER BY sort_path",
       "ordered": true
     }
   ]
