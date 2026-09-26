@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "case_exists_activity_flags_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "case_exists_activity_flags",
+    "source": {
+      "repository": "NemeStats/NemeStats",
+      "commit": "51e7aacc1c118f440c168e0662be8e8ceafb84a1",
+      "path": "SQL/Registered_Users_report.sql",
+      "url": "https://github.com/NemeStats/NemeStats/blob/51e7aacc1c118f440c168e0662be8e8ceafb84a1/SQL/Registered_Users_report.sql",
+      "sha256": "cf0ae38fce880100a8af27ae1ff8358516fbe1c4da81873f52352931ed8a6703",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from case_exists_activity_flags; source SQL/Registered_Users_report.sql:7-17",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A CASE WHEN EXISTS projection returns a numeric flag from a correlated or uncorrelated existence test.",
+      "mysql_mariadb_translation": "Reduced to one fixed activity row and one numeric CASE flag so MariaDB's integer result metadata is isolated from the original joins, date thresholds, and repeated child rows."
+    },
+    "independently_authored": true,
+    "minimized_from": "case_exists_activity_flags"
+  },
+  "features": [
+    "case-when-exists",
+    "integer-metadata",
+    "minimized-regression",
+    "deterministic-order"
+  ],
+  "fixture_notes": "One fixed activity row makes the EXISTS predicate true; the CASE must return the same value and integer metadata as MariaDB.",
+  "determinism_notes": "The single fixed row and scalar query use no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE exists_flag_probe (probe_id INT PRIMARY KEY)",
+    "INSERT INTO exists_flag_probe VALUES (901)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT CASE WHEN EXISTS (SELECT 1 FROM exists_flag_probe) THEN 1 ELSE 0 END AS present_flag",
+      "ordered": true
+    }
+  ]
+}

@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "case_exists_activity_flags",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "repository": "NemeStats/NemeStats",
+      "commit": "51e7aacc1c118f440c168e0662be8e8ceafb84a1",
+      "path": "SQL/Registered_Users_report.sql",
+      "url": "https://github.com/NemeStats/NemeStats/blob/51e7aacc1c118f440c168e0662be8e8ceafb84a1/SQL/Registered_Users_report.sql",
+      "sha256": "cf0ae38fce880100a8af27ae1ff8358516fbe1c4da81873f52352931ed8a6703",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "SQL/Registered_Users_report.sql:1-21",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A parent-and-child report projects several CASE WHEN EXISTS flags, including correlated date thresholds, while LEFT JOINs retain parents and expose repeated child activity rows.",
+      "mysql_mariadb_translation": "Reauthored as a member-program activity report. Correlated EXISTS projections classify ownership, any activity, activity after one week, and activity after one month; LEFT JOINs preserve members without programs and expose deterministic activity rows. SQL Server identifiers and DATEADD syntax are replaced with newly authored MariaDB tables, literals, and DATE_ADD expressions."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "case-when-exists",
+    "correlated-subquery",
+    "left-join",
+    "date-add-threshold",
+    "null-preservation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Member 701 owns a program with activity before and after one week; member 702 owns a program with activity after one week and one month; member 703 owns no program and must remain through the LEFT JOIN with zero flags. Repeated activity rows make the EXISTS flags observable independently of the joined child row.",
+  "determinism_notes": "Member, program, and activity IDs and dates are fixed; output is ordered by member, program, and activity IDs with no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE activity_members (member_id INT PRIMARY KEY, member_name VARCHAR(32) NOT NULL, joined_on DATE NOT NULL)",
+    "CREATE TABLE activity_programs (program_id INT PRIMARY KEY, owner_id INT NOT NULL, created_on DATE NOT NULL, program_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE program_activity (activity_id INT PRIMARY KEY, program_id INT NOT NULL, activity_on DATE NOT NULL, activity_kind VARCHAR(16) NOT NULL)",
+    "INSERT INTO activity_members VALUES (701, 'Ada', '2026-01-01'), (702, 'Bea', '2026-01-05'), (703, 'Cora', '2026-01-10')",
+    "INSERT INTO activity_programs VALUES (801, 701, '2026-01-01', 'North Lab'), (802, 702, '2026-01-10', 'South Lab')",
+    "INSERT INTO program_activity VALUES (901, 801, '2026-01-05', 'draft'), (902, 801, '2026-01-10', 'review'), (903, 802, '2026-01-18', 'review'), (904, 802, '2026-02-20', 'launch')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT m.member_id, p.program_id, a.activity_id, CASE WHEN EXISTS (SELECT 1 FROM activity_programs owned WHERE owned.owner_id = m.member_id) THEN 1 ELSE 0 END AS owns_program, CASE WHEN EXISTS (SELECT 1 FROM program_activity any_activity WHERE any_activity.program_id = p.program_id) THEN 1 ELSE 0 END AS has_activity, CASE WHEN EXISTS (SELECT 1 FROM program_activity weekly_activity WHERE weekly_activity.program_id = p.program_id AND weekly_activity.activity_on > DATE_ADD(p.created_on, INTERVAL 7 DAY)) THEN 1 ELSE 0 END AS active_after_week, CASE WHEN EXISTS (SELECT 1 FROM program_activity monthly_activity WHERE monthly_activity.program_id = p.program_id AND monthly_activity.activity_on > DATE_ADD(p.created_on, INTERVAL 1 MONTH)) THEN 1 ELSE 0 END AS active_after_month FROM activity_members m LEFT JOIN activity_programs p ON p.owner_id = m.member_id LEFT JOIN program_activity a ON a.program_id = p.program_id ORDER BY m.member_id, p.program_id, a.activity_id",
+      "ordered": true
+    }
+  ]
+}

@@ -1604,7 +1604,13 @@ impl RawEngine {
                         .max()
                         .unwrap_or_default();
                     metadata.column_type = match rank {
-                        1 => MysqlColumnType::BigInt,
+                        1 if branch_metadata
+                            .iter()
+                            .any(|branch| branch.column_type == MysqlColumnType::BigInt) =>
+                        {
+                            MysqlColumnType::BigInt
+                        }
+                        1 => MysqlColumnType::Integer,
                         2 => MysqlColumnType::Decimal,
                         3 => MysqlColumnType::Double,
                         _ => metadata.column_type,
