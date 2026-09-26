@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "use_index_for_order_dispatch",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "linq2db/linq2db.baselines",
+      "commit": "f38d2d2c6b90da0f0dbcf48e6f7bfb617dd6fde4",
+      "path": "MySql.8.0/Tests/Extensions/MySqlTests/Tests.Extensions.MySqlTests.IndexHintUseIndexForOrderByTest(MySql.8.0).sql",
+      "url": "https://github.com/linq2db/linq2db.baselines/blob/f38d2d2c6b90da0f0dbcf48e6f7bfb617dd6fde4/MySql.8.0/Tests/Extensions/MySqlTests/Tests.Extensions.MySqlTests.IndexHintUseIndexForOrderByTest%28MySql.8.0%29.sql",
+      "sha256": "b08a0ec5334941f0ee7ec5d1cf7185ee20527e677c744a2de2b314f81e03aebd",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "IndexHintUseIndexForOrderByTest(MySql.8.0).sql:6",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL read names multiple permitted indexes with USE INDEX FOR ORDER BY while producing an ordered result.",
+      "mysql_mariadb_translation": "Reauthored as a dispatch parcel listing. USE INDEX FOR ORDER BY names the label and priority indexes for a filtered parcel read, with a unique parcel-ID tie breaker. The source schema, aliases, rows, and application context are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "use-index-for-order-by",
+    "multiple-order-index-hints",
+    "filtered-select",
+    "order-by",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Active parcels 1001 and 1003 are returned in priority-descending, label-ascending, ID order; inactive parcel 1002 is filtered. The order-by hint must not change the result ordering or filtering.",
+  "determinism_notes": "Parcel IDs, priorities, labels, and states are fixed, both hinted indexes exist, and the ORDER BY list is unique. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE dispatch_order_parcels (parcel_id INT PRIMARY KEY, parcel_state VARCHAR(12) NOT NULL, priority INT NOT NULL, parcel_label VARCHAR(32) NOT NULL, INDEX idx_order_label (parcel_label), INDEX idx_order_priority (priority))",
+    "INSERT INTO dispatch_order_parcels VALUES (1001, 'active', 7, 'beta'), (1002, 'inactive', 9, 'alpha'), (1003, 'active', 7, 'alpha')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT parcel_id, priority, parcel_label FROM dispatch_order_parcels USE INDEX FOR ORDER BY (idx_order_label, idx_order_priority) WHERE parcel_state = 'active' ORDER BY priority DESC, parcel_label ASC, parcel_id ASC",
+      "ordered": true
+    }
+  ]
+}
