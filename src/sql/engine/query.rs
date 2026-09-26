@@ -22,7 +22,7 @@ impl RawEngine {
         let fetch = query.fetch;
 
         let result_columns: Vec<String>;
-        let result_metadata: Vec<ColumnMetadata>;
+        let mut result_metadata: Vec<ColumnMetadata>;
         let mut rows = match &*query.body {
             SetExpr::Select(select) => {
                 return self.select_from(
@@ -74,6 +74,12 @@ impl RawEngine {
                 }
                 result_columns = left_result.columns.clone();
                 result_metadata = left_result.column_metadata.clone();
+                for (metadata, right_metadata) in result_metadata
+                    .iter_mut()
+                    .zip(&right_result.column_metadata)
+                {
+                    metadata.nullable |= right_metadata.nullable;
+                }
                 let right_rows = right_result
                     .rows
                     .into_iter()
@@ -2625,11 +2631,58 @@ impl RawEngine {
         None
     }
 
+    fn set_operation_column_nullable_at(
+        &self,
+        body: &SetExpr,
+        alias_columns: &[sqlparser::ast::TableAliasColumnDef],
+        index: usize,
+        first_row: Option<&Map<String, Value>>,
+    ) -> bool {
+        match body {
+            SetExpr::Query(query) => {
+                self.set_operation_column_nullable_at(&query.body, alias_columns, index, first_row)
+            }
+            SetExpr::SetOperation { left, right, .. } => {
+                self.set_operation_column_nullable_at(left, alias_columns, index, first_row)
+                    || self.set_operation_column_nullable_at(right, alias_columns, index, first_row)
+            }
+            SetExpr::Select(inner) => {
+                let Some(item) = inner.projection.get(index) else {
+                    return false;
+                };
+                let (expr, mut name) = match item {
+                    SelectItem::UnnamedExpr(expr) => (expr, projection_output_column_name(expr)),
+                    SelectItem::ExprWithAlias { expr, alias } => (expr, alias.value.clone()),
+                    SelectItem::Wildcard(_) | SelectItem::QualifiedWildcard(_, _) => return false,
+                };
+                if let Some(alias) = alias_columns.get(index) {
+                    name = alias.name.value.clone();
+                }
+                self.expression_metadata(inner, expr, name, first_row)
+                    .nullable
+            }
+            _ => false,
+        }
+    }
+
+    fn set_operation_column_nullable(
+        &self,
+        body: &SetExpr,
+        alias_columns: &[sqlparser::ast::TableAliasColumnDef],
+        column: &str,
+        first_row: Option<&Map<String, Value>>,
+    ) -> bool {
+        let Some((_, _, _, index)) = Self::derived_projection(body, alias_columns, column) else {
+            return false;
+        };
+        self.set_operation_column_nullable_at(body, alias_columns, index, first_row)
+    }
+
     fn derived_projection<'a>(
         body: &'a SetExpr,
         alias_columns: &[sqlparser::ast::TableAliasColumnDef],
         column: &str,
-    ) -> Option<(&'a Select, &'a Expr, String)> {
+    ) -> Option<(&'a Select, &'a Expr, String, usize)> {
         match body {
             SetExpr::Query(query) => Self::derived_projection(&query.body, alias_columns, column),
             SetExpr::SetOperation { left, .. } => {
@@ -2648,7 +2701,7 @@ impl RawEngine {
                         inner_name = alias.name.value.clone();
                     }
                     if inner_name.eq_ignore_ascii_case(column) {
-                        return Some((inner, inner_expr, inner_name));
+                        return Some((inner, inner_expr, inner_name, index));
                     }
                 }
                 None
@@ -2745,13 +2798,19 @@ impl RawEngine {
                     metadata.table = alias.name.value.clone();
                     return Some(metadata);
                 }
-                let Some((inner, inner_expr, inner_name)) =
+                let Some((inner, inner_expr, inner_name, _)) =
                     Self::derived_projection(&subquery.body, &alias.columns, column)
                 else {
                     continue;
                 };
                 let mut metadata =
                     self.expression_metadata(inner, inner_expr, inner_name, first_row);
+                metadata.nullable |= self.set_operation_column_nullable(
+                    &subquery.body,
+                    &alias.columns,
+                    column,
+                    first_row,
+                );
                 metadata.table = alias.name.value.clone();
                 return Some(metadata);
             }

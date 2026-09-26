@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "grouping_sets_sales_summary",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Bugrabugra/SQL",
+      "commit": "07305572bf922f34087ad2edc4834f52dfead2f4",
+      "path": "PostgreSQL Tutorial/Section 7. Grouping Sets/7.1 - PostgreSQL GROUPING SETS.sql",
+      "url": "https://github.com/Bugrabugra/SQL/blob/07305572bf922f34087ad2edc4834f52dfead2f4/PostgreSQL%20Tutorial/Section%207.%20Grouping%20Sets/7.1%20-%20PostgreSQL%20GROUPING%20SETS.sql",
+      "sha256": "9153420df053de616879051c34e5c0c1d81e3ee9259f4239fd02b1090940e8ed",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "PostgreSQL Tutorial/Section 7. Grouping Sets/7.1 - PostgreSQL GROUPING SETS.sql:31-58",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A PostgreSQL GROUPING SETS query emits detail rows, each single-dimension subtotal, and a grand total, while GROUPING flags distinguish rolled-up NULL dimensions.",
+      "mysql_mariadb_translation": "Reauthored as a regional sales summary. Four grouped UNION ALL branches implement the detail, region, channel, and grand-total grouping sets; explicit rollup flags replace PostgreSQL GROUPING() and deterministic ordering keeps subtotal rows after their detail groups. The source schema, dimensions, labels, quantities, and reporting context are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "grouping-sets-translation",
+    "multi-level-aggregate",
+    "union-all",
+    "rollup-flags",
+    "null-markers",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Regions North and South each contain multiple channels. The result has four detail rows, two region subtotals, two channel subtotals, and one grand total. Explicit flags distinguish subtotal NULLs from ordinary dimension values and preserve the grouping-set level after MariaDB translation.",
+  "determinism_notes": "Region, channel, sale IDs, quantities, branch constants, and final ordering are fixed; there are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE regional_sales (sale_id INT PRIMARY KEY, region_code VARCHAR(16) NOT NULL, channel_code VARCHAR(16) NOT NULL, quantity INT NOT NULL)",
+    "INSERT INTO regional_sales VALUES (501, 'North', 'Retail', 12), (502, 'North', 'Online', 8), (503, 'South', 'Retail', 15), (504, 'South', 'Online', 5)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH sales_summary AS (SELECT region_code, channel_code, SUM(quantity) AS total_quantity, 0 AS region_rolled_up, 0 AS channel_rolled_up FROM regional_sales GROUP BY region_code, channel_code UNION ALL SELECT region_code, NULL, SUM(quantity), 0, 1 FROM regional_sales GROUP BY region_code UNION ALL SELECT NULL, channel_code, SUM(quantity), 1, 0 FROM regional_sales GROUP BY channel_code UNION ALL SELECT NULL, NULL, SUM(quantity), 1, 1 FROM regional_sales) SELECT region_code, channel_code, total_quantity, region_rolled_up, channel_rolled_up FROM sales_summary ORDER BY region_rolled_up, region_code IS NULL, region_code, channel_rolled_up, channel_code IS NULL, channel_code",
+      "ordered": true
+    }
+  ]
+}

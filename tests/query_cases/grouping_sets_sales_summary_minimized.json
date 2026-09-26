@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "grouping_sets_sales_summary_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "grouping_sets_sales_summary",
+    "source": {
+      "kind": "github",
+      "repository": "Bugrabugra/SQL",
+      "commit": "07305572bf922f34087ad2edc4834f52dfead2f4",
+      "path": "PostgreSQL Tutorial/Section 7. Grouping Sets/7.1 - PostgreSQL GROUPING SETS.sql",
+      "url": "https://github.com/Bugrabugra/SQL/blob/07305572bf922f34087ad2edc4834f52dfead2f4/PostgreSQL%20Tutorial/Section%207.%20Grouping%20Sets/7.1%20-%20PostgreSQL%20GROUPING%20SETS.sql",
+      "sha256": "9153420df053de616879051c34e5c0c1d81e3ee9259f4239fd02b1090940e8ed",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "Minimized from grouping_sets_sales_summary",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A grouped UNION ALL relation introduces NULL subtotal dimensions after a non-NULL detail branch while retaining explicit grouping-level flags.",
+      "mysql_mariadb_translation": "Reduced to one regional detail row and one region subtotal. The two UNION ALL branches isolate nullable set-operation metadata from the other grouping levels and final ordering logic."
+    },
+    "independently_authored": true,
+    "minimized_from": "grouping_sets_sales_summary"
+  },
+  "features": [
+    "grouping-sets-translation",
+    "union-all",
+    "nullable-set-operation-column",
+    "metadata-regression",
+    "minimized-regression"
+  ],
+  "fixture_notes": "The detail branch emits a non-NULL channel, while the subtotal branch emits NULL for that same output column. Both rows must be returned with nullable wire metadata.",
+  "determinism_notes": "One fixed source row and two fixed grouping branches produce deterministic output; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE regional_sales_min (sale_id INT PRIMARY KEY, region_code VARCHAR(16) NOT NULL, channel_code VARCHAR(16) NOT NULL, quantity INT NOT NULL)",
+    "INSERT INTO regional_sales_min VALUES (701, 'North', 'Retail', 12)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH sales_summary AS (SELECT region_code, channel_code, SUM(quantity) AS total_quantity, 0 AS region_rolled_up, 0 AS channel_rolled_up FROM regional_sales_min GROUP BY region_code, channel_code UNION ALL SELECT region_code, NULL, SUM(quantity), 0, 1 FROM regional_sales_min GROUP BY region_code) SELECT region_code, channel_code, total_quantity, region_rolled_up, channel_rolled_up FROM sales_summary ORDER BY region_rolled_up, channel_code IS NULL, channel_code",
+      "ordered": true
+    }
+  ]
+}
