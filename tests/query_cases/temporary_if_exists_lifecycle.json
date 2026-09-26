@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "id": "temporary_if_exists_lifecycle",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "isc-projects/kea",
+      "commit": "7095baa491374b7abf28c3fd9307b0b4c4db8f54",
+      "path": "src/share/database/scripts/mysql/dhcpdb_create.mysql",
+      "url": "https://github.com/isc-projects/kea/blob/7095baa491374b7abf28c3fd9307b0b4c4db8f54/src/share/database/scripts/mysql/dhcpdb_create.mysql",
+      "sha256": "f8c6641394ba249cf5998d7c152fd9f7f7e1762e31b8d0df27c773c0fcca00ae",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "src/share/database/scripts/mysql/dhcpdb_create.mysql:6941-6971",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL database script drops a temporary staging table with IF EXISTS before creating and later cleaning up the staging relation, making repeated setup and teardown safe.",
+      "mysql_mariadb_translation": "Reauthored as a dispatch staging lifecycle. An absent temporary table is dropped idempotently, a temporary aggregate is created from ready source rows, its contents are consumed, and two cleanup drops verify that teardown is safe when repeated. The source procedure, schema, names, and values are not copied.",
+      "independently_authored": true
+    }
+  },
+  "features": [
+    "drop-temporary-table-if-exists",
+    "temporary-table-ctas",
+    "insert-select",
+    "repeated-idempotent-cleanup",
+    "temporary-source-isolation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The initial DROP TEMPORARY TABLE IF EXISTS targets an absent relation and must be a no-op. The staging table contains only ready dispatches; its read verifies materialization before the first cleanup. The second conditional drop targets the already removed relation, while the permanent dispatch source remains unchanged.",
+  "determinism_notes": "Dispatch IDs, states, depot IDs, and parcel counts are fixed; staging output and permanent-source checks are explicitly ordered. There are no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE dispatch_source (dispatch_id INT PRIMARY KEY, depot_id INT NOT NULL, dispatch_state VARCHAR(16) NOT NULL, parcel_count INT NOT NULL)",
+    "INSERT INTO dispatch_source VALUES (101, 10, 'ready', 4), (102, 10, 'held', 99), (201, 20, 'ready', 3), (301, 30, 'delivered', 7)"
+  ],
+  "steps": [
+    {
+      "sql": "DROP TEMPORARY TABLE IF EXISTS dispatch_stage",
+      "ordered": true
+    },
+    {
+      "sql": "CREATE TEMPORARY TABLE dispatch_stage AS SELECT depot_id, SUM(parcel_count) AS ready_parcels FROM dispatch_source WHERE dispatch_state = 'ready' GROUP BY depot_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT depot_id, ready_parcels FROM dispatch_stage ORDER BY depot_id",
+      "ordered": true
+    },
+    {
+      "sql": "DROP TEMPORARY TABLE IF EXISTS dispatch_stage",
+      "ordered": true
+    },
+    {
+      "sql": "DROP TEMPORARY TABLE IF EXISTS dispatch_stage",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT dispatch_id, depot_id, dispatch_state, parcel_count FROM dispatch_source ORDER BY dispatch_id",
+      "ordered": true
+    }
+  ]
+}
