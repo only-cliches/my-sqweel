@@ -230,7 +230,8 @@ fn incoming_value_expr(expr: &Expr, incoming: &Map<String, Value>) -> Result<Opt
         return Ok(Some(Value::Null));
     };
     let column = projection_expr_column_name(expr);
-    Ok(Some(incoming.get(&column).cloned().unwrap_or(Value::Null)))
+    let column = column.rsplit('.').next().unwrap_or(&column);
+    Ok(Some(incoming.get(column).cloned().unwrap_or(Value::Null)))
 }
 
 pub(super) fn assignment_target_name(assignment: &Assignment) -> String {

@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "qualified_values_timestamp_merge_minimized",
+  "provenance": {
+    "kind": "minimized-reproduction",
+    "source_case": "qualified_values_timestamp_merge",
+    "source": {
+      "kind": "github",
+      "repository": "box/Anemometer",
+      "commit": "929f3385e4ecb539890e4d33e8b6aff052688318",
+      "path": "mysql56-save_history.sql",
+      "url": "https://github.com/box/Anemometer/blob/929f3385e4ecb539890e4d33e8b6aff052688318/mysql56-save_history.sql",
+      "sha256": "c10aa2b222a6963a91c70bdee6350736e09f9aafc44008f87527f56cd6175e59",
+      "source_dialect": "mysql-mariadb"
+    },
+    "source_location": "mysql56-save_history.sql:9-12",
+    "source_dialect": "mysql-mariadb",
+    "observed_pattern": "An INSERT ... SELECT upsert merges duplicate-key rows with LEAST and GREATEST while qualifying the incoming VALUES() column references with the target table name.",
+    "mysql_mariadb_translation": "Reduced to one existing metric window, one duplicate batch row, and one merge statement. The new-key path, multiple rows, and application tables are removed while the qualified VALUES() references remain isolated.",
+    "independently_authored": true
+  },
+  "features": [
+    "insert-select",
+    "on-duplicate-key-update",
+    "qualified-values-reference",
+    "least-greatest-merge",
+    "minimized-regression"
+  ],
+  "fixture_notes": "The existing north window must expand from 100..130 to 90..150 using the incoming duplicate row.",
+  "determinism_notes": "The key, bounds, and single merge statement are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE mini_metric_windows (window_key VARCHAR(16) PRIMARY KEY, first_seen INT NOT NULL, last_seen INT NOT NULL)",
+    "CREATE TABLE mini_metric_batch (window_key VARCHAR(16) PRIMARY KEY, first_seen INT NOT NULL, last_seen INT NOT NULL)",
+    "INSERT INTO mini_metric_windows (window_key, first_seen, last_seen) VALUES ('north', 100, 130)",
+    "INSERT INTO mini_metric_batch (window_key, first_seen, last_seen) VALUES ('north', 90, 150)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO mini_metric_windows (window_key, first_seen, last_seen) SELECT window_key, first_seen, last_seen FROM mini_metric_batch ON DUPLICATE KEY UPDATE first_seen = LEAST(VALUES(`mini_metric_windows`.first_seen), mini_metric_windows.first_seen), last_seen = GREATEST(VALUES(`mini_metric_windows`.last_seen), mini_metric_windows.last_seen)",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT window_key, first_seen, last_seen FROM mini_metric_windows ORDER BY window_key",
+      "ordered": true
+    }
+  ]
+}

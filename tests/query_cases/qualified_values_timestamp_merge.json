@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "id": "qualified_values_timestamp_merge",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "box/Anemometer",
+      "commit": "929f3385e4ecb539890e4d33e8b6aff052688318",
+      "path": "mysql56-save_history.sql",
+      "url": "https://github.com/box/Anemometer/blob/929f3385e4ecb539890e4d33e8b6aff052688318/mysql56-save_history.sql",
+      "sha256": "c10aa2b222a6963a91c70bdee6350736e09f9aafc44008f87527f56cd6175e59",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "mysql56-save_history.sql:9-12",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "An INSERT ... SELECT upsert merges duplicate-key rows with LEAST and GREATEST while qualifying the incoming VALUES() column references with the target table name.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored metric-window merge. A batch relation supplies an earlier and later observation for one existing key plus one new key; the duplicate branch keeps the earliest first_seen and latest last_seen using qualified VALUES() references, and a final ordered read verifies both merge and insert behavior. The source performance-schema tables and operational data are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "insert-select",
+    "on-duplicate-key-update",
+    "qualified-values-reference",
+    "least-greatest-merge",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The north window starts at 100 and 130, then receives 90 and 150, so the merged bounds must become 90 and 150. The south window is inserted from the same batch.",
+  "determinism_notes": "Window keys, bounds, and source order are fixed; the final read is ordered by the unique window key with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE metric_windows (window_key VARCHAR(16) PRIMARY KEY, first_seen INT NOT NULL, last_seen INT NOT NULL)",
+    "INSERT INTO metric_windows (window_key, first_seen, last_seen) VALUES ('north', 100, 130)",
+    "CREATE TABLE metric_batch (window_key VARCHAR(16) PRIMARY KEY, first_seen INT NOT NULL, last_seen INT NOT NULL)",
+    "INSERT INTO metric_batch (window_key, first_seen, last_seen) VALUES ('north', 90, 150), ('south', 200, 210)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO metric_windows (window_key, first_seen, last_seen) SELECT window_key, first_seen, last_seen FROM metric_batch ORDER BY window_key ON DUPLICATE KEY UPDATE first_seen = LEAST(VALUES(`metric_windows`.first_seen), metric_windows.first_seen), last_seen = GREATEST(VALUES(`metric_windows`.last_seen), metric_windows.last_seen)",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT window_key, first_seen, last_seen FROM metric_windows ORDER BY window_key",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
