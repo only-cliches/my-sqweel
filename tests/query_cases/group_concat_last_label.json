@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "group_concat_last_label",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "freemed/freemed",
+      "commit": "79efd68d2a919244beeb584f77e8298a42a01a01",
+      "path": "data/schema/mysql/scheduler.sql",
+      "url": "https://github.com/freemed/freemed/blob/79efd68d2a919244beeb584f77e8298a42a01a01/data/schema/mysql/scheduler.sql",
+      "sha256": "c728c8e68d23d69c4eeae2961762231e68244b4f60f0c837a05beeeff2c7d217",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "data/schema/mysql/scheduler.sql:214-215",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped scheduler projection wraps GROUP_CONCAT with SUBSTRING_INDEX using a negative count to select the final concatenated label.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored service-label summary. Fixed service rows are grouped by team, labels are concatenated in deterministic priority order, and SUBSTRING_INDEX with a negative count selects the final label; the schema, rows, aliases, and reporting purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "group-concat",
+    "substring-index",
+    "negative-index",
+    "grouped-aggregation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Team 11 has three labels so negative-index extraction must return the lowest-priority label; team 22 has one label to exercise the single-element boundary; team 33 has no service rows and is absent from the grouped result.",
+  "determinism_notes": "Team IDs, service priorities, labels, aggregate ordering, and final ordering are fixed; labels contain no comma separators, and no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE team_services (service_id INT PRIMARY KEY, team_id INT NOT NULL, service_label VARCHAR(32) NOT NULL, priority INT NOT NULL)",
+    "INSERT INTO team_services VALUES (101, 11, 'api', 30), (102, 11, 'worker', 20), (103, 11, 'web', 10), (201, 22, 'batch', 40)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT team_id, GROUP_CONCAT(service_label ORDER BY priority DESC, service_id ASC SEPARATOR ',') AS ordered_labels, SUBSTRING_INDEX(GROUP_CONCAT(service_label ORDER BY priority DESC, service_id ASC SEPARATOR ','), ',', -1) AS final_label FROM team_services GROUP BY team_id ORDER BY team_id",
+      "ordered": true
+    }
+  ]
+}
