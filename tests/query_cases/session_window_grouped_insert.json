@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "id": "session_window_grouped_insert",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "GZJackCai/ali2015",
+      "commit": "833f650f7faa1d91567207b11f6ac6ce0e423ef3",
+      "path": "data/sql/cart_last_day.sql",
+      "url": "https://github.com/GZJackCai/ali2015/blob/833f650f7faa1d91567207b11f6ac6ce0e423ef3/data/sql/cart_last_day.sql",
+      "sha256": "298d544d00a23ecf4dc06aa3a089c7e654c1153c34933ddb2972d4d39d69e6d2",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "data/sql/cart_last_day.sql:L16-L19",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL INSERT ... SELECT uses session variables as a time-window projection, filters behavior rows inclusively, groups by actor and item dimensions, and stores MIN/MAX event times for each group.",
+      "mysql_mariadb_translation": "Reauthored as a saved-item activity window. Fixed session variables define an inclusive reporting interval, only saved events are inserted, and grouped actor/category/item rows retain first and last saved timestamps while unrelated behavior and out-of-window events are excluded."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "session-user-variables",
+    "grouped-insert-select",
+    "inclusive-datetime-window",
+    "min-max-event-times",
+    "behavior-filter",
+    "deterministic-final-state"
+  ],
+  "fixture_notes": "Events exactly at both window boundaries are included. A viewed event for the same item, an event before the window, and an event after the window are excluded. Repeated saved events collapse into one row with first and last timestamps; separate users and items remain separate groups.",
+  "determinism_notes": "The session variables, event timestamps, identifiers, behavior labels, grouping keys, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE saved_item_windows (window_start DATETIME NOT NULL, window_end DATETIME NOT NULL, user_id INT NOT NULL, category_id INT NOT NULL, item_id INT NOT NULL, first_saved DATETIME NOT NULL, last_saved DATETIME NOT NULL, PRIMARY KEY (window_start, window_end, user_id, item_id))",
+    "CREATE TABLE item_events (event_id INT PRIMARY KEY, event_time DATETIME NOT NULL, user_id INT NOT NULL, category_id INT NOT NULL, item_id INT NOT NULL, behavior VARCHAR(16) NOT NULL)",
+    "SET @window_start = '2026-06-10 09:00:00'",
+    "SET @window_end = '2026-06-10 18:00:00'",
+    "INSERT INTO item_events VALUES (1, '2026-06-10 08:59:59', 7, 10, 100, 'saved'), (2, '2026-06-10 09:00:00', 7, 10, 100, 'saved'), (3, '2026-06-10 10:15:00', 7, 10, 100, 'saved'), (4, '2026-06-10 11:00:00', 7, 10, 100, 'viewed'), (5, '2026-06-10 12:00:00', 7, 10, 200, 'saved'), (6, '2026-06-10 13:30:00', 8, 10, 100, 'saved'), (7, '2026-06-10 18:00:00', 8, 10, 100, 'saved'), (8, '2026-06-10 18:00:01', 8, 10, 100, 'saved')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO saved_item_windows (window_start, window_end, user_id, category_id, item_id, first_saved, last_saved) SELECT @window_start, @window_end, user_id, category_id, item_id, MIN(event_time), MAX(event_time) FROM item_events WHERE event_time BETWEEN @window_start AND @window_end AND behavior = 'saved' GROUP BY user_id, item_id, category_id, behavior ORDER BY user_id, item_id, category_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT window_start, window_end, user_id, category_id, item_id, first_saved, last_saved FROM saved_item_windows ORDER BY user_id, item_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT window_start, window_end, user_id, category_id, item_id, first_saved, last_saved FROM saved_item_windows ORDER BY user_id, item_id",
+      "ordered": true
+    }
+  ]
+}
