@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "use_index_for_join_dispatch",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "linq2db/linq2db.baselines",
+      "commit": "f38d2d2c6b90da0f0dbcf48e6f7bfb617dd6fde4",
+      "path": "MySql.8.0/Tests/Extensions/MySqlTests/Tests.Extensions.MySqlTests.IndexHintUseIndexForJoinTest(MySql.8.0).sql",
+      "url": "https://github.com/linq2db/linq2db.baselines/blob/f38d2d2c6b90da0f0dbcf48e6f7bfb617dd6fde4/MySql.8.0/Tests/Extensions/MySqlTests/Tests.Extensions.MySqlTests.IndexHintUseIndexForJoinTest%28MySql.8.0%29.sql",
+      "sha256": "86a0bfe6159bc3f9c68de9e56c4adafae337bc5cc7b03487fa4c459654208db7",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "IndexHintUseIndexForJoinTest(MySql.8.0).sql:6",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL join relation uses USE INDEX FOR JOIN with multiple named indexes while participating in a joined read.",
+      "mysql_mariadb_translation": "Reauthored as a dispatch report joining route and parcel tables. Each relation names its join-purpose index hint, filters active routes, and returns deterministic parcel rows. The source schema, aliases, rows, and application context are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "use-index-for-join",
+    "multiple-index-hints",
+    "inner-join",
+    "filtered-select",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Routes 401 and 402 are active and each contributes parcels; route 403 is inactive and must be filtered before joining. Both joined relations use explicit join-purpose indexes without changing result semantics.",
+  "determinism_notes": "Route and parcel IDs are fixed, both hinted indexes exist, and the final result has a unique parcel-ID ordering. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE dispatch_join_routes (route_id INT PRIMARY KEY, route_state VARCHAR(12) NOT NULL, zone_code VARCHAR(12) NOT NULL, INDEX idx_join_route_zone (zone_code))",
+    "CREATE TABLE dispatch_join_parcels (parcel_id INT PRIMARY KEY, route_id INT NOT NULL, parcel_label VARCHAR(32) NOT NULL, INDEX idx_join_parcel_route (route_id))",
+    "INSERT INTO dispatch_join_routes VALUES (401, 'active', 'north'), (402, 'active', 'south'), (403, 'paused', 'west')",
+    "INSERT INTO dispatch_join_parcels VALUES (501, 401, 'crate-A'), (502, 402, 'crate-B'), (503, 403, 'crate-C')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT r.route_id, r.zone_code, p.parcel_id, p.parcel_label FROM dispatch_join_routes AS r USE INDEX FOR JOIN (idx_join_route_zone) INNER JOIN dispatch_join_parcels AS p USE INDEX FOR JOIN (idx_join_parcel_route) ON p.route_id = r.route_id WHERE r.route_state = 'active' ORDER BY p.parcel_id",
+      "ordered": true
+    }
+  ]
+}
