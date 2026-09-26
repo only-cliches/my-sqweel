@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "id": "delete_not_in_returning",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Dicklesworthstone/sqlmodel_rust",
+      "commit": "59f85843e2354922e6e8ad9db48617b783eed4b8",
+      "path": "crates/sqlmodel-e2e/golden/sqlite/delete_with_subquery_returning.sql",
+      "url": "https://github.com/Dicklesworthstone/sqlmodel_rust/blob/59f85843e2354922e6e8ad9db48617b783eed4b8/crates/sqlmodel-e2e/golden/sqlite/delete_with_subquery_returning.sql",
+      "sha256": "5e42e9bca844d07086d5c3b189472c3676b5add7c34687c6edfbd771affa4cf9",
+      "source_dialect": "sqlite"
+    },
+    "inspiration": {
+      "source_location": "crates/sqlmodel-e2e/golden/sqlite/delete_with_subquery_returning.sql:3",
+      "source_dialect": "sqlite",
+      "observed_pattern": "A DELETE removes rows whose foreign key is absent from a subquery result and uses RETURNING to expose the deleted rows.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored project-task cleanup. Tasks assigned to teams absent from an active-team relation are deleted and returned with an explicit projection; a NULL team assignment remains because NOT IN evaluates to UNKNOWN when the left operand is NULL. The schema, names, values, and application context are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "delete",
+    "not-in-subquery",
+    "returning",
+    "null-semantics",
+    "deterministic-final-state"
+  ],
+  "fixture_notes": "Task 202 belongs to inactive team 20 and is deleted and returned. Tasks 201 and 203 belong to active teams, while task 204 has a NULL team_id and remains because NOT IN does not match NULL.",
+  "determinism_notes": "Task IDs and team IDs are fixed; the delete RETURNING result is unordered, and the final task read is ordered by task ID. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE active_teams (team_id INT PRIMARY KEY, team_name VARCHAR(24) NOT NULL)",
+    "CREATE TABLE project_tasks (task_id INT PRIMARY KEY, team_id INT NULL, task_label VARCHAR(32) NOT NULL, task_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO active_teams VALUES (10, 'atlas'), (30, 'orion')",
+    "INSERT INTO project_tasks VALUES (201, 10, 'compile-assets', 'queued'), (202, 20, 'retire-worker', 'queued'), (203, 30, 'publish-report', 'ready'), (204, NULL, 'unassigned-review', 'queued')"
+  ],
+  "steps": [
+    {
+      "sql": "DELETE FROM project_tasks WHERE team_id NOT IN (SELECT team_id FROM active_teams) RETURNING task_id, team_id, task_label, task_state",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT task_id, team_id, task_label, task_state FROM project_tasks ORDER BY task_id",
+      "ordered": true
+    }
+  ]
+}
