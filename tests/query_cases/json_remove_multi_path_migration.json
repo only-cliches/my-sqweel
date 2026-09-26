@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "id": "json_remove_multi_path_migration",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "open-metadata/OpenMetadata",
+      "commit": "1d7143035fc1e2e7b33cf732817414f0f5940d9c",
+      "path": "bootstrap/sql/migrations/native/1.4.0/mysql/schemaChanges.sql",
+      "url": "https://github.com/open-metadata/OpenMetadata/blob/1d7143035fc1e2e7b33cf732817414f0f5940d9c/bootstrap/sql/migrations/native/1.4.0/mysql/schemaChanges.sql",
+      "sha256": "e55cdad00a904345327c85fa21b2ec881217c4522b5662c28b46bd42d4a7b60b",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "bootstrap/sql/migrations/native/1.4.0/mysql/schemaChanges.sql:40-44",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL migration removes an obsolete nested JSON field before inserting a replacement nested object or value, preserving the old value through JSON_EXTRACT while changing the document shape.",
+      "mysql_mariadb_translation": "Reauthored as a configuration-schema migration over new service documents. One UPDATE removes three deprecated nested connection paths in a single JSON_REMOVE call, then inserts replacement host, port, and certificate paths from the original document with JSON_INSERT and JSON_EXTRACT; a guard leaves already-modern documents unchanged. The source schema, paths, identifiers, and migration values are not copied.",
+      "independently_authored": true
+    }
+  },
+  "features": [
+    "json-remove",
+    "json-remove-multiple-paths",
+    "json-insert",
+    "json-extract",
+    "json-contains-path",
+    "conditional-update",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Documents 801 and 802 contain the three deprecated connection paths and are migrated; document 803 already uses the modern shape and must remain unchanged. Each migrated document must lose all legacy paths while preserving their values under the new nested paths.",
+  "determinism_notes": "Document IDs, JSON paths, values, and predicates are fixed; final projections are ordered by the primary key. There are no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE service_documents (document_id INT PRIMARY KEY, payload JSON NOT NULL)",
+    "INSERT INTO service_documents VALUES (801, '{\"connection\":{\"legacy_host\":\"edge-a\",\"legacy_port\":443,\"tls\":{\"old_ca\":\"ca-a\"}},\"mode\":\"active\"}'), (802, '{\"connection\":{\"legacy_host\":\"edge-b\",\"legacy_port\":8443,\"tls\":{\"old_ca\":\"ca-b\"}},\"mode\":\"standby\"}'), (803, '{\"connection\":{\"host\":\"edge-modern\",\"port\":9443,\"tls\":{\"ca\":\"ca-modern\"}},\"mode\":\"active\"}')"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE service_documents SET payload = JSON_INSERT(JSON_REMOVE(payload, '$.connection.legacy_host', '$.connection.legacy_port', '$.connection.tls.old_ca'), '$.connection.host', JSON_EXTRACT(payload, '$.connection.legacy_host'), '$.connection.port', JSON_EXTRACT(payload, '$.connection.legacy_port'), '$.connection.tls.ca', JSON_EXTRACT(payload, '$.connection.tls.old_ca')) WHERE JSON_CONTAINS_PATH(payload, 'all', '$.connection.legacy_host', '$.connection.legacy_port', '$.connection.tls.old_ca')",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT document_id, JSON_CONTAINS_PATH(payload, 'one', '$.connection.legacy_host', '$.connection.legacy_port', '$.connection.tls.old_ca') AS has_legacy, JSON_UNQUOTE(JSON_EXTRACT(payload, '$.connection.host')) AS host, JSON_UNQUOTE(JSON_EXTRACT(payload, '$.connection.port')) AS port, JSON_UNQUOTE(JSON_EXTRACT(payload, '$.connection.tls.ca')) AS ca, JSON_UNQUOTE(JSON_EXTRACT(payload, '$.mode')) AS mode FROM service_documents ORDER BY document_id",
+      "ordered": true
+    }
+  ]
+}
