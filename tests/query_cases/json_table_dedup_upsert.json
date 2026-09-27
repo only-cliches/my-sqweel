@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "id": "json_table_dedup_upsert",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "open-metadata/OpenMetadata",
+      "commit": "f2eaa4a75c524f821278ec38f385ac264312a227",
+      "path": "bootstrap/sql/migrations/native/2.0.0/mysql/postDataMigrationSQLScript.sql",
+      "url": "https://github.com/open-metadata/OpenMetadata/blob/f2eaa4a75c524f821278ec38f385ac264312a227/bootstrap/sql/migrations/native/2.0.0/mysql/postDataMigrationSQLScript.sql",
+      "sha256": "37b704fd06918132be606efe944cd345b9c3bbf3fd10d672701faf7923dc54db",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "postDataMigrationSQLScript.sql:319-327",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL migration materializes a JSON_TABLE expansion as a joined relational source rather than relying on a correlated JSON_TABLE EXISTS predicate while updating related rows.",
+      "mysql_mariadb_translation": "Reauthored as a catalog-label loader. A correlated JSON_TABLE expansion supplies labels to an INSERT SELECT, a NOT EXISTS guard preserves an existing label, and ON DUPLICATE KEY UPDATE makes repeated labels idempotent while new products receive their labels; the migration tables, JSON paths, names, values, and application workflow are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "json-table",
+    "correlated-json-expansion",
+    "insert-select",
+    "not-exists-guard",
+    "on-duplicate-key-update",
+    "duplicate-source-row",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Product 1001 already has a featured label, so that label remains legacy while the repeated sale labels collapse to one active row through the unique key. Product 1002 receives its new label, product 1003 has no labels, and orphan label 1004 remains untouched.",
+  "determinism_notes": "Product IDs, JSON arrays, target labels, unique keys, source ordering, and final ordering are fixed. The statements run sequentially on one connection with no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE catalog_payloads (product_id INT PRIMARY KEY, product_name VARCHAR(32) NOT NULL, payload JSON NOT NULL)",
+    "INSERT INTO catalog_payloads VALUES (1001, 'Aster', '{\"labels\":[\"featured\",\"sale\",\"sale\"]}'), (1002, 'Beryl', '{\"labels\":[\"new\"]}'), (1003, 'Cobalt', '{\"labels\":[]}')",
+    "CREATE TABLE catalog_labels (product_id INT NOT NULL, label_name VARCHAR(16) NOT NULL, label_state VARCHAR(16) NOT NULL, PRIMARY KEY (product_id, label_name))",
+    "INSERT INTO catalog_labels VALUES (1001, 'featured', 'legacy'), (1004, 'orphan', 'keep')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO catalog_labels (product_id, label_name, label_state) SELECT p.product_id, jt.label_name, 'active' FROM catalog_payloads AS p CROSS JOIN JSON_TABLE(p.payload, '$.labels[*]' COLUMNS (label_name VARCHAR(16) PATH '$')) AS jt WHERE NOT EXISTS (SELECT 1 FROM catalog_labels AS existing WHERE existing.product_id = p.product_id AND existing.label_name = jt.label_name) ORDER BY p.product_id, jt.label_name ON DUPLICATE KEY UPDATE label_state = VALUES(label_state)",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT product_id, label_name, label_state FROM catalog_labels ORDER BY product_id, label_name",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT product_id, label_name, label_state FROM catalog_labels WHERE product_id IN (1001, 1002, 1004) ORDER BY product_id, label_name",
+      "ordered": true
+    }
+  ]
+}
