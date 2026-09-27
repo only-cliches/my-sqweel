@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "id": "dependency_depth_rank",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "gortadevosyan/task_management_db",
+      "commit": "62bcb7aff1eeb83a6c0d41fa5b4bc2fc31636ac6",
+      "path": "DQL.sql",
+      "url": "https://github.com/gortadevosyan/task_management_db/blob/62bcb7aff1eeb83a6c0d41fa5b4bc2fc31636ac6/DQL.sql",
+      "sha256": "3cc0b8172cd810e9c8b513b064dedab14f532698f19c3072ca6ca5667b378793",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "DQL.sql:147-193",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A recursive dependency walk emits multiple paths, then a ROW_NUMBER partition keeps the shallowest occurrence of each task to produce a topological depth order while excluding revisits.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored task-dependency report. A recursive CTE carries a comma-delimited path for cycle prevention, converging paths are retained, and ROW_NUMBER selects the minimum depth with a deterministic path tie-break. PostgreSQL arrays, PL/pgSQL functions, task schema, identifiers, and values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "recursive-cte",
+    "cycle-prevention",
+    "converging-paths",
+    "row-number",
+    "minimum-depth",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Task 40 is reachable through both tasks 20 and 30, so the recursive relation produces two paths and the ranked result keeps the shallower equal-depth occurrence with the lexical path tie-break. Edge 50 -> 20 closes a cycle that must not recurse forever. Task 60 is an independent root.",
+  "determinism_notes": "Task IDs, edge direction, recursion depth bound, path text, ranking tie-break, and final depth/task ordering are fixed. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE dependency_tasks (task_id INT PRIMARY KEY, task_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE dependency_edges (edge_id INT PRIMARY KEY, parent_task_id INT NOT NULL, child_task_id INT NOT NULL)",
+    "INSERT INTO dependency_tasks VALUES (10, 'prepare'), (20, 'compile'), (30, 'package'), (40, 'publish'), (50, 'archive'), (60, 'standalone')",
+    "INSERT INTO dependency_edges VALUES (1, 10, 20), (2, 10, 30), (3, 20, 40), (4, 30, 40), (5, 40, 50), (6, 50, 20)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH RECURSIVE task_paths (task_id, depth, path_text) AS (SELECT t.task_id, 0, CAST(CONCAT(',', t.task_id, ',') AS CHAR(255)) FROM dependency_tasks t LEFT JOIN dependency_edges incoming ON incoming.child_task_id = t.task_id WHERE incoming.child_task_id IS NULL UNION ALL SELECT e.child_task_id, p.depth + 1, CONCAT(p.path_text, e.child_task_id, ',') FROM task_paths p INNER JOIN dependency_edges e ON e.parent_task_id = p.task_id WHERE p.path_text NOT LIKE CONCAT('%,', e.child_task_id, ',%')), ranked_tasks AS (SELECT task_id, depth, path_text, ROW_NUMBER() OVER (PARTITION BY task_id ORDER BY depth, path_text) AS path_rank FROM task_paths) SELECT r.task_id, t.task_name, r.depth, r.path_text FROM ranked_tasks r INNER JOIN dependency_tasks t ON t.task_id = r.task_id WHERE r.path_rank = 1 ORDER BY r.depth, r.task_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT task_id, task_name FROM dependency_tasks ORDER BY task_id",
+      "ordered": true
+    }
+  ]
+}
