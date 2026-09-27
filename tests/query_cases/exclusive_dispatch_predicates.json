@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "exclusive_dispatch_predicates",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Eished/sql_notes",
+      "commit": "d5af8fef28436fac0228d084c149f7fcbc82b369",
+      "path": "SQL/select.sql",
+      "url": "https://github.com/Eished/sql_notes/blob/d5af8fef28436fac0228d084c149f7fcbc82b369/SQL/select.sql",
+      "sha256": "5a7599de4e9421c9ad4a83f551c15f4594f9786a28e99316510cb0d275f12030",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "SQL/select.sql:90-98 (XOR predicate)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL filter combines two conjunctions with XOR so a row qualifies only when exactly one mutually exclusive classification branch is true.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored dispatch audit. Fixed queue classes and retry counts apply the same XOR-of-AND predicate to classify exclusive handoff paths, then SUM counts qualifying requests per queue; the source table, labels, values, and course-report context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["boolean-xor", "compound-predicate", "and-precedence", "conditional-classification", "grouped-sum", "deterministic-order"],
+  "fixture_notes": "Priority requests with fewer than three retries and routine requests with at least three retries each select exactly one branch. The remaining combinations select neither branch and are retained so the XOR result distinguishes exclusive matches from both false.",
+  "determinism_notes": "Request IDs, queue classes, retry counts, branch threshold, and ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE dispatch_requests (request_id INT PRIMARY KEY, queue_class VARCHAR(16) NOT NULL, retry_count INT NOT NULL)",
+    "INSERT INTO dispatch_requests VALUES (1001, 'priority', 1), (1002, 'priority', 4), (1003, 'routine', 4), (1004, 'routine', 1), (1005, 'priority', 2), (1006, 'routine', 5)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT request_id, queue_class, retry_count, ((queue_class = 'priority' AND retry_count < 3) XOR (queue_class <> 'priority' AND retry_count >= 3)) AS exclusive_handoff, CASE WHEN ((queue_class = 'priority' AND retry_count < 3) XOR (queue_class <> 'priority' AND retry_count >= 3)) THEN 'single-branch' ELSE 'no-single-branch' END AS branch_class FROM dispatch_requests ORDER BY request_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT queue_class, SUM((queue_class = 'priority' AND retry_count < 3) XOR (queue_class <> 'priority' AND retry_count >= 3)) AS exclusive_count FROM dispatch_requests GROUP BY queue_class ORDER BY queue_class",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT request_id, queue_class, retry_count FROM dispatch_requests ORDER BY request_id",
+      "ordered": true
+    }
+  ]
+}
