@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "id": "insert_delayed_auto_increment_batch",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "repository": "mariadb-corporation/mariadb-qa",
+      "commit": "53e3741e6ac43968f0027ea22ec0eba3f5a15299",
+      "path": "BUGS/MDEV-22576.sql",
+      "url": "https://github.com/mariadb-corporation/mariadb-qa/blob/53e3741e6ac43968f0027ea22ec0eba3f5a15299/BUGS/MDEV-22576.sql",
+      "sha256": "2093c89c30f75c64c2d17498861dabf0ba83a2eb3e789faed944c62d6511b18d",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "BUGS/MDEV-22576.sql: multi-row INSERT DELAYED with NULL auto-increment values",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB regression script sends multiple rows through INSERT DELAYED into a MyISAM table, including NULL values for an auto-increment key, then inspects the resulting table state.",
+      "mysql_mariadb_translation": "Reauthored as an independent event-log append. A multi-row INSERT DELAYED allocates three sequential event IDs for NULL keys on a MyISAM table, and an ordered final read verifies all payloads; performance-schema inspection, session engine changes, and source values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["insert-delayed", "multi-row-insert", "auto-increment", "myisam", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "Event 1 is seeded explicitly; the delayed batch supplies three NULL event IDs and must materialize as events 2, 3, and 4 in value-list order.",
+  "determinism_notes": "The MyISAM table, initial auto-increment value, three-row value list, and final primary-key order are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE event_log (event_id INT AUTO_INCREMENT PRIMARY KEY, event_kind VARCHAR(16) NOT NULL, payload VARCHAR(32) NOT NULL) ENGINE=MyISAM",
+    "INSERT INTO event_log VALUES (1, 'boot', 'node-a-ready')"
+  ],
+  "steps": [
+    {"sql": "INSERT DELAYED INTO event_log (event_id, event_kind, payload) VALUES (NULL, 'sync', 'node-b-ready'), (NULL, 'alert', 'node-c-warn'), (NULL, 'audit', 'node-d-checked')", "ordered": true}
+  ],
+  "checks": [
+    {"sql": "SELECT event_id, event_kind, payload FROM event_log ORDER BY event_id", "ordered": true}
+  ]
+}
