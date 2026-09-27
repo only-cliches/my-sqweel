@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "symmetric_difference_union_anti_join",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "fikrimln16/leetcode-fikrimln16",
+      "commit": "08e002da792dbc72614d1db3219c8f9fcf6c3bd1",
+      "path": "database/1965.sql",
+      "url": "https://github.com/fikrimln16/leetcode-fikrimln16/blob/08e002da792dbc72614d1db3219c8f9fcf6c3bd1/database/1965.sql",
+      "sha256": "f4d3c18104912037cddf035f635b0eb85443f19b38d324ebdedd78610a5cba33",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "database/1965.sql:1-13",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A symmetric-difference report uses two LEFT JOIN anti-joins, one from each relation, and combines the unmatched identifiers with UNION ALL before deterministic ordering.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored warehouse reconciliation report. Inventory-only and scan-only rows are projected into compatible columns through two directional LEFT JOIN anti-joins and UNION ALL; shared item IDs are excluded, while the new schema, labels, rows, and report purpose are unrelated to the source query."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "left-join",
+    "anti-join",
+    "union-all",
+    "symmetric-difference",
+    "null-projection",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Inventory IDs 101 and 104 have no scan, scan ID 203 has no inventory row, and shared IDs 102 and 103 must be excluded. The two UNION ALL branches use compatible projected columns and preserve one row per unmatched ID.",
+  "determinism_notes": "All IDs and labels are fixed, and the set-difference report orders by the unique item ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE warehouse_inventory (item_id INT PRIMARY KEY, item_label VARCHAR(32) NOT NULL)",
+    "CREATE TABLE warehouse_scans (item_id INT PRIMARY KEY, scan_label VARCHAR(32) NOT NULL)",
+    "INSERT INTO warehouse_inventory VALUES (101, 'crate-a'), (102, 'crate-b'), (103, 'crate-c'), (104, 'crate-d')",
+    "INSERT INTO warehouse_scans VALUES (102, 'scan-b'), (103, 'scan-c'), (203, 'scan-x')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT i.item_id AS item_id, i.item_label, CAST(NULL AS CHAR(32)) AS scan_label FROM warehouse_inventory i LEFT JOIN warehouse_scans s ON s.item_id = i.item_id WHERE s.item_id IS NULL UNION ALL SELECT s.item_id AS item_id, CAST(NULL AS CHAR(32)) AS item_label, s.scan_label FROM warehouse_scans s LEFT JOIN warehouse_inventory i ON i.item_id = s.item_id WHERE i.item_id IS NULL ORDER BY item_id",
+      "ordered": true
+    }
+  ]
+}

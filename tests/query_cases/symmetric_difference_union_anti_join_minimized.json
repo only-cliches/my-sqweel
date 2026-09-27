@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "symmetric_difference_union_anti_join_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "symmetric_difference_union_anti_join",
+    "source": {
+      "kind": "github",
+      "repository": "fikrimln16/leetcode-fikrimln16",
+      "commit": "08e002da792dbc72614d1db3219c8f9fcf6c3bd1",
+      "path": "database/1965.sql",
+      "url": "https://github.com/fikrimln16/leetcode-fikrimln16/blob/08e002da792dbc72614d1db3219c8f9fcf6c3bd1/database/1965.sql",
+      "sha256": "f4d3c18104912037cddf035f635b0eb85443f19b38d324ebdedd78610a5cba33",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "database/1965.sql:1-13",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A symmetric-difference report uses two LEFT JOIN anti-joins, one from each relation, and combines the unmatched identifiers with UNION ALL before deterministic ordering.",
+      "mysql_mariadb_translation": "Reduced to one inventory-only row and one scan-only row while retaining the directional anti-joins, UNION ALL, and incompatible-branch NULL projection that exposes set-result character metadata."
+    },
+    "independently_authored": true,
+    "minimized_from": "symmetric_difference_union_anti_join"
+  },
+  "features": [
+    "left-join",
+    "anti-join",
+    "union-all",
+    "symmetric-difference",
+    "cast-null-metadata",
+    "minimized-regression",
+    "deterministic-order"
+  ],
+  "fixture_notes": "One inventory-only row and one scan-only row are sufficient to expose the UNION ALL result metadata difference between MariaDB VAR_STRING and MySqweel STRING for the CAST(NULL AS CHAR) branch.",
+  "determinism_notes": "The two fixed IDs and labels are ordered by unique item ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE mini_inventory (item_id INT PRIMARY KEY, item_label VARCHAR(16) NOT NULL)",
+    "CREATE TABLE mini_scans (item_id INT PRIMARY KEY, scan_label VARCHAR(16) NOT NULL)",
+    "INSERT INTO mini_inventory VALUES (11, 'crate-a')",
+    "INSERT INTO mini_scans VALUES (22, 'scan-x')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT i.item_id AS item_id, i.item_label, CAST(NULL AS CHAR(16)) AS scan_label FROM mini_inventory i LEFT JOIN mini_scans s ON s.item_id = i.item_id WHERE s.item_id IS NULL UNION ALL SELECT s.item_id AS item_id, CAST(NULL AS CHAR(16)) AS item_label, s.scan_label FROM mini_scans s LEFT JOIN mini_inventory i ON i.item_id = s.item_id WHERE i.item_id IS NULL ORDER BY item_id",
+      "ordered": true
+    }
+  ]
+}

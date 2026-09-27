@@ -5,6 +5,15 @@ use std::ops::ControlFlow;
 
 use sqlparser::ast::{VisitMut, Visitor, VisitorMut};
 
+fn merge_set_column_type(left: MysqlColumnType, right: MysqlColumnType) -> MysqlColumnType {
+    match (left, right) {
+        // MariaDB promotes CHAR/VARCHAR branches in a UNION to VAR_STRING.
+        (MysqlColumnType::Char, MysqlColumnType::VarChar)
+        | (MysqlColumnType::VarChar, MysqlColumnType::Char) => MysqlColumnType::VarChar,
+        _ => left,
+    }
+}
+
 impl RawEngine {
     pub(super) fn select_query(&self, mut query: Query) -> Result<QueryResult> {
         if query.with.as_ref().is_some_and(|with| with.recursive) {
@@ -78,6 +87,8 @@ impl RawEngine {
                     .iter_mut()
                     .zip(&right_result.column_metadata)
                 {
+                    metadata.column_type =
+                        merge_set_column_type(metadata.column_type, right_metadata.column_type);
                     metadata.nullable |= right_metadata.nullable;
                 }
                 let right_rows = right_result
