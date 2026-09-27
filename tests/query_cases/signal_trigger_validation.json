@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "signal_trigger_validation",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "adityarverma/railway-management-system",
+      "commit": "ead871ede39addaf58f9712aa6486708e550d739",
+      "path": "railway.sql",
+      "url": "https://github.com/adityarverma/railway-management-system/blob/ead871ede39addaf58f9712aa6486708e550d739/railway.sql",
+      "sha256": "46f313f2cc288c41f180db3c402c0592dfdb605df10f81b330344a5d45c5c225f",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "railway.sql:125-143",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A BEFORE INSERT trigger uses conditional validation and SIGNAL SQLSTATE 45000 to reject rows whose business values violate several invariants.",
+      "mysql_mariadb_translation": "Rewritten as a newly authored shipment trigger with one conditional SIGNAL for an invalid quantity. A valid insert, an expected trigger error, and a final ordered read verify both acceptance and rejected-row state without copying the source schema or data."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "create-trigger",
+    "before-insert",
+    "signal-sqlstate",
+    "conditional-validation",
+    "trigger-error-state",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The shipment trigger accepts positive quantities and raises SQLSTATE 45000 for a zero quantity. The final read proves the rejected row was not stored.",
+  "determinism_notes": "All identifiers, quantities, and messages are fixed; the final read is ordered by shipment ID and uses no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE shipment_lines (shipment_id INT PRIMARY KEY, item_code VARCHAR(16) NOT NULL, quantity INT NOT NULL)",
+    "CREATE TRIGGER shipment_quantity_guard BEFORE INSERT ON shipment_lines FOR EACH ROW BEGIN IF NEW.quantity <= 0 THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'quantity must be positive'; END IF; END"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO shipment_lines VALUES (701, 'BX-17', 3)",
+      "ordered": false
+    },
+    {
+      "sql": "INSERT INTO shipment_lines VALUES (702, 'BX-18', 0)",
+      "ordered": false,
+      "expect_error": true
+    },
+    {
+      "sql": "SELECT shipment_id, item_code, quantity FROM shipment_lines ORDER BY shipment_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
