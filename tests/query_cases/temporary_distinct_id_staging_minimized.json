@@ -1,0 +1,86 @@
+{
+  "version": 1,
+  "id": "temporary_distinct_id_staging_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "temporary_distinct_id_staging",
+    "source": {
+      "kind": "github",
+      "repository": "CatoTH/antragsgruen",
+      "commit": "5256b1e9a6e47344f477462b4fed83995c9d12cc",
+      "path": "assets/db/copy-site.sql",
+      "url": "https://github.com/CatoTH/antragsgruen/blob/5256b1e9a6e47344f477462b4fed83995c9d12cc/assets/db/copy-site.sql",
+      "sha256": "75a7862005d92b8d9a5686bec1db2fe75a0327b98fbc63a37e196e72aba3a963",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "assets/db/copy-site.sql:276-303",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A minimized temporary primary-key stage receives repeated INSERT IGNORE SELECT DISTINCT loads before an anti-join copies only a missing directory row.",
+      "mysql_mariadb_translation": "Reduced to two source tables, one duplicate staged identifier, one new identifier, and one pre-existing destination row while retaining temporary-table creation, repeated DISTINCT INSERT IGNORE, NOT IN filtering, and cleanup."
+    },
+    "independently_authored": true,
+    "minimized_from": "temporary_distinct_id_staging"
+  },
+  "features": [
+    "temporary-table-lifecycle",
+    "repeated-insert-ignore-select",
+    "distinct-source-projection",
+    "primary-key-deduplication",
+    "not-in-anti-join",
+    "minimized-regression",
+    "deterministic-order"
+  ],
+  "fixture_notes": "User 21 is already copied, user 22 is newly staged and copied, and the duplicate source occurrence of user 21 must not create a second stage row.",
+  "determinism_notes": "Both duplicate source projections are identical, and all IDs and ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE mini_events (event_id INT PRIMARY KEY, user_id INT NULL)",
+    "CREATE TABLE mini_files (file_id INT PRIMARY KEY, owner_id INT NULL)",
+    "CREATE TABLE mini_directory (user_id INT PRIMARY KEY, user_name VARCHAR(16) NOT NULL)",
+    "CREATE TABLE mini_copied (user_id INT PRIMARY KEY, user_name VARCHAR(16) NOT NULL)",
+    "INSERT INTO mini_events VALUES (1, 21), (2, 21)",
+    "INSERT INTO mini_files VALUES (3, 22)",
+    "INSERT INTO mini_directory VALUES (21, 'Indigo'), (22, 'Jade')",
+    "INSERT INTO mini_copied VALUES (21, 'Indigo')"
+  ],
+  "steps": [
+    {
+      "sql": "DROP TEMPORARY TABLE IF EXISTS mini_user_stage",
+      "ordered": true
+    },
+    {
+      "sql": "CREATE TEMPORARY TABLE mini_user_stage (user_id INT PRIMARY KEY)",
+      "ordered": false
+    },
+    {
+      "sql": "INSERT IGNORE INTO mini_user_stage SELECT DISTINCT user_id FROM mini_events WHERE user_id IS NOT NULL",
+      "ordered": false
+    },
+    {
+      "sql": "INSERT IGNORE INTO mini_user_stage SELECT DISTINCT owner_id FROM mini_files WHERE owner_id IS NOT NULL",
+      "ordered": false
+    },
+    {
+      "sql": "INSERT IGNORE INTO mini_copied (user_id, user_name) SELECT u.user_id, u.user_name FROM mini_directory AS u INNER JOIN mini_user_stage AS s ON s.user_id = u.user_id WHERE u.user_id NOT IN (SELECT user_id FROM mini_copied) ORDER BY u.user_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT user_id FROM mini_user_stage ORDER BY user_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT user_id, user_name FROM mini_copied ORDER BY user_id",
+      "ordered": true
+    },
+    {
+      "sql": "DROP TEMPORARY TABLE mini_user_stage",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT user_id, user_name FROM mini_copied ORDER BY user_id",
+      "ordered": true
+    }
+  ]
+}

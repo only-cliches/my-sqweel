@@ -1,0 +1,83 @@
+{
+  "version": 1,
+  "id": "temporary_distinct_id_staging",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "CatoTH/antragsgruen",
+      "commit": "5256b1e9a6e47344f477462b4fed83995c9d12cc",
+      "path": "assets/db/copy-site.sql",
+      "url": "https://github.com/CatoTH/antragsgruen/blob/5256b1e9a6e47344f477462b4fed83995c9d12cc/assets/db/copy-site.sql",
+      "sha256": "75a7862005d92b8d9a5686bec1db2fe75a0327b98fbc63a37e196e72aba3a963",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "assets/db/copy-site.sql:276-303",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB copy workflow accumulates distinct non-NULL identifiers from several source tables into a temporary primary-key table with repeated INSERT IGNORE SELECT statements, then copies only target rows absent from the destination.",
+      "mysql_mariadb_translation": "Reauthored as a user-notification migration. Three independent event tables contribute user IDs to a temporary primary-key stage through repeated DISTINCT INSERT IGNORE loads; a final anti-join copy inserts only directory users missing from the destination, and ordered reads verify both the staged set and copied rows."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "temporary-table-lifecycle",
+    "repeated-insert-ignore-select",
+    "distinct-source-projection",
+    "primary-key-deduplication",
+    "not-in-anti-join",
+    "deterministic-order"
+  ],
+  "fixture_notes": "User IDs 11 and 12 arrive from multiple event sources, user ID 13 arrives from one source, and NULL IDs are excluded. The destination already contains user 11, so the final NOT IN copy inserts only users 12 and 13.",
+  "determinism_notes": "All IDs, source rows, duplicate keys, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE notification_events (event_id INT PRIMARY KEY, user_id INT NULL, event_kind VARCHAR(16) NOT NULL)",
+    "CREATE TABLE file_owners (file_id INT PRIMARY KEY, owner_id INT NULL, file_kind VARCHAR(16) NOT NULL)",
+    "CREATE TABLE directory_users (user_id INT PRIMARY KEY, user_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE copied_users (user_id INT PRIMARY KEY, user_name VARCHAR(32) NOT NULL)",
+    "INSERT INTO notification_events VALUES (101, 11, 'mention'), (102, 12, 'mention'), (103, 12, 'reaction'), (104, NULL, 'system')",
+    "INSERT INTO file_owners VALUES (201, 11, 'image'), (202, 13, 'report'), (203, NULL, 'orphan')",
+    "INSERT INTO directory_users VALUES (11, 'Aster'), (12, 'Beryl'), (13, 'Cobalt'), (14, 'Dune')",
+    "INSERT INTO copied_users VALUES (11, 'Aster')"
+  ],
+  "steps": [
+    {
+      "sql": "DROP TEMPORARY TABLE IF EXISTS user_id_stage",
+      "ordered": true
+    },
+    {
+      "sql": "CREATE TEMPORARY TABLE user_id_stage (user_id INT PRIMARY KEY)",
+      "ordered": false
+    },
+    {
+      "sql": "INSERT IGNORE INTO user_id_stage SELECT DISTINCT user_id FROM notification_events WHERE user_id IS NOT NULL",
+      "ordered": false
+    },
+    {
+      "sql": "INSERT IGNORE INTO user_id_stage SELECT DISTINCT owner_id FROM file_owners WHERE owner_id IS NOT NULL",
+      "ordered": false
+    },
+    {
+      "sql": "INSERT IGNORE INTO copied_users (user_id, user_name) SELECT u.user_id, u.user_name FROM directory_users AS u INNER JOIN user_id_stage AS s ON s.user_id = u.user_id WHERE u.user_id NOT IN (SELECT user_id FROM copied_users) ORDER BY u.user_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT user_id FROM user_id_stage ORDER BY user_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT user_id, user_name FROM copied_users ORDER BY user_id",
+      "ordered": true
+    },
+    {
+      "sql": "DROP TEMPORARY TABLE user_id_stage",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT user_id, user_name FROM copied_users ORDER BY user_id",
+      "ordered": true
+    }
+  ]
+}
