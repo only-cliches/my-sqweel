@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "id": "insert_ignore_distinct_grouped_bindings",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "OCSInventory-NG/OCSInventory-ocsreports",
+      "commit": "737531a7eb852359f28c29dddca12c9727fb72ba",
+      "path": "files/update/7054.sql",
+      "url": "https://github.com/OCSInventory-NG/OCSInventory-ocsreports/blob/737531a7eb852359f28c29dddca12c9727fb72ba/files/update/7054.sql",
+      "sha256": "16f6e7b611302ee67b506a7195be403371f25286d23773bb22d197dbe99334da",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "7054.sql:14-17,38-61",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL migration loads a relation with INSERT IGNORE ... SELECT DISTINCT from multiple source tables, filters the active/default subset, and combines the selection with GROUP BY so repeated source matches do not abort the migration on unique-key conflicts.",
+      "mysql_mariadb_translation": "Reauthored as a routing-binding refresh. Active routing groups are cross-joined with enabled labels, exact duplicate source candidates are collapsed by DISTINCT and GROUP BY, an existing binding is ignored, and new group-label bindings are inserted; the source migration tables, identifiers, OIDs, labels, and upgrade context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "insert-ignore",
+    "select-distinct",
+    "group-by",
+    "implicit-cross-join",
+    "unique-conflict-skip",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Two active ops groups receive both enabled labels. The source contains an exact duplicate label candidate, which SELECT DISTINCT and GROUP BY collapse before insertion. The pre-existing ops/pager binding exercises INSERT IGNORE's duplicate-key skip; the inactive dev group and disabled label are excluded.",
+  "determinism_notes": "All group, label, state, and binding values are fixed. GROUP BY includes every selected source column, duplicate source rows are removed before insertion, and final reads use explicit ordering. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE routing_groups (group_id INT PRIMARY KEY, group_code VARCHAR(16) NOT NULL, active TINYINT NOT NULL)",
+    "INSERT INTO routing_groups VALUES (10, 'ops', 1), (20, 'ops', 1), (30, 'dev', 0)",
+    "CREATE TABLE route_labels (label_id INT PRIMARY KEY, route_code VARCHAR(16) NOT NULL, enabled TINYINT NOT NULL)",
+    "INSERT INTO route_labels VALUES (100, 'pager', 1), (101, 'email', 1), (102, 'pager', 1), (103, 'sms', 0)",
+    "CREATE TABLE group_route_bindings (group_id INT NOT NULL, label_id INT NOT NULL, route_code VARCHAR(16) NOT NULL, PRIMARY KEY (group_id, label_id), UNIQUE KEY group_route_unique (group_id, route_code))",
+    "INSERT INTO group_route_bindings VALUES (10, 100, 'pager')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT IGNORE INTO group_route_bindings (group_id, label_id, route_code) SELECT DISTINCT g.group_id, l.label_id, l.route_code FROM routing_groups AS g, route_labels AS l WHERE g.group_code = 'ops' AND g.active = 1 AND l.enabled = 1 GROUP BY g.group_id, l.label_id, l.route_code",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT group_id, label_id, route_code FROM group_route_bindings ORDER BY group_id, label_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT group_id, COUNT(*) AS binding_count FROM group_route_bindings GROUP BY group_id ORDER BY group_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT group_id, label_id, route_code FROM group_route_bindings WHERE group_id = 20 ORDER BY label_id",
+      "ordered": true
+    }
+  ]
+}
