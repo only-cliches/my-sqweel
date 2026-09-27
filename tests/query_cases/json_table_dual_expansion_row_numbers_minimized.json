@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "json_table_dual_expansion_row_numbers_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "minimized_from": "json_table_dual_expansion_row_numbers",
+    "source": {
+      "kind": "github",
+      "repository": "YiWeiOh/8Weeks_SQL_challenge---MySQL",
+      "commit": "10eb4af293f19e67a5baf5f27cf2e122901a89a8",
+      "path": "Case Study #2 - Pizza Runner/1. MySQL code.sql",
+      "url": "https://github.com/YiWeiOh/8Weeks_SQL_challenge---MySQL/blob/10eb4af293f19e67a5baf5f27cf2e122901a89a8/Case%20Study%20%232%20-%20Pizza%20Runner/1.%20MySQL%20code.sql",
+      "sha256": "4d11b77cbf5112fcd5fcb607ccb6341300c4c980b4846eabd84f21424ad2409c",
+      "source_dialect": "mysql"
+    },
+    "inspiration": {
+      "source_location": "Minimized from Case Study #2 - Pizza Runner/1. MySQL code.sql:395-428",
+      "source_dialect": "mysql",
+      "observed_pattern": "A derived source assigns a ROW_NUMBER ordinal before two JSON_TABLE expansions are joined.",
+      "mysql_mariadb_translation": "Reduced to one independently authored shipment row, two add-ons, and one restriction while retaining the derived wildcard projection, window ordinal, and dual JSON_TABLE joins that expose derived-column metadata."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "row-number",
+    "json-table",
+    "dual-correlated-expansion",
+    "derived-column-metadata",
+    "minimized-regression"
+  ],
+  "fixture_notes": "One fixed shipment has two add-ons and one restriction, producing two rows while the derived shipment ID remains an INT column in MariaDB metadata.",
+  "determinism_notes": "One shipment ID, fixed JSON arrays, explicit window ordering, and ordered output; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE mini_shipment_attribute_sets (shipment_id INT PRIMARY KEY, shipment_code VARCHAR(16) NOT NULL, add_ons JSON NOT NULL, restrictions JSON NOT NULL)",
+    "INSERT INTO mini_shipment_attribute_sets VALUES (991, 'MINI-991', '[\"gift-wrap\", \"fragile\"]', '[\"cold\"]')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT t.source_row, t.shipment_id, t.shipment_code, a.add_on, r.restriction FROM (SELECT s.*, ROW_NUMBER() OVER (ORDER BY shipment_id) AS source_row FROM mini_shipment_attribute_sets AS s) AS t INNER JOIN JSON_TABLE(t.add_ons, '$[*]' COLUMNS (add_on VARCHAR(32) PATH '$')) AS a INNER JOIN JSON_TABLE(t.restrictions, '$[*]' COLUMNS (restriction VARCHAR(32) PATH '$')) AS r ORDER BY t.source_row, a.add_on, r.restriction",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}

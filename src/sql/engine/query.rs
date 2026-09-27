@@ -2737,6 +2737,48 @@ impl RawEngine {
         let inner_expr = values.rows.first()?.get(index)?;
         Some(self.expression_metadata(outer_select, inner_expr, column.to_string(), first_row))
     }
+    fn derived_wildcard_metadata(
+        &self,
+        body: &SetExpr,
+        alias_columns: &[sqlparser::ast::TableAliasColumnDef],
+        column: &str,
+    ) -> Option<ColumnMetadata> {
+        if !alias_columns.is_empty() {
+            return None;
+        }
+        let body = match body {
+            SetExpr::Query(query) => &query.body,
+            SetExpr::SetOperation { left, .. } => left,
+            SetExpr::Select(inner) => {
+                for item in &inner.projection {
+                    let qualifier = match item {
+                        SelectItem::Wildcard(_) => None,
+                        SelectItem::QualifiedWildcard(prefix, _) => Some(
+                            prefix
+                                .0
+                                .iter()
+                                .map(|part| part.value.as_str())
+                                .collect::<Vec<_>>()
+                                .join("."),
+                        ),
+                        _ => continue,
+                    };
+                    let expression = match qualifier {
+                        Some(qualifier) => Expr::CompoundIdentifier(vec![
+                            sqlparser::ast::Ident::new(qualifier),
+                            sqlparser::ast::Ident::new(column),
+                        ]),
+                        None => Expr::Identifier(sqlparser::ast::Ident::new(column)),
+                    };
+                    let (table, hint) = self.resolve_expression_column(inner, &expression)?;
+                    return Some(ColumnMetadata::from_declared(column, table, &hint));
+                }
+                return None;
+            }
+            _ => return None,
+        };
+        self.derived_wildcard_metadata(body, alias_columns, column)
+    }
 
     fn scalar_subquery_metadata(&self, body: &SetExpr) -> Option<ColumnMetadata> {
         match body {
@@ -2807,6 +2849,12 @@ impl RawEngine {
                 let Some((inner, inner_expr, inner_name, _)) =
                     Self::derived_projection(&subquery.body, &alias.columns, column)
                 else {
+                    if let Some(mut metadata) =
+                        self.derived_wildcard_metadata(&subquery.body, &alias.columns, column)
+                    {
+                        metadata.table = alias.name.value.clone();
+                        return Some(metadata);
+                    }
                     continue;
                 };
                 let mut metadata =

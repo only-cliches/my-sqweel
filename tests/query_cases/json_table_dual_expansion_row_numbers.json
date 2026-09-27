@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "json_table_dual_expansion_row_numbers",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "YiWeiOh/8Weeks_SQL_challenge---MySQL",
+      "commit": "10eb4af293f19e67a5baf5f27cf2e122901a89a8",
+      "path": "Case Study #2 - Pizza Runner/1. MySQL code.sql",
+      "url": "https://github.com/YiWeiOh/8Weeks_SQL_challenge---MySQL/blob/10eb4af293f19e67a5baf5f27cf2e122901a89a8/Case%20Study%20%232%20-%20Pizza%20Runner/1.%20MySQL%20code.sql",
+      "sha256": "4d11b77cbf5112fcd5fcb607ccb6341300c4c980b4846eabd84f21424ad2409c",
+      "source_dialect": "mysql"
+    },
+    "inspiration": {
+      "source_location": "Case Study #2 - Pizza Runner/1. MySQL code.sql:395-428",
+      "source_dialect": "mysql",
+      "observed_pattern": "A derived source assigns ROW_NUMBER() ordinals, then two correlated JSON_TABLE expansions are joined to produce a vertical combination of two JSON-backed attribute lists.",
+      "mysql_mariadb_translation": "Reauthored as a shipment-attribute matrix. A deterministic shipment ordinal is assigned in a derived query, then JSON_TABLE expands add-on and restriction arrays and their joined combinations are emitted in ordinal order. The source schema, identifiers, values, and pizza workflow are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "row-number",
+    "json-table",
+    "dual-correlated-expansion",
+    "derived-source",
+    "cartesian-attribute-pairs",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Shipment 901 produces four add-on/restriction combinations from two values in each JSON array; shipment 902 produces one combination. The derived row ordinal must follow shipment ID order.",
+  "determinism_notes": "Shipment IDs, JSON array order, window ordering, expansion columns, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE shipment_attribute_sets (shipment_id INT PRIMARY KEY, shipment_code VARCHAR(16) NOT NULL, add_ons JSON NOT NULL, restrictions JSON NOT NULL)",
+    "INSERT INTO shipment_attribute_sets VALUES (901, 'SHIP-901', '[\"gift-wrap\", \"fragile\"]', '[\"cold\", \"insured\"]'), (902, 'SHIP-902', '[\"signature\"]', '[\"oversize\"]')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT t.source_row, t.shipment_id, t.shipment_code, a.add_on, r.restriction FROM (SELECT s.*, ROW_NUMBER() OVER (ORDER BY shipment_id) AS source_row FROM shipment_attribute_sets AS s) AS t INNER JOIN JSON_TABLE(t.add_ons, '$[*]' COLUMNS (add_on VARCHAR(32) PATH '$')) AS a INNER JOIN JSON_TABLE(t.restrictions, '$[*]' COLUMNS (restriction VARCHAR(32) PATH '$')) AS r ORDER BY t.source_row, a.add_on, r.restriction",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
