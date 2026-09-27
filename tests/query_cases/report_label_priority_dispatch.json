@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "report_label_priority_dispatch",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "KarthickJoyous/mysql-notes",
+      "commit": "e6fbfc8bfe9cbf42d45ba242cdb904a1d64951c6",
+      "path": "FIND_IN_SET-FIELD.sql",
+      "url": "https://github.com/KarthickJoyous/mysql-notes/blob/e6fbfc8bfe9cbf42d45ba242cdb904a1d64951c6/FIND_IN_SET-FIELD.sql",
+      "sha256": "b0219fe0d53061c6750a60bdcbbe8be34a7d5b4c2b1acb3477e81fb51253f281",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "FIND_IN_SET-FIELD.sql: documented SELECT examples and filtering use cases",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL report uses FIND_IN_SET to filter comma-separated labels and expose their one-based position, then uses FIELD to impose a custom priority order.",
+      "mysql_mariadb_translation": "Reauthored as an independent report-dispatch query. Fixed report rows are filtered by an operations label stored in CSV form, the matching position is projected, and FIELD ranks the retained reports by workflow state; NULL and empty label lists remain deliberate nonmatches."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "find-in-set",
+    "field-custom-order",
+    "csv-membership-filter",
+    "null-propagation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Reports 401 and 403 contain the operations label and are retained; report 401 is urgent and must sort ahead of blocked report 403. Report 402 lacks the label, report 404 has a NULL list, and report 405 has an empty list, so all three are filtered out.",
+  "determinism_notes": "Report IDs, states, labels, custom rank arguments, and the unique-ID tie-break are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE dispatch_reports (report_id INT PRIMARY KEY, report_title VARCHAR(32) NOT NULL, workflow_state VARCHAR(16) NOT NULL, audience_labels VARCHAR(64) NULL)",
+    "INSERT INTO dispatch_reports VALUES (401, 'ops latency', 'urgent', 'ops,finance'), (402, 'finance audit', 'queued', 'finance'), (403, 'ops capacity', 'blocked', 'sales,ops'), (404, 'missing audience', 'urgent', NULL), (405, 'empty audience', 'queued', '')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT report_id, report_title, workflow_state, FIND_IN_SET('ops', audience_labels) AS ops_position, FIELD(workflow_state, 'queued', 'blocked', 'urgent') AS priority_rank FROM dispatch_reports WHERE FIND_IN_SET('ops', audience_labels) > 0 ORDER BY FIELD(workflow_state, 'queued', 'blocked', 'urgent') DESC, report_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT report_id, report_title, workflow_state, audience_labels FROM dispatch_reports ORDER BY report_id",
+      "ordered": true
+    }
+  ]
+}
