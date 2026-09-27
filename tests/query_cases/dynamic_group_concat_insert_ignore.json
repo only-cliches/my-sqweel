@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "id": "dynamic_group_concat_insert_ignore",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "box/Anemometer",
+      "commit": "929f3385e4ecb539890e4d33e8b6aff052688318",
+      "path": "mysql56-save_history.sql",
+      "url": "https://github.com/box/Anemometer/blob/929f3385e4ecb539890e4d33e8b6aff052688318/mysql56-save_history.sql",
+      "sha256": "c10aa2b222a6963a91c70bdee6350736e09f9aafc44008f87527f56cd6175e59",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "mysql56-save_history.sql:15-26",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL maintenance script builds an INSERT IGNORE statement dynamically with GROUP_CONCAT(DISTINCT ...) over metadata joined by shared column names, stores the statement in a user variable, and executes it through PREPARE and EXECUTE.",
+      "mysql_mariadb_translation": "Reauthored as a fixed snapshot loader. A metadata catalog discovers the shared source/target columns, GROUP_CONCAT constructs a deterministic INSERT IGNORE projection with a fixed batch origin, and PREPARE/EXECUTE loads one new snapshot while ignoring an existing primary-key row; performance-schema tables, host variables, query-digest columns, and cleanup operations are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "group-concat-distinct",
+    "metadata-join",
+    "dynamic-sql",
+    "prepare-execute",
+    "insert-ignore",
+    "user-variable",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The metadata catalog lists three shared source/target columns and one target-only origin column. The generated statement copies both source records with a fixed origin; the pre-existing record_id 1 is ignored and record_id 2 is inserted.",
+  "determinism_notes": "Column names, ordinals, source rows, target rows, and the generated origin are fixed. GROUP_CONCAT has explicit ordinal ordering, and final reads are ordered by record_id. No host identity, clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE source_records (record_id INT PRIMARY KEY, record_state VARCHAR(16) NOT NULL, record_note VARCHAR(32) NOT NULL)",
+    "INSERT INTO source_records VALUES (1, 'ready', 'alpha'), (2, 'queued', 'beta')",
+    "CREATE TABLE snapshot_records (record_id INT PRIMARY KEY, record_state VARCHAR(16) NOT NULL, record_note VARCHAR(32) NOT NULL, origin VARCHAR(16) NOT NULL)",
+    "INSERT INTO snapshot_records VALUES (1, 'stale', 'old', 'previous')",
+    "CREATE TABLE export_columns (dataset_name VARCHAR(32) NOT NULL, column_name VARCHAR(32) NOT NULL, ordinal INT NOT NULL, enabled TINYINT NOT NULL, PRIMARY KEY (dataset_name, column_name))",
+    "INSERT INTO export_columns VALUES ('source_records', 'record_id', 1, 1), ('source_records', 'record_state', 2, 1), ('source_records', 'record_note', 3, 1), ('snapshot_records', 'record_id', 1, 1), ('snapshot_records', 'record_state', 2, 1), ('snapshot_records', 'record_note', 3, 1), ('snapshot_records', 'origin', 4, 1)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT CONCAT('INSERT IGNORE INTO snapshot_records (', GROUP_CONCAT(DISTINCT a.column_name ORDER BY a.ordinal SEPARATOR ','), ',origin) SELECT ', GROUP_CONCAT(DISTINCT a.column_name ORDER BY a.ordinal SEPARATOR ','), ',''batch-a'' FROM source_records') INTO @snapshot_sql FROM export_columns AS a INNER JOIN export_columns AS b ON b.dataset_name = 'snapshot_records' AND b.column_name = a.column_name WHERE a.dataset_name = 'source_records' AND a.enabled = 1",
+      "ordered": true
+    },
+    {
+      "sql": "PREPARE snapshot_insert FROM @snapshot_sql",
+      "ordered": false
+    },
+    {
+      "sql": "EXECUTE snapshot_insert",
+      "ordered": false
+    },
+    {
+      "sql": "DEALLOCATE PREPARE snapshot_insert",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT record_id, record_state, record_note, origin FROM snapshot_records ORDER BY record_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT COUNT(*) AS snapshot_count FROM snapshot_records",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT record_id, origin FROM snapshot_records WHERE record_id = 2 ORDER BY record_id",
+      "ordered": true
+    }
+  ]
+}
