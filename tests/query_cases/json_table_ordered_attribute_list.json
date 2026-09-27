@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "json_table_ordered_attribute_list",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Payroll-Engine/PayrollEngine.Backend",
+      "commit": "ecd049ee43a64c130981301192a0f8ab36eed1ed",
+      "path": "Persistence/Persistence.MySql/Functions/GetAttributeNames.mysql.sql",
+      "url": "https://github.com/Payroll-Engine/PayrollEngine.Backend/blob/ecd049ee43a64c130981301192a0f8ab36eed1ed/Persistence/Persistence.MySql/Functions/GetAttributeNames.mysql.sql",
+      "sha256": "e37b90a2d1edef85d8ebdd83b8ba90d5088837f610d80ad5ad887134a58eef39",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Persistence/Persistence.MySql/Functions/GetAttributeNames.mysql.sql:37-43",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "JSON_TABLE exposes FOR ORDINALITY and a VARCHAR value column, then GROUP_CONCAT orders the values by the generated index while filtering blank values.",
+      "mysql_mariadb_translation": "Reauthored as a deployment-attribute report. Each deployment stores a JSON array, a correlated JSON_TABLE expands it with ordinals, and a grouped ordered GROUP_CONCAT omits blank values while preserving input order and duplicate attributes. The source function, identifiers, values, and payroll context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "json-table",
+    "for-ordinality",
+    "correlated-table-function",
+    "group-concat",
+    "blank-value-filter",
+    "duplicate-preservation"
+  ],
+  "fixture_notes": "Deployment 701 keeps non-empty attributes in JSON order, skips an empty string, and preserves a repeated attribute; deployment 702 skips whitespace-only text and retains its two non-empty attributes.",
+  "determinism_notes": "Deployment IDs, JSON array order, ordinals, separator, grouping, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE deployment_attribute_sets (deployment_id INT PRIMARY KEY, attributes JSON NOT NULL)",
+    "INSERT INTO deployment_attribute_sets VALUES (701, '[\"zone-west\", \"\", \"priority-high\", \"zone-west\"]'), (702, '[\"  \", \"owner-blue\", \"region-eu\"]')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT d.deployment_id, GROUP_CONCAT(j.val ORDER BY j.idx SEPARATOR '|') AS ordered_attributes FROM deployment_attribute_sets AS d CROSS JOIN JSON_TABLE(d.attributes, '$[*]' COLUMNS (idx FOR ORDINALITY, val VARCHAR(128) PATH '$')) AS j WHERE LENGTH(TRIM(j.val)) > 0 GROUP BY d.deployment_id ORDER BY d.deployment_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
