@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "id": "bundle_component_split",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Mhouri/sql",
+      "commit": "3b9fdbfe783e12d26823fbba2bc16af4dafe8db5",
+      "path": "regexp_substr n°4.sql",
+      "url": "https://github.com/Mhouri/sql/blob/3b9fdbfe783e12d26823fbba2bc16af4dafe8db5/regexp_substr%20n%C2%B04.sql",
+      "sha256": "b44eb1690e735cc74bfcf9089b7ae29cf2f08c0e2308076a050d32c099566b1f",
+      "source_dialect": "oracle"
+    },
+    "inspiration": {
+      "source_location": "regexp_substr n°4.sql:65-84",
+      "source_dialect": "oracle",
+      "observed_pattern": "A delimited row stores several position-aligned columns, and a generated level sequence extracts each column at the same ordinal while the sequence length follows the longest list.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored bundle-component report. A recursive CTE generates ordinals through the longest comma-separated list, SUBSTRING_INDEX extracts each available component, and CASE preserves NULL for shorter quantity or price lists. The schema, rows, output columns, and reporting purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "recursive-cte",
+    "substring-index",
+    "greatest",
+    "coalesce",
+    "case",
+    "null-preservation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Bundles 101 and 102 contain three and two components; bundle 102 intentionally has only one quantity, and bundle 103 has no quantity list, so missing aligned values become NULL while component rows remain present. Bundle 104 has empty lists and is excluded from expansion.",
+  "determinism_notes": "The report orders by unique bundle ID and component position. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE bundles (bundle_id INT PRIMARY KEY, bundle_name VARCHAR(64) NOT NULL, component_codes VARCHAR(255), component_qtys VARCHAR(255), component_prices VARCHAR(255))",
+    "INSERT INTO bundles VALUES (101, 'starter kit', 'A10,A11,A12', '2,4,6', '9.50,11.00,12.50'), (102, 'repair kit', 'B20,B21', '5', '20.00,21.00'), (103, 'single kit', 'C30', NULL, '7.25'), (104, 'empty kit', '', '', '')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH RECURSIVE positions (position) AS (SELECT 1 UNION ALL SELECT position + 1 FROM positions WHERE position < (SELECT MAX(GREATEST(COALESCE(CHAR_LENGTH(component_codes) - CHAR_LENGTH(REPLACE(component_codes, ',', '')), 0), COALESCE(CHAR_LENGTH(component_qtys) - CHAR_LENGTH(REPLACE(component_qtys, ',', '')), 0), COALESCE(CHAR_LENGTH(component_prices) - CHAR_LENGTH(REPLACE(component_prices, ',', '')), 0)) + 1) FROM bundles)) SELECT b.bundle_id, p.position, SUBSTRING_INDEX(SUBSTRING_INDEX(b.component_codes, ',', p.position), ',', -1) AS component_code, CASE WHEN p.position <= COALESCE(CHAR_LENGTH(b.component_qtys) - CHAR_LENGTH(REPLACE(b.component_qtys, ',', '')), 0) + 1 AND b.component_qtys IS NOT NULL THEN SUBSTRING_INDEX(SUBSTRING_INDEX(b.component_qtys, ',', p.position), ',', -1) END AS component_qty, CASE WHEN p.position <= COALESCE(CHAR_LENGTH(b.component_prices) - CHAR_LENGTH(REPLACE(b.component_prices, ',', '')), 0) + 1 AND b.component_prices IS NOT NULL THEN CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(b.component_prices, ',', p.position), ',', -1) AS DECIMAL(6,2)) END AS component_price FROM bundles b INNER JOIN positions p ON p.position <= GREATEST(COALESCE(CHAR_LENGTH(b.component_codes) - CHAR_LENGTH(REPLACE(b.component_codes, ',', '')), 0), COALESCE(CHAR_LENGTH(b.component_qtys) - CHAR_LENGTH(REPLACE(b.component_qtys, ',', '')), 0), COALESCE(CHAR_LENGTH(b.component_prices) - CHAR_LENGTH(REPLACE(b.component_prices, ',', '')), 0)) + 1 WHERE b.component_codes IS NOT NULL AND b.component_codes <> '' ORDER BY b.bundle_id, p.position",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT bundle_id, component_codes, component_qtys, component_prices FROM bundles WHERE bundle_id IN (103, 104) ORDER BY bundle_id",
+      "ordered": true
+    }
+  ]
+}
