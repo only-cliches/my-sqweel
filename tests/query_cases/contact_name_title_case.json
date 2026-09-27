@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "contact_name_title_case",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "fishercoder1534/Leetcode",
+      "commit": "d4b110598c4e9291e11765019ba3dc84ae53efa4",
+      "path": "database/_1667.sql",
+      "url": "https://github.com/fishercoder1534/Leetcode/blob/d4b110598c4e9291e11765019ba3dc84ae53efa4/database/_1667.sql",
+      "sha256": "2ce20f4827bdd6740d725276e9a7dd99da4b8ba6decdd50ae4894babe24f74ba",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "database/_1667.sql:2 (title-case projection)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL projection title-cases a stored name by uppercasing its first character and lowercasing the remaining substring, then orders the result by the row identifier.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored contact-directory report. Fixed given and family names are normalized with UCASE, LCASE, LEFT, SUBSTRING, and CONCAT, while a blank given name exercises empty-string preservation; the source table, identifiers, values, and user-directory context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["ucase", "lcase", "left", "substring", "concat", "empty-string", "deterministic-order"],
+  "fixture_notes": "Contact 901 has mixed-case given and family names, contact 902 has already-lowercase values, and contact 903 has an empty given name that remains empty after the first-character and remainder expressions.",
+  "determinism_notes": "Contact IDs and names are fixed; output ordering is by the primary key with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE directory_contacts (contact_id INT PRIMARY KEY, given_name VARCHAR(32) NOT NULL, family_name VARCHAR(32) NOT NULL)",
+    "INSERT INTO directory_contacts VALUES (901, 'aLEx', 'mCLEAN'), (902, 'sara', 'nguyen'), (903, '', 'o''neal')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT contact_id, CONCAT(UCASE(LEFT(given_name, 1)), LCASE(SUBSTRING(given_name, 2))) AS normalized_given, CONCAT(UCASE(LEFT(family_name, 1)), LCASE(SUBSTRING(family_name, 2))) AS normalized_family FROM directory_contacts ORDER BY contact_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT contact_id, given_name, family_name FROM directory_contacts ORDER BY contact_id",
+      "ordered": true
+    }
+  ]
+}
