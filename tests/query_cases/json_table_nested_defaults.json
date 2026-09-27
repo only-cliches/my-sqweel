@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "json_table_nested_defaults",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "antlr/grammars-v4",
+      "commit": "e199816b3f1a7a49ea1ad84fb6b87c382ea36a33",
+      "path": "sql/mariadb/examples/fast/dml_select.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/e199816b3f1a7a49ea1ad84fb6b87c382ea36a33/sql/mariadb/examples/fast/dml_select.sql",
+      "sha256": "b9128ffb5b50bea79c534bc24a127d9d626fd2d21be8cb0a45deafd8d6c84f79",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/mariadb/examples/fast/dml_select.sql:229-243",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "JSON_TABLE projects an ordinality column, typed and defaulted scalar paths, an EXISTS path, and a NESTED PATH child expansion from one JSON document.",
+      "mysql_mariadb_translation": "Reauthored as an independent policy-rule audit. A JSON column is expanded per document, missing policy and rule names use ON EMPTY defaults, malformed numeric limits use an ON ERROR default, nested rules retain parent rows, and deterministic document/rule ordering makes the result stable; the source JSON, names, and values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "json-table",
+    "nested-path",
+    "for-ordinality",
+    "default-on-empty",
+    "default-on-error",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Document 1 has two rules: one numeric limit and one malformed text limit that must use the ON ERROR default. Document 2 omits the policy and rule list, so the policy default and null-complemented nested row are observable.",
+  "determinism_notes": "Document IDs, JSON object order, rule order, default literals, typed columns, and final document/rule ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE policy_documents (document_id INT PRIMARY KEY, document_json JSON NOT NULL)",
+    "INSERT INTO policy_documents (document_id, document_json) VALUES (1, '{\"policy\":\"alpha\",\"rules\":[{\"name\":\"read\",\"limit\":3},{\"name\":\"write\",\"limit\":\"bad\"}]}'), (2, '{\"rules\":[]}')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT d.document_id, jt.policy_code, jt.rule_no, jt.rule_name, jt.limit_value FROM policy_documents AS d CROSS JOIN JSON_TABLE(d.document_json, '$' COLUMNS (policy_code VARCHAR(16) PATH '$.policy' DEFAULT 'unassigned' ON EMPTY, NESTED PATH '$.rules[*]' COLUMNS (rule_no FOR ORDINALITY, rule_name VARCHAR(16) PATH '$.name' DEFAULT 'unnamed' ON EMPTY, limit_value INT PATH '$.limit' DEFAULT '0' ON ERROR))) AS jt ORDER BY d.document_id, jt.rule_no",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT document_id, document_json FROM policy_documents ORDER BY document_id",
+      "ordered": true
+    }
+  ]
+}

@@ -6433,6 +6433,13 @@ impl RawEngine {
 fn json_table_column_hints(
     columns: &[sqlparser::ast::JsonTableColumn],
 ) -> Vec<(String, ColumnHint)> {
+    json_table_column_hints_with_nullability(columns, false)
+}
+
+fn json_table_column_hints_with_nullability(
+    columns: &[sqlparser::ast::JsonTableColumn],
+    nested: bool,
+) -> Vec<(String, ColumnHint)> {
     columns
         .iter()
         .flat_map(|column| match column {
@@ -6440,7 +6447,7 @@ fn json_table_column_hints(
                 name.value.clone(),
                 ColumnHint {
                     sql_type: Some("INT".to_string()),
-                    nullable: Some(false),
+                    nullable: Some(nested),
                     ..ColumnHint::default()
                 },
             )],
@@ -6452,7 +6459,7 @@ fn json_table_column_hints(
                 },
             )],
             sqlparser::ast::JsonTableColumn::Nested(column) => {
-                json_table_column_hints(&column.columns)
+                json_table_column_hints_with_nullability(&column.columns, true)
             }
         })
         .collect()
@@ -6462,11 +6469,19 @@ fn find_json_table_column_hint(
     columns: &[sqlparser::ast::JsonTableColumn],
     name: &str,
 ) -> Option<ColumnHint> {
+    find_json_table_column_hint_with_nullability(columns, name, false)
+}
+
+fn find_json_table_column_hint_with_nullability(
+    columns: &[sqlparser::ast::JsonTableColumn],
+    name: &str,
+    nested: bool,
+) -> Option<ColumnHint> {
     columns.iter().find_map(|column| match column {
         sqlparser::ast::JsonTableColumn::ForOrdinality(column) => {
             column.value.eq_ignore_ascii_case(name).then(|| ColumnHint {
                 sql_type: Some("INT".to_string()),
-                nullable: Some(false),
+                nullable: Some(nested),
                 ..ColumnHint::default()
             })
         }
@@ -6479,7 +6494,7 @@ fn find_json_table_column_hint(
                 ..ColumnHint::default()
             }),
         sqlparser::ast::JsonTableColumn::Nested(column) => {
-            find_json_table_column_hint(&column.columns, name)
+            find_json_table_column_hint_with_nullability(&column.columns, name, true)
         }
     })
 }
@@ -6493,6 +6508,59 @@ fn json_table_column_names(column: &sqlparser::ast::JsonTableColumn) -> Vec<Stri
             .iter()
             .flat_map(json_table_column_names)
             .collect(),
+    }
+}
+
+fn json_table_default_value(value: &sqlparser::ast::Value) -> Value {
+    match value {
+        sqlparser::ast::Value::Number(number, _) => serde_json::from_str(&number.to_string())
+            .unwrap_or_else(|_| Value::String(number.to_string())),
+        sqlparser::ast::Value::Boolean(value) => Value::Bool(*value),
+        sqlparser::ast::Value::Null => Value::Null,
+        sqlparser::ast::Value::SingleQuotedString(value)
+        | sqlparser::ast::Value::DoubleQuotedString(value)
+        | sqlparser::ast::Value::EscapedStringLiteral(value)
+        | sqlparser::ast::Value::UnicodeStringLiteral(value)
+        | sqlparser::ast::Value::NationalStringLiteral(value)
+        | sqlparser::ast::Value::SingleQuotedByteStringLiteral(value)
+        | sqlparser::ast::Value::DoubleQuotedByteStringLiteral(value)
+        | sqlparser::ast::Value::TripleSingleQuotedString(value)
+        | sqlparser::ast::Value::TripleDoubleQuotedString(value)
+        | sqlparser::ast::Value::TripleSingleQuotedByteStringLiteral(value)
+        | sqlparser::ast::Value::TripleDoubleQuotedByteStringLiteral(value)
+        | sqlparser::ast::Value::SingleQuotedRawStringLiteral(value)
+        | sqlparser::ast::Value::DoubleQuotedRawStringLiteral(value)
+        | sqlparser::ast::Value::TripleSingleQuotedRawStringLiteral(value)
+        | sqlparser::ast::Value::TripleDoubleQuotedRawStringLiteral(value) => {
+            Value::String(value.clone())
+        }
+        sqlparser::ast::Value::DollarQuotedString(value) => Value::String(value.value.clone()),
+        sqlparser::ast::Value::HexStringLiteral(value)
+        | sqlparser::ast::Value::Placeholder(value) => Value::String(value.clone()),
+    }
+}
+
+fn cast_json_table_value(value: Value, data_type: &str) -> Result<Value> {
+    if value == Value::Null || matches!(&value, Value::String(text) if eval::is_json_null(text)) {
+        return Ok(Value::Null);
+    }
+    if data_type.eq_ignore_ascii_case("JSON") {
+        return Ok(value);
+    }
+    cast_json_value(value, data_type)
+}
+
+fn json_table_on_error_value(
+    handling: Option<&sqlparser::ast::JsonTableColumnErrorHandling>,
+    data_type: &str,
+    error: anyhow::Error,
+) -> Result<Value> {
+    match handling {
+        Some(sqlparser::ast::JsonTableColumnErrorHandling::Null) => Ok(Value::Null),
+        Some(sqlparser::ast::JsonTableColumnErrorHandling::Default(value)) => {
+            cast_json_table_value(json_table_default_value(value), data_type)
+        }
+        _ => Err(error),
     }
 }
 
@@ -6520,16 +6588,22 @@ fn materialize_json_table_rows(
                         (!json_extract_matches(root, &path).is_empty()) as u8,
                     ))
                 } else {
-                    json_extract_path(root, &path).unwrap_or(Value::Null)
-                };
-                let value = if value == Value::Null
-                    || matches!(&value, Value::String(text) if eval::is_json_null(text))
-                {
-                    Value::Null
-                } else if column.r#type.to_string().eq_ignore_ascii_case("JSON") {
-                    value
-                } else {
-                    cast_json_value(value, &column.r#type.to_string())?
+                    let extracted =
+                        json_extract_path(root, &path).or_else(|| match &column.on_empty {
+                            Some(sqlparser::ast::JsonTableColumnErrorHandling::Default(value)) => {
+                                Some(json_table_default_value(value))
+                            }
+                            _ => Some(Value::Null),
+                        });
+                    let value = extracted.unwrap_or(Value::Null);
+                    match cast_json_table_value(value, &column.r#type.to_string()) {
+                        Ok(value) => value,
+                        Err(error) => json_table_on_error_value(
+                            column.on_error.as_ref(),
+                            &column.r#type.to_string(),
+                            error,
+                        )?,
+                    }
                 };
                 for row in &mut rows {
                     row.insert(column.name.value.clone(), value.clone());
