@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "daily_temperature_rises",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "lydxlx1/LeetCode",
+      "commit": "516d5f08fc9b1b71b14d43687221a06d07dc51fc",
+      "path": "src/_197.sql",
+      "url": "https://github.com/lydxlx1/LeetCode/blob/516d5f08fc9b1b71b14d43687221a06d07dc51fc/src/_197.sql",
+      "sha256": "0e41b05179c5cec5e443e5af93733fd43adf378891f3bdc07c2601e5770b8a70",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "src/_197.sql:2-11",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A self-join pairs each row with the immediately preceding calendar date using DATE_ADD, then filters for a strictly larger measurement.",
+      "mysql_mariadb_translation": "Reauthored as an independent sensor-temperature audit. Readings are joined within each station on exact one-day adjacency, only rises are returned, missing dates do not pair, and deterministic station/date ordering makes the result stable; the source schema, names, and values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "self-join",
+    "date-add",
+    "temporal-adjacency",
+    "strict-comparison",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Station 10 rises from 40 to 45 on July 2 but falls on July 3 and has a July 5 gap; station 20 rises from 79 to 81 on July 3; station 30 has only one reading. Only exact consecutive-day rises should be returned.",
+  "determinism_notes": "Station IDs, reading dates, temperatures, exact one-day interval, comparison, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE sensor_readings (reading_id INT PRIMARY KEY, station_id INT NOT NULL, reading_on DATE NOT NULL, temperature_c DECIMAL(5,2) NOT NULL)",
+    "INSERT INTO sensor_readings (reading_id, station_id, reading_on, temperature_c) VALUES (1, 10, '2026-07-01', 40.00), (2, 10, '2026-07-02', 45.00), (3, 10, '2026-07-03', 43.00), (4, 10, '2026-07-05', 50.00), (5, 20, '2026-07-01', 80.00), (6, 20, '2026-07-02', 79.00), (7, 20, '2026-07-03', 81.00), (8, 30, '2026-07-02', 12.00)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT current_reading.reading_id, current_reading.station_id, current_reading.reading_on, current_reading.temperature_c, prior_reading.temperature_c AS prior_temperature_c FROM sensor_readings AS current_reading INNER JOIN sensor_readings AS prior_reading ON current_reading.station_id = prior_reading.station_id AND current_reading.reading_on = DATE_ADD(prior_reading.reading_on, INTERVAL 1 DAY) WHERE current_reading.temperature_c > prior_reading.temperature_c ORDER BY current_reading.station_id, current_reading.reading_on",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT reading_id, station_id, reading_on, temperature_c FROM sensor_readings ORDER BY reading_id",
+      "ordered": true
+    }
+  ]
+}
