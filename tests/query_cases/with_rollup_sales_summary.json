@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "with_rollup_sales_summary",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "functions/aggregate/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/functions/aggregate/mysql.sql",
+      "sha256": "0160718d9ccf135c9938eaf3879a37c672cd171e68065046c953d55e95a33425",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "functions/aggregate/mysql.sql:30",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped aggregate uses MySQL's WITH ROLLUP extension to emit detail rows, per-dimension subtotals, and a grand total from one grouped query.",
+      "mysql_mariadb_translation": "Reauthored as an independent regional sales summary. Fixed transactions are grouped by region and channel, and WITH ROLLUP emits channel details, regional subtotals, and the grand total without copying the source schema or values."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "with-rollup",
+    "multi-level-aggregate",
+    "group-by",
+    "null-summary-dimensions",
+    "deterministic-fixture"
+  ],
+  "fixture_notes": "North has separate web and store detail groups, South has two web rows plus one store row, and the rollup output must include both regional subtotals and one grand total. Source rows contain no NULL dimensions, so NULL region or channel values identify generated summary levels. The rollup result is compared as an unordered relation because SQL does not guarantee summary-row order without an outer ordering query.",
+  "determinism_notes": "Transaction IDs, dimensions, amounts, and grouping expressions are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE regional_sales (sale_id INT PRIMARY KEY, region_code VARCHAR(16) NOT NULL, sales_channel VARCHAR(16) NOT NULL, net_amount INT NOT NULL)",
+    "INSERT INTO regional_sales VALUES (1001, 'North', 'web', 12), (1002, 'North', 'store', 8), (1003, 'South', 'web', 20), (1004, 'South', 'web', 5), (1005, 'South', 'store', 7)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT region_code, sales_channel, SUM(net_amount) AS total_amount, COUNT(*) AS sale_count FROM regional_sales GROUP BY region_code, sales_channel WITH ROLLUP",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT sale_id, region_code, sales_channel, net_amount FROM regional_sales ORDER BY sale_id",
+      "ordered": true
+    }
+  ]
+}
