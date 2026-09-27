@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "weekday_distinct_order_totals",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Udaysaini2709/Pizza_Sales_Analysis",
+      "commit": "bcf7ef769a3c6560ba7d2579dc77b26ff1bb2e7b",
+      "path": "Pizza_Sales.sql",
+      "url": "https://github.com/Udaysaini2709/Pizza_Sales_Analysis/blob/bcf7ef769a3c6560ba7d2579dc77b26ff1bb2e7b/Pizza_Sales.sql",
+      "sha256": "2455cd0093f14ee751cec874ea802985d9cc3b90b1f46f0158aafeae69dc128f",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Pizza_Sales.sql:31-37 (daily weekday trend)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A daily trend groups records by DAYNAME, counts distinct business orders rather than raw rows, and uses FIELD in ORDER BY to restore Monday-through-Sunday calendar order instead of alphabetical order.",
+      "mysql_mariadb_translation": "Rewritten as an independent service-visit ledger with repeated line events for the same order, a second aggregate for total units, and fixed DATE values covering all weekdays. The query uses an aliased DAYNAME grouping expression and FIELD over that projection alias for calendar sorting, with a stable weekday tie-breaker; the source schema, pizza data, and date-normalization UPDATE are omitted."
+    },
+    "independently_authored": true
+  },
+  "features": ["dayname", "field-function", "count-distinct", "sum", "grouping", "duplicate-order-rows", "deterministic-order"],
+  "fixture_notes": "Each weekday has at least one service order. Monday and Wednesday contain repeated line events for one order, so raw row counts differ from distinct order counts; unit totals include every line event.",
+  "determinism_notes": "Visit dates, line IDs, order IDs, and unit counts are fixed. FIELD defines calendar order and weekday_name is a stable tie-breaker; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE service_lines (line_id INT PRIMARY KEY, order_id INT NOT NULL, service_date DATE NOT NULL, units INT NOT NULL)",
+    "INSERT INTO service_lines VALUES (1001, 501, '2026-05-04', 2), (1002, 501, '2026-05-04', 1), (1003, 502, '2026-05-04', 3), (1004, 503, '2026-05-05', 4), (1005, 504, '2026-05-06', 1), (1006, 504, '2026-05-06', 2), (1007, 505, '2026-05-07', 5), (1008, 506, '2026-05-08', 2), (1009, 507, '2026-05-09', 6), (1010, 508, '2026-05-10', 3)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT DAYNAME(service_date) AS weekday_name, COUNT(DISTINCT order_id) AS distinct_orders, SUM(units) AS total_units FROM service_lines GROUP BY DAYNAME(service_date) ORDER BY FIELD(weekday_name, 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'), weekday_name",
+      "ordered": true
+    }
+  ]
+}
