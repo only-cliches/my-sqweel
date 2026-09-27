@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "distinct_sum_cost_buckets",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "pgspider/sqlite_fdw",
+      "commit": "ea52a24f63dda31bbf72270ba32f8217cd6232be",
+      "path": "sql/15.7/extra/aggregates.sql",
+      "url": "https://github.com/pgspider/sqlite_fdw/blob/ea52a24f63dda31bbf72270ba32f8217cd6232be/sql/15.7/extra/aggregates.sql",
+      "sha256": "8ad2f4f3eebe47c40538121917e2e1bab2dd5ef893e134b573c881b0618d2fdc",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "sql/15.7/extra/aggregates.sql:576 (distinct aggregate test)",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A grouped numeric report compares ordinary SUM with SUM(DISTINCT ...) so repeated values contribute to the gross total but only one copy contributes to the unique total.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored cost-bucket report with decimal charges, a LEFT JOIN to preserve an empty bucket, explicit ordinary and distinct counts, and NULL charges. The fixture uses new tables, rows, labels, and ordering while retaining the standard SUM(DISTINCT ...) semantics."
+    },
+    "independently_authored": true
+  },
+  "features": ["sum-distinct", "sum", "count-distinct", "left-join", "grouping", "null", "decimal", "deterministic-order"],
+  "fixture_notes": "Bucket 10 has duplicate 12.50 charges plus 8.00 and NULL, so gross and unique totals differ; bucket 20 repeats 7.25; bucket 30 has no events and must retain NULL sum results through the LEFT JOIN.",
+  "determinism_notes": "Bucket IDs and event IDs are fixed, grouping uses the unique bucket key, and the final report orders by bucket ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE cost_buckets (bucket_id INT PRIMARY KEY, bucket_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE cost_events (event_id INT PRIMARY KEY, bucket_id INT NOT NULL, charge DECIMAL(10,2) NULL)",
+    "INSERT INTO cost_buckets VALUES (10, 'onboarding'), (20, 'renewal'), (30, 'closure')",
+    "INSERT INTO cost_events VALUES (1001, 10, 12.50), (1002, 10, 12.50), (1003, 10, 8.00), (1004, 10, NULL), (2001, 20, 5.00), (2002, 20, 7.25), (2003, 20, 7.25), (2004, 20, NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT b.bucket_id, b.bucket_name, COUNT(e.charge) AS charge_count, SUM(e.charge) AS gross_charge, SUM(DISTINCT e.charge) AS unique_charge, COUNT(DISTINCT e.charge) AS unique_charge_points FROM cost_buckets b LEFT JOIN cost_events e ON e.bucket_id = b.bucket_id GROUP BY b.bucket_id, b.bucket_name ORDER BY b.bucket_id",
+      "ordered": true
+    }
+  ]
+}
