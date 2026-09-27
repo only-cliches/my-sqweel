@@ -8,7 +8,7 @@ description: Discover public GitHub SQL patterns yourself from MySQL/MariaDB, Po
 You own discovery. Search public GitHub directly; do not ask the user for repositories.
 Use this skill when the user asks for query coverage, real-world SQL patterns,
 or a compatibility regression. Work one candidate at a time. Do not start another
-candidate until the current one is accepted, parked, or documented as a duplicate.
+candidate until the current one is retained or discarded.
 
 ## Prerequisites
 
@@ -70,15 +70,31 @@ SQL joins, subqueries, CTEs, grouping, windows, set operations, expressions, DML
 ordinary transactions. Translate dialect forms only when semantics are clear: for
 example, PostgreSQL `$1` parameters to concrete fixture literals, `::type` to `CAST`,
 `ILIKE` to a documented case-insensitive collation/`LOWER` form, and aggregate
-`FILTER` to `CASE` inside the aggregate. Park arrays, ranges, `JSONB` operators,
+`FILTER` to `CASE` inside the aggregate. Skip arrays, ranges, `JSONB` operators,
 PostGIS, SQLite PRAGMAs, virtual tables, PostgreSQL extensions, and any translation
 that would change behavior materially.
+
+## Retain only shippable coverage
+
+Before authoring a JSON case, reject candidates that are duplicates, non-portable,
+outside the autonomous implementation scope below, or otherwise would previously
+have been parked or only documented. Move directly to the next candidate without
+changing the repository.
+
+If testing later reveals that a candidate must be rejected, remove every
+candidate-specific working-tree change before continuing, including generated JSON
+cases and minimized cases under `tests/query_cases/`. Do not add rejected candidates
+to `CHANGELOG.md`, preserve them as tests, or create `park`, `document`, `reviewed`,
+or duplicate-only commits. Preserve unrelated pre-existing working-tree changes.
+
+If no candidate produces retained coverage, finish with no repository commit and
+briefly report that no shippable candidate was found.
 
 ## Changelog
 
 At the end of every query-coverage turn, update `CHANGELOG.md` in the current
-unreleased section. Record every fixture, minimized case, and source fix added
-or discovered during that turn using concise, semantic, evidence-backed wording.
+unreleased section. Record every retained fixture, minimized case, and source fix
+added during that turn using concise, semantic, evidence-backed wording.
 Do not end a turn with query-coverage changes omitted from the changelog.
 
 ## Build and compare a case
@@ -128,7 +144,8 @@ cargo test --locked --test query_coverage query_coverage_cases -- --exact --noca
 ```
 
 First run with `QUERY_COVERAGE_MODE=baseline` twice. A baseline failure or different
-baseline result means the fixture is invalid or nondeterministic; fix or park it.
+baseline result means the fixture is invalid or nondeterministic; fix it or discard
+the candidate and delete its generated JSON cases.
 Only after two identical baseline observations run the differential comparison.
 
 ## Handle the result
@@ -139,7 +156,8 @@ Only after two identical baseline observations run the differential comparison.
 - Implement the smallest general fix under `src/sql`. Do not weaken the comparator,
   alter expected results, change floors, or special-case fixture values.
 - Do not implement routines, triggers, administration, topology, storage architecture,
-  or new transaction isolation models autonomously. Park these with evidence.
+  or new transaction isolation models autonomously. Discard these candidates without
+  repository changes.
 - All tests must pass, resolve any failing tests.
 
 Before the end-of-turn commit, rerun the original and minimized cases three
@@ -150,5 +168,5 @@ Never push, open a PR, or merge without the user asking.
 
 Report the source URL and commit, source dialect, query location, observed pattern,
 MySQL/MariaDB translation, feature combination,
-fixture assumptions, MariaDB behavior, MySqweel behavior, tests run, and any parked
-reason. Query count alone is not a general SQL compatibility guarantee.
+fixture assumptions, MariaDB behavior, MySqweel behavior, and tests run for retained
+coverage. Query count alone is not a general SQL compatibility guarantee.
