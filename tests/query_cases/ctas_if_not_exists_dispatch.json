@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "ctas_if_not_exists_dispatch",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "DataLinkDC/dinky",
+      "commit": "63b5a5aa2438a4c30efd1067da8aedf844951143",
+      "path": "script/sql/dinky-mysql.sql",
+      "url": "https://github.com/DataLinkDC/dinky/blob/63b5a5aa2438a4c30efd1067da8aedf844951143/script/sql/dinky-mysql.sql",
+      "sha256": "a0196e96dc23e80c96b8fd054d80ffb17d205cfdf44a98f7997233d9329f736d",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "script/sql/dinky-mysql.sql: conditional CREATE TABLE ... AS SELECT staging statements",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL/MariaDB setup script conditionally materializes a filtered projection into a new table with CREATE TABLE IF NOT EXISTS ... AS SELECT.",
+      "mysql_mariadb_translation": "Reauthored as a dispatch snapshot. Ready parcel rows are materialized with a computed weight band, the same conditional CTAS is repeated to verify idempotence, and an ordered read confirms the original snapshot remains unchanged. The source schema, identifiers, values, and application setup are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["conditional-ctas", "create-table-as-select", "filtered-source", "computed-column", "idempotent-ddl", "deterministic-order"],
+  "fixture_notes": "Ready parcels 701 and 703 are copied with computed weight bands; queued parcel 702 is excluded. The repeated IF NOT EXISTS CTAS must preserve the existing snapshot rows and schema.",
+  "determinism_notes": "Parcel IDs, states, weights, CASE thresholds, and final primary-key order are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE dispatch_parcels (parcel_id INT PRIMARY KEY, parcel_label VARCHAR(24) NOT NULL, parcel_state VARCHAR(16) NOT NULL, weight_kg INT NOT NULL)",
+    "INSERT INTO dispatch_parcels VALUES (701, 'north-crate', 'ready', 8), (702, 'held-box', 'queued', 14), (703, 'south-sack', 'ready', 21)"
+  ],
+  "steps": [
+    {
+      "sql": "CREATE TABLE IF NOT EXISTS dispatch_snapshot AS SELECT parcel_id, parcel_label, CASE WHEN weight_kg >= 20 THEN 'heavy' ELSE 'light' END AS weight_band FROM dispatch_parcels WHERE parcel_state = 'ready' ORDER BY parcel_id",
+      "ordered": true
+    },
+    {
+      "sql": "CREATE TABLE IF NOT EXISTS dispatch_snapshot AS SELECT parcel_id, parcel_label, CASE WHEN weight_kg >= 20 THEN 'heavy' ELSE 'light' END AS weight_band FROM dispatch_parcels WHERE parcel_state = 'ready' ORDER BY parcel_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT parcel_id, parcel_label, weight_band FROM dispatch_snapshot ORDER BY parcel_id",
+      "ordered": true
+    }
+  ]
+}
