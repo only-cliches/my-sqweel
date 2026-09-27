@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "id": "intersect_grouped_year_counts",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "chris-data-pro/python-algorithm",
+      "commit": "577e3f3244f7e63aecf0325a611e22d3466ce10c",
+      "path": "sql/intersect.sql",
+      "url": "https://github.com/chris-data-pro/python-algorithm/blob/577e3f3244f7e63aecf0325a611e22d3466ce10c/sql/intersect.sql",
+      "sha256": "73dac280cffa4b1f1d5c5e82d2a4938f23dc3747676303559491c17a791e3f0b",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/intersect.sql:33-43",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "Two grouped customer queries use year-specific HAVING thresholds and INTERSECT to retain customers above the threshold in both years.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored service-order audit. Two grouped YEAR-based branches intersect accounts with at least three orders in each of two fixed years, while a conditional aggregate report independently exposes both yearly counts; the source tables, identifiers, dates, and customer-order context are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "intersect",
+    "group-by",
+    "having",
+    "year-extraction",
+    "conditional-aggregate",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Account 120 meets the threshold in both years; accounts 121 and 122 meet it in only one year; account 123 meets it in both with extra orders. The INTERSECT result must contain 120 and 123, while the conditional aggregate exposes all yearly counts.",
+  "determinism_notes": "Account IDs and order dates are fixed. Set-operation and aggregate results are ordered by account ID, with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE service_orders (order_id INT PRIMARY KEY, account_id INT NOT NULL, ordered_on DATE NOT NULL)",
+    "INSERT INTO service_orders VALUES (1001, 120, '2024-01-10'), (1002, 120, '2024-03-11'), (1003, 120, '2024-07-19'), (1004, 120, '2024-11-23'), (1005, 120, '2025-02-05'), (1006, 120, '2025-04-17'), (1007, 120, '2025-08-21'), (1008, 120, '2025-12-02'), (1101, 121, '2024-01-12'), (1102, 121, '2024-05-14'), (1103, 121, '2024-09-16'), (1104, 121, '2024-12-18'), (1105, 121, '2025-03-20'), (1106, 121, '2025-06-22'), (1107, 121, '2025-10-24'), (1201, 122, '2024-02-13'), (1202, 122, '2024-06-15'), (1203, 122, '2024-10-17'), (1204, 122, '2025-01-19'), (1205, 122, '2025-05-21'), (1206, 122, '2025-09-23'), (1301, 123, '2024-02-01'), (1302, 123, '2024-04-03'), (1303, 123, '2024-06-05'), (1304, 123, '2024-08-07'), (1305, 123, '2025-01-09'), (1306, 123, '2025-03-11'), (1307, 123, '2025-05-13'), (1308, 123, '2025-07-15'), (1309, 123, '2025-09-17')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT account_id FROM service_orders WHERE YEAR(ordered_on) = 2024 GROUP BY account_id HAVING COUNT(*) >= 3 INTERSECT SELECT account_id FROM service_orders WHERE YEAR(ordered_on) = 2025 GROUP BY account_id HAVING COUNT(*) >= 3 ORDER BY account_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT account_id, SUM(CASE WHEN YEAR(ordered_on) = 2024 THEN 1 ELSE 0 END) AS orders_2024, SUM(CASE WHEN YEAR(ordered_on) = 2025 THEN 1 ELSE 0 END) AS orders_2025 FROM service_orders GROUP BY account_id HAVING orders_2024 >= 3 AND orders_2025 >= 3 ORDER BY account_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT account_id, COUNT(*) AS total_orders FROM service_orders GROUP BY account_id ORDER BY account_id",
+      "ordered": true
+    }
+  ]
+}
