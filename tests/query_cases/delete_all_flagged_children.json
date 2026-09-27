@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "id": "delete_all_flagged_children",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "davidB/forum-migration",
+      "commit": "1ced26384595db5928a026f1cf13fa54da951f85",
+      "path": "purge.sql",
+      "url": "https://github.com/davidB/forum-migration/blob/1ced26384595db5928a026f1cf13fa54da951f85/purge.sql",
+      "sha256": "a187d31cfc6cf8ad720d0eaed85e6cad9ae97246fb4b7abf7a04d25c033630a2",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "purge.sql:5-6",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A DELETE selects target IDs through nested derived subqueries, compares a grouped flagged-child count with a correlated total-child count through HAVING, and then removes only parents whose children all satisfy the flagged condition.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored customer-note purge. Nested derived tables make the target-table read safe during DELETE; only accounts whose complete note history is flagged are removed, while mixed, normal-only, and childless accounts remain."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "delete-in-subquery",
+    "nested-derived-table",
+    "grouped-having-alias",
+    "correlated-count-subquery",
+    "all-children-predicate",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Account 801 has only flagged notes and is deleted; account 802 has flagged and normal notes and remains; account 803 has no notes and account 804 has only a normal note, so neither is selected.",
+  "determinism_notes": "Account and note IDs are fixed, each grouped account has a stable primary key, and the final read orders by account ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE purge_accounts (account_id INT PRIMARY KEY, account_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE purge_notes (note_id INT PRIMARY KEY, account_id INT NOT NULL, note_state VARCHAR(16) NOT NULL, note_text VARCHAR(64) NOT NULL)",
+    "INSERT INTO purge_accounts VALUES (801, 'all-flagged'), (802, 'mixed-history'), (803, 'no-history'), (804, 'normal-only')",
+    "INSERT INTO purge_notes VALUES (901, 801, 'flagged', 'spam-a'), (902, 801, 'flagged', 'spam-b'), (903, 802, 'flagged', 'spam-c'), (904, 802, 'normal', 'kept-a'), (905, 804, 'normal', 'kept-b')"
+  ],
+  "steps": [
+    {
+      "sql": "DELETE FROM purge_accounts WHERE account_id IN (SELECT account_id FROM (SELECT a.account_id, COUNT(n.note_id) AS flagged_notes, (SELECT COUNT(*) FROM purge_notes AS all_notes WHERE all_notes.account_id = a.account_id) AS total_notes FROM purge_accounts AS a, purge_notes AS n WHERE n.account_id = a.account_id AND n.note_state = 'flagged' GROUP BY a.account_id HAVING flagged_notes = total_notes) AS all_flagged_accounts)",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT account_id, account_name FROM purge_accounts ORDER BY account_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT note_id, account_id, note_state FROM purge_notes ORDER BY note_id",
+      "ordered": true
+    }
+  ]
+}
