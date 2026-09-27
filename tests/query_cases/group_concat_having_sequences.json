@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "id": "group_concat_having_sequences",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "hepabolu/mytap",
+      "commit": "adcc0769d71baf0c59ab3c427c92806a838c8b6a",
+      "path": "mytap-constraint.sql",
+      "url": "https://github.com/hepabolu/mytap/blob/adcc0769d71baf0c59ab3c427c92806a838c8b6a/mytap-constraint.sql",
+      "sha256": "4e7993a049ac7c02200f578e88b86f9b830f9cff4830c86adc33ad21be7d1a2d",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "mytap-constraint.sql:440-451",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped query uses ordered GROUP_CONCAT expressions inside HAVING to retain only groups whose concatenated members match an expected sequence.",
+      "mysql_mariadb_translation": "Reauthored as an independent route-sequence audit. Each route's ordered stop codes are concatenated and compared in HAVING with a fixed expected sequence; matching and mismatching routes make the aggregate predicate observable without copying information-schema queries, schemas, or values."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "group-concat",
+    "aggregate-having",
+    "ordered-aggregate",
+    "join",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Routes 601 and 602 have stop sequences matching their expected strings and remain in the report. Route 603 has one wrong stop code and is filtered out by the GROUP_CONCAT equality in HAVING.",
+  "determinism_notes": "Route IDs, expected sequences, stop ordinals, stop codes, grouping, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE route_expectations (route_id INT PRIMARY KEY, expected_sequence VARCHAR(64) NOT NULL)",
+    "CREATE TABLE route_stops (stop_id INT PRIMARY KEY, route_id INT NOT NULL, stop_order INT NOT NULL, stop_code VARCHAR(16) NOT NULL)",
+    "INSERT INTO route_expectations VALUES (601, 'dock|sort|load'), (602, 'scan|seal'), (603, 'check|dispatch')",
+    "INSERT INTO route_stops VALUES (7001, 601, 1, 'dock'), (7002, 601, 2, 'sort'), (7003, 601, 3, 'load'), (7004, 602, 1, 'scan'), (7005, 602, 2, 'seal'), (7006, 603, 1, 'check'), (7007, 603, 2, 'hold')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT r.route_id, GROUP_CONCAT(s.stop_code ORDER BY s.stop_order ASC, s.stop_id ASC SEPARATOR '|') AS observed_sequence FROM route_expectations AS r INNER JOIN route_stops AS s ON s.route_id = r.route_id GROUP BY r.route_id, r.expected_sequence HAVING GROUP_CONCAT(s.stop_code ORDER BY s.stop_order ASC, s.stop_id ASC SEPARATOR '|') = r.expected_sequence ORDER BY r.route_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT route_id, expected_sequence FROM route_expectations ORDER BY route_id",
+      "ordered": true
+    }
+  ]
+}
