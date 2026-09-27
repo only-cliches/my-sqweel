@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "id": "grouped_update_join_membership",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "JacksonHoggard/Song-Database-CS4347-005",
+      "commit": "0a9f455108a32b474f3bd13ffce965c8f7e68cde",
+      "path": "update.sql",
+      "url": "https://github.com/JacksonHoggard/Song-Database-CS4347-005/blob/0a9f455108a32b474f3bd13ffce965c8f7e68cde/update.sql",
+      "sha256": "a00cfd16165babedce161d6e2a868a8bb41bb88837052c6610098fcbcc59bbe1",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "update.sql:26-36",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "An UPDATE JOIN uses a grouped derived table to count child rows per parent, then updates only parents whose aggregate count exceeds a threshold.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored team-tier refresh. A grouped member-count derived table joins to team rows and promotes only teams with at least two members; the schema, labels, values, and operational meaning are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "update-join",
+    "grouped-derived-table",
+    "count-threshold",
+    "left-join-final-state",
+    "partial-mutation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Team 301 has three members and is promoted, team 302 has one member and keeps its existing tier, and team 303 has no member rows and remains unchanged because it is absent from the grouped derived table.",
+  "determinism_notes": "Team and member IDs are fixed; the grouped UPDATE has a unique team join key and the final read orders by the primary team ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE league_teams (team_id INT PRIMARY KEY, team_name VARCHAR(32) NOT NULL, tier VARCHAR(16) NOT NULL)",
+    "CREATE TABLE league_members (member_id INT PRIMARY KEY, team_id INT NOT NULL, member_name VARCHAR(32) NOT NULL)",
+    "INSERT INTO league_teams VALUES (301, 'northwind', 'starter'), (302, 'southridge', 'starter'), (303, 'eastvale', 'starter')",
+    "INSERT INTO league_members VALUES (401, 301, 'Aster'), (402, 301, 'Beryl'), (403, 301, 'Cobalt'), (404, 302, 'Dune')"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE league_teams AS t JOIN (SELECT team_id, COUNT(member_name) AS member_count FROM league_members GROUP BY team_id) AS m ON t.team_id = m.team_id SET t.tier = 'ensemble' WHERE m.member_count >= 2",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT team_id, team_name, tier FROM league_teams ORDER BY team_id",
+      "ordered": true
+    }
+  ]
+}
