@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "id": "calendar_weekday_occurrences",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "SparkhoundSQL/sql-server-toolbox",
+      "commit": "51636a22fe7db848cc12473c8083e2753bb6ab93",
+      "path": "dimdate.sql",
+      "url": "https://github.com/SparkhoundSQL/sql-server-toolbox/blob/51636a22fe7db848cc12473c8083e2753bb6ab93/dimdate.sql",
+      "sha256": "a54982c8428cafc02d40471c7291538e8725cffbabc6e72ec361fe254855d2c5",
+      "source_dialect": "sqlserver"
+    },
+    "inspiration": {
+      "source_location": "dimdate.sql:31-62",
+      "source_dialect": "sqlserver",
+      "observed_pattern": "A recursive date sequence feeds window functions that number each weekday occurrence within its month and compute a month-end value for every generated calendar row.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored bounded calendar report. A MariaDB recursive CTE expands a stored date range, ROW_NUMBER partitions by month and weekday, LAST_DAY computes each month boundary, and CASE classifies weekends and selected fixed holidays. The schema, range, output columns, and reporting purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "recursive-cte",
+    "date-add",
+    "row-number",
+    "window-partition",
+    "last-day",
+    "dayofweek",
+    "case",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The range spans 2024-01-01 through 2024-02-05, exposing repeated weekdays across two months, the January month boundary, the third Monday classification, and the February first Monday. The range is stored in one fixed row and contains no current-date dependency.",
+  "determinism_notes": "The generated dates and window ordering are fixed; the final report orders by day_date and uses no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE calendar_ranges (range_id INT PRIMARY KEY, range_start DATE NOT NULL, range_end DATE NOT NULL)",
+    "INSERT INTO calendar_ranges VALUES (7, '2024-01-01', '2024-02-05')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH RECURSIVE calendar_days (range_id, day_date, range_end) AS (SELECT range_id, range_start, range_end FROM calendar_ranges UNION ALL SELECT range_id, DATE_ADD(day_date, INTERVAL 1 DAY), range_end FROM calendar_days WHERE day_date < range_end), labeled_days AS (SELECT range_id, day_date, DATE_FORMAT(day_date, '%Y-%m') AS month_key, DAYOFWEEK(day_date) AS weekday_no, ROW_NUMBER() OVER (PARTITION BY range_id, DATE_FORMAT(day_date, '%Y-%m'), DAYOFWEEK(day_date) ORDER BY day_date) AS weekday_occurrence, LAST_DAY(day_date) AS month_end FROM calendar_days) SELECT range_id, day_date, month_key, weekday_no, weekday_occurrence, month_end, CASE WHEN day_date = '2024-01-01' THEN 'new-year' WHEN weekday_no = 2 AND weekday_occurrence = 3 THEN 'third-monday' WHEN weekday_no IN (1, 7) THEN 'weekend' ELSE 'weekday' END AS day_class FROM labeled_days ORDER BY range_id, day_date",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT range_id, range_start, range_end FROM calendar_ranges ORDER BY range_id",
+      "ordered": true
+    }
+  ]
+}
