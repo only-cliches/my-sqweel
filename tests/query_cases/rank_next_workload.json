@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "rank_next_workload",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Malekpour99/handouts",
+      "commit": "3cab2b1611732cab26b403ddfd301c9402d7732e",
+      "path": "Database/MySQL-Commands.sql",
+      "url": "https://github.com/Malekpour99/handouts/blob/3cab2b1611732cab26b403ddfd301c9402d7732e/Database/MySQL-Commands.sql",
+      "sha256": "cdfbc53059cfd54a7a9a4f9e09ed43d3dbcd3c24ad4f73143b4e7cb2981598b9",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Database/MySQL-Commands.sql:371-389 (window-function examples)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped workload report combines a descending RANK partition with chronological LEAD values, so tied priority rows keep a shared rank while each row also sees the next workload estimate; a CASE classifies the transition and partition edges expose the missing neighbor.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored work-item ledger with new names, dates, rows, and output labels. The fixture uses MariaDB-compatible two-argument LEAD, a deterministic date-plus-ID order, nullable DECIMAL estimates, and a separate item-ID LEAD to distinguish an actual next row from a NULL estimate. The source's unrelated tutorial sections and default-argument examples are omitted."
+    },
+    "independently_authored": true
+  },
+  "features": ["window", "rank", "lead", "partition-by", "case", "null", "decimal", "deterministic-order"],
+  "fixture_notes": "Team north has tied priority pairs, a NULL current estimate, and a NULL next estimate; team south has a tied lower-priority pair and a terminal row. The item-ID LEAD distinguishes terminal rows from rows whose estimate is NULL.",
+  "determinism_notes": "Each team has unique (work_day, item_id) ordering keys and all result reads order by team, work_day, item_id. No clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE work_items (item_id INT PRIMARY KEY, team VARCHAR(16) NOT NULL, work_day DATE NOT NULL, priority INT NOT NULL, estimate_hours DECIMAL(7,2) NULL)",
+    "INSERT INTO work_items VALUES (1, 'north', '2026-04-03', 90, 4.50), (2, 'north', '2026-04-04', 90, 6.00), (3, 'north', '2026-04-05', 70, NULL), (4, 'north', '2026-04-06', 70, 3.25), (5, 'south', '2026-04-03', 80, 2.00), (6, 'south', '2026-04-04', 60, 5.50), (7, 'south', '2026-04-05', 60, 1.25)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT team, work_day, priority, estimate_hours, RANK() OVER (PARTITION BY team ORDER BY priority DESC) AS priority_rank, LEAD(estimate_hours, 1) OVER (PARTITION BY team ORDER BY work_day, item_id) AS next_estimate, CASE WHEN LEAD(item_id, 1) OVER (PARTITION BY team ORDER BY work_day, item_id) IS NULL THEN 'no-next' WHEN estimate_hours IS NULL THEN 'current-unknown' WHEN LEAD(estimate_hours, 1) OVER (PARTITION BY team ORDER BY work_day, item_id) IS NULL THEN 'next-unknown' WHEN LEAD(estimate_hours, 1) OVER (PARTITION BY team ORDER BY work_day, item_id) > estimate_hours THEN 'heavier-next' WHEN LEAD(estimate_hours, 1) OVER (PARTITION BY team ORDER BY work_day, item_id) < estimate_hours THEN 'lighter-next' ELSE 'same-next' END AS transition FROM work_items ORDER BY team, work_day, item_id",
+      "ordered": true
+    }
+  ]
+}
