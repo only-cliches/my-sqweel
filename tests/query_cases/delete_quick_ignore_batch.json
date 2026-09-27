@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "delete_quick_ignore_batch",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "antlr/grammars-v4",
+      "commit": "e199816b3f1a7a49ea1ad84fb6b87c382ea36a33",
+      "path": "sql/mariadb/examples/fast/dml_delete.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/e199816b3f1a7a49ea1ad84fb6b87c382ea36a33/sql/mariadb/examples/fast/dml_delete.sql",
+      "sha256": "62329095424f65c4213801a8cc24b7525a679590e941b67624790f4efe462ee8",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/mariadb/examples/fast/dml_delete.sql:5",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB single-table DELETE combines the QUICK and IGNORE modifiers so an engine-specific deletion hint and error-suppressing mode are accepted together.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored MyISAM queue purge. DELETE QUICK IGNORE removes the two highest-priority discarded entries under deterministic ORDER BY/LIMIT selection, while active and lower-priority entries remain for final-state verification."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "delete-quick",
+    "delete-ignore",
+    "myisam",
+    "order-by-limit",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Discarded queue items 1201, 1202, and 1203 are ordered by priority 90, 80, and 70; QUICK IGNORE with LIMIT 2 removes the first two. Active item 1301 and the lower-priority discarded item remain.",
+  "determinism_notes": "The MyISAM table, item IDs, states, priorities, ordering tie-breaker, and final read are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE quick_queue_items (item_id INT PRIMARY KEY, item_label VARCHAR(32) NOT NULL, item_state VARCHAR(16) NOT NULL, priority INT NOT NULL) ENGINE=MyISAM",
+    "INSERT INTO quick_queue_items VALUES (1201, 'stale-index', 'discarded', 90), (1202, 'old-cache', 'discarded', 80), (1203, 'expired-token', 'discarded', 70), (1301, 'active-retry', 'active', 99)"
+  ],
+  "steps": [
+    {
+      "sql": "DELETE QUICK IGNORE FROM quick_queue_items WHERE item_state = 'discarded' ORDER BY priority DESC, item_id ASC LIMIT 2",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT item_id, item_label, item_state, priority FROM quick_queue_items ORDER BY item_id",
+      "ordered": true
+    }
+  ]
+}

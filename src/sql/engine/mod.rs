@@ -1314,6 +1314,8 @@ impl RawEngine {
             )
             .replace("DELETE LOW_PRIORITY", "DELETE")
             .replace("delete low_priority", "delete")
+            .replace("DELETE QUICK", "DELETE")
+            .replace("delete quick", "delete")
             .replace("UPDATE LOW_PRIORITY", "UPDATE")
             .replace("update low_priority", "update")
             .replace("DELETE IGNORE", "DELETE")
