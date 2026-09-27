@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "id": "window_delete_dedup",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "scenarios/deduplication/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/scenarios/deduplication/mysql.sql",
+      "sha256": "776f99a0788f5333d8210a3d3942c6771f77306621e99fc764e1ee26ada9e1e0",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "scenarios/deduplication/mysql.sql:37-80",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL deduplication workflow ranks rows within each repeated key using ROW_NUMBER and deletes every ranked duplicate through a nested derived query so the target table can be read safely during its own DELETE.",
+      "mysql_mariadb_translation": "Reauthored as an account-alias cleanup. A deterministic window ranking keeps the newest alias per account key, including a tie-break by alias ID and a NULL-key partition, while a nested DELETE removes only lower-ranked aliases; the source schema, names, values, and user-deduplication context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "delete-subquery",
+    "window-row-number",
+    "nested-derived-table",
+    "partitioned-deduplication",
+    "null-partition",
+    "deterministic-tie-break",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Account alpha keeps alias 3 because it has the newest sequence and wins the equal-sequence ID tie; alias 1 and 2 are deleted. The NULL account-key partition keeps alias 6 over alias 5. Account beta's single alias 4 remains, and each retained alias keeps its original label and sequence.",
+  "determinism_notes": "Alias IDs, account keys, sequence values, window ordering, and final ordering are fixed. The cleanup runs on one connection with no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE account_aliases (alias_id INT PRIMARY KEY, account_key VARCHAR(16) NULL, alias_label VARCHAR(32) NOT NULL, created_seq INT NOT NULL)",
+    "INSERT INTO account_aliases VALUES (1, 'alpha', 'alpha-old', 10), (2, 'alpha', 'alpha-newer', 20), (3, 'alpha', 'alpha-tie-winner', 20), (4, 'beta', 'beta-only', 5), (5, NULL, 'anonymous-old', 7), (6, NULL, 'anonymous-new', 8)"
+  ],
+  "steps": [
+    {
+      "sql": "DELETE FROM account_aliases WHERE alias_id IN (SELECT duplicate_id FROM (SELECT alias_id AS duplicate_id, ROW_NUMBER() OVER (PARTITION BY account_key ORDER BY created_seq DESC, alias_id DESC) AS row_no FROM account_aliases) AS ranked_aliases WHERE row_no > 1)",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT alias_id, account_key, alias_label, created_seq FROM account_aliases ORDER BY alias_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT alias_id, account_key FROM account_aliases ORDER BY alias_id",
+      "ordered": true
+    }
+  ]
+}
