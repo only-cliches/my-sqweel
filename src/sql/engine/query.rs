@@ -2134,8 +2134,8 @@ impl RawEngine {
                     "LENGTHB" | "WEEK" => MysqlColumnType::Integer,
                     "TO_SECONDS" => MysqlColumnType::BigInt,
                     "ADD_MONTHS" => MysqlColumnType::Char,
-                    "FIELD" | "FIND_IN_SET" | "BIT_COUNT" | "INSTR" | "PERIOD_ADD"
-                    | "PERIOD_DIFF" | "TO_DAYS" => MysqlColumnType::Integer,
+                    "EXTRACT_YEAR_MONTH" | "FIELD" | "FIND_IN_SET" | "BIT_COUNT" | "INSTR"
+                    | "PERIOD_ADD" | "PERIOD_DIFF" | "TO_DAYS" => MysqlColumnType::Integer,
                     "YEAR" | "MONTH" | "DAY" | "DAYOFMONTH" | "DAYOFWEEK" | "WEEKDAY"
                     | "DAYOFYEAR" | "YEARWEEK" | "WEEKOFYEAR" | "QUARTER" | "HOUR" | "MINUTE"
                     | "SECOND" | "MICROSECOND" => MysqlColumnType::Integer,

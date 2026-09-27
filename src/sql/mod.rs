@@ -55,7 +55,9 @@ pub(crate) fn sql_tokens(sql: &str) -> Result<Vec<(Token, &str)>, TokenizerError
 }
 
 pub fn parse(sql: &str) -> Result<Vec<Statement>, sqlparser::parser::ParserError> {
-    let parser_sql = rewrite_mysql_distinctrow(&rewrite_mysql_compound_intervals(sql));
+    let parser_sql = rewrite_mysql_extract_year_month(&rewrite_mysql_distinctrow(
+        &rewrite_mysql_compound_intervals(sql),
+    ));
     let rewritten_assignments = if parser_sql.contains(":=")
         && !parser_sql
             .trim_start()
@@ -152,6 +154,111 @@ fn rewrite_mysql_compound_intervals(sql: &str) -> String {
         }
         output.push(byte);
         index += 1;
+    }
+    String::from_utf8(output).expect("SQL input must be UTF-8")
+}
+
+fn rewrite_mysql_extract_year_month(sql: &str) -> String {
+    let bytes = sql.as_bytes();
+    let mut output = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        let is_extract = index + 7 <= bytes.len()
+            && bytes[index..index + 7].eq_ignore_ascii_case(b"EXTRACT")
+            && (index == 0
+                || !bytes[index - 1].is_ascii_alphanumeric() && bytes[index - 1] != b'_')
+            && (index + 7 == bytes.len()
+                || !bytes[index + 7].is_ascii_alphanumeric() && bytes[index + 7] != b'_');
+        if !is_extract {
+            output.push(bytes[index]);
+            index += 1;
+            continue;
+        }
+
+        let mut cursor = index + 7;
+        while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        if bytes.get(cursor) != Some(&b'(') {
+            output.push(bytes[index]);
+            index += 1;
+            continue;
+        }
+        cursor += 1;
+        while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        let field_start = cursor;
+        while cursor < bytes.len()
+            && (bytes[cursor].is_ascii_alphanumeric() || bytes[cursor] == b'_')
+        {
+            cursor += 1;
+        }
+        if !bytes[field_start..cursor].eq_ignore_ascii_case(b"YEAR_MONTH") {
+            output.extend_from_slice(&bytes[index..cursor]);
+            index = cursor;
+            continue;
+        }
+        while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        let from_start = cursor;
+        while cursor < bytes.len() && bytes[cursor].is_ascii_alphabetic() {
+            cursor += 1;
+        }
+        if !bytes[from_start..cursor].eq_ignore_ascii_case(b"FROM") {
+            output.extend_from_slice(&bytes[index..cursor]);
+            index = cursor;
+            continue;
+        }
+        while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        let expression_start = cursor;
+        let mut depth = 0_u32;
+        let mut in_single = false;
+        let mut in_double = false;
+        let mut in_backtick = false;
+        while cursor < bytes.len() {
+            let byte = bytes[cursor];
+            if (in_single || in_double) && byte == b'\\' {
+                cursor = cursor.saturating_add(2);
+                continue;
+            }
+            if in_single {
+                if byte == b'\'' {
+                    in_single = false;
+                }
+            } else if in_double {
+                if byte == b'"' {
+                    in_double = false;
+                }
+            } else if in_backtick {
+                if byte == b'`' {
+                    in_backtick = false;
+                }
+            } else {
+                match byte {
+                    b'\'' => in_single = true,
+                    b'"' => in_double = true,
+                    b'`' => in_backtick = true,
+                    b'(' => depth += 1,
+                    b')' if depth == 0 => break,
+                    b')' => depth -= 1,
+                    _ => {}
+                }
+            }
+            cursor += 1;
+        }
+        if cursor >= bytes.len() || bytes.get(cursor) != Some(&b')') {
+            output.extend_from_slice(&bytes[index..cursor]);
+            index = cursor;
+            continue;
+        }
+        output.extend_from_slice(b"EXTRACT_YEAR_MONTH(");
+        output.extend_from_slice(&bytes[expression_start..cursor]);
+        output.push(b')');
+        index = cursor + 1;
     }
     String::from_utf8(output).expect("SQL input must be UTF-8")
 }
@@ -387,4 +494,17 @@ fn rewrite_drop_index_on_table(sql: &str) -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse;
+
+    #[test]
+    fn parses_mysql_year_month_extract() {
+        let statements =
+            parse("SELECT EXTRACT(YEAR_MONTH FROM '2026-01-05 08:00:00') AS month_key")
+                .expect("YEAR_MONTH should parse through the MySQL compatibility rewrite");
+        assert_eq!(statements.len(), 1);
+    }
 }

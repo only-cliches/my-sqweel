@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "monthly_status_correlated_summary",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "maranemil/howto",
+      "commit": "1acc3008b6733111747d0fad1704753f1b4fe45b",
+      "path": "fullstack/sugarcrm/sql_reports/sql_leads_by_month.sql",
+      "url": "https://github.com/maranemil/howto/blob/1acc3008b6733111747d0fad1704753f1b4fe45b/fullstack/sugarcrm/sql_reports/sql_leads_by_month.sql",
+      "sha256": "ab24a3696ca0e622fbf2382f93f6e62544499c4088704560717eb6bf84ec76c1",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "fullstack/sugarcrm/sql_reports/sql_leads_by_month.sql:3-32 (monthly status report)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A monthly report groups by EXTRACT(YEAR_MONTH FROM DATE_ADD(...)) and projects correlated scalar COUNT subqueries for each status alongside an outer COUNT total.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored deployment-event report. Fixed event timestamps are grouped by a shifted YEAR_MONTH key, correlated status counts compare the outer event month with the full event ledger, an archived row separates subquery counts from the active outer total, and deterministic month ordering replaces the source LIMIT pagination; source tables, labels, values, and CRM context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["extract-year-month", "date-add", "correlated-scalar-count", "grouping", "status-breakdown", "outer-filter-vs-subquery", "deterministic-order"],
+  "fixture_notes": "January has one queued and one approved active event. February has one queued and one closed active event plus one archived paused event; the archived event contributes to its correlated status count but not the outer active total. The one-hour shift preserves each event's calendar month while exercising DATE_ADD inside EXTRACT.",
+  "determinism_notes": "Event IDs, timestamps, statuses, active flags, and month ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE deployment_events (event_id INT PRIMARY KEY, event_at DATETIME NOT NULL, event_status VARCHAR(16) NOT NULL, active TINYINT NOT NULL)",
+    "INSERT INTO deployment_events VALUES (2001, '2026-01-05 08:00:00', 'queued', 1), (2002, '2026-01-10 09:30:00', 'approved', 1), (2003, '2026-02-01 10:00:00', 'queued', 1), (2004, '2026-02-04 11:15:00', 'closed', 1), (2005, '2026-02-12 12:45:00', 'paused', 0)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT EXTRACT(YEAR_MONTH FROM DATE_ADD(e.event_at, INTERVAL 1 HOUR)) AS month_key, (SELECT COUNT(*) FROM deployment_events AS q WHERE q.event_status = 'queued' AND SUBSTR(e.event_at, 1, 7) = SUBSTR(q.event_at, 1, 7)) AS queued_events, (SELECT COUNT(*) FROM deployment_events AS a WHERE a.event_status = 'approved' AND SUBSTR(e.event_at, 1, 7) = SUBSTR(a.event_at, 1, 7)) AS approved_events, (SELECT COUNT(*) FROM deployment_events AS c WHERE c.event_status = 'closed' AND SUBSTR(e.event_at, 1, 7) = SUBSTR(c.event_at, 1, 7)) AS closed_events, (SELECT COUNT(*) FROM deployment_events AS p WHERE p.event_status = 'paused' AND SUBSTR(e.event_at, 1, 7) = SUBSTR(p.event_at, 1, 7)) AS paused_events, COUNT(e.event_status) AS active_events FROM deployment_events AS e WHERE e.active = 1 GROUP BY EXTRACT(YEAR_MONTH FROM DATE_ADD(e.event_at, INTERVAL 1 HOUR)) ORDER BY month_key",
+      "ordered": true
+    }
+  ]
+}

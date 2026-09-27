@@ -4789,6 +4789,9 @@ pub(super) fn eval_function_text(
         "DATE" => eval_date_part(args.first(), data, last_insert_id),
         "TIME" => eval_time_part(args.first(), data, last_insert_id),
         "YEAR" => eval_datetime_component(args.first(), data, last_insert_id, "YEAR"),
+        "EXTRACT_YEAR_MONTH" => {
+            eval_datetime_component(args.first(), data, last_insert_id, "YEAR_MONTH")
+        }
         "MONTH" => eval_datetime_component(args.first(), data, last_insert_id, "MONTH"),
         "DAY" | "DAYOFMONTH" => eval_datetime_component(args.first(), data, last_insert_id, "DAY"),
         "DAYOFWEEK" => eval_datetime_component(args.first(), data, last_insert_id, "DAYOFWEEK"),

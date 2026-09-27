@@ -898,3 +898,55 @@ fn query_events_report_logical_read_and_write_metrics() {
     assert!(multi_statement.metrics.rows_read >= 4);
     assert!(multi_statement.metrics.cells_read >= 4);
 }
+
+#[test]
+fn supports_mysql_year_month_extract() {
+    let engine = Engine::default();
+    let result = engine
+        .execute_sql("SELECT EXTRACT(YEAR_MONTH FROM '2026-01-05 08:00:00') AS month_key")
+        .expect("YEAR_MONTH extraction should execute");
+    assert_eq!(result[0].rows[0]["month_key"], 202601);
+}
+
+#[test]
+fn supports_grouped_mysql_year_month_extract() {
+    let engine = Engine::default();
+    engine
+        .execute_sql(
+            "CREATE TABLE month_probe (id INT PRIMARY KEY, event_at DATETIME NOT NULL, active TINYINT NOT NULL); \
+             INSERT INTO month_probe VALUES (1, '2026-01-05 08:00:00', 1), (2, '2026-01-10 09:30:00', 0);",
+        )
+        .unwrap();
+    let result = engine
+        .execute_sql(
+            "SELECT EXTRACT(YEAR_MONTH FROM DATE_ADD(e.event_at, INTERVAL 1 HOUR)) AS month_key, \
+             (SELECT COUNT(*) FROM month_probe AS q WHERE q.active = 1 \
+             AND SUBSTR(e.event_at, 1, 7) = SUBSTR(q.event_at, 1, 7)) AS active_month_events, \
+             COUNT(e.event_at) AS active_events FROM month_probe AS e WHERE e.active = 1 \
+             GROUP BY EXTRACT(YEAR_MONTH FROM DATE_ADD(e.event_at, INTERVAL 1 HOUR)) \
+             ORDER BY month_key",
+        )
+        .expect("grouped correlated YEAR_MONTH extraction should execute");
+    assert_eq!(result[0].rows[0]["month_key"], 202601);
+}
+
+#[test]
+fn supports_correlated_monthly_status_summary() {
+    let engine = Engine::default();
+    engine
+        .execute_sql(
+            "CREATE TABLE monthly_event_min (event_id INT PRIMARY KEY, event_at DATETIME NOT NULL, event_status VARCHAR(16) NOT NULL, active TINYINT NOT NULL); \
+             INSERT INTO monthly_event_min VALUES (1, '2026-01-05 08:00:00', 'queued', 1), (2, '2026-01-10 09:30:00', 'approved', 0);",
+        )
+        .unwrap();
+    let result = engine
+        .execute_sql(
+            "SELECT EXTRACT(YEAR_MONTH FROM DATE_ADD(e.event_at, INTERVAL 1 HOUR)) AS month_key, \
+             (SELECT COUNT(*) FROM monthly_event_min AS q WHERE q.event_status = 'queued' \
+             AND SUBSTR(e.event_at, 1, 7) = SUBSTR(q.event_at, 1, 7)) AS queued_events, \
+             COUNT(e.event_status) AS active_events FROM monthly_event_min AS e WHERE e.active = 1 \
+             GROUP BY EXTRACT(YEAR_MONTH FROM DATE_ADD(e.event_at, INTERVAL 1 HOUR)) ORDER BY month_key",
+        )
+        .expect("correlated monthly status summary should execute");
+    assert_eq!(result[0].rows[0]["queued_events"], 1);
+}

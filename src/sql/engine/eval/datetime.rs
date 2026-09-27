@@ -809,6 +809,7 @@ fn extract_datetime_component(field: &str, datetime: NaiveDateTime) -> Result<Va
     let date = datetime.date();
     let time = datetime.time();
     let number = match field {
+        "YEAR_MONTH" => i64::from(date.year()) * 100 + i64::from(date.month()),
         "YEAR" => i64::from(date.year()),
         "MONTH" => i64::from(date.month()),
         "WEEK" => i64::from(date.iso_week().week()),

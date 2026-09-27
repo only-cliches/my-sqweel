@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "id": "monthly_status_correlated_summary_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "monthly_status_correlated_summary",
+    "source": {
+      "kind": "github",
+      "repository": "maranemil/howto",
+      "commit": "1acc3008b6733111747d0fad1704753f1b4fe45b",
+      "path": "fullstack/sugarcrm/sql_reports/sql_leads_by_month.sql",
+      "url": "https://github.com/maranemil/howto/blob/1acc3008b6733111747d0fad1704753f1b4fe45b/fullstack/sugarcrm/sql_reports/sql_leads_by_month.sql",
+      "sha256": "ab24a3696ca0e622fbf2382f93f6e62544499c4088704560717eb6bf84ec76c1",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from fullstack/sugarcrm/sql_reports/sql_leads_by_month.sql:3-32",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped monthly projection combines EXTRACT(YEAR_MONTH FROM DATE_ADD(...)) with a correlated scalar COUNT filtered by the outer row's month.",
+      "mysql_mariadb_translation": "Reduced to one status count, two fixed event rows, one active-row filter, and one deterministic grouped result. The broader status dashboard and CRM-specific tables are removed while retaining the correlated month comparison and shifted YEAR_MONTH expression."
+    },
+    "independently_authored": true
+  },
+  "features": ["extract-year-month", "date-add", "correlated-scalar-count", "grouping", "minimized-regression"],
+  "fixture_notes": "Two events share one month; one queued row is active and one approved row is inactive. The correlated count sees the queued event while the outer active total counts only the active row.",
+  "determinism_notes": "Event IDs, timestamps, statuses, active flags, and grouped ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE monthly_event_min (event_id INT PRIMARY KEY, event_at DATETIME NOT NULL, event_status VARCHAR(16) NOT NULL, active TINYINT NOT NULL)",
+    "INSERT INTO monthly_event_min VALUES (1, '2026-01-05 08:00:00', 'queued', 1), (2, '2026-01-10 09:30:00', 'approved', 0)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT EXTRACT(YEAR_MONTH FROM DATE_ADD(e.event_at, INTERVAL 1 HOUR)) AS month_key, (SELECT COUNT(*) FROM monthly_event_min AS q WHERE q.event_status = 'queued' AND SUBSTR(e.event_at, 1, 7) = SUBSTR(q.event_at, 1, 7)) AS queued_events, COUNT(e.event_status) AS active_events FROM monthly_event_min AS e WHERE e.active = 1 GROUP BY EXTRACT(YEAR_MONTH FROM DATE_ADD(e.event_at, INTERVAL 1 HOUR)) ORDER BY month_key",
+      "ordered": true
+    }
+  ]
+}
