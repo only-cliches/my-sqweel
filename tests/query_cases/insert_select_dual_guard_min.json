@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "id": "insert_select_dual_guard_min",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "meritaccess/database_update",
+      "commit": "696f77dbf94d87037fc149cd55868d746a84c26f",
+      "path": "update.sql",
+      "url": "https://github.com/meritaccess/database_update/blob/696f77dbf94d87037fc149cd55868d746a84c26f/update.sql",
+      "sha256": "7e440e203db5ccda0b09997f49bcde84224caf05ae5495aebf4a4d017b5810a4",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "update.sql:3-10",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A minimized idempotent initializer inserts one literal setting through SELECT FROM DUAL only when the key does not already exist.",
+      "mysql_mariadb_translation": "Reduced from the independently authored runtime-setting initializer to one primary-key column and two identical guarded inserts, retaining the DUAL source and NOT EXISTS predicate that exposed the mismatch."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "insert-select",
+    "dual-source",
+    "not-exists-guard",
+    "idempotent-migration",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The repeated guarded insert should add the retry setting once; the second execution should be a no-op rather than a duplicate-key error.",
+  "determinism_notes": "One fixed key, two fixed statements, and one ordered final read; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE runtime_settings (setting_key VARCHAR(32) PRIMARY KEY)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO runtime_settings (setting_key) SELECT 'retry_limit' FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM runtime_settings WHERE setting_key = 'retry_limit')",
+      "ordered": false
+    },
+    {
+      "sql": "INSERT INTO runtime_settings (setting_key) SELECT 'retry_limit' FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM runtime_settings WHERE setting_key = 'retry_limit')",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT setting_key FROM runtime_settings ORDER BY setting_key",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT setting_key FROM runtime_settings ORDER BY setting_key",
+      "ordered": true
+    }
+  ]
+}

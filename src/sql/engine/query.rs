@@ -682,17 +682,6 @@ impl RawEngine {
             }
             return Ok(finished);
         }
-        if root_name_full.eq_ignore_ascii_case("dual") {
-            return self.finish_select_rows(
-                &select,
-                vec![Map::new()],
-                order_by,
-                limit,
-                offset,
-                fetch,
-                self.last_insert_id.load(AtomicOrdering::Relaxed),
-            );
-        }
 
         let rows = if root.joins.is_empty()
             && !matches!(
@@ -3201,6 +3190,14 @@ impl RawEngine {
         order_by: &[OrderByExpr],
     ) -> Result<Vec<Map<String, Value>>> {
         let (table, alias) = table_factor_name_and_alias(&root.relation)?;
+        if table.eq_ignore_ascii_case("dual") {
+            let row = Map::new();
+            return if self.matches_selection_ctx(select.selection.as_ref(), &row, 0)? {
+                Ok(vec![row])
+            } else {
+                Ok(Vec::new())
+            };
+        }
         let schema = self
             .schemas
             .get(&table)

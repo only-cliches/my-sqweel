@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "id": "insert_select_dual_guard",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "meritaccess/database_update",
+      "commit": "696f77dbf94d87037fc149cd55868d746a84c26f",
+      "path": "update.sql",
+      "url": "https://github.com/meritaccess/database_update/blob/696f77dbf94d87037fc149cd55868d746a84c26f/update.sql",
+      "sha256": "7e440e203db5ccda0b09997f49bcde84224caf05ae5495aebf4a4d017b5810a4",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "update.sql:3-10",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "An idempotent MySQL configuration migration inserts literal values through SELECT FROM DUAL only when a matching key does not already exist.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored runtime-setting initializer. A SELECT FROM DUAL supplies one fixed setting row, a NOT EXISTS guard prevents duplicate initialization, and the same guarded insert is repeated before an ordered final read. The source table, keys, values, comments, and access-control domain are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "insert-select",
+    "dual-source",
+    "not-exists-guard",
+    "idempotent-migration",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The existing theme setting remains unchanged, the missing retry setting is inserted once, and the repeated guarded insert is a no-op. The setting key is the primary key so duplicate prevention is observable without relying on INSERT IGNORE.",
+  "determinism_notes": "All keys, values, statements, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE runtime_settings (setting_key VARCHAR(32) PRIMARY KEY, setting_value VARCHAR(64) NOT NULL, validation_regex VARCHAR(64) NOT NULL, example_value VARCHAR(32) NOT NULL)",
+    "INSERT INTO runtime_settings VALUES ('theme', 'midnight', '^(dark|light)$', 'dark')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO runtime_settings (setting_key, setting_value, validation_regex, example_value) SELECT 'retry_limit', '3', '^[0-9]+$', '3' FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM runtime_settings WHERE setting_key = 'retry_limit')",
+      "ordered": false
+    },
+    {
+      "sql": "INSERT INTO runtime_settings (setting_key, setting_value, validation_regex, example_value) SELECT 'retry_limit', '3', '^[0-9]+$', '3' FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM runtime_settings WHERE setting_key = 'retry_limit')",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT setting_key, setting_value, validation_regex, example_value FROM runtime_settings ORDER BY setting_key",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT setting_key, setting_value, validation_regex, example_value FROM runtime_settings ORDER BY setting_key",
+      "ordered": true
+    }
+  ]
+}
