@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "id": "right_join_review_threshold",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "anqizhaoaz/Managing-Big-Data-with-MySQL",
+      "commit": "796c3e9480820fbeb9292c165438669becc8f9f0",
+      "path": "mysql_exercise_08.sql",
+      "url": "https://github.com/anqizhaoaz/Managing-Big-Data-with-MySQL/blob/796c3e9480820fbeb9292c165438669becc8f9f0/mysql_exercise_08.sql",
+      "sha256": "7c0f4ba6a7ec8590b973d53d2bb9f2526bd4dec6bc0a3f63819bf648a32cb762",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "mysql_exercise_08.sql:18-30",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A RIGHT JOIN preserves review rows, then grouping computes average and count metrics and HAVING filters groups by the count alias before descending average ordering.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored asset-review threshold report. Catalog metadata is RIGHT JOINed to reviews, unmatched reviewed assets remain visible with a NULL label, qualifying groups use AVG and COUNT with a HAVING alias threshold, and deterministic score/id ordering stabilizes the output. The source schema, rows, identifiers, and dog-review domain are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "right-join",
+    "grouped-average",
+    "grouped-count",
+    "having-alias",
+    "unmatched-right-row",
+    "null-extension",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Asset 101 has two catalog-matched reviews and qualifies with an average score of 4.5; asset 999 has two reviews but no catalog row and qualifies with a NULL label; asset 202 has one review and is removed by HAVING. Review IDs and scores are fixed.",
+  "determinism_notes": "The report orders by descending average score and then the unique asset ID. Every group has fixed review rows and no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE review_assets (asset_id INT PRIMARY KEY, asset_label VARCHAR(32) NOT NULL, owner_code VARCHAR(16) NOT NULL)",
+    "CREATE TABLE asset_reviews (review_id INT PRIMARY KEY, asset_id INT NOT NULL, owner_code VARCHAR(16) NOT NULL, score INT NOT NULL)",
+    "INSERT INTO review_assets VALUES (101, 'north-star', 'owner-a'), (202, 'south-star', 'owner-b')",
+    "INSERT INTO asset_reviews VALUES (1, 101, 'owner-a', 4), (2, 101, 'owner-a', 5), (3, 202, 'owner-b', 2), (4, 999, 'owner-z', 5), (5, 999, 'owner-z', 3)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT r.asset_id, a.asset_label, AVG(r.score) AS average_score, COUNT(r.review_id) AS review_count FROM review_assets AS a RIGHT JOIN asset_reviews AS r ON a.asset_id = r.asset_id AND a.owner_code = r.owner_code WHERE r.asset_id IS NOT NULL GROUP BY r.asset_id, a.asset_label HAVING review_count >= 2 ORDER BY average_score DESC, r.asset_id ASC",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT asset_id, asset_label, owner_code FROM review_assets ORDER BY asset_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT review_id, asset_id, owner_code, score FROM asset_reviews ORDER BY review_id",
+      "ordered": true
+    }
+  ]
+}
