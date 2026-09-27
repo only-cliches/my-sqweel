@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "date_format_mysql_specifiers",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "TimelordUK/sql-cli",
+      "commit": "ce100d36a7d8a15876f9ce74ad3efb38eb417db7",
+      "path": "examples/date_format_mysql.sql",
+      "url": "https://github.com/TimelordUK/sql-cli/blob/ce100d36a7d8a15876f9ce74ad3efb38eb417db7/examples/date_format_mysql.sql",
+      "sha256": "ac242b2d1ffec94c074700f386498f796233324c54f21092b5cae1513e1c363b",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "examples/date_format_mysql.sql:20-43",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "MySQL DATE_FORMAT uses MySQL-specific weekday, month, minute, second, composite-time, and literal-percent format specifiers on a fixed timestamp.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored dispatch-calendar report. Stored DATETIME rows exercise weekday/month names, minute/second fields, 24-hour and 12-hour composites, microseconds, literal percent signs, and NULL propagation; the source timestamp, aliases, schema, and CLI example are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "date-format",
+    "mysql-format-specifiers",
+    "weekday-month-names",
+    "time-composites",
+    "microseconds",
+    "null-propagation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Dispatch row 501 uses a Sunday timestamp with nonzero microseconds; row 502 uses a month-boundary timestamp; row 503 is NULL and must produce NULL formatted values. The final projection makes each MySQL-specific format result observable.",
+  "determinism_notes": "DATETIME values, format strings, labels, and ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE dispatch_calendar (dispatch_id INT PRIMARY KEY, dispatch_label VARCHAR(32) NOT NULL, dispatch_at DATETIME(6) NULL)",
+    "INSERT INTO dispatch_calendar VALUES (501, 'sunday-release', '2025-06-15 14:05:09.123456'), (502, 'month-boundary', '2025-02-28 00:07:04.000009'), (503, 'unscheduled', NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT dispatch_id, DATE_FORMAT(dispatch_at, '%W') AS weekday_name, DATE_FORMAT(dispatch_at, '%M') AS month_name, DATE_FORMAT(dispatch_at, '%i:%s') AS minute_second_label, DATE_FORMAT(dispatch_at, '%r') AS time_12h, DATE_FORMAT(dispatch_at, '%f') AS microseconds, DATE_FORMAT(dispatch_at, '100%% ready') AS literal_percent FROM dispatch_calendar ORDER BY dispatch_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT dispatch_id, DATE_FORMAT(dispatch_at, '%Y-%m-%d %H:%i:%s') AS dispatch_label FROM dispatch_calendar WHERE dispatch_at IS NOT NULL ORDER BY dispatch_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT dispatch_id, dispatch_label, dispatch_at FROM dispatch_calendar ORDER BY dispatch_id",
+      "ordered": true
+    }
+  ]
+}
