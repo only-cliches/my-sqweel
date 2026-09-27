@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "greatest_feature_flags",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "zubkov-andrei/pg_profile",
+      "commit": "0e80bd0251cf1603b72504dc693f78382563495f",
+      "path": "report/section.sql",
+      "url": "https://github.com/zubkov-andrei/pg_profile/blob/0e80bd0251cf1603b72504dc693f78382563495f/report/section.sql",
+      "sha256": "53b192abcbeeb66139d6213b2d5efcce380ec63ee83c5433f07d9b8af7640894",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "report/section.sql:170-215 (report feature flags)",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A feature report turns grouped metric evidence into boolean flags: each flag counts rows whose maximum across several related counters is positive, while separate flags inspect a single counter and an unconditional row count establishes whether any samples exist.",
+      "mysql_mariadb_translation": "Rewritten as an original project-sample dashboard with new tables, columns, values, and labels. PostgreSQL COUNT(*) FILTER (WHERE ...) expressions become COUNT(CASE WHEN ... THEN sample_id END) > 0, and GREATEST preserves the multi-counter existence predicates. A LEFT JOIN adds a project with no samples so zero-count and false-flag behavior is observable; PostgreSQL catalog, JSON, and procedural context are omitted."
+    },
+    "independently_authored": true
+  },
+  "features": ["conditional-aggregate", "greatest", "count", "case", "left-join", "grouping", "null", "boolean"],
+  "fixture_notes": "Project 10 has CPU-only and contention samples, project 20 has a zero-only sample plus an error sample, project 30 has no samples, and project 40 has a sample where only the retry counter is positive. The unmatched LEFT JOIN row must not create a sample or any feature flag.",
+  "determinism_notes": "Project IDs and sample IDs are unique, grouping uses the project primary key and name, and the final read orders by project ID. No clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE projects (project_id INT PRIMARY KEY, project_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE sample_windows (sample_id INT PRIMARY KEY, project_id INT NOT NULL, cpu_ms DECIMAL(8,2) NOT NULL, io_ms DECIMAL(8,2) NOT NULL, queue_ms DECIMAL(8,2) NOT NULL, lock_ms DECIMAL(8,2) NOT NULL, retry_ms DECIMAL(8,2) NOT NULL, error_count INT NOT NULL)",
+    "INSERT INTO projects VALUES (10, 'atlas'), (20, 'borealis'), (30, 'cygnus'), (40, 'draco')",
+    "INSERT INTO sample_windows VALUES (101, 10, 3.50, 0.00, 0.00, 0.00, 0.00, 0), (102, 10, 0.00, 2.25, 4.00, 0.00, 0.00, 0), (201, 20, 0.00, 0.00, 0.00, 0.00, 0.00, 0), (202, 20, 0.00, 0.00, 0.00, 0.00, 0.00, 2), (401, 40, 0.00, 0.00, 0.00, 0.00, 7.50, 0)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT p.project_id, p.project_name, COUNT(s.sample_id) AS sample_count, COUNT(CASE WHEN GREATEST(s.cpu_ms, s.io_ms) > 0 THEN s.sample_id END) > 0 AS has_resource_activity, COUNT(CASE WHEN GREATEST(s.queue_ms, s.lock_ms, s.retry_ms) > 0 THEN s.sample_id END) > 0 AS has_contention, COUNT(CASE WHEN s.error_count > 0 THEN s.sample_id END) > 0 AS has_failures FROM projects p LEFT JOIN sample_windows s ON s.project_id = p.project_id GROUP BY p.project_id, p.project_name ORDER BY p.project_id",
+      "ordered": true
+    }
+  ]
+}
