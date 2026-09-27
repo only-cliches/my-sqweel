@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "insert_distinct_coalesce_antijoin",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "OHDSI/Vocabulary-v5.0",
+      "commit": "90badee5c8e053a83e2fc23c9413a151bcea9983",
+      "path": "AMT/load_stage_2.sql",
+      "url": "https://github.com/OHDSI/Vocabulary-v5.0/blob/90badee5c8e053a83e2fc23c9413a151bcea9983/AMT/load_stage_2.sql",
+      "sha256": "db67147e22042b68edb34a2b4a93747e9dbf31b2c368767d172e6a99858a88f5",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "AMT/load_stage_2.sql:2-15",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "An INSERT SELECT DISTINCT joins a mapped staging relation to a concept relation through COALESCE, filters mapped IDs, and uses a correlated NOT EXISTS anti-join to avoid inserting a relationship that already exists.",
+      "mysql_mariadb_translation": "Rewritten as an independent catalog-alias loader. A mapping source resolves a preferred or fallback label with COALESCE, DISTINCT collapses repeated candidate rows, a correlated NOT EXISTS guard preserves an existing relationship, and explicit NOT IN/IS NOT NULL filters reject sentinel and missing category IDs."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "insert-select",
+    "distinct-projection",
+    "coalesce-join",
+    "correlated-not-exists",
+    "not-in-filter",
+    "null-filter",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The preferred label resolves one catalog row, the fallback label resolves another, duplicate mapping rows collapse through DISTINCT, an existing relationship is skipped by NOT EXISTS, and sentinel or NULL category IDs are excluded.",
+  "determinism_notes": "Catalog and mapping IDs are fixed; the inserted relationship rows are read in primary-key order. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE alias_catalog (catalog_code VARCHAR(16) PRIMARY KEY, catalog_label VARCHAR(32) NOT NULL, catalog_class VARCHAR(16) NOT NULL)",
+    "CREATE TABLE alias_mappings (mapping_id INT PRIMARY KEY, preferred_label VARCHAR(32) NULL, fallback_label VARCHAR(32) NULL, category_id INT NULL, precedence INT NOT NULL, mapping_kind VARCHAR(16) NOT NULL)",
+    "CREATE TABLE catalog_relationships (catalog_code VARCHAR(16) NOT NULL, vocabulary_id VARCHAR(8) NOT NULL, category_id INT NOT NULL, precedence INT NOT NULL, mapping_kind VARCHAR(16) NOT NULL, PRIMARY KEY (catalog_code, vocabulary_id))",
+    "INSERT INTO alias_catalog VALUES ('ALPHA', 'Preferred Alpha', 'Ingredient'), ('BETA', 'Fallback Beta', 'Ingredient'), ('GAMMA', 'Other Gamma', 'Brand')",
+    "INSERT INTO alias_mappings VALUES (501, 'Preferred Alpha', 'unused', 71, 1, 'direct'), (502, NULL, 'Fallback Beta', 72, 2, 'fallback'), (503, 'Preferred Alpha', NULL, 71, 1, 'direct'), (504, 'Other Gamma', NULL, 0, 3, 'sentinel'), (505, 'Other Gamma', NULL, NULL, 4, 'missing')",
+    "INSERT INTO catalog_relationships VALUES ('ALPHA', 'CAT', 70, 0, 'existing')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO catalog_relationships (catalog_code, vocabulary_id, category_id, precedence, mapping_kind) SELECT DISTINCT c.catalog_code, 'CAT', m.category_id, m.precedence, m.mapping_kind FROM alias_mappings AS m INNER JOIN alias_catalog AS c ON c.catalog_label = COALESCE(m.preferred_label, m.fallback_label) WHERE c.catalog_class = 'Ingredient' AND NOT EXISTS (SELECT 1 FROM catalog_relationships AS r WHERE r.catalog_code = c.catalog_code AND r.vocabulary_id = 'CAT') AND m.category_id NOT IN (0, 17) AND m.category_id IS NOT NULL ORDER BY c.catalog_code, m.category_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT catalog_code, vocabulary_id, category_id, precedence, mapping_kind FROM catalog_relationships ORDER BY catalog_code, vocabulary_id",
+      "ordered": true
+    }
+  ]
+}
