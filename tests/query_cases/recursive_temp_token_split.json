@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "id": "recursive_temp_token_split",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "dotnet/orleans",
+      "commit": "8bc9fd244427351ad24ccc039a9e7642a42c1cc4",
+      "path": "src/AdoNet/Orleans.GrainDirectory.AdoNet/MySQL-GrainDirectory.sql",
+      "url": "https://github.com/dotnet/orleans/blob/8bc9fd244427351ad24ccc039a9e7642a42c1cc4/src/AdoNet/Orleans.GrainDirectory.AdoNet/MySQL-GrainDirectory.sql",
+      "sha256": "c5b65e0bbb82deebc2b1e84696ffdb3a7686e266900f5132c8d68f0178483fa2",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "src/AdoNet/Orleans.GrainDirectory.AdoNet/MySQL-GrainDirectory.sql:199-221",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A recursive CTE repeatedly removes the first pipe-delimited token and inserts each token with its one-based depth into a temporary table.",
+      "mysql_mariadb_translation": "Reauthored as a temporary import-token buffer. A recursive CTE splits a fixed deployment route string into ordered tokens, inserts the token text and position into a temporary table, and verifies the staged rows before the session ends. The source schema, identifiers, variables, and Orleans workflow are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "recursive-cte",
+    "temporary-table",
+    "delimiter-splitting",
+    "substring-index",
+    "deterministic-ordinal-output"
+  ],
+  "fixture_notes": "The route string contains three non-empty segments, including a repeated segment, so the recursive expansion must preserve both order and duplicate token text.",
+  "determinism_notes": "The route literal, recursion termination condition, ordinal values, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TEMPORARY TABLE deployment_route_tokens (token_position INT NOT NULL, token_value VARCHAR(24) NOT NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO deployment_route_tokens (token_position, token_value) WITH RECURSIVE route_parts (remaining, token_value, token_position) AS (SELECT SUBSTRING('west|relay|west', CHAR_LENGTH(SUBSTRING_INDEX('west|relay|west', '|', 1)) + 2, CHAR_LENGTH('west|relay|west')), SUBSTRING_INDEX('west|relay|west', '|', 1), 1 UNION ALL SELECT SUBSTRING(remaining, CHAR_LENGTH(SUBSTRING_INDEX(remaining, '|', 1)) + 2, CHAR_LENGTH(remaining)), SUBSTRING_INDEX(remaining, '|', 1), token_position + 1 FROM route_parts WHERE remaining <> '') SELECT token_position, token_value FROM route_parts",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT token_position, token_value FROM deployment_route_tokens ORDER BY token_position",
+      "ordered": true
+    }
+  ]
+}
