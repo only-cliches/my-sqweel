@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "id": "insert_delayed_modify_column",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "repository": "mariadb-corporation/mariadb-qa",
+      "commit": "53e3741e6ac43968f0027ea22ec0eba3f5a15299",
+      "path": "BUGS/MDEV-29786.sql",
+      "url": "https://github.com/mariadb-corporation/mariadb-qa/blob/53e3741e6ac43968f0027ea22ec0eba3f5a15299/BUGS/MDEV-29786.sql",
+      "sha256": "4773d247019ed694f9b39dd801706b4fd7b36680d23588374b238010ee775727",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "BUGS/MDEV-29786.sql: INSERT DELAYED followed by ALTER TABLE MODIFY",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB regression script queues an INSERT DELAYED into a MyISAM table and immediately modifies the inserted column's type with ALTER TABLE.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored event-schema migration. INSERT DELAYED adds a fixed event, ALTER TABLE MODIFY changes the event code to a string with a default, and a later insert plus ordered read verifies delayed-row persistence, existing-value preservation, and default materialization; the source's wsrep setting, table names, values, and bug context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["insert-delayed", "alter-table", "modify-column", "column-default", "myisam", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "Event 1 exists before the migration, delayed event 2 must persist before ALTER TABLE completes, and event 3 omits event_code after MODIFY COLUMN so it receives the new default.",
+  "determinism_notes": "Event IDs, codes, notes, column definition, and final order are fixed; the DDL boundary drains the delayed MyISAM insert before the later insert, with no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE delayed_schema_events (event_id INT PRIMARY KEY, event_code INT NOT NULL, event_note VARCHAR(32) NOT NULL) ENGINE=MyISAM",
+    "INSERT INTO delayed_schema_events VALUES (1, 17, 'queued')"
+  ],
+  "steps": [
+    {"sql": "INSERT DELAYED INTO delayed_schema_events (event_id, event_code, event_note) VALUES (2, 29, 'accepted')", "ordered": true},
+    {"sql": "ALTER TABLE delayed_schema_events MODIFY COLUMN event_code VARCHAR(8) NOT NULL DEFAULT 'unknown'", "ordered": true},
+    {"sql": "INSERT INTO delayed_schema_events (event_id, event_note) VALUES (3, 'defaulted')", "ordered": true}
+  ],
+  "checks": [
+    {"sql": "SELECT event_id, event_code, event_note FROM delayed_schema_events ORDER BY event_id", "ordered": true}
+  ]
+}

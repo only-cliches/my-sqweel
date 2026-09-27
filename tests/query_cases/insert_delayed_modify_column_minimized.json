@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "id": "insert_delayed_modify_column_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "insert_delayed_modify_column",
+    "source": {
+      "kind": "github",
+      "repository": "mariadb-corporation/mariadb-qa",
+      "commit": "53e3741e6ac43968f0027ea22ec0eba3f5a15299",
+      "path": "BUGS/MDEV-29786.sql",
+      "url": "https://github.com/mariadb-corporation/mariadb-qa/blob/53e3741e6ac43968f0027ea22ec0eba3f5a15299/BUGS/MDEV-29786.sql",
+      "sha256": "4773d247019ed694f9b39dd801706b4fd7b36680d23588374b238010ee775727",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from BUGS/MDEV-29786.sql: INSERT DELAYED followed by ALTER TABLE MODIFY",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "The smallest affected-row probe queues one MyISAM row with INSERT DELAYED and then changes its integer column to VARCHAR with ALTER TABLE MODIFY.",
+      "mysql_mariadb_translation": "Reduced to one pre-existing row, one delayed row, and one type-family-changing MODIFY COLUMN operation; the defaulted follow-up insert and extra event fields are removed so ALTER's converted-row count is isolated."
+    },
+    "independently_authored": true,
+    "minimized_from": "insert_delayed_modify_column"
+  },
+  "features": ["insert-delayed", "alter-table", "modify-column", "affected-rows", "metadata-regression"],
+  "fixture_notes": "Two fixed rows exist when MODIFY COLUMN converts the integer event_code to VARCHAR; MariaDB reports both converted rows as affected and the final read verifies their values.",
+  "determinism_notes": "The two event IDs, codes, schema operation, and final order are fixed; ALTER TABLE drains the delayed insert before reporting, with no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE delayed_schema_events_min (event_id INT PRIMARY KEY, event_code INT NOT NULL) ENGINE=MyISAM",
+    "INSERT INTO delayed_schema_events_min VALUES (1, 17)"
+  ],
+  "steps": [
+    {"sql": "INSERT DELAYED INTO delayed_schema_events_min (event_id, event_code) VALUES (2, 29)", "ordered": true},
+    {"sql": "ALTER TABLE delayed_schema_events_min MODIFY COLUMN event_code VARCHAR(8) NOT NULL DEFAULT 'unknown'", "ordered": true}
+  ],
+  "checks": [
+    {"sql": "SELECT event_id, event_code FROM delayed_schema_events_min ORDER BY event_id", "ordered": true}
+  ]
+}

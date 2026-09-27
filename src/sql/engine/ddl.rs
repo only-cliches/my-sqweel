@@ -229,7 +229,8 @@ impl RawEngine {
             });
         for op in operations {
             let row_action = alter_row_action(&op);
-            let reports_rows_affected = alter_operation_reports_rows_affected(&op);
+            let reports_rows_affected = alter_operation_reports_rows_affected(&op)
+                || alter_operation_converts_rows(&schema, &op);
             self.apply_alter_operation(&table, &mut schema, op)?;
             if let Some(row_action) = row_action {
                 self.apply_alter_row_action(&table, row_action)?;
@@ -723,6 +724,53 @@ fn alter_operation_reports_rows_affected(op: &sqlparser::ast::AlterTableOperatio
             sqlparser::ast::TableConstraint::ForeignKey { .. }
         )
     )
+}
+fn alter_operation_converts_rows(
+    schema: &TableSchemaHint,
+    op: &sqlparser::ast::AlterTableOperation,
+) -> bool {
+    let (column, data_type) = match op {
+        sqlparser::ast::AlterTableOperation::ModifyColumn {
+            col_name,
+            data_type,
+            ..
+        } => (&col_name.value, data_type),
+        sqlparser::ast::AlterTableOperation::ChangeColumn {
+            old_name,
+            data_type,
+            ..
+        } => (&old_name.value, data_type),
+        sqlparser::ast::AlterTableOperation::AlterColumn {
+            column_name,
+            op: sqlparser::ast::AlterColumnOperation::SetDataType { data_type, .. },
+        } => (&column_name.value, data_type),
+        _ => return false,
+    };
+    let Some(previous_type) = schema
+        .columns
+        .get(column)
+        .and_then(|hint| hint.sql_type.as_deref())
+    else {
+        return false;
+    };
+    sql_type_family(previous_type) != sql_type_family(&data_type.to_string())
+}
+
+fn sql_type_family(sql_type: &str) -> u8 {
+    match sql_type
+        .trim()
+        .to_ascii_uppercase()
+        .split(['(', ' ', '\t'])
+        .next()
+        .unwrap_or_default()
+    {
+        "TINYINT" | "SMALLINT" | "MEDIUMINT" | "INT" | "INTEGER" | "BIGINT" | "DECIMAL"
+        | "NUMERIC" | "FLOAT" | "DOUBLE" | "REAL" | "BIT" | "BOOL" | "BOOLEAN" => 1,
+        "CHAR" | "VARCHAR" | "TINYTEXT" | "TEXT" | "MEDIUMTEXT" | "LONGTEXT" | "BINARY"
+        | "VARBINARY" | "TINYBLOB" | "BLOB" | "MEDIUMBLOB" | "LONGBLOB" => 2,
+        "DATE" | "TIME" | "DATETIME" | "TIMESTAMP" | "YEAR" => 3,
+        _ => 0,
+    }
 }
 
 fn alter_row_action(op: &sqlparser::ast::AlterTableOperation) -> Option<AlterRowAction> {
