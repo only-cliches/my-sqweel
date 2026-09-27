@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "id": "grouped_conditional_badge_upsert",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "VeteranBoLuo/light-note",
+      "commit": "dc703aa2cafdf9f88dd35c9d0979bd03da1a45ea",
+      "path": "apps/server/migrations/20260814_points_earning_c5.sql",
+      "url": "https://github.com/VeteranBoLuo/light-note/blob/dc703aa2cafdf9f88dd35c9d0979bd03da1a45ea/apps/server/migrations/20260814_points_earning_c5.sql",
+      "sha256": "d86dcb160216f011eb0eed71e434934efaadc8573283e96696a60c2907974ac4",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "apps/server/migrations/20260814_points_earning_c5.sql:148-154",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped INSERT ... SELECT derives the earliest event and the earliest conditional event timestamp with MIN(CASE ...), then ON DUPLICATE KEY UPDATE preserves an existing earliest timestamp while filling an absent nullable timestamp.",
+      "mysql_mariadb_translation": "Reauthored as a badge-award consolidation. Grouped badge events derive each member's earliest award and earliest claimed event, while the duplicate-key clause keeps an existing earlier award, fills only an empty claim timestamp, and inserts unseen member-badge pairs. The source schema, identifiers, values, and points migration context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "grouped-insert-select",
+    "conditional-aggregate",
+    "case-expression",
+    "duplicate-key-upsert",
+    "least-coalesce-merge",
+    "nullable-date-state"
+  ],
+  "fixture_notes": "Member 41 receives an earlier award and a previously absent claim timestamp; member 42 has already-earlier award and claim timestamps that must remain unchanged; member 43 is inserted from a new grouped badge stream.",
+  "determinism_notes": "Event IDs, member IDs, badge codes, reasons, timestamps, grouping keys, and final primary-key ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE badge_events (event_id INT PRIMARY KEY, member_id INT NOT NULL, badge_code VARCHAR(24) NOT NULL, reason VARCHAR(16) NOT NULL, awarded_at DATETIME NOT NULL)",
+    "CREATE TABLE member_badges (member_id INT NOT NULL, badge_code VARCHAR(24) NOT NULL, first_awarded_at DATETIME NOT NULL, claimed_at DATETIME NULL, PRIMARY KEY (member_id, badge_code))",
+    "INSERT INTO badge_events VALUES (1001, 41, 'sprinter', 'progress', '2026-03-05 10:00:00'), (1002, 41, 'sprinter', 'milestone', '2026-03-01 09:00:00'), (1003, 41, 'sprinter', 'claimed', '2026-03-03 12:00:00'), (1004, 42, 'helper', 'progress', '2026-03-04 08:00:00'), (1005, 43, 'mentor', 'progress', '2026-04-02 11:00:00'), (1006, 43, 'mentor', 'claimed', '2026-04-01 15:00:00')",
+    "INSERT INTO member_badges VALUES (41, 'sprinter', '2026-03-02 08:00:00', NULL), (42, 'helper', '2026-02-01 08:00:00', '2026-02-02 08:00:00')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO member_badges (member_id, badge_code, first_awarded_at, claimed_at) SELECT member_id, badge_code, MIN(awarded_at), MIN(CASE WHEN reason = 'claimed' THEN awarded_at ELSE NULL END) FROM badge_events GROUP BY member_id, badge_code ON DUPLICATE KEY UPDATE first_awarded_at = LEAST(member_badges.first_awarded_at, VALUES(first_awarded_at)), claimed_at = COALESCE(member_badges.claimed_at, VALUES(claimed_at))",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT member_id, badge_code, first_awarded_at, claimed_at FROM member_badges ORDER BY member_id, badge_code",
+      "ordered": true
+    }
+  ]
+}
