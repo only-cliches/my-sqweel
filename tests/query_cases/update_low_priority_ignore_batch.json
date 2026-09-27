@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "id": "update_low_priority_ignore_batch",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "DTStack/dt-sql-parser",
+      "commit": "3f21f2c1c8e0548357dd55d7cc1c2a75bb7065c2",
+      "path": "test/parser/mysql/syntax/fixtures/update.sql",
+      "url": "https://github.com/DTStack/dt-sql-parser/blob/3f21f2c1c8e0548357dd55d7cc1c2a75bb7065c2/test/parser/mysql/syntax/fixtures/update.sql",
+      "sha256": "bdab40950592abbc7ebe67cd3b1423182328472dfa7190a364dc89eb265fc2d0",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "test/parser/mysql/syntax/fixtures/update.sql:3-30",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "MySQL UPDATE syntax combines LOW_PRIORITY and IGNORE modifiers with deterministic ORDER BY and LIMIT selection.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored dispatch-claim batch. Ready tasks are selected by priority and ID, the first claim occupies a unique slot, and IGNORE skips a later duplicate-slot update while the bounded statement examines only two rows. The parser fixture, table names, values, and product domain are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "update-low-priority",
+    "update-ignore",
+    "update-order-by",
+    "update-limit",
+    "unique-conflict-suppression",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Task 701 is the highest-priority ready task and claims unique slot 1; task 702 is the second selected ready task but its slot-1 update conflicts with held task 703 and is ignored; task 704 is outside LIMIT and remains ready.",
+  "determinism_notes": "Priority and task IDs define selection order, slot 1 is already held by task 703, and the final read is ordered by task ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE dispatch_claims (task_id INT PRIMARY KEY, task_label VARCHAR(32) NOT NULL, task_state VARCHAR(16) NOT NULL, priority INT NOT NULL, claim_slot INT NULL UNIQUE)",
+    "INSERT INTO dispatch_claims VALUES (701, 'alpha', 'ready', 9, NULL), (702, 'beta', 'ready', 8, NULL), (703, 'gamma', 'held', 99, 1), (704, 'delta', 'ready', 7, NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE LOW_PRIORITY IGNORE dispatch_claims SET claim_slot = 1, task_state = 'claimed' WHERE task_state = 'ready' ORDER BY priority DESC, task_id ASC LIMIT 2",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT task_id, task_label, task_state, priority, claim_slot FROM dispatch_claims ORDER BY task_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT task_id, task_label, task_state, priority, claim_slot FROM dispatch_claims ORDER BY task_id",
+      "ordered": true
+    }
+  ]
+}
