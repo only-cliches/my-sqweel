@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "id": "canonical_digest_keys",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "mecha2k/ml-lecture",
+      "commit": "155f2f826a264cb9c85a73971b64286c46ef803c",
+      "path": "src/database/mysql_01.sql",
+      "url": "https://github.com/mecha2k/ml-lecture/blob/155f2f826a264cb9c85a73971b64286c46ef803c/src/database/mysql_01.sql",
+      "sha256": "ffaf931cb0218f0a9abb2aaf336fcc66115c9c8ea9627c6a568a327eb3c6f7fc",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "src/database/mysql_01.sql:10",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL expression hashes a concatenated identity string with SHA2 to produce a deterministic 256-bit digest.",
+      "mysql_mariadb_translation": "Reauthored as an independent identity-key audit. CONCAT_WS builds canonical keys from tenant, subject, and optional scope fields, SHA2 fingerprints those keys, and a grouped report counts repeated identities while preserving their labels through ordered GROUP_CONCAT."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "sha2",
+    "concat-ws",
+    "computed-group-key",
+    "grouped-count",
+    "ordered-group-concat",
+    "null-field-semantics",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Records 501 and 503 have the same tenant and subject with NULL scope, so CONCAT_WS produces one shared fingerprint and the grouped report lists both labels. Records 502 and 504 have distinct scoped identities and remain separate groups.",
+  "determinism_notes": "Record IDs, identity fields, hash length, grouping expression, label ordering, and final fingerprint ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE identity_records (record_id INT PRIMARY KEY, record_label VARCHAR(32) NOT NULL, tenant_code VARCHAR(16) NOT NULL, subject_code VARCHAR(16) NOT NULL, scope_code VARCHAR(16) NULL)",
+    "INSERT INTO identity_records VALUES (501, 'primary-null-scope', 'acme', 'user-42', NULL), (502, 'scoped-admin', 'acme', 'user-42', 'admin'), (503, 'secondary-null-scope', 'acme', 'user-42', NULL), (504, 'scoped-reader', 'beta', 'user-7', 'reader')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT SHA2(CONCAT_WS('|', tenant_code, subject_code, scope_code), 256) AS identity_fingerprint, COUNT(*) AS record_count, GROUP_CONCAT(record_label ORDER BY record_id ASC SEPARATOR ',') AS record_labels FROM identity_records GROUP BY SHA2(CONCAT_WS('|', tenant_code, subject_code, scope_code), 256) ORDER BY identity_fingerprint",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT record_id, record_label, tenant_code, subject_code, scope_code FROM identity_records ORDER BY record_id",
+      "ordered": true
+    }
+  ]
+}
