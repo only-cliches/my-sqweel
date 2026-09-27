@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "id": "insert_select_left_join_coalesce_upsert",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "repository": "wikimedia/wikimedia-fundraising-tools",
+      "commit": "06bcea4c314a359e51a604924e9a6e24bef2b1dc",
+      "path": "silverpop_export/update_silverpop_staging.sql",
+      "url": "https://github.com/wikimedia/wikimedia-fundraising-tools/blob/06bcea4c314a359e51a604924e9a6e24bef2b1dc/silverpop_export/update_silverpop_staging.sql",
+      "sha256": "67e26c03d3818bd38affd46d6b8299bbe7a06e747e87a1a3d8c5b8e779d8c3bf",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "silverpop_export/update_silverpop_staging.sql: INSERT ... SELECT enrichment with multiple LEFT JOINs and COALESCE, followed by duplicate-key handling",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL maintenance load projects rows through several optional LEFT JOIN enrichments, uses COALESCE defaults in the INSERT ... SELECT projection, orders source rows deterministically, and uses ON DUPLICATE KEY UPDATE to tolerate an already-staged key.",
+      "mysql_mariadb_translation": "Reauthored as an independent contact-export load. Active contact updates are enriched by optional language and privacy tables, COALESCE supplies a language and opt-out default, an existing export key takes the no-op duplicate path, and a new key is inserted; source schemas, timestamps, application names, and values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["insert-select", "left-join", "multi-table-enrichment", "coalesce", "on-duplicate-key-update", "no-op-upsert", "deterministic-order", "dml-final-state"],
+  "fixture_notes": "Export 100 already exists and must remain unchanged when its active contact update conflicts; export 200 is new and receives the locale fallback 'en' plus an explicit privacy opt-out. Inactive contact 300 is filtered out.",
+  "determinism_notes": "Contact IDs, enrichment rows, filters, source ordering, and final ordering are fixed; COALESCE inputs contain no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE contact_updates (contact_id INT PRIMARY KEY, display_name VARCHAR(32) NOT NULL, preferred_language VARCHAR(8), active TINYINT NOT NULL)",
+    "CREATE TABLE language_defaults (region_code VARCHAR(8) PRIMARY KEY, default_language VARCHAR(8) NOT NULL)",
+    "CREATE TABLE privacy_preferences (contact_id INT PRIMARY KEY, opted_out TINYINT NULL)",
+    "CREATE TABLE contact_exports (contact_id INT PRIMARY KEY, display_name VARCHAR(32) NOT NULL, preferred_language VARCHAR(8) NOT NULL, opted_out TINYINT NOT NULL)",
+    "INSERT INTO contact_updates VALUES (100, 'Ari Updated', NULL, 1), (200, 'Bea New', NULL, 1), (300, 'Cal Inactive', 'de', 0)",
+    "INSERT INTO language_defaults VALUES ('north', 'fr')",
+    "INSERT INTO privacy_preferences VALUES (100, NULL), (200, 1)",
+    "INSERT INTO contact_exports VALUES (100, 'Ari Original', 'es', 0)"
+  ],
+  "steps": [
+    {"sql": "INSERT INTO contact_exports (contact_id, display_name, preferred_language, opted_out) SELECT c.contact_id, c.display_name, COALESCE(c.preferred_language, l.default_language, 'en'), COALESCE(p.opted_out, 0) FROM contact_updates AS c LEFT JOIN language_defaults AS l ON l.region_code = CASE WHEN c.contact_id = 100 THEN 'north' ELSE 'missing' END LEFT JOIN privacy_preferences AS p ON p.contact_id = c.contact_id WHERE c.active = 1 ORDER BY c.contact_id ON DUPLICATE KEY UPDATE contact_id = contact_exports.contact_id", "ordered": true}
+  ],
+  "checks": [
+    {"sql": "SELECT contact_id, display_name, preferred_language, opted_out FROM contact_exports ORDER BY contact_id", "ordered": true}
+  ]
+}
