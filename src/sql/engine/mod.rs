@@ -6067,13 +6067,14 @@ fn strip_create_table_charset(sql: &str) -> String {
     };
     let suffix = &sql[close + 1..];
     let upper = suffix.to_ascii_uppercase();
-    let Some(charset) = upper
+    let Some(option) = upper
         .find("CHARSET")
         .or_else(|| upper.find("CHARACTER SET"))
+        .or_else(|| upper.find("COLLATE"))
     else {
         return sql.to_string();
     };
-    let options_start = upper.find("DEFAULT").unwrap_or(charset);
+    let options_start = upper.find("DEFAULT").unwrap_or(option);
     format!("{}{}", &sql[..=close], suffix[..options_start].trim_end())
 }
 

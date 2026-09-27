@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "id": "generated_weekday_labels",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "mariadb-corporation/mariadb-qa",
+      "commit": "af4cc4f84b29b0e7938c2335ad461dfbcd3c884c",
+      "path": "BUGS/MDEV-27920.sql",
+      "url": "https://github.com/mariadb-corporation/mariadb-qa/blob/af4cc4f84b29b0e7938c2335ad461dfbcd3c884c/BUGS/MDEV-27920.sql",
+      "sha256": "7e520d62883d070d8f8f5988af8b7073016589f98c598aa9421ec41a6519c90b",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "BUGS/MDEV-27920.sql:1-2",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB table defines a generated character column from CONCAT and DAYNAME while using a binary table collation.",
+      "mysql_mariadb_translation": "Reauthored as an independent calendar-label table. A virtual generated column converts fixed DATE values to English weekday labels under utf8_bin, a later date update recomputes the label, and an ordered read verifies the generated values; the source table, rows, and sleep-based bug timing are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "generated-column",
+    "virtual-generated-column",
+    "dayname",
+    "concat",
+    "binary-collation",
+    "generated-update",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Calendar rows 410 and 411 begin on fixed dates with different weekdays; row 410 is updated across a weekday boundary and its virtual label must recompute while row 411 remains unchanged.",
+  "determinism_notes": "All dates, IDs, DDL, and final ordering are fixed; DAYNAME, CONCAT, and the virtual generated column use no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE calendar_labels (label_id INT PRIMARY KEY, label_date DATE NOT NULL, weekday_label VARCHAR(12) AS (CONCAT('', DAYNAME(label_date))) VIRTUAL) COLLATE utf8_bin",
+    "INSERT INTO calendar_labels (label_id, label_date) VALUES (410, '2024-02-05'), (411, '2024-02-10')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT label_id, label_date, weekday_label FROM calendar_labels ORDER BY label_id",
+      "ordered": true
+    },
+    {
+      "sql": "UPDATE calendar_labels SET label_date = '2024-02-06' WHERE label_id = 410",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT label_id, label_date, weekday_label FROM calendar_labels ORDER BY label_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT label_id, label_date, weekday_label FROM calendar_labels ORDER BY label_id",
+      "ordered": true
+    }
+  ]
+}

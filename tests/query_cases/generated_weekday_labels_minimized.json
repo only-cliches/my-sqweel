@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "generated_weekday_labels_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "mariadb-corporation/mariadb-qa",
+      "commit": "af4cc4f84b29b0e7938c2335ad461dfbcd3c884c",
+      "path": "BUGS/MDEV-27920.sql",
+      "url": "https://github.com/mariadb-corporation/mariadb-qa/blob/af4cc4f84b29b0e7938c2335ad461dfbcd3c884c/BUGS/MDEV-27920.sql",
+      "sha256": "7e520d62883d070d8f8f5988af8b7073016589f98c598aa9421ec41a6519c90b",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "BUGS/MDEV-27920.sql:1-2",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A generated character column is declared on a binary-collated MariaDB table.",
+      "mysql_mariadb_translation": "Reduced to one fixed DATE source value and one virtual DAYNAME generated column so the parser's table-level COLLATE path is isolated from updates, multiple rows, and the source timing statement."
+    },
+    "independently_authored": true,
+    "minimized_from": "generated_weekday_labels"
+  },
+  "features": [
+    "generated-column",
+    "virtual-generated-column",
+    "dayname",
+    "binary-collation",
+    "minimized-regression"
+  ],
+  "fixture_notes": "The fixed date must produce a visible weekday label through the virtual generated column; the table-level utf8_bin option is part of the parser regression.",
+  "determinism_notes": "One fixed date and one ordered read are used; DAYNAME and the generated expression use no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE mini_calendar_labels (label_id INT PRIMARY KEY, label_date DATE NOT NULL, weekday_label VARCHAR(12) AS (CONCAT('', DAYNAME(label_date))) VIRTUAL) COLLATE utf8_bin",
+    "INSERT INTO mini_calendar_labels (label_id, label_date) VALUES (510, '2024-02-05')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT label_id, label_date, weekday_label FROM mini_calendar_labels ORDER BY label_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT label_id, label_date, weekday_label FROM mini_calendar_labels ORDER BY label_id",
+      "ordered": true
+    }
+  ]
+}
