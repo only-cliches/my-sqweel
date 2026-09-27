@@ -546,7 +546,7 @@ impl RawEngine {
             );
             if !conflict_keys.is_empty()
                 && generated_id
-                && !options.on_duplicate.is_empty()
+                && (options.ignore || !options.on_duplicate.is_empty())
                 && let (Some(auto_increment_key), Some(auto_increment_before)) =
                     (&auto_increment_key, auto_increment_before)
             {

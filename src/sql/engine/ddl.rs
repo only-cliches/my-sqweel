@@ -116,7 +116,7 @@ impl RawEngine {
             &table,
             result.rows,
             InsertRowsOptions {
-                ignore: false,
+                ignore: create_table_ignore_mode(),
                 replace: false,
                 on_duplicate: &[],
                 returning: None,

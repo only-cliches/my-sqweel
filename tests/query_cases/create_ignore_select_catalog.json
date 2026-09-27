@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "id": "create_ignore_select_catalog",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "LearnSphere/DataShop",
+      "commit": "8602bf5f3d297fce86cd601d9bc4d4013acc5602",
+      "path": "sql/v10.x/sps_and_triggers/ffi_populate_database.sql",
+      "url": "https://github.com/LearnSphere/DataShop/blob/8602bf5f3d297fce86cd601d9bc4d4013acc5602/sql/v10.x/sps_and_triggers/ffi_populate_database.sql",
+      "sha256": "bd6c0a53acf03dcaa7a9e4f2ebdd465307f8f3bec0e638bf8af7018e1e444ec9",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "ffi_populate_database.sql:787-799",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB staging migration declares a keyed table with indexes, then uses CREATE TABLE ... IGNORE SELECT to materialize source rows while suppressing duplicate-key conflicts from repeated source pairs.",
+      "mysql_mariadb_translation": "Reauthored as a catalog staging operation. A MyISAM table declares an auto-increment row identifier and a unique label/group key, then CREATE TABLE ... IGNORE SELECT copies non-NULL catalog candidates; an exact duplicate source pair is ignored and the ordered read verifies the retained rows."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "create-table-ignore-select",
+    "unique-key-deduplication",
+    "auto-increment",
+    "myisam-table",
+    "null-filter",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Two identical source candidates for the same label/group pair must produce one staged row because the destination UNIQUE key is enforced by CREATE TABLE ... IGNORE SELECT. A NULL label and NULL group are filtered before staging, while a distinct pair is retained.",
+  "determinism_notes": "The duplicate source rows have identical projected values, and source rows, unique keys, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE catalog_candidates (label_name VARCHAR(32), group_name VARCHAR(32), source_rank INT)",
+    "INSERT INTO catalog_candidates VALUES ('alpha', 'core', 1), ('alpha', 'core', 1), ('beta', 'edge', 3), (NULL, 'edge', 4), ('gamma', NULL, 5)"
+  ],
+  "steps": [
+    {
+      "sql": "CREATE TABLE staged_catalog (stage_id BIGINT AUTO_INCREMENT PRIMARY KEY, label_name VARCHAR(32) NOT NULL, group_name VARCHAR(32) NOT NULL, source_rank INT, UNIQUE KEY uq_staged_catalog (label_name, group_name)) ENGINE=MyISAM IGNORE SELECT label_name, group_name, source_rank FROM catalog_candidates WHERE label_name IS NOT NULL AND group_name IS NOT NULL",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT stage_id, label_name, group_name, source_rank FROM staged_catalog ORDER BY label_name, group_name",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT stage_id, label_name, group_name, source_rank FROM staged_catalog ORDER BY label_name, group_name",
+      "ordered": true
+    }
+  ]
+}

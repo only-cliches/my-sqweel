@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "id": "create_ignore_select_catalog_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "create_ignore_select_catalog",
+    "source": {
+      "kind": "github",
+      "repository": "LearnSphere/DataShop",
+      "commit": "8602bf5f3d297fce86cd601d9bc4d4013acc5602",
+      "path": "sql/v10.x/sps_and_triggers/ffi_populate_database.sql",
+      "url": "https://github.com/LearnSphere/DataShop/blob/8602bf5f3d297fce86cd601d9bc4d4013acc5602/sql/v10.x/sps_and_triggers/ffi_populate_database.sql",
+      "sha256": "bd6c0a53acf03dcaa7a9e4f2ebdd465307f8f3bec0e638bf8af7018e1e444ec9",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "ffi_populate_database.sql:787-799",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A minimized CREATE TABLE ... IGNORE SELECT stages duplicate source pairs into a destination with one unique key and one auto-increment identity.",
+      "mysql_mariadb_translation": "Reduced to one exact duplicate pair and one distinct pair while retaining the explicit MyISAM table schema, unique key, IGNORE SELECT clause, and ordered final read."
+    },
+    "independently_authored": true,
+    "minimized_from": "create_ignore_select_catalog"
+  },
+  "features": [
+    "create-table-ignore-select",
+    "unique-key-deduplication",
+    "auto-increment",
+    "myisam-table",
+    "minimized-regression",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The exact duplicate source pair must be ignored by the destination unique key, so the distinct second row receives the next contiguous auto-increment ID.",
+  "determinism_notes": "Both duplicate source rows have identical projected values, and all rows and ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE mini_catalog_candidates (label_name VARCHAR(16), group_name VARCHAR(16))",
+    "INSERT INTO mini_catalog_candidates VALUES ('alpha', 'core'), ('alpha', 'core'), ('beta', 'edge')"
+  ],
+  "steps": [
+    {
+      "sql": "CREATE TABLE mini_staged_catalog (stage_id INT AUTO_INCREMENT PRIMARY KEY, label_name VARCHAR(16) NOT NULL, group_name VARCHAR(16) NOT NULL, UNIQUE KEY uq_mini_staged_catalog (label_name, group_name)) ENGINE=MyISAM IGNORE SELECT label_name, group_name FROM mini_catalog_candidates",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT stage_id, label_name, group_name FROM mini_staged_catalog ORDER BY label_name, group_name",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT stage_id, label_name, group_name FROM mini_staged_catalog ORDER BY label_name, group_name",
+      "ordered": true
+    }
+  ]
+}

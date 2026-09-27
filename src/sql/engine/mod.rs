@@ -410,6 +410,7 @@ thread_local! {
     static ACTIVE_QUERY_METRICS: RefCell<Vec<Rc<QueryMetricsRecorder>>> = const { RefCell::new(Vec::new()) };
     static QUERY_METRICS_ACTIVE: Cell<bool> = const { Cell::new(false) };
     static ACTIVE_UPDATE_IGNORE: RefCell<Vec<bool>> = const { RefCell::new(Vec::new()) };
+    static ACTIVE_CREATE_TABLE_IGNORE: RefCell<Vec<bool>> = const { RefCell::new(Vec::new()) };
 }
 
 struct QueryMetricsGuard {
@@ -477,6 +478,27 @@ impl Drop for UpdateIgnoreGuard {
 
 pub(super) fn update_ignore_mode() -> bool {
     ACTIVE_UPDATE_IGNORE.with(|active| active.borrow().last().copied().unwrap_or(false))
+}
+
+struct CreateTableIgnoreGuard;
+
+impl CreateTableIgnoreGuard {
+    fn install(enabled: bool) -> Self {
+        ACTIVE_CREATE_TABLE_IGNORE.with(|active| active.borrow_mut().push(enabled));
+        Self
+    }
+}
+
+impl Drop for CreateTableIgnoreGuard {
+    fn drop(&mut self) {
+        ACTIVE_CREATE_TABLE_IGNORE.with(|active| {
+            active.borrow_mut().pop();
+        });
+    }
+}
+
+pub(super) fn create_table_ignore_mode() -> bool {
+    ACTIVE_CREATE_TABLE_IGNORE.with(|active| active.borrow().last().copied().unwrap_or(false))
 }
 
 pub(super) fn changed_cell_count(before: &Map<String, Value>, after: &Map<String, Value>) -> usize {
@@ -935,6 +957,8 @@ impl RawEngine {
                 self.maybe_inject_failure(&raw)?;
                 let _update_ignore_guard =
                     UpdateIgnoreGuard::install(is_update_ignore_statement(&raw));
+                let _create_table_ignore_guard =
+                    CreateTableIgnoreGuard::install(is_create_table_ignore_select(&raw));
                 if let Some(result) = self.execute_alter_rename_column_if_exists_compat(&raw)? {
                     self.capture_eval_user_variables();
                     self.record_found_rows(&raw, &result);
@@ -1303,6 +1327,7 @@ impl RawEngine {
             .replace(" ZEROFILL", "")
             .replace(" zerofill", "");
         parse_sql = rewrite_group_concat_limits_for_parser(&parse_sql);
+        parse_sql = rewrite_create_table_ignore_select_for_parser(&parse_sql);
         parse_sql = strip_select_modifiers_anywhere(&parse_sql);
         parse_sql = rewrite_set_statement_for_parser(&parse_sql);
         parse_sql = query::strip_explain_index_hints(&parse_sql);
@@ -6410,6 +6435,55 @@ fn cast_warning_inputs(sql: &str) -> Vec<(String, String, bool)> {
         cursor = close + 1;
     }
     inputs
+}
+
+fn rewrite_create_table_ignore_select_for_parser(sql: &str) -> String {
+    let upper = sql.to_ascii_uppercase();
+    if !upper.trim_start().starts_with("CREATE TABLE") {
+        return sql.to_string();
+    }
+    let bytes = upper.as_bytes();
+    let mut cursor = 0;
+    while let Some(relative) = upper[cursor..].find("IGNORE") {
+        let start = cursor + relative;
+        let end = start + "IGNORE".len();
+        let before_boundary =
+            start == 0 || !bytes[start - 1].is_ascii_alphanumeric() && bytes[start - 1] != b'_';
+        let after_boundary =
+            end == bytes.len() || !bytes[end].is_ascii_alphanumeric() && bytes[end] != b'_';
+        if before_boundary && after_boundary {
+            let mut select_start = end;
+            while select_start < bytes.len() && bytes[select_start].is_ascii_whitespace() {
+                select_start += 1;
+            }
+            if bytes
+                .get(select_start..select_start + "SELECT".len())
+                .is_some_and(|value| value.eq_ignore_ascii_case(b"SELECT"))
+            {
+                let mut rewritten = String::with_capacity(sql.len() - "IGNORE".len());
+                rewritten.push_str(&sql[..start]);
+                rewritten.push_str(&sql[end..]);
+                return rewritten;
+            }
+        }
+        cursor = end;
+    }
+    sql.to_string()
+}
+
+fn is_create_table_ignore_select(sql: &str) -> bool {
+    let mut tokens = sql.split_whitespace();
+    let Some(first) = tokens.next() else {
+        return false;
+    };
+    let Some(second) = tokens.next() else {
+        return false;
+    };
+    first.eq_ignore_ascii_case("CREATE")
+        && second.eq_ignore_ascii_case("TABLE")
+        && tokens.collect::<Vec<_>>().windows(2).any(|pair| {
+            pair[0].eq_ignore_ascii_case("IGNORE") && pair[1].eq_ignore_ascii_case("SELECT")
+        })
 }
 
 fn is_update_ignore_statement(sql: &str) -> bool {
