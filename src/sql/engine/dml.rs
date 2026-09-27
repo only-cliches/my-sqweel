@@ -1696,7 +1696,18 @@ impl RawEngine {
         }
         let mut matching_contexts = Vec::new();
         for context in contexts {
-            if self.matches_selection_ctx(delete.selection.as_ref(), &context, 0)? {
+            let mut context = context;
+            for entry in &self.user_variables {
+                context
+                    .entry(format!("@{}", entry.key()))
+                    .or_insert_with(|| entry.value().clone());
+            }
+            let matches = self.matches_selection_ctx(
+                delete.selection.as_ref(),
+                &context,
+                self.last_insert_id.load(AtomicOrdering::Relaxed),
+            )?;
+            if matches {
                 matching_contexts.push(context);
             }
         }

@@ -3866,7 +3866,11 @@ impl RawEngine {
                 let expression = expression.trim();
                 let expr = parse_scalar_expr(expression)
                     .ok_or_else(|| anyhow!("unsupported user variable expression: {expression}"))?;
-                let value = self.eval_expr_ctx(&expr, &Map::new(), 0)?;
+                let value = self.eval_expr_ctx(
+                    &expr,
+                    &Map::new(),
+                    self.last_insert_id.load(AtomicOrdering::Relaxed),
+                )?;
                 self.user_variables.insert(name.to_ascii_lowercase(), value);
             }
             return Ok(Some(QueryResult::default()));

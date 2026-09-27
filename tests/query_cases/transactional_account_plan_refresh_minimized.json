@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "id": "transactional_account_plan_refresh_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "Junxi01/CareerPilot",
+      "commit": "bd3307093994ddea9fb53656393d26fb3c10a9ea",
+      "path": "database/seed.sql",
+      "url": "https://github.com/Junxi01/CareerPilot/blob/bd3307093994ddea9fb53656393d26fb3c10a9ea/database/seed.sql",
+      "sha256": "5f813070eda4be21e861eadc18537591c3d116b0fe5f755348c5d3b9ca6e57df",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "database/seed.sql:21-27, duplicate upsert, LAST_INSERT_ID(existing_id), and SET session variable",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A duplicate-key upsert assigns LAST_INSERT_ID(existing_id), then a SET statement captures LAST_INSERT_ID() into a session variable for a following write.",
+      "mysql_mariadb_translation": "Reduced to one existing account, one duplicate upsert inside a transaction, one SET capture of the existing identifier, and one dependent insert that exposes the captured value; joined cleanup and multi-row plan refresh are removed to isolate SET user-variable evaluation of LAST_INSERT_ID().",
+      "independently_authored": true
+    },
+    "parent_case": "transactional_account_plan_refresh"
+  },
+  "features": [
+    "transaction",
+    "duplicate-key-upsert",
+    "last-insert-id",
+    "set-user-variable",
+    "dependent-insert",
+    "minimized-regression",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The duplicate account remains ID 41. SET must capture LAST_INSERT_ID() as 41 so the dependent audit row references the existing account rather than zero.",
+  "determinism_notes": "The account ID, key, transaction statements, and final ordering are fixed with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE refresh_accounts_min (account_id INT AUTO_INCREMENT PRIMARY KEY, account_key VARCHAR(32) NOT NULL UNIQUE, display_name VARCHAR(64) NOT NULL)",
+    "CREATE TABLE refresh_audit_min (audit_id INT AUTO_INCREMENT PRIMARY KEY, account_id INT NOT NULL, audit_label VARCHAR(32) NOT NULL)",
+    "INSERT INTO refresh_accounts_min (account_id, account_key, display_name) VALUES (41, 'atlas', 'Atlas Original')"
+  ],
+  "steps": [
+    {
+      "sql": "START TRANSACTION",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO refresh_accounts_min (account_key, display_name) VALUES ('atlas', 'Atlas Refreshed') ON DUPLICATE KEY UPDATE display_name = VALUES(display_name), account_id = LAST_INSERT_ID(account_id)",
+      "ordered": true
+    },
+    {
+      "sql": "SET @refresh_account_id = LAST_INSERT_ID()",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO refresh_audit_min (account_id, audit_label) VALUES (@refresh_account_id, 'captured')",
+      "ordered": true
+    },
+    {
+      "sql": "COMMIT",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT account_id, account_key, display_name FROM refresh_accounts_min ORDER BY account_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT audit_id, account_id, audit_label FROM refresh_audit_min ORDER BY audit_id",
+      "ordered": true
+    }
+  ]
+}

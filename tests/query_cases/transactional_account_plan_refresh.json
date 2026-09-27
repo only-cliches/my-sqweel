@@ -1,0 +1,79 @@
+{
+  "version": 1,
+  "id": "transactional_account_plan_refresh",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Junxi01/CareerPilot",
+      "commit": "bd3307093994ddea9fb53656393d26fb3c10a9ea",
+      "path": "database/seed.sql",
+      "url": "https://github.com/Junxi01/CareerPilot/blob/bd3307093994ddea9fb53656393d26fb3c10a9ea/database/seed.sql",
+      "sha256": "5f813070eda4be21e861eadc18537591c3d116b0fe5f755348c5d3b9ca6e57df",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "database/seed.sql:5-47, transactional user upsert, LAST_INSERT_ID session variable, joined child cleanup, and follow-up seed writes",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A repeatable seed transaction upserts a parent by a unique key, captures its existing identifier with LAST_INSERT_ID into a session variable, deletes related child rows through a join, and repopulates dependent rows before committing.",
+      "mysql_mariadb_translation": "Reauthored as an account-plan refresh. A duplicate account upsert updates its display name and captures account_id, a joined delete removes one legacy plan, and an INSERT SELECT upsert refreshes an existing core plan while adding a pro plan before COMMIT; source tables, names, values, and application seed data are not copied.",
+      "independently_authored": true
+    }
+  },
+  "features": [
+    "transaction",
+    "duplicate-key-upsert",
+    "last-insert-id",
+    "session-user-variable",
+    "delete-join",
+    "insert-select-upsert",
+    "commit-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Account 41 is selected through the duplicate account_key path, so LAST_INSERT_ID must be assigned from the existing primary key rather than a new allocation. The legacy plan membership is removed, the core membership note is refreshed, and the pro membership is inserted before commit.",
+  "determinism_notes": "Account, plan, membership identifiers, transaction statements, and final ordering are fixed. There are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE plan_accounts (account_id INT AUTO_INCREMENT PRIMARY KEY, account_key VARCHAR(32) NOT NULL UNIQUE, display_name VARCHAR(64) NOT NULL)",
+    "CREATE TABLE plan_catalog (plan_id INT PRIMARY KEY, plan_code VARCHAR(16) NOT NULL UNIQUE)",
+    "CREATE TABLE account_plans (membership_id INT AUTO_INCREMENT PRIMARY KEY, account_id INT NOT NULL, plan_id INT NOT NULL, note VARCHAR(32) NOT NULL, UNIQUE KEY account_plan_key (account_id, plan_id))",
+    "INSERT INTO plan_accounts (account_id, account_key, display_name) VALUES (41, 'atlas', 'Atlas Original')",
+    "INSERT INTO plan_catalog (plan_id, plan_code) VALUES (7, 'legacy'), (11, 'core'), (13, 'pro')",
+    "INSERT INTO account_plans (membership_id, account_id, plan_id, note) VALUES (101, 41, 7, 'remove-me'), (102, 41, 11, 'old-core')"
+  ],
+  "steps": [
+    {
+      "sql": "START TRANSACTION",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO plan_accounts (account_key, display_name) VALUES ('atlas', 'Atlas Refreshed') ON DUPLICATE KEY UPDATE display_name = VALUES(display_name), account_id = LAST_INSERT_ID(account_id)",
+      "ordered": true
+    },
+    {
+      "sql": "SET @refresh_account_id = LAST_INSERT_ID()",
+      "ordered": true
+    },
+    {
+      "sql": "DELETE ap FROM account_plans AS ap INNER JOIN plan_catalog AS p ON p.plan_id = ap.plan_id WHERE ap.account_id = @refresh_account_id AND p.plan_code = 'legacy'",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO account_plans (account_id, plan_id, note) SELECT @refresh_account_id, p.plan_id, 'refreshed' FROM plan_catalog AS p WHERE p.plan_code IN ('core', 'pro') ON DUPLICATE KEY UPDATE note = VALUES(note)",
+      "ordered": true
+    },
+    {
+      "sql": "COMMIT",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT account_id, account_key, display_name FROM plan_accounts ORDER BY account_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT ap.account_id, p.plan_code, ap.note FROM account_plans AS ap INNER JOIN plan_catalog AS p ON p.plan_id = ap.plan_id ORDER BY ap.account_id, p.plan_id",
+      "ordered": true
+    }
+  ]
+}
