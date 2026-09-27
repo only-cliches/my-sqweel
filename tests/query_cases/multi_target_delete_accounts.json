@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "id": "multi_target_delete_accounts",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "dml/delete/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/dml/delete/mysql.sql",
+      "sha256": "819df13ca105e3e6b09eaf4d39108e014491b5b37a53ef5a0d2ea69a6d63b510",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "dml/delete/mysql.sql:22-29",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "MySQL multi-table DELETE names multiple joined aliases as deletion targets and removes matching parent and child rows in one statement.",
+      "mysql_mariadb_translation": "Reauthored as an independent account-retirement cleanup. A multi-target DELETE removes one closed account and all of its expired sessions, while open accounts, active sessions, and expired sessions for open accounts remain; the source schema, names, values, and application context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "multi-target-delete",
+    "delete-join",
+    "parent-child-cleanup",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Account 810 is closed with two expired sessions and must be removed together with both sessions. Account 811 is closed but has only an active session, while account 812 is open with an expired session; neither account nor its session rows should be deleted.",
+  "determinism_notes": "Account and session IDs, states, join keys, predicates, and final reads are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE account_registry (account_id INT PRIMARY KEY, account_name VARCHAR(32) NOT NULL, account_state VARCHAR(16) NOT NULL)",
+    "CREATE TABLE account_sessions (session_id INT PRIMARY KEY, account_id INT NOT NULL, session_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO account_registry VALUES (810, 'closed-alpha', 'closed'), (811, 'closed-beta', 'closed'), (812, 'open-gamma', 'open')",
+    "INSERT INTO account_sessions VALUES (9101, 810, 'expired'), (9102, 810, 'expired'), (9103, 811, 'active'), (9104, 812, 'expired')"
+  ],
+  "steps": [
+    {
+      "sql": "DELETE a, s FROM account_registry AS a INNER JOIN account_sessions AS s ON s.account_id = a.account_id WHERE a.account_state = 'closed' AND s.session_state = 'expired'",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT account_id, account_name, account_state FROM account_registry ORDER BY account_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT session_id, account_id, session_state FROM account_sessions ORDER BY session_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT account_id, account_name, account_state FROM account_registry ORDER BY account_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT session_id, account_id, session_state FROM account_sessions ORDER BY session_id",
+      "ordered": true
+    }
+  ]
+}
