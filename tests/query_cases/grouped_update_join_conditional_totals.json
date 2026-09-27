@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "id": "grouped_update_join_conditional_totals",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Yu-Geun-Chan/baseball_ygc",
+      "commit": "af18f500909477a11c8f0c0726fdc9f85a3f25cf",
+      "path": "DB.sql",
+      "url": "https://github.com/Yu-Geun-Chan/baseball_ygc/blob/af18f500909477a11c8f0c0726fdc9f85a3f25cf/DB.sql",
+      "sha256": "84cefc000afa312ce8609ddfe0cfd83344182f92ed653f5850fb43c2fd7ce735",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "DB.sql:336-347 and 440-450",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "An UPDATE JOIN joins target rows to a grouped derived relation whose conditional positive and negative aggregates populate two target totals.",
+      "mysql_mariadb_translation": "Reauthored as a media-feedback totals refresh. A grouped derived table sums positive and negative integer feedback separately with CASE, then an UPDATE JOIN changes only lesson items; an unrelated item and an item without matching feedback preserve their initial totals. The source schema, identifiers, labels, values, and application domain are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "update-join",
+    "grouped-derived-table",
+    "conditional-aggregate",
+    "multiple-target-assignments",
+    "join-filter",
+    "deterministic-final-state"
+  ],
+  "fixture_notes": "Lesson 501 receives positive total 8 and negative total 2 from mixed feedback, lesson 502 receives only negative feedback, and lesson 503 has no matching lesson feedback. A trailer item with another kind verifies the UPDATE WHERE filter does not broaden the target set.",
+  "determinism_notes": "All item and feedback identifiers, kinds, scores, aggregate expressions, and final primary-key ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE media_items (item_id INT PRIMARY KEY, item_kind VARCHAR(16) NOT NULL, positive_total INT NOT NULL, negative_total INT NOT NULL)",
+    "CREATE TABLE media_feedback (feedback_id INT PRIMARY KEY, item_kind VARCHAR(16) NOT NULL, item_id INT NOT NULL, score INT NOT NULL)",
+    "INSERT INTO media_items VALUES (501, 'lesson', 90, 80), (502, 'lesson', 4, 1), (503, 'lesson', 2, 3), (504, 'trailer', 7, 6)",
+    "INSERT INTO media_feedback VALUES (1, 'lesson', 501, 5), (2, 'lesson', 501, -2), (3, 'lesson', 501, 3), (4, 'lesson', 501, 0), (5, 'lesson', 502, -4), (6, 'trailer', 504, 8)"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE media_items AS i INNER JOIN (SELECT f.item_kind, f.item_id, SUM(CASE WHEN f.score > 0 THEN f.score ELSE 0 END) AS positive_total, SUM(CASE WHEN f.score < 0 THEN -f.score ELSE 0 END) AS negative_total FROM media_feedback AS f GROUP BY f.item_kind, f.item_id) AS totals ON totals.item_kind = i.item_kind AND totals.item_id = i.item_id SET i.positive_total = totals.positive_total, i.negative_total = totals.negative_total WHERE i.item_kind = 'lesson'",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT item_id, item_kind, positive_total, negative_total FROM media_items ORDER BY item_id",
+      "ordered": true
+    }
+  ]
+}
