@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "id": "ifnull_values_upsert_nullable",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "DTStack/chunjun",
+      "commit": "cff5fbffb498a60e0fb700f77073deeebb7ed3e6",
+      "path": "chunjun-examples/sql/mysql/kafka_mysql_sink.sql",
+      "url": "https://github.com/DTStack/chunjun/blob/cff5fbffb498a60e0fb700f77073deeebb7ed3e6/chunjun-examples/sql/mysql/kafka_mysql_sink.sql",
+      "sha256": "99dc85792230b714ccd4adf389d1bd94ae020d8aea4adfec52c21f8ba31ae3f0",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "kafka_mysql_sink.sql:55, generated ON DUPLICATE KEY UPDATE with IFNULL(VALUES(column), column)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A sink upsert uses IFNULL around VALUES(column) in each duplicate-key assignment so incoming NULL fields do not overwrite existing non-NULL values while non-NULL fields still refresh the row.",
+      "mysql_mariadb_translation": "Reauthored as a device-profile merge. One multi-row VALUES statement refreshes non-NULL labels or regions, preserves existing values when an incoming field is NULL, and inserts a new profile whose NULL field remains NULL; the source connector schema, columns, values, and sink workflow are not copied.",
+      "independently_authored": true
+    }
+  },
+  "features": [
+    "nullable-upsert",
+    "ifnull",
+    "values-reference",
+    "multi-row-values",
+    "existing-and-new-rows",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Profile alpha preserves its existing label while refreshing region; beta refreshes its label and preserves its existing NULL region; gamma is inserted with a NULL label and a fixed region.",
+  "determinism_notes": "Profile keys, nullable fields, incoming rows, and final ordering are fixed. There are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE device_profiles (profile_id INT AUTO_INCREMENT PRIMARY KEY, device_key VARCHAR(16) NOT NULL UNIQUE, display_name VARCHAR(32) NULL, region_code VARCHAR(16) NULL)",
+    "INSERT INTO device_profiles (profile_id, device_key, display_name, region_code) VALUES (1, 'alpha', 'Alpha Original', 'west'), (2, 'beta', 'Beta Original', NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO device_profiles (device_key, display_name, region_code) VALUES ('alpha', NULL, 'east'), ('beta', 'Beta Refresh', NULL), ('gamma', NULL, 'north') ON DUPLICATE KEY UPDATE display_name = IFNULL(VALUES(display_name), display_name), region_code = IFNULL(VALUES(region_code), region_code)",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT profile_id, device_key, display_name, region_code FROM device_profiles ORDER BY profile_id",
+      "ordered": true
+    }
+  ]
+}
