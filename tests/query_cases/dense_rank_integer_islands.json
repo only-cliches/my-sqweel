@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "dense_rank_integer_islands",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "ziag/ScriptsSQL",
+      "commit": "122cd0d0b92d1fd8cbc36b6d541433b0bc72c40b",
+      "path": "Divers/DENSE_RANK.sql",
+      "url": "https://github.com/ziag/ScriptsSQL/blob/122cd0d0b92d1fd8cbc36b6d541433b0bc72c40b/Divers/DENSE_RANK.sql",
+      "sha256": "55d74deac04a9f266103a57f5d87c4775f766109bb6e5045abca44e2a72a90de",
+      "source_dialect": "sql-server"
+    },
+    "inspiration": {
+      "source_location": "Divers/DENSE_RANK.sql:7-18",
+      "source_dialect": "sql-server",
+      "observed_pattern": "A CTE subtracts DENSE_RANK from ordered integer values so each consecutive integer island shares a grouping key, then MIN and MAX report each island's bounds.",
+      "mysql_mariadb_translation": "Reauthored as an inventory-batch island report. Independently authored batch numbers include consecutive runs, gaps, and a duplicate number; a DENSE_RANK-derived key groups each consecutive run and the final aggregate reports its lower and upper batch numbers plus row count. SQL Server table variables, aliases, and values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["cte", "dense-rank", "integer-islands", "grouped-min-max", "duplicate-values", "deterministic-order"],
+  "fixture_notes": "Batch numbers form islands 41-43, 45-46, 50-52, 55-56, and 60-61. Batch 50 occurs twice and must remain in the same island with a row count of three; gaps must start new islands.",
+  "determinism_notes": "Batch IDs are unique and batch numbers are fixed. DENSE_RANK orders only by batch number, grouping equal values together; the final report orders by the unique lower bound. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE inventory_batches (batch_id INT PRIMARY KEY, batch_no INT NOT NULL)",
+    "INSERT INTO inventory_batches VALUES (401, 41), (402, 42), (403, 43), (404, 45), (405, 46), (406, 50), (407, 50), (408, 51), (409, 52), (410, 55), (411, 56), (412, 60), (413, 61)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH numbered_batches AS (SELECT batch_no, batch_no - DENSE_RANK() OVER (ORDER BY batch_no) AS island_key FROM inventory_batches) SELECT MIN(batch_no) AS first_batch, MAX(batch_no) AS last_batch, COUNT(*) AS batch_rows FROM numbered_batches GROUP BY island_key ORDER BY first_batch",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT batch_id, batch_no FROM inventory_batches ORDER BY batch_id",
+      "ordered": true
+    }
+  ]
+}
