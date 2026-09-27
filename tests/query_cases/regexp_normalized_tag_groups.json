@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "id": "regexp_normalized_tag_groups",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "IHTSDO/snomed-database-loader",
+      "commit": "19c08f80025b6ca204f80f44fceef9ec65e2b29b",
+      "path": "mysql-loader-with-optimized-views/mysql_load/sct_mysql_temp.sql",
+      "url": "https://github.com/IHTSDO/snomed-database-loader/blob/19c08f80025b6ca204f80f44fceef9ec65e2b29b/mysql-loader-with-optimized-views/mysql_load/sct_mysql_temp.sql",
+      "sha256": "03a6f0df4a0b6bb0650133e0a177559855299ed386ea38d99a6de27d7e32ab25",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sct_mysql_temp.sql:1732",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "Nested REGEXP_REPLACE calls normalize structured text before the surrounding query aggregates or groups the cleaned values.",
+      "mysql_mariadb_translation": "Reauthored as an independent tag-normalization report. Fixed event labels collapse repeated whitespace with REGEXP_REPLACE before TRIM, then group by the normalized expression and retain ordered source IDs through GROUP_CONCAT; the source procedure, schema, and terminology are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "regexp-replace",
+    "nested-text-normalization",
+    "computed-group-key",
+    "grouped-count",
+    "ordered-group-concat",
+    "null-filtering",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Events 601 and 602 normalize to the same tag despite different internal whitespace and must form one group. Event 603 forms a separate group; event 604 has NULL text and is excluded before normalization.",
+  "determinism_notes": "Event IDs, raw labels, normalization expressions, source-ID ordering, and final normalized-tag ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE tag_events (event_id INT PRIMARY KEY, raw_tag VARCHAR(64) NULL)",
+    "INSERT INTO tag_events VALUES (601, '  incident   response  '), (602, 'incident response'), (603, 'maintenance'), (604, NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT TRIM(REGEXP_REPLACE(raw_tag, '[[:space:]]+', ' ')) AS normalized_tag, COUNT(*) AS event_count, GROUP_CONCAT(event_id ORDER BY event_id ASC SEPARATOR ',') AS event_ids FROM tag_events WHERE raw_tag IS NOT NULL GROUP BY TRIM(REGEXP_REPLACE(raw_tag, '[[:space:]]+', ' ')) ORDER BY normalized_tag",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT event_id, raw_tag FROM tag_events ORDER BY event_id",
+      "ordered": true
+    }
+  ]
+}
