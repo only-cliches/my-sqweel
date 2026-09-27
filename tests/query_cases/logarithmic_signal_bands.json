@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "logarithmic_signal_bands",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "jakartaee/platform-tck",
+      "commit": "e8e56c2cde0e38f5b09136835a286a880e46faf2",
+      "path": "release/bin/sql/mysql/mysql.dml.sql",
+      "url": "https://github.com/jakartaee/platform-tck/blob/e8e56c2cde0e38f5b09136835a286a880e46faf2/release/bin/sql/mysql/mysql.dml.sql",
+      "sha256": "a679d71fd5ab388a899d11da3f2122ffb0f8d9130bb9cfa991005f12aa39aba1",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "release/bin/sql/mysql/mysql.dml.sql:397 (Log10_Fn_Query)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL JDBC compatibility query projects LOG10 over a numeric column through the ODBC scalar-function escape form.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored signal-band report. Fixed positive amplitudes and one NULL are projected through LOG10, classified with a threshold, and summarized per channel with ROUND and AVG; the source table, placeholders, values, and compatibility-test context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["log10", "numeric-function", "null-propagation", "case-classification", "grouped-average", "rounding", "deterministic-order"],
+  "fixture_notes": "Channel alpha contains amplitudes 1, 10, and 1000, producing logarithms 0, 1, and 3 with the last classified high. Channel beta contains 0.1 and 100 plus one NULL reading; NULL remains missing and is excluded from the grouped average.",
+  "determinism_notes": "Reading IDs, channels, amplitudes, threshold, rounding scale, and ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE signal_readings (reading_id INT PRIMARY KEY, channel_code VARCHAR(16) NOT NULL, amplitude DOUBLE NULL)",
+    "INSERT INTO signal_readings VALUES (801, 'alpha', 1.0), (802, 'alpha', 10.0), (803, 'alpha', 1000.0), (804, 'beta', 0.1), (805, 'beta', 100.0), (806, 'beta', NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT reading_id, channel_code, amplitude, ROUND(LOG10(amplitude), 3) AS log10_value, CASE WHEN amplitude IS NULL THEN 'missing' WHEN LOG10(amplitude) >= 2 THEN 'high' ELSE 'low' END AS signal_band FROM signal_readings ORDER BY reading_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT channel_code, COUNT(amplitude) AS measured_count, ROUND(AVG(LOG10(amplitude)), 3) AS mean_log10 FROM signal_readings WHERE amplitude IS NOT NULL GROUP BY channel_code ORDER BY channel_code",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT reading_id, channel_code, amplitude FROM signal_readings ORDER BY reading_id",
+      "ordered": true
+    }
+  ]
+}
