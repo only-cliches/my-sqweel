@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "id": "regexp_check_immutable_registry",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "alibaba/compileflow",
+      "commit": "c2831832745e893f0dbe22b1e94810625372a356",
+      "path": "compileflow-deploy/compileflow-deploy-mysql/src/main/resources/db/compileflow-deploy/mysql/migration/V1__deploy_baseline.sql",
+      "url": "https://github.com/alibaba/compileflow/blob/c2831832745e893f0dbe22b1e94810625372a356/compileflow-deploy/compileflow-deploy-mysql/src/main/resources/db/compileflow-deploy/mysql/migration/V1__deploy_baseline.sql",
+      "sha256": "3da66e9a301d66ad12fa4ad0106eff5470341d3c7252b54224672ff7327fefcc",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "V1__deploy_baseline.sql:6-30",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL registry table validates a fixed-format digest with a regular-expression CHECK constraint and uses BEFORE UPDATE and BEFORE DELETE triggers to enforce immutability.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored artifact registry. The MariaDB-compatible REGEXP predicate validates a lowercase hexadecimal digest, while separate single-statement triggers reject updates and deletes. Valid insertion, constraint rejection, trigger rejection, and final state are covered without copying the source schema or values."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "regexp-check-constraint",
+    "immutable-table",
+    "before-update-trigger",
+    "before-delete-trigger",
+    "signal-sqlstate",
+    "constraint-error",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The registry accepts a 64-character lowercase hexadecimal digest. A malformed digest is rejected by the CHECK constraint, while UPDATE and DELETE are rejected by immutability triggers; the original row remains unchanged.",
+  "determinism_notes": "Registry IDs, digest strings, attempted mutations, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE artifact_registry (artifact_id INT PRIMARY KEY, artifact_code VARCHAR(16) NOT NULL, digest CHAR(64) NOT NULL, CONSTRAINT artifact_digest_format CHECK (digest REGEXP '^[0-9a-f]{64}$'))",
+    "CREATE TRIGGER artifact_registry_no_update BEFORE UPDATE ON artifact_registry FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'artifact registry is immutable'",
+    "CREATE TRIGGER artifact_registry_no_delete BEFORE DELETE ON artifact_registry FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'artifact registry is immutable'"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO artifact_registry VALUES (801, 'core', '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef')",
+      "ordered": false
+    },
+    {
+      "sql": "INSERT INTO artifact_registry VALUES (802, 'bad', 'not-a-digest')",
+      "ordered": false,
+      "expect_error": true
+    },
+    {
+      "sql": "UPDATE artifact_registry SET artifact_code = 'changed' WHERE artifact_id = 801",
+      "ordered": false,
+      "expect_error": true
+    },
+    {
+      "sql": "DELETE FROM artifact_registry WHERE artifact_id = 801",
+      "ordered": false,
+      "expect_error": true
+    },
+    {
+      "sql": "SELECT artifact_id, artifact_code, digest FROM artifact_registry ORDER BY artifact_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
