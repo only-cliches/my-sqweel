@@ -1,0 +1,74 @@
+{
+  "version": 1,
+  "id": "dynamic_group_concat_update_join",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "KiRiSv/F1AltChamps",
+      "commit": "26cc299c0bf17c0118ab18262a70d1db5c6277d1",
+      "path": "update.sql",
+      "url": "https://github.com/KiRiSv/F1AltChamps/blob/26cc299c0bf17c0118ab18262a70d1db5c6277d1/update.sql",
+      "sha256": "c2376eabf917117a94b22b1265eb3aeacd4c980b1992a04b52beac0a52492168",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "update.sql:23-65",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL maintenance script uses ordered GROUP_CONCAT to build dynamic SQL, then PREPARE and EXECUTE to perform a joined UPDATE that copies derived values into a target table.",
+      "mysql_mariadb_translation": "Reauthored as an independent dispatch-summary refresh. A fixed metadata table supplies target assignment names, ordered GROUP_CONCAT constructs the SET list, and PREPARE/EXECUTE applies that list through an UPDATE JOIN; source racing tables, dynamic position expressions, and application labels are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "dynamic-sql",
+    "group-concat",
+    "prepare-execute",
+    "update-join",
+    "user-variable",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Two metadata rows generate the deterministic assignments for total_units and alert_count. Team 71 is refreshed from matching incoming values; team 72 has no incoming row and remains unchanged.",
+  "determinism_notes": "Metadata ordinals, team IDs, assignments, generated SQL order, and final reads are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE dispatch_summaries (team_id INT PRIMARY KEY, total_units INT NOT NULL, alert_count INT NOT NULL)",
+    "CREATE TABLE dispatch_updates (team_id INT PRIMARY KEY, total_units INT NOT NULL, alert_count INT NOT NULL)",
+    "CREATE TABLE summary_columns (column_name VARCHAR(32) NOT NULL, ordinal_no INT NOT NULL PRIMARY KEY)",
+    "INSERT INTO dispatch_summaries VALUES (71, 3, 1), (72, 8, 2)",
+    "INSERT INTO dispatch_updates VALUES (71, 19, 4)",
+    "INSERT INTO summary_columns VALUES ('total_units', 1), ('alert_count', 2)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT GROUP_CONCAT(CONCAT('s.', column_name, ' = u.', column_name) ORDER BY ordinal_no SEPARATOR ', ') INTO @summary_assignments FROM summary_columns",
+      "ordered": true
+    },
+    {
+      "sql": "SET @summary_update = CONCAT('UPDATE dispatch_summaries AS s JOIN dispatch_updates AS u ON s.team_id = u.team_id SET ', @summary_assignments)",
+      "ordered": false
+    },
+    {
+      "sql": "PREPARE summary_refresh FROM @summary_update",
+      "ordered": false
+    },
+    {
+      "sql": "EXECUTE summary_refresh",
+      "ordered": false
+    },
+    {
+      "sql": "DEALLOCATE PREPARE summary_refresh",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT team_id, total_units, alert_count FROM dispatch_summaries ORDER BY team_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT team_id, total_units, alert_count FROM dispatch_summaries ORDER BY team_id",
+      "ordered": true
+    }
+  ]
+}
