@@ -898,7 +898,10 @@ impl RawEngine {
         let table_name = table_factor_name(&table.relation)?;
         let (_, left_alias) = table_factor_name_and_alias(&table.relation)?;
         let join = &table.joins[0];
-        let right_table = table_factor_name(&join.relation)?;
+        let right_table = match table_factor_name(&join.relation) {
+            Ok(name) => name,
+            Err(_) => return Ok(None),
+        };
         let (_, right_alias) = table_factor_name_and_alias(&join.relation)?;
         if !table_name.eq_ignore_ascii_case(&right_table) {
             return Ok(None);

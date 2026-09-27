@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "window_rank_update_tasks",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "ChurchCRM/CRM",
+      "commit": "561df5d3db48ff445232c458a976c1b6d8964d0c",
+      "path": "src/mysql/upgrade/6.7.0.sql",
+      "url": "https://github.com/ChurchCRM/CRM/blob/561df5d3db48ff445232c458a9764d0c/src/mysql/upgrade/6.7.0.sql",
+      "sha256": "8745a1cbd9c9580ff1869be300af597711033ccf28c06172cf41fdcab536e335",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "src/mysql/upgrade/6.7.0.sql:7-17",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "An UPDATE JOIN consumes a derived ROW_NUMBER window result to assign stable display positions to existing rows.",
+      "mysql_mariadb_translation": "Reauthored as an independent task-order migration. A derived ROW_NUMBER partition ranks tasks by group and priority, and an UPDATE JOIN writes each computed position back to the task table with a task-ID tie-break. The source schema, identifiers, values, and application context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "row-number",
+    "partitioned-window",
+    "window-driven-update",
+    "update-join",
+    "deterministic-tie-break",
+    "dml-final-state"
+  ],
+  "fixture_notes": "Tasks 801, 802, and 804 share group alpha and receive positions 1, 2, and 3 by descending priority; task 803 is the sole beta task and receives position 1. Existing display positions are overwritten by the computed ranks.",
+  "determinism_notes": "Task IDs, groups, priorities, window ordering, and final primary-key ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE dispatch_tasks (task_id INT PRIMARY KEY, task_group VARCHAR(16) NOT NULL, task_label VARCHAR(32) NOT NULL, priority INT NOT NULL, display_position INT NULL)",
+    "INSERT INTO dispatch_tasks VALUES (801, 'alpha', 'rebuild-index', 40, 99), (802, 'alpha', 'refresh-cache', 20, 99), (803, 'beta', 'send-report', 30, 99), (804, 'alpha', 'compact-logs', 10, 99)"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE dispatch_tasks AS target INNER JOIN (SELECT task_id, ROW_NUMBER() OVER (PARTITION BY task_group ORDER BY priority DESC, task_id ASC) AS new_position FROM dispatch_tasks) AS ranked ON ranked.task_id = target.task_id SET target.display_position = ranked.new_position",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT task_id, task_group, task_label, priority, display_position FROM dispatch_tasks ORDER BY task_id",
+      "ordered": true
+    }
+  ]
+}
