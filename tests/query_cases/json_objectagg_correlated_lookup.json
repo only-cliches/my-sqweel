@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "json_objectagg_correlated_lookup",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "unkeyed/unkey",
+      "commit": "70cd1245bb6e18f753d7270c6983aa91dd4f1ada",
+      "path": "pkg/db/queries/identity_find.sql",
+      "url": "https://github.com/unkeyed/unkey/blob/70cd1245bb6e18f753d7270c6983aa91dd4f1ada/pkg/db/queries/identity_find.sql",
+      "sha256": "1e8b38b2a0cf643e0a7ea835816762c4ecbbc9d1a3dbaa022168f5dbed8e34dc",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "pkg/db/queries/identity_find.sql:2-36",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL lookup unions exact-identifier and external-identifier candidates with a priority, then uses a correlated JSON_ARRAYAGG(JSON_OBJECT(...)) child projection with an empty JSON_ARRAY fallback.",
+      "mysql_mariadb_translation": "Reauthored as a workspace directory lookup. Exact numeric directory IDs outrank matching external keys, while a correlated ordered JSON_ARRAYAGG emits rule objects and COALESCE supplies an empty array for directories without rules; the source schema, identifiers, values, and identity domain are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["union-all-priority", "correlated-subquery", "json-arrayagg", "json-object", "empty-json-fallback", "ordered-child-aggregation", "deterministic-order"],
+  "fixture_notes": "Directory 1001 is selected over directory 1002 when the lookup value matches its numeric ID and directory 1002's external key. Its two rules become ordered JSON objects. A second lookup finds directory 1003 by external key and verifies that no child rules produce JSON_ARRAY() rather than SQL NULL.",
+  "determinism_notes": "Directory IDs, external keys, rule IDs, JSON fields, lookup priorities, and final projections are fixed; JSON_ARRAYAGG orders by rule ID and outer results use a stable priority and ID order. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE workspace_directories (directory_id INT PRIMARY KEY, external_key VARCHAR(32) NOT NULL, workspace_id INT NOT NULL, directory_name VARCHAR(32) NOT NULL, is_deleted TINYINT NOT NULL)",
+    "CREATE TABLE directory_rules (rule_id INT PRIMARY KEY, directory_id INT NOT NULL, rule_name VARCHAR(32) NOT NULL, max_units INT NOT NULL, window_seconds INT NOT NULL, auto_apply TINYINT NOT NULL)",
+    "INSERT INTO workspace_directories VALUES (1001, 'alice-key', 7, 'Alpha directory', 0), (1002, '1001', 7, 'Fallback directory', 0), (1003, 'carol-key', 7, 'Carol directory', 0), (1004, 'deleted-key', 7, 'Deleted directory', 1)",
+    "INSERT INTO directory_rules VALUES (41, 1001, 'burst', 20, 60, 1), (42, 1001, 'daily', 500, 86400, 0), (51, 1002, 'fallback', 5, 60, 1)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT d.directory_id, d.directory_name, COALESCE((SELECT JSON_ARRAYAGG(JSON_OBJECT('rule_id', r.rule_id, 'name', r.rule_name, 'max_units', r.max_units, 'window_seconds', r.window_seconds, 'auto_apply', r.auto_apply = 1) ORDER BY r.rule_id) FROM directory_rules AS r WHERE r.directory_id = d.directory_id), JSON_ARRAY()) AS rules FROM (SELECT d1.directory_id, d1.directory_name, 0 AS lookup_priority FROM workspace_directories AS d1 WHERE d1.directory_id = 1001 AND d1.workspace_id = 7 AND d1.is_deleted = 0 UNION ALL SELECT d2.directory_id, d2.directory_name, 1 AS lookup_priority FROM workspace_directories AS d2 WHERE d2.external_key = '1001' AND d2.workspace_id = 7 AND d2.is_deleted = 0) AS d ORDER BY d.lookup_priority, d.directory_id LIMIT 1",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT d.directory_id, d.directory_name, COALESCE((SELECT JSON_ARRAYAGG(JSON_OBJECT('rule_id', r.rule_id, 'name', r.rule_name, 'max_units', r.max_units, 'window_seconds', r.window_seconds, 'auto_apply', r.auto_apply = 1) ORDER BY r.rule_id) FROM directory_rules AS r WHERE r.directory_id = d.directory_id), JSON_ARRAY()) AS rules FROM (SELECT d1.directory_id, d1.directory_name, 0 AS lookup_priority FROM workspace_directories AS d1 WHERE d1.directory_id = 'carol-key' AND d1.workspace_id = 7 AND d1.is_deleted = 0 UNION ALL SELECT d2.directory_id, d2.directory_name, 1 AS lookup_priority FROM workspace_directories AS d2 WHERE d2.external_key = 'carol-key' AND d2.workspace_id = 7 AND d2.is_deleted = 0) AS d ORDER BY d.lookup_priority, d.directory_id LIMIT 1",
+      "ordered": true
+    }
+  ]
+}

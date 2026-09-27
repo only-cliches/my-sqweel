@@ -138,7 +138,7 @@ pub(crate) fn mysql_json_agg_text(value: &Value) -> Result<String> {
             "[{}]",
             values
                 .iter()
-                .map(mysql_json_agg_text)
+                .map(mysql_json_text)
                 .collect::<Result<Vec<_>>>()?
                 .join(",")
         )),
@@ -150,7 +150,7 @@ pub(crate) fn mysql_json_agg_text(value: &Value) -> Result<String> {
                     Ok(format!(
                         "{}:{}",
                         serde_json::to_string(key).unwrap_or_default(),
-                        mysql_json_agg_text(value)?
+                        mysql_json_text(value)?
                     ))
                 })
                 .collect::<Result<Vec<_>>>()?

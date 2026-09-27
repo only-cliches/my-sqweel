@@ -2899,6 +2899,29 @@ impl RawEngine {
                 best = argument_type;
             }
         }
+        if best_rank == 0 {
+            if argument_types
+                .iter()
+                .any(|argument_type| *argument_type == MysqlColumnType::LongBlob)
+            {
+                return MysqlColumnType::LongBlob;
+            }
+            if argument_types
+                .iter()
+                .any(|argument_type| *argument_type == MysqlColumnType::MediumBlob)
+            {
+                return MysqlColumnType::MediumBlob;
+            }
+            if argument_types
+                .iter()
+                .any(|argument_type| *argument_type == MysqlColumnType::Blob)
+                && argument_types
+                    .iter()
+                    .any(|argument_type| *argument_type != MysqlColumnType::Blob)
+            {
+                return MysqlColumnType::MediumBlob;
+            }
+        }
         if best_rank == 0
             && let Some(first_type) = argument_types.first().copied()
             && matches!(
