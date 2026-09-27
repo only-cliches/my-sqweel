@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "bitwise_aggregate_profiles",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "functions/aggregate/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/functions/aggregate/mysql.sql",
+      "sha256": "0160718d9ccf135c9938eaf3879a37c672cd171e68065046c953d55e95a33425",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "functions/aggregate/mysql.sql:158-160 (BIT aggregate examples)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped bitmask report applies BIT_AND, BIT_OR, and BIT_XOR across each entity's flag samples, exposing the common permissions, union of permissions, and parity mask while aggregate NULL inputs are ignored.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored profile-permission audit with new table names, masks, IDs, and grouping purpose. The fixture keeps the three MariaDB bit aggregates together, includes a NULL sample inside one profile, and orders by the unique profile ID; unrelated statistical and JSON examples are omitted."
+    },
+    "independently_authored": true
+  },
+  "features": ["bit-and-aggregate", "bit-or-aggregate", "bit-xor-aggregate", "grouping", "null-aggregate-input", "deterministic-order"],
+  "fixture_notes": "Profile 11 combines masks 7, 5, and 3; profile 22 combines 12, 10, NULL, and 6; profile 33 has one mask. The NULL sample must not change any aggregate result.",
+  "determinism_notes": "Profile IDs and sample IDs are fixed, each profile has a unique grouping key, and the final read orders by profile ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE profile_permission_samples (sample_id INT PRIMARY KEY, profile_id INT NOT NULL, permission_mask INT NULL)",
+    "INSERT INTO profile_permission_samples VALUES (1101, 11, 7), (1102, 11, 5), (1103, 11, 3), (2201, 22, 12), (2202, 22, 10), (2203, 22, NULL), (2204, 22, 6), (3301, 33, 9)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT profile_id, BIT_AND(permission_mask) AS common_permissions, BIT_OR(permission_mask) AS any_permissions, BIT_XOR(permission_mask) AS parity_permissions FROM profile_permission_samples GROUP BY profile_id ORDER BY profile_id",
+      "ordered": true
+    }
+  ]
+}
