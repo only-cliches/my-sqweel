@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "id": "latest_owner_update_join",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "onkar0127/real-estate-Databse-analytics",
+      "commit": "fae8ee7a63c9cbdac0f0d0c5ccfacb06e2425be5",
+      "path": "update.sql",
+      "url": "https://github.com/onkar0127/real-estate-Databse-analytics/blob/fae8ee7a63c9cbdac0f0d0c5ccfacb06e2425be5/update.sql",
+      "sha256": "f1a2f85cc50c5016f848698cda168aedaf6423732d6e6a7d123e684d4dd4a126",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "update.sql:4-18",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "An UPDATE JOIN derives the latest event date per entity with a grouped MAX subquery, joins that boundary back to the event rows, and copies the resulting owner into the entity table.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored asset-ownership refresh. A grouped MAX transfer-date relation identifies each asset's latest transfer, a derived owner map joins the corresponding transfer row, and UPDATE JOIN writes current owners while an asset without transfers remains unchanged. The source schema, rows, identifiers, and real-estate domain are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "update-join",
+    "nested-derived-table",
+    "grouped-max-latest-row",
+    "multi-table-update",
+    "nullable-preservation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Asset 501 changes from owner 801 to its later owner 802; asset 502 changes from owner 803 to owner 804; asset 503 has no transfers and remains NULL. Each asset has one unique latest transfer date so the grouped MAX mapping is deterministic.",
+  "determinism_notes": "Transfer dates and IDs are fixed, each asset has one unique latest date, and final ownership is ordered by the primary asset ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE ownership_assets (asset_id INT PRIMARY KEY, asset_label VARCHAR(32) NOT NULL, current_owner_id INT NULL)",
+    "CREATE TABLE ownership_transfers (transfer_id INT PRIMARY KEY, asset_id INT NOT NULL, owner_id INT NOT NULL, transferred_on DATE NOT NULL)",
+    "INSERT INTO ownership_assets VALUES (501, 'violet', 801), (502, 'indigo', 803), (503, 'silver', NULL)",
+    "INSERT INTO ownership_transfers VALUES (1, 501, 801, '2026-01-05'), (2, 501, 802, '2026-02-10'), (3, 502, 803, '2026-01-20'), (4, 502, 804, '2026-03-01')"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE ownership_assets AS a JOIN (SELECT t.asset_id, t.owner_id AS latest_owner FROM ownership_transfers AS t INNER JOIN (SELECT asset_id, MAX(transferred_on) AS latest_on FROM ownership_transfers GROUP BY asset_id) AS latest ON t.asset_id = latest.asset_id AND t.transferred_on = latest.latest_on) AS owner_map ON a.asset_id = owner_map.asset_id SET a.current_owner_id = owner_map.latest_owner",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT asset_id, asset_label, current_owner_id FROM ownership_assets ORDER BY asset_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT asset_id, asset_label, current_owner_id FROM ownership_assets ORDER BY asset_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT transfer_id, asset_id, owner_id, transferred_on FROM ownership_transfers ORDER BY transfer_id",
+      "ordered": true
+    }
+  ]
+}
