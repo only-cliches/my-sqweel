@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "id": "update_ordered_limit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Trabalho-BD/banco_ecommerce",
+      "commit": "d4a2e4b4eee7fd63a6b2d571e3f8aab683fbe8a2",
+      "path": "update.sql",
+      "url": "https://github.com/Trabalho-BD/banco_ecommerce/blob/d4a2e4b4eee7fd63a6b2d571e3f8aab683fbe8a2/update.sql",
+      "sha256": "7c3c2dd2dcdc6233db7ade9e2ceee3056871753776816b864e7bfc781df72989",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "update.sql:26-31",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL UPDATE filters eligible rows, orders them by a descending business priority with an ascending identifier tie-breaker, and limits the mutation to one row.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored dispatch-queue claim. Only ready tasks participate, the highest priority task wins with task ID as the deterministic tie-breaker, and UPDATE ORDER BY LIMIT changes exactly one task. The source procedure, tables, values, and ecommerce domain are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "update-order-by",
+    "update-limit",
+    "deterministic-tie-break",
+    "filtered-dml",
+    "final-state-check"
+  ],
+  "fixture_notes": "Task 601 and 602 are ready at equal priority, so the lower task ID 601 must be claimed; task 603 has higher priority but is held and must remain untouched; task 604 is ready at lower priority and remains queued.",
+  "determinism_notes": "Priority, task IDs, state values, and final ordering are fixed. The update has no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE dispatch_tasks (task_id INT PRIMARY KEY, task_label VARCHAR(32) NOT NULL, task_state VARCHAR(16) NOT NULL, priority INT NOT NULL)",
+    "INSERT INTO dispatch_tasks VALUES (601, 'alpha', 'ready', 7), (602, 'beta', 'ready', 7), (603, 'gamma', 'held', 99), (604, 'delta', 'ready', 3)"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE dispatch_tasks SET task_state = 'claimed' WHERE task_state = 'ready' ORDER BY priority DESC, task_id ASC LIMIT 1",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT task_id, task_label, task_state, priority FROM dispatch_tasks ORDER BY task_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT task_id, task_label, task_state, priority FROM dispatch_tasks ORDER BY task_id",
+      "ordered": true
+    }
+  ]
+}
