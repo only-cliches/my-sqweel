@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "regexp_substr_grouped_channels_minimized",
+  "provenance": {
+    "kind": "minimized-from-query-case",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "functions/string-functions/oceanbase.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/functions/string-functions/oceanbase.sql",
+      "sha256": "7d203c4b97af16fc93c29b72c312cc1f61ed9b6426c948042e86699905354d22",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from functions/string-functions/oceanbase.sql:41-46",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "The smallest grouped probe extracts a regex token inside an ordered GROUP_CONCAT expression.",
+      "mysql_mariadb_translation": "Reduced to one independently authored channel with one matching message and one nonmatching message. REGEXP_SUBSTR, NULLIF, ordered GROUP_CONCAT, and COUNT remain while the second channel and final table checks are removed."
+    },
+    "independently_authored": true,
+    "minimized_from": "regexp_substr_grouped_channels"
+  },
+  "features": [
+    "regexp-substr",
+    "aggregate-expression",
+    "ordered-group-concat",
+    "nullif-empty-match",
+    "minimized-regression"
+  ],
+  "fixture_notes": "The matching message contributes AB-204, the nonmatching message contributes no token, and the aggregate must return one token with count one.",
+  "determinism_notes": "The channel key, message IDs, text, pattern, and aggregate ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE mini_channel_messages (message_id INT PRIMARY KEY, channel_id INT NOT NULL, message_text VARCHAR(160) NULL)",
+    "INSERT INTO mini_channel_messages VALUES (4101, 901, 'Deploy ticket AB-204 is queued'), (4102, 901, 'Routine heartbeat only')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT channel_id, COALESCE(GROUP_CONCAT(NULLIF(REGEXP_SUBSTR(message_text, '[A-Z]{2}-[0-9]+'), '') ORDER BY message_id SEPARATOR '|'), 'none') AS incident_tokens, COUNT(NULLIF(REGEXP_SUBSTR(message_text, '[A-Z]{2}-[0-9]+'), '')) AS token_count FROM mini_channel_messages GROUP BY channel_id ORDER BY channel_id",
+      "ordered": true
+    }
+  ]
+}

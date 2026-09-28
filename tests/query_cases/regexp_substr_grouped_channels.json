@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "id": "regexp_substr_grouped_channels",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "functions/string-functions/oceanbase.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/functions/string-functions/oceanbase.sql",
+      "sha256": "7d203c4b97af16fc93c29b72c312cc1f61ed9b6426c948042e86699905354d22",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "functions/string-functions/oceanbase.sql:41-46",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL-mode string-function reference places REGEXP_SUBSTR extraction beside ordered GROUP_CONCAT aggregation examples.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored incident-channel report. A LEFT JOIN preserves channels with no matching tokens, REGEXP_SUBSTR extracts the first incident code per message, NULLIF removes MariaDB's empty no-match result, and ordered GROUP_CONCAT plus COUNT summarizes each channel. The reference examples, schema, values, and documentation context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "regexp-substr",
+    "aggregate-expression",
+    "ordered-group-concat",
+    "left-join-null-extension",
+    "nullif-empty-match",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Channel 201 has two incident codes and one message without a code; extraction keeps the first code from each matching message and ordered aggregation returns AB-204|CD-9. Channel 202 has only missing or nonmatching text, so the left-joined group returns the fallback label none and token count zero.",
+  "determinism_notes": "Channel IDs, message IDs, message text, regex pattern, aggregate ordering, and final channel ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE incident_channels (channel_id INT PRIMARY KEY, channel_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE channel_messages (message_id INT PRIMARY KEY, channel_id INT NOT NULL, message_text VARCHAR(160) NULL)",
+    "INSERT INTO incident_channels VALUES (201, 'operations'), (202, 'security')",
+    "INSERT INTO channel_messages VALUES (3001, 201, 'Deploy ticket AB-204 is queued'), (3002, 201, 'Escalation CD-9 then EF-11'), (3003, 201, 'Routine heartbeat only'), (3004, 202, NULL), (3005, 202, 'Maintenance window complete')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT c.channel_id, c.channel_name, COALESCE(GROUP_CONCAT(NULLIF(REGEXP_SUBSTR(m.message_text, '[A-Z]{2}-[0-9]+'), '') ORDER BY m.message_id SEPARATOR '|'), 'none') AS incident_tokens, COUNT(NULLIF(REGEXP_SUBSTR(m.message_text, '[A-Z]{2}-[0-9]+'), '')) AS token_count FROM incident_channels AS c LEFT JOIN channel_messages AS m ON m.channel_id = c.channel_id GROUP BY c.channel_id, c.channel_name ORDER BY c.channel_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT channel_id, channel_name FROM incident_channels ORDER BY channel_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT message_id, channel_id, message_text FROM channel_messages ORDER BY message_id",
+      "ordered": true
+    }
+  ]
+}
