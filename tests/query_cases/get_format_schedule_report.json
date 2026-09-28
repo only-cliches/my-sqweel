@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "get_format_schedule_report",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "apmuthu/radicore",
+      "commit": "551c8e445c96f8a04ca96a2b538d35e7014552cd",
+      "path": "radicore/dict/sql/postgresql/mysqlcompat-1.04b/datetime.sql",
+      "url": "https://github.com/apmuthu/radicore/blob/551c8e445c96f8a04ca96a2b538d35e7014552cd/radicore/dict/sql/postgresql/mysqlcompat-1.04b/datetime.sql",
+      "sha256": "9cc45c5e12f1333b644956462cb30fcda6e0a9d9a09d2895e84acd0a6a243d67",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "radicore/dict/sql/postgresql/mysqlcompat-1.04b/datetime.sql:184-220 (GET_FORMAT compatibility function)",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A compatibility function maps DATE, DATETIME, and TIME format families plus USA, ISO, and INTERNAL locale names to MariaDB DATE_FORMAT masks.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored schedule-format report. Fixed DATETIME values are formatted through literal GET_FORMAT calls for DATE/ISO, DATETIME/USA, and TIME/JIS branches selected by each schedule ID; the source function body, schema, names, and values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["get-format", "date-format", "datetime", "deterministic-order"],
+  "fixture_notes": "Each schedule row uses a fixed timestamp and one literal GET_FORMAT family/locale pair selected by schedule ID. All combinations are supported MariaDB formats, so the report exercises mask construction and DATE_FORMAT composition without relying on unsupported dynamic GET_FORMAT arguments.",
+  "determinism_notes": "Schedule IDs, timestamps, format families, and locales are fixed; the output is ordered by the unique schedule ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE schedule_formats (schedule_id INT PRIMARY KEY, schedule_name VARCHAR(32) NOT NULL, scheduled_at DATETIME NOT NULL, format_family VARCHAR(16) NOT NULL, locale_name VARCHAR(16) NOT NULL)",
+    "INSERT INTO schedule_formats VALUES (301, 'morning briefing', '2026-04-05 07:08:09', 'DATE', 'ISO'), (302, 'evening handoff', '2026-04-05 17:18:19', 'DATETIME', 'USA'), (303, 'nightly archive', '2026-04-05 21:22:23', 'TIME', 'JIS')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT schedule_id, schedule_name, CASE schedule_id WHEN 301 THEN GET_FORMAT(DATE, 'ISO') WHEN 302 THEN GET_FORMAT(DATETIME, 'USA') WHEN 303 THEN GET_FORMAT(TIME, 'JIS') END AS format_mask, CASE schedule_id WHEN 301 THEN DATE_FORMAT(scheduled_at, GET_FORMAT(DATE, 'ISO')) WHEN 302 THEN DATE_FORMAT(scheduled_at, GET_FORMAT(DATETIME, 'USA')) WHEN 303 THEN DATE_FORMAT(scheduled_at, GET_FORMAT(TIME, 'JIS')) END AS formatted_value FROM schedule_formats ORDER BY schedule_id",
+      "ordered": true
+    }
+  ]
+}
