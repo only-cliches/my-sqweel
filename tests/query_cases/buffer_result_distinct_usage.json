@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "buffer_result_distinct_usage",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/4570.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/4570.sql",
+      "sha256": "a7385b9ea4f1c7e91510ee00504949abd8e3757976a5e045d9a48865fdb57f4f",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/docker/fuzz_root/mysql_initlib/4570.sql:16-17",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL grouped aggregate query applies SQL_BUFFER_RESULT while using DISTINCT inside aggregate expressions.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored route-usage report. SQL_BUFFER_RESULT accompanies grouped SUM(DISTINCT ...) and COUNT(DISTINCT ...) projections over accepted readings; the source tables, expressions, values, and fuzz-test context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["sql-buffer-result", "distinct-aggregates", "grouped-aggregate", "filtered-read", "deterministic-order"],
+  "fixture_notes": "Accepted east readings contain duplicate units and metric codes, so SUM(DISTINCT) reports 11 and COUNT(DISTINCT) reports 2. Accepted west readings share one metric code but have two unit values, producing 8 and 1. A paused east reading is excluded.",
+  "determinism_notes": "Reading IDs, regions, unit counts, metric codes, and states are fixed; grouped output is ordered by the unique region code with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE route_usage (reading_id INT PRIMARY KEY, region_code VARCHAR(16) NOT NULL, metric_code VARCHAR(16) NOT NULL, billed_units INT NOT NULL, usage_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO route_usage VALUES (3101, 'east', 'parcel', 4, 'accepted'), (3102, 'east', 'returns', 4, 'accepted'), (3103, 'east', 'parcel', 7, 'accepted'), (3104, 'west', 'dock', 3, 'accepted'), (3105, 'west', 'dock', 5, 'accepted'), (3106, 'east', 'legacy', 9, 'paused')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT SQL_BUFFER_RESULT region_code, SUM(DISTINCT billed_units) AS unique_units, COUNT(DISTINCT metric_code) AS metric_types FROM route_usage WHERE usage_state = 'accepted' GROUP BY region_code ORDER BY region_code",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT reading_id, region_code, metric_code, billed_units, usage_state FROM route_usage ORDER BY reading_id",
+      "ordered": true
+    }
+  ]
+}
