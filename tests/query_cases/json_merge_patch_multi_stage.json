@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "json_merge_patch_multi_stage",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "CUBRID/cubrid-testcases",
+      "commit": "c7a58842a09521d205cec00bf13b5c456fdc9b29",
+      "path": "sql/_31_cherry/issue_22162_more_json_functions/cases/json_merge_patch.sql",
+      "url": "https://github.com/CUBRID/cubrid-testcases/blob/c7a58842a09521d205cec00bf13b5c456fdc9b29/sql/_31_cherry/issue_22162_more_json_functions/cases/json_merge_patch.sql",
+      "sha256": "1281bd7fbb4004b9dba449f947dc0e9e89072ee3ce4a8793e43672b7c1ace483",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/_31_cherry/issue_22162_more_json_functions/cases/json_merge_patch.sql:23-29",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A JSON report merges three documents left-to-right with JSON_MERGE_PATCH, then checks containment of the merged result and intermediate merge.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored deployment-policy audit. Three JSON documents layer profile fields, replace an array, remove a null-patched key, and add a flag; JSON_CONTAINS and scalar projections expose both the final and intermediate merge semantics. The source table, values, identifiers, and test context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["json-merge-patch", "multi-document-json-merge", "json-contains", "nested-json", "array-replacement", "null-key-removal", "deterministic-order"],
+  "fixture_notes": "Deployment 701 starts with a basic north profile and two labels, receives a pro overlay that replaces labels and nulls obsolete, then receives a south-region flag patch. Deployment 702 has a different two-stage profile. Final projections verify replacement, removal, addition, and containment for each row.",
+  "determinism_notes": "Deployment IDs, JSON documents, paths, expected keys, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE deployment_patches (deployment_id INT PRIMARY KEY, base_doc JSON NOT NULL, overlay_doc JSON NOT NULL, final_doc JSON NOT NULL)",
+    "INSERT INTO deployment_patches VALUES (701, '{\"profile\":{\"tier\":\"basic\",\"region\":\"north\"},\"labels\":[\"blue\",\"canary\"],\"obsolete\":true}', '{\"profile\":{\"tier\":\"pro\"},\"labels\":[\"stable\"],\"obsolete\":null}', '{\"profile\":{\"region\":\"south\"},\"new_flag\":true}'), (702, '{\"profile\":{\"tier\":\"trial\",\"region\":\"east\"},\"labels\":[\"beta\"]}', '{\"profile\":{\"tier\":\"standard\"},\"obsolete\":true}', '{\"profile\":{\"region\":\"west\"},\"new_flag\":false}')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT deployment_id, JSON_UNQUOTE(JSON_EXTRACT(JSON_MERGE_PATCH(base_doc, overlay_doc, final_doc), '$.profile.tier')) AS tier, JSON_UNQUOTE(JSON_EXTRACT(JSON_MERGE_PATCH(base_doc, overlay_doc, final_doc), '$.profile.region')) AS region, JSON_LENGTH(JSON_MERGE_PATCH(base_doc, overlay_doc, final_doc), '$.labels') AS label_count, JSON_CONTAINS_PATH(JSON_MERGE_PATCH(base_doc, overlay_doc, final_doc), 'one', '$.obsolete') AS has_obsolete, JSON_CONTAINS_PATH(JSON_MERGE_PATCH(base_doc, overlay_doc, final_doc), 'one', '$.new_flag') AS has_new_flag, JSON_CONTAINS(JSON_MERGE_PATCH(base_doc, overlay_doc, final_doc), JSON_OBJECT('profile', JSON_OBJECT('region', JSON_UNQUOTE(JSON_EXTRACT(final_doc, '$.profile.region'))))) AS contains_final_region FROM deployment_patches ORDER BY deployment_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT deployment_id, JSON_UNQUOTE(JSON_EXTRACT(JSON_MERGE_PATCH(base_doc, overlay_doc), '$.profile.tier')) AS intermediate_tier, JSON_LENGTH(JSON_MERGE_PATCH(base_doc, overlay_doc), '$.labels') AS intermediate_label_count FROM deployment_patches ORDER BY deployment_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT deployment_id, base_doc, overlay_doc, final_doc FROM deployment_patches ORDER BY deployment_id",
+      "ordered": true
+    }
+  ]
+}

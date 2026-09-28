@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "json_merge_patch_multi_stage_minimized",
+  "provenance": {
+    "kind": "minimized-from-query-case",
+    "source": {
+      "kind": "github",
+      "repository": "CUBRID/cubrid-testcases",
+      "commit": "c7a58842a09521d205cec00bf13b5c456fdc9b29",
+      "path": "sql/_31_cherry/issue_22162_more_json_functions/cases/json_merge_patch.sql",
+      "url": "https://github.com/CUBRID/cubrid-testcases/blob/c7a58842a09521d205cec00bf13b5c456fdc9b29/sql/_31_cherry/issue_22162_more_json_functions/cases/json_merge_patch.sql",
+      "sha256": "1281bd7fbb4004b9dba449f947dc0e9e89072ee3ce4a8793e43672b7c1ace483",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from sql/_31_cherry/issue_22162_more_json_functions/cases/json_merge_patch.sql:23-29",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "The smallest useful probe applies JSON_MERGE_PATCH to three documents and inspects one replaced nested value, one removed key, and one added key.",
+      "mysql_mariadb_translation": "Reduced to one independently authored deployment row and three fixed JSON documents, retaining left-to-right multi-document patching, null-key removal, array replacement, and containment while removing the second row and intermediate report."
+    },
+    "independently_authored": true,
+    "minimized_from": "json_merge_patch_multi_stage"
+  },
+  "features": ["json-merge-patch", "multi-document-json-merge", "json-contains", "nested-json", "deterministic-order"],
+  "fixture_notes": "One deployment's base tier is overridden, its labels array is replaced, obsolete is removed by a null patch, and a new flag is added by the third document. The final JSON projections make every patch rule observable.",
+  "determinism_notes": "The single deployment key, three documents, JSON paths, and result ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE deployment_patch_min (deployment_id INT PRIMARY KEY, base_doc JSON NOT NULL, overlay_doc JSON NOT NULL, final_doc JSON NOT NULL)",
+    "INSERT INTO deployment_patch_min VALUES (901, '{\"tier\":\"basic\",\"labels\":[\"old\"],\"obsolete\":true}', '{\"tier\":\"pro\",\"labels\":[\"new\"],\"obsolete\":null}', '{\"region\":\"south\",\"new_flag\":true}')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT deployment_id, JSON_UNQUOTE(JSON_EXTRACT(JSON_MERGE_PATCH(base_doc, overlay_doc, final_doc), '$.tier')) AS tier, JSON_UNQUOTE(JSON_EXTRACT(JSON_MERGE_PATCH(base_doc, overlay_doc, final_doc), '$.region')) AS region, JSON_LENGTH(JSON_MERGE_PATCH(base_doc, overlay_doc, final_doc), '$.labels') AS label_count, JSON_CONTAINS_PATH(JSON_MERGE_PATCH(base_doc, overlay_doc, final_doc), 'one', '$.obsolete') AS has_obsolete, JSON_CONTAINS_PATH(JSON_MERGE_PATCH(base_doc, overlay_doc, final_doc), 'one', '$.new_flag') AS has_new_flag, JSON_CONTAINS(JSON_MERGE_PATCH(base_doc, overlay_doc, final_doc), JSON_OBJECT('region', 'south')) AS contains_region FROM deployment_patch_min ORDER BY deployment_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT deployment_id, base_doc, overlay_doc, final_doc FROM deployment_patch_min ORDER BY deployment_id",
+      "ordered": true
+    }
+  ]
+}
