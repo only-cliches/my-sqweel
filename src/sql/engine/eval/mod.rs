@@ -1789,7 +1789,7 @@ fn eval_aggregate_call_rows<'a>(
                     members.push(format!(
                         "{}:{}",
                         serde_json::to_string(&json_scalar_to_string(&key))?,
-                        mysql_json_agg_text(&value)?
+                        mysql_json_agg_member_text(&value)?
                     ));
                 }
             }

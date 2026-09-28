@@ -128,6 +128,13 @@ fn mysql_json_agg_element_text(value: &Value) -> Result<String> {
     }
     mysql_json_text(value)
 }
+pub(crate) fn mysql_json_agg_member_text(value: &Value) -> Result<String> {
+    match value {
+        Value::Array(_) | Value::Object(_) => mysql_json_text(value),
+        _ => mysql_json_agg_text(value),
+    }
+}
+
 /// MariaDB renders JSON_ARRAYAGG/JSON_OBJECTAGG results with aggregate-style
 /// separators: arrays join with "," and objects join "key:value" pairs with
 /// ", " (unlike JSON_ARRAY/JSON_OBJECT, which add spaces after colons too).

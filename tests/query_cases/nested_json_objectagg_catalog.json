@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "id": "nested_json_objectagg_catalog",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "repository": "mariadb-corporation/exasol-mariadb-compat",
+      "commit": "33b4b396a657e7681e7e6ff03eee9d38c78df922",
+      "path": "udfs/json/json_objectagg.sql",
+      "url": "https://github.com/mariadb-corporation/exasol-mariadb-compat/blob/33b4b396a657e7681e7e6ff03eee9d38c78df922/udfs/json/json_objectagg.sql",
+      "sha256": "0b5e229b9912c4373839a1247f4a5da2076385ef16312587069005603da4e932",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "udfs/json/json_objectagg.sql:36-40",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "JSON_OBJECTAGG embeds JSON_OBJECT values verbatim, preserving nested JSON structure and the nested function's spacing while joining aggregate members with MariaDB's aggregate separators.",
+      "mysql_mariadb_translation": "Reauthored as an independent catalog-settings report. Each catalog's property keys aggregate into a JSON object whose values are nested JSON_OBJECT documents containing a label and numeric setting; grouped catalog ordering and stable property keys make nested serialization observable without copying the source schema or values."
+    },
+    "independently_authored": true
+  },
+  "features": ["json-objectagg", "nested-json-object", "grouped-report", "nested-serialization", "deterministic-order"],
+  "fixture_notes": "Catalog 501 has two nested property documents and catalog 502 has one; each aggregate key is unique, and numeric nested values expose JSON_OBJECT's scalar rendering inside JSON_OBJECTAGG.",
+  "determinism_notes": "Catalog IDs, property keys, labels, numeric values, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE catalog_settings (catalog_id INT NOT NULL, property_key VARCHAR(32) NOT NULL, property_label VARCHAR(32) NOT NULL, property_value INT NOT NULL, PRIMARY KEY (catalog_id, property_key))",
+    "INSERT INTO catalog_settings VALUES (501, 'retry', 'fast', 3), (501, 'quota', 'standard', 80), (502, 'retry', 'safe', 5)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT catalog_id, JSON_OBJECTAGG(property_key, JSON_OBJECT('label', property_label, 'value', property_value)) AS settings FROM catalog_settings GROUP BY catalog_id ORDER BY catalog_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT catalog_id, COUNT(*) AS property_count FROM catalog_settings GROUP BY catalog_id ORDER BY catalog_id",
+      "ordered": true
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "id": "nested_json_objectagg_catalog_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "nested_json_objectagg_catalog",
+    "source": {
+      "repository": "mariadb-corporation/exasol-mariadb-compat",
+      "commit": "33b4b396a657e7681e7e6ff03eee9d38c78df922",
+      "path": "udfs/json/json_objectagg.sql",
+      "url": "https://github.com/mariadb-corporation/exasol-mariadb-compat/blob/33b4b396a657e7681e7e6ff03eee9d38c78df922/udfs/json/json_objectagg.sql",
+      "sha256": "0b5e229b9912c4373839a1247f4a5da2076385ef16312587069005603da4e932",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from nested_json_objectagg_catalog",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A scalar JSON_OBJECTAGG result contains a nested JSON_OBJECT value without flattening the inner object.",
+      "mysql_mariadb_translation": "Reduced to one fixed key and one nested numeric JSON_OBJECT value, isolating nested object serialization from grouping, multiple keys, and catalog rows."
+    },
+    "independently_authored": true,
+    "minimized_from": "nested_json_objectagg_catalog"
+  },
+  "features": ["json-objectagg", "nested-json-object", "nested-serialization", "minimized-regression"],
+  "fixture_notes": "The single aggregate member must render as a nested object with its label and numeric value intact.",
+  "determinism_notes": "The key, label, numeric value, and one-row input are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE mini_catalog_settings (property_key VARCHAR(32) PRIMARY KEY, property_label VARCHAR(32) NOT NULL, property_value INT NOT NULL)",
+    "INSERT INTO mini_catalog_settings VALUES ('quota', 'standard', 80)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT JSON_OBJECTAGG(property_key, JSON_OBJECT('label', property_label, 'value', property_value)) AS settings FROM mini_catalog_settings",
+      "ordered": true
+    }
+  ]
+}
