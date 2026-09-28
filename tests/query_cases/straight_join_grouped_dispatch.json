@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "straight_join_grouped_dispatch",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "fayson/cdhproject",
+      "commit": "500a3d14aa40d19a1faac671d7c3267e68567afc",
+      "path": "impala-tpcds/queries/q24.sql",
+      "url": "https://github.com/fayson/cdhproject/blob/500a3d14aa40d19a1faac671d7c3267e68567afc/impala-tpcds/queries/q24.sql",
+      "sha256": "7655f3af7427eb6051a66321caab47eb73ee1833a838e7c0849ed05cc6fdeb8f",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "impala-tpcds/queries/q24.sql:1-41",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A report wraps a STRAIGHT_JOIN aggregate in a common table expression, groups by several dimensions, and retains only groups above a SUM threshold.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored dispatch summary. A CTE uses SELECT STRAIGHT_JOIN across active routes and ready packages, groups by route and package kind, applies a HAVING total threshold, and exposes the grouped rows in deterministic order. The source TPC-DS relations, columns, values, and reporting context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["cte", "straight-join", "grouped-aggregate", "having", "filtered-read", "deterministic-order"],
+  "fixture_notes": "Active routes 301 and 302 each have a ready package group totaling seven units and pass the threshold. Route 302 also has a low-volume group that is filtered out; route 303 has enough units but is inactive and must not appear. A held package on route 301 is excluded before aggregation.",
+  "determinism_notes": "Route IDs, package IDs, states, grouping fields, units, threshold, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE dispatch_routes (route_id INT PRIMARY KEY, route_code VARCHAR(16) NOT NULL, region_code VARCHAR(16) NOT NULL, route_state VARCHAR(16) NOT NULL)",
+    "CREATE TABLE dispatch_packages (package_id INT PRIMARY KEY, route_id INT NOT NULL, package_kind VARCHAR(16) NOT NULL, package_state VARCHAR(16) NOT NULL, units INT NOT NULL)",
+    "INSERT INTO dispatch_routes VALUES (301, 'north-1', 'north', 'active'), (302, 'south-1', 'south', 'active'), (303, 'west-1', 'west', 'inactive')",
+    "INSERT INTO dispatch_packages VALUES (501, 301, 'standard', 'ready', 3), (502, 301, 'standard', 'ready', 4), (503, 301, 'standard', 'held', 10), (504, 302, 'standard', 'ready', 2), (505, 302, 'standard', 'ready', 5), (506, 303, 'standard', 'ready', 20)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH ready_package_totals AS (SELECT STRAIGHT_JOIN r.route_code, r.region_code, p.package_kind, SUM(p.units) AS total_units, COUNT(*) AS package_count FROM dispatch_routes AS r STRAIGHT_JOIN dispatch_packages AS p ON p.route_id = r.route_id WHERE r.route_state = 'active' AND p.package_state = 'ready' GROUP BY r.route_code, r.region_code, p.package_kind HAVING SUM(p.units) >= 6) SELECT route_code, region_code, package_kind, total_units, package_count FROM ready_package_totals ORDER BY route_code, package_kind",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT route_id, route_code, region_code, route_state FROM dispatch_routes ORDER BY route_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT package_id, route_id, package_kind, package_state, units FROM dispatch_packages ORDER BY package_id",
+      "ordered": true
+    }
+  ]
+}

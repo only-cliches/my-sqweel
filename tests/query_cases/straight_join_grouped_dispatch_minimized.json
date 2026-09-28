@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "straight_join_grouped_dispatch_minimized",
+  "provenance": {
+    "kind": "minimized-from-query-case",
+    "source": {
+      "kind": "github",
+      "repository": "fayson/cdhproject",
+      "commit": "500a3d14aa40d19a1faac671d7c3267e68567afc",
+      "path": "impala-tpcds/queries/q24.sql",
+      "url": "https://github.com/fayson/cdhproject/blob/500a3d14aa40d19a1faac671d7c3267e68567afc/impala-tpcds/queries/q24.sql",
+      "sha256": "7655f3af7427eb6051a66321caab47eb73ee1833a838e7c0849ed05cc6fdeb8f",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from impala-tpcds/queries/q24.sql:1-41",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "The smallest grouped probe keeps a CTE, SELECT STRAIGHT_JOIN, a two-table join, and a HAVING aggregate threshold.",
+      "mysql_mariadb_translation": "Reduced to two active routes and three ready packages so one grouped route passes the SUM threshold and the other does not; the independently authored CTE and joined schema isolate the combined syntax without copying the source relations or values."
+    },
+    "independently_authored": true,
+    "minimized_from": "straight_join_grouped_dispatch"
+  },
+  "features": ["cte", "straight-join", "grouped-aggregate", "having", "deterministic-order"],
+  "fixture_notes": "Route 901 has two ready packages totaling six units and passes; route 902 has one package totaling five units and is filtered by the threshold. The final source-table read makes both the grouping inputs and the untouched rows observable.",
+  "determinism_notes": "Route IDs, package IDs, fixed units, threshold, grouping keys, and ordering are deterministic; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE dispatch_routes_min (route_id INT PRIMARY KEY, route_code VARCHAR(16) NOT NULL, route_state VARCHAR(16) NOT NULL)",
+    "CREATE TABLE dispatch_packages_min (package_id INT PRIMARY KEY, route_id INT NOT NULL, package_kind VARCHAR(16) NOT NULL, package_state VARCHAR(16) NOT NULL, units INT NOT NULL)",
+    "INSERT INTO dispatch_routes_min VALUES (901, 'north-mini', 'active'), (902, 'south-mini', 'active')",
+    "INSERT INTO dispatch_packages_min VALUES (911, 901, 'standard', 'ready', 2), (912, 901, 'standard', 'ready', 4), (913, 902, 'standard', 'ready', 5)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH ready_package_totals AS (SELECT STRAIGHT_JOIN r.route_code, p.package_kind, SUM(p.units) AS total_units, COUNT(*) AS package_count FROM dispatch_routes_min AS r STRAIGHT_JOIN dispatch_packages_min AS p ON p.route_id = r.route_id WHERE r.route_state = 'active' AND p.package_state = 'ready' GROUP BY r.route_code, p.package_kind HAVING SUM(p.units) >= 6) SELECT route_code, package_kind, total_units, package_count FROM ready_package_totals ORDER BY route_code, package_kind",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT route_id, route_code, route_state FROM dispatch_routes_min ORDER BY route_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT package_id, route_id, package_kind, package_state, units FROM dispatch_packages_min ORDER BY package_id",
+      "ordered": true
+    }
+  ]
+}
