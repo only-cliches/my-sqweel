@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "id": "str_to_date_grouped_insert_minimized",
+  "provenance": {
+    "kind": "minimized-from-query-case",
+    "source": {
+      "kind": "github",
+      "repository": "sruthijonnala/SQL-practice",
+      "commit": "155b6019991a92b375c7702601d15a92d50379f4",
+      "path": "Group by & Having.sql",
+      "url": "https://github.com/sruthijonnala/SQL-practice/blob/155b6019991a92b375c7702601d15a92d50379f4/Group%20by%20%26%20Having.sql",
+      "sha256": "3b75816602c9c549b7f1eda7dadaf047fdf040adcd8a2acd7bbff0335f2dfc10",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from Group by & Having.sql:14-27, 34-40",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "The smallest grouped load parses text dates, derives one month key, and inserts an aggregate row from a SELECT source.",
+      "mysql_mariadb_translation": "Reduced to one independently authored month with two settled rows sharing one order reference. STR_TO_DATE, DATE_FORMAT, SUM, COUNT(DISTINCT), and grouped INSERT ... SELECT remain while unrelated statuses, NULL dates, and the second month are removed."
+    },
+    "independently_authored": true,
+    "minimized_from": "str_to_date_grouped_insert"
+  },
+  "features": [
+    "str-to-date",
+    "date-format-bucketing",
+    "grouped-insert-select",
+    "count-distinct",
+    "minimized-regression"
+  ],
+  "fixture_notes": "Two settled rows parse into January 2026, sum to 30.00, and count as one distinct order despite sharing order_ref 9101.",
+  "determinism_notes": "Sale IDs, text dates, order reference, amounts, grouping expression, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE mini_sale_inputs (sale_id INT PRIMARY KEY, sold_on_text VARCHAR(16) NOT NULL, order_ref INT NOT NULL, sale_state VARCHAR(16) NOT NULL, gross DECIMAL(10,2) NOT NULL)",
+    "CREATE TABLE mini_monthly_summary (sales_month CHAR(7) PRIMARY KEY, gross_revenue DECIMAL(10,2) NOT NULL, distinct_orders INT NOT NULL)",
+    "INSERT INTO mini_sale_inputs VALUES (7101, '05/01/2026', 9101, 'settled', 12.50), (7102, '18/01/2026', 9101, 'settled', 17.50)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO mini_monthly_summary (sales_month, gross_revenue, distinct_orders) SELECT DATE_FORMAT(STR_TO_DATE(sold_on_text, '%d/%m/%Y'), '%Y-%m') AS sales_month, SUM(gross) AS gross_revenue, COUNT(DISTINCT order_ref) AS distinct_orders FROM mini_sale_inputs WHERE sale_state = 'settled' GROUP BY DATE_FORMAT(STR_TO_DATE(sold_on_text, '%d/%m/%Y'), '%Y-%m') ORDER BY sales_month",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT sales_month, gross_revenue, distinct_orders FROM mini_monthly_summary ORDER BY sales_month",
+      "ordered": true
+    }
+  ]
+}

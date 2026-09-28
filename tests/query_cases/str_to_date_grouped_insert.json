@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "id": "str_to_date_grouped_insert",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "sruthijonnala/SQL-practice",
+      "commit": "155b6019991a92b375c7702601d15a92d50379f4",
+      "path": "Group by & Having.sql",
+      "url": "https://github.com/sruthijonnala/SQL-practice/blob/155b6019991a92b375c7702601d15a92d50379f4/Group%20by%20%26%20Having.sql",
+      "sha256": "3b75816602c9c549b7f1eda7dadaf047fdf040adcd8a2acd7bbff0335f2dfc10",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Group by & Having.sql:14-27, 34-40",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "MySQL statements parse text dates with STR_TO_DATE and use grouped aggregate queries over the resulting date-bearing rows.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored campaign-summary load. INSERT ... SELECT parses fixed day/month/year text, derives a month bucket with DATE_FORMAT, groups settled revenue and distinct orders, and persists the monthly rows. The source employee schema, values, and practice exercises are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "str-to-date",
+    "date-format-bucketing",
+    "grouped-insert-select",
+    "count-distinct",
+    "null-filtering",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Settled campaign rows in January and February 2026 are parsed from DD/MM/YYYY text and grouped into two summary rows; a pending row, a NULL date, and a duplicate order reference exercise filtering and COUNT(DISTINCT).",
+  "determinism_notes": "Sale IDs, text dates, order references, amounts, status filter, grouping expression, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE campaign_sale_inputs (sale_id INT PRIMARY KEY, sold_on_text VARCHAR(16) NULL, order_ref INT NOT NULL, sale_state VARCHAR(16) NOT NULL, gross DECIMAL(10,2) NOT NULL)",
+    "CREATE TABLE campaign_monthly_summary (sales_month CHAR(7) PRIMARY KEY, gross_revenue DECIMAL(10,2) NOT NULL, distinct_orders INT NOT NULL)",
+    "INSERT INTO campaign_sale_inputs VALUES (6101, '15/01/2026', 8001, 'settled', 120.50), (6102, '20/01/2026', 8002, 'settled', 80.00), (6103, '28/01/2026', 8002, 'settled', 19.50), (6104, '03/02/2026', 8003, 'settled', 200.00), (6105, '04/02/2026', 8004, 'pending', 999.00), (6106, NULL, 8005, 'settled', 75.00)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO campaign_monthly_summary (sales_month, gross_revenue, distinct_orders) SELECT DATE_FORMAT(STR_TO_DATE(sold_on_text, '%d/%m/%Y'), '%Y-%m') AS sales_month, SUM(gross) AS gross_revenue, COUNT(DISTINCT order_ref) AS distinct_orders FROM campaign_sale_inputs WHERE sale_state = 'settled' AND sold_on_text IS NOT NULL GROUP BY DATE_FORMAT(STR_TO_DATE(sold_on_text, '%d/%m/%Y'), '%Y-%m') ORDER BY sales_month",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT sales_month, gross_revenue, distinct_orders FROM campaign_monthly_summary ORDER BY sales_month",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT sale_id, sold_on_text, order_ref, sale_state, gross FROM campaign_sale_inputs ORDER BY sale_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT sales_month, gross_revenue, distinct_orders FROM campaign_monthly_summary ORDER BY sales_month",
+      "ordered": true
+    }
+  ]
+}
