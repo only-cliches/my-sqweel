@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "id": "distinct_ordered_json_labels",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "elixir-europe-training/Training-Metrics-Database",
+      "commit": "17cbe47309ec7a33baf66a591bd1eadf56d52c52",
+      "path": "data_migration/queries/get_impact.sql",
+      "url": "https://github.com/elixir-europe-training/Training-Metrics-Database/blob/17cbe47309ec7a33baf66a591bd1eadf56d52c52/data_migration/queries/get_impact.sql",
+      "sha256": "462fe0fd6f8a86d99dda242fcb6f821cb5e753deadaf3ea84fcd0768a0cd71bf",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "data_migration/queries/get_impact.sql:14-15 (grouped JSON_ARRAYAGG(DISTINCT ...) projections)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped MySQL report uses JSON_ARRAYAGG(DISTINCT ...) over joined taxonomy values so repeated detail matches produce one JSON label per parent.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored collection-label report. Duplicate label rows are collapsed inside JSON_ARRAYAGG and an aggregate-local ORDER BY makes the resulting JSON array deterministic; the source schema, joins, field names, and migration context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "json-arrayagg",
+    "distinct-aggregate-values",
+    "aggregate-local-ordering",
+    "inner-join",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Collection 501 has labels zeta, alpha, zeta, and beta, so the aggregate must emit the distinct labels in alphabetical order. Collection 502 has gamma twice and must emit one gamma value.",
+  "determinism_notes": "Collection IDs, label IDs, labels, aggregate ordering, and final collection ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE label_collections (collection_id INT PRIMARY KEY, collection_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE collection_labels (label_id INT PRIMARY KEY, collection_id INT NOT NULL, label_name VARCHAR(32) NOT NULL)",
+    "INSERT INTO label_collections VALUES (501, 'alpha-set'), (502, 'beta-set')",
+    "INSERT INTO collection_labels VALUES (7001, 501, 'zeta'), (7002, 501, 'alpha'), (7003, 501, 'zeta'), (7004, 501, 'beta'), (7005, 502, 'gamma'), (7006, 502, 'gamma')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT c.collection_id, c.collection_name, JSON_ARRAYAGG(DISTINCT l.label_name ORDER BY l.label_name ASC) AS labels FROM label_collections AS c INNER JOIN collection_labels AS l ON l.collection_id = c.collection_id GROUP BY c.collection_id, c.collection_name ORDER BY c.collection_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT collection_id, collection_name FROM label_collections ORDER BY collection_id",
+      "ordered": true
+    }
+  ]
+}
