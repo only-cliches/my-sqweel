@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "id": "mid_message_slices_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "striver619/db",
+      "commit": "918ce0e4618268d87d2d051466b448869c1c7098",
+      "path": "mysql/mysql-learn.sql",
+      "url": "https://github.com/striver619/db/blob/918ce0e4618268d87d2d051466b448869c1c7098/mysql/mysql-learn.sql",
+      "sha256": "ef20ef838fe720fb24e7939bf24d2bf9065adec9ec41a24d7e9c4e1bedc26c69",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "mysql/mysql-learn.sql: MID(s,n,len) example",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL scalar function extracts a fixed-length substring from a text value using MID.",
+      "mysql_mariadb_translation": "Reduced to one independent row with a negative start position. It isolates MID's right-relative slicing semantics and result metadata without the source schema or surrounding examples."
+    },
+    "independently_authored": true,
+    "minimized_from": "mid_message_slices"
+  },
+  "features": [
+    "mid-string-function",
+    "negative-start",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The single message 'north-star' with MID(..., -2, 2) must return 'ar'.",
+  "determinism_notes": "The message, position, length, and row ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE mini_message_fragment (fragment_id INT PRIMARY KEY, message_text VARCHAR(32) NOT NULL, start_pos INT NOT NULL, slice_len INT NOT NULL)",
+    "INSERT INTO mini_message_fragment VALUES (7, 'north-star', -2, 2)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT fragment_id, MID(message_text, start_pos, slice_len) AS fragment FROM mini_message_fragment ORDER BY fragment_id",
+      "ordered": true
+    }
+  ]
+}

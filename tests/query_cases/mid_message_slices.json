@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "mid_message_slices",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "striver619/db",
+      "commit": "918ce0e4618268d87d2d051466b448869c1c7098",
+      "path": "mysql/mysql-learn.sql",
+      "url": "https://github.com/striver619/db/blob/918ce0e4618268d87d2d051466b448869c1c7098/mysql/mysql-learn.sql",
+      "sha256": "ef20ef838fe720fb24e7939bf24d2bf9065adec9ec41a24d7e9c4e1bedc26c69",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "mysql/mysql-learn.sql: MID(s,n,len) string-function example",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL string-function guide uses MID(string, start, length) to extract a bounded substring, documenting it as equivalent to SUBSTRING.",
+      "mysql_mariadb_translation": "Reauthored as an independent message-fragment audit. Fixed rows cover a leading slice, a negative start, zero and out-of-range lengths, and NULL input while reporting slice lengths; the source table, literals, and learning context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "mid-string-function",
+    "negative-start",
+    "zero-length-boundary",
+    "out-of-range-boundary",
+    "null-propagation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Fragment 11 extracts 'north' from the start of 'north-star'; fragment 22 uses a negative start to extract the final two characters; fragment 33 requests zero characters; fragment 44 starts beyond the input and returns an empty string; fragment 55 has NULL input and returns NULL.",
+  "determinism_notes": "Fragment IDs, texts, positions, lengths, and ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE message_fragments (fragment_id INT PRIMARY KEY, message_text VARCHAR(32) NULL, start_pos INT NOT NULL, slice_len INT NOT NULL)",
+    "INSERT INTO message_fragments VALUES (11, 'north-star', 1, 5), (22, 'north-star', -2, 2), (33, 'echo', 2, 0), (44, 'tiny', 10, 2), (55, NULL, 2, 3)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT fragment_id, MID(message_text, start_pos, slice_len) AS fragment, CHAR_LENGTH(MID(message_text, start_pos, slice_len)) AS fragment_length FROM message_fragments ORDER BY fragment_id",
+      "ordered": true
+    }
+  ]
+}
