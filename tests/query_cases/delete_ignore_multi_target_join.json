@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "delete_ignore_multi_target_join",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "antlr/grammars-v4",
+      "commit": "e199816b3f1a7a49ea1ad84fb6b87c382ea36a33",
+      "path": "sql/mariadb/examples/fast/dml_delete.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/e199816b3f1a7a49ea1ad84fb6b87c382ea36a33/sql/mariadb/examples/fast/dml_delete.sql",
+      "sha256": "62329095424f65c4213801a8cc24b7525a679590e941b67624790f4efe462ee8",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/mariadb/examples/fast/dml_delete.sql:9 (DELETE IGNORE naming joined target aliases)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB DELETE IGNORE names multiple joined aliases as deletion targets while filtering through inner and left join conditions.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored archive cleanup. DELETE IGNORE removes archived orders and their obsolete audit rows together, while active orders and non-obsolete audits remain; the source schema, aliases, predicates, and values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "delete-ignore",
+    "multi-target-delete",
+    "inner-join",
+    "joined-filter",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Order 701 is archived with one obsolete audit and both rows must be deleted. Order 702 is active, and order 703 is archived with a review audit; both remain with their audits. The statement names both joined aliases as deletion targets.",
+  "determinism_notes": "Order IDs, audit IDs, states, audit kinds, join keys, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE archive_orders (order_id INT PRIMARY KEY, order_state VARCHAR(16) NOT NULL)",
+    "CREATE TABLE archive_audits (audit_id INT PRIMARY KEY, order_id INT NOT NULL, audit_kind VARCHAR(16) NOT NULL)",
+    "INSERT INTO archive_orders VALUES (701, 'archived'), (702, 'active'), (703, 'archived')",
+    "INSERT INTO archive_audits VALUES (8701, 701, 'obsolete'), (8702, 702, 'obsolete'), (8703, 703, 'review')"
+  ],
+  "steps": [
+    {
+      "sql": "DELETE IGNORE o.*, a.* FROM archive_orders AS o INNER JOIN archive_audits AS a ON a.order_id = o.order_id WHERE o.order_state = 'archived' AND a.audit_kind = 'obsolete'",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT order_id, order_state FROM archive_orders ORDER BY order_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT audit_id, order_id, audit_kind FROM archive_audits ORDER BY audit_id",
+      "ordered": true
+    }
+  ]
+}
