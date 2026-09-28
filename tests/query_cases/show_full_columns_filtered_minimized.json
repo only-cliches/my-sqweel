@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "id": "show_full_columns_filtered_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "show_full_columns_filtered",
+    "source": {
+      "kind": "github",
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/481.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/481.sql",
+      "sha256": "6b2a4a8025f34b27e3c9cc32531e7aad6a65af7a8056d0df5f896f2dc23f8468",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from show_full_columns_filtered",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "SHOW FULL COLUMNS with a Field predicate must return only the requested metadata rows while preserving MariaDB result metadata types.",
+      "mysql_mariadb_translation": "Reduced to one primary key and one defaulted VARCHAR, filtering to the VARCHAR field so row selection, full metadata columns, and unquoted defaults remain observable without the larger dispatch schema."
+    },
+    "independently_authored": true
+  },
+  "features": ["show-full-columns", "metadata-filter", "metadata-regression", "minimized-regression"],
+  "fixture_notes": "Only probe_state is requested by the Field predicate. Its default is returned without SQL quotes, while Type and Default use MariaDB BLOB metadata.",
+  "determinism_notes": "DDL and field names are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE metadata_probe (probe_id INT PRIMARY KEY, probe_state VARCHAR(16) NOT NULL DEFAULT 'queued')"
+  ],
+  "steps": [
+    {
+      "sql": "SHOW FULL COLUMNS FROM metadata_probe WHERE Field = 'probe_state'",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}

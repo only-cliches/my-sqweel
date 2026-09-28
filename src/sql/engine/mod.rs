@@ -4298,8 +4298,8 @@ impl RawEngine {
         if let Some(table) = parse_show_columns_table(trimmed) {
             return Ok(Some(self.show_columns(&table)));
         }
-        if let Some(table) = parse_show_full_columns_table(trimmed) {
-            return Ok(Some(self.show_full_columns(&table)));
+        if let Some((table, fields)) = parse_show_full_columns_table(trimmed) {
+            return Ok(Some(self.show_full_columns(&table, &fields)));
         }
         if !upper.starts_with("DESCRIBE SELECT ")
             && !upper.starts_with("DESC SELECT ")

@@ -91,7 +91,7 @@ pub(super) fn parse_show_columns_table(sql: &str) -> Option<String> {
         .and_then(|idx| tokens.get(idx + 1).cloned())
 }
 
-pub(super) fn parse_show_full_columns_table(sql: &str) -> Option<String> {
+pub(super) fn parse_show_full_columns_table(sql: &str) -> Option<(String, Vec<String>)> {
     let tokens = normalized_sql_tokens(sql);
     let upper = tokens
         .iter()
@@ -103,10 +103,36 @@ pub(super) fn parse_show_full_columns_table(sql: &str) -> Option<String> {
     {
         return None;
     }
-    upper
+    let table_position = upper
         .iter()
-        .position(|token| token == "FROM" || token == "IN")
-        .and_then(|idx| tokens.get(idx + 1).cloned())
+        .position(|token| token == "FROM" || token == "IN")?;
+    let table = tokens.get(table_position + 1)?.clone();
+    let Some(where_position) = upper.iter().position(|token| token == "WHERE") else {
+        return Some((table, Vec::new()));
+    };
+    let mut fields = Vec::new();
+    let mut position = where_position + 1;
+    loop {
+        if !upper.get(position)?.eq("FIELD") || upper.get(position + 1)?.as_str() != "=" {
+            return None;
+        }
+        fields.push(
+            tokens
+                .get(position + 2)?
+                .trim_matches(['\'', '"'])
+                .to_string(),
+        );
+        position += 3;
+        if upper.get(position).is_some_and(|token| token == "OR") {
+            position += 1;
+            continue;
+        }
+        if position != tokens.len() {
+            return None;
+        }
+        break;
+    }
+    Some((table, fields))
 }
 
 pub(super) fn parse_describe_table(sql: &str) -> Option<String> {

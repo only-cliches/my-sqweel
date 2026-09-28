@@ -5782,7 +5782,7 @@ impl RawEngine {
         }
     }
 
-    pub(super) fn show_full_columns(&self, table: &str) -> QueryResult {
+    pub(super) fn show_full_columns(&self, table: &str, fields: &[String]) -> QueryResult {
         let columns = [
             "Field",
             "Type",
@@ -5803,6 +5803,12 @@ impl RawEngine {
             .map(|schema| {
                 ordered_schema_columns(&schema)
                     .into_iter()
+                    .filter(|column| {
+                        fields.is_empty()
+                            || fields
+                                .iter()
+                                .any(|field| field.eq_ignore_ascii_case(column))
+                    })
                     .filter_map(|column| {
                         let hint = schema.columns.get(&column)?;
                         let key = mysql_column_key(&schema, &column);
@@ -5818,7 +5824,7 @@ impl RawEngine {
                         row.insert(
                             "Collation".to_string(),
                             if character_type {
-                                Value::String("utf8mb4_0900_ai_ci".to_string())
+                                Value::String("utf8mb4_general_ci".to_string())
                             } else {
                                 Value::Null
                             },
@@ -5836,7 +5842,9 @@ impl RawEngine {
                             "Default".to_string(),
                             hint.default
                                 .clone()
-                                .map(Value::String)
+                                .map(|default| {
+                                    Value::String(unquote_sql_string(&default).unwrap_or(default))
+                                })
                                 .unwrap_or(Value::Null),
                         );
                         row.insert(
@@ -5861,7 +5869,62 @@ impl RawEngine {
             rows_affected: 0,
             last_insert_id: 0,
             columns,
-            column_metadata: vec![],
+            column_metadata: vec![
+                ColumnMetadata {
+                    name: "Field".to_string(),
+                    column_type: MysqlColumnType::VarChar,
+                    nullable: true,
+                    ..ColumnMetadata::default()
+                },
+                ColumnMetadata {
+                    name: "Type".to_string(),
+                    column_type: MysqlColumnType::Blob,
+                    nullable: true,
+                    ..ColumnMetadata::default()
+                },
+                ColumnMetadata {
+                    name: "Collation".to_string(),
+                    column_type: MysqlColumnType::VarChar,
+                    nullable: true,
+                    ..ColumnMetadata::default()
+                },
+                ColumnMetadata {
+                    name: "Null".to_string(),
+                    column_type: MysqlColumnType::VarChar,
+                    nullable: true,
+                    ..ColumnMetadata::default()
+                },
+                ColumnMetadata {
+                    name: "Key".to_string(),
+                    column_type: MysqlColumnType::VarChar,
+                    nullable: true,
+                    ..ColumnMetadata::default()
+                },
+                ColumnMetadata {
+                    name: "Default".to_string(),
+                    column_type: MysqlColumnType::Blob,
+                    nullable: true,
+                    ..ColumnMetadata::default()
+                },
+                ColumnMetadata {
+                    name: "Extra".to_string(),
+                    column_type: MysqlColumnType::VarChar,
+                    nullable: true,
+                    ..ColumnMetadata::default()
+                },
+                ColumnMetadata {
+                    name: "Privileges".to_string(),
+                    column_type: MysqlColumnType::VarChar,
+                    nullable: true,
+                    ..ColumnMetadata::default()
+                },
+                ColumnMetadata {
+                    name: "Comment".to_string(),
+                    column_type: MysqlColumnType::VarChar,
+                    nullable: true,
+                    ..ColumnMetadata::default()
+                },
+            ],
             rows,
             warnings: vec![],
         }

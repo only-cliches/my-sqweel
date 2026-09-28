@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "show_full_columns_filtered",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/481.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/481.sql",
+      "sha256": "6b2a4a8025f34b27e3c9cc32531e7aad6a65af7a8056d0df5f896f2dc23f8468",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/docker/fuzz_root/mysql_initlib/481.sql:14-16",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL SHOW FULL COLUMNS inspection can filter the returned schema rows with a WHERE predicate on the Field name.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored dispatch-slot metadata inspection. SHOW FULL COLUMNS filters to the code and state fields of a new table, preserving full metadata while excluding the primary key and capacity fields; the source schema, names, values, and fuzz-test context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["show-full-columns", "metadata-filter", "where-field", "schema-metadata", "deterministic-order"],
+  "fixture_notes": "Only slot_code and slot_state should be returned by the Field predicate; slot_id and capacity must be excluded. The selected columns exercise character metadata, a default, and full schema fields.",
+  "determinism_notes": "DDL and field names are fixed; the metadata result is ordered by declaration order and the final row read by the primary key, with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE dispatch_slots (slot_id INT PRIMARY KEY, slot_code VARCHAR(24) NOT NULL, capacity INT NULL, slot_state VARCHAR(16) NOT NULL DEFAULT 'queued')",
+    "INSERT INTO dispatch_slots (slot_id, slot_code, capacity) VALUES (5201, 'east-window', 32)"
+  ],
+  "steps": [
+    {
+      "sql": "SHOW FULL COLUMNS FROM dispatch_slots WHERE Field = 'slot_code' OR Field = 'slot_state'",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT slot_id, slot_code, capacity, slot_state FROM dispatch_slots ORDER BY slot_id",
+      "ordered": true
+    }
+  ]
+}
