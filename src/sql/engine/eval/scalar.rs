@@ -31,7 +31,7 @@ pub(super) fn eval_from_base64_value(value: Value) -> Result<Value> {
     Ok(Value::String(format!("{MYSQL_BINARY_SENTINEL}{hex}")))
 }
 
-fn binary_value_bytes(value: &Value) -> Option<Vec<u8>> {
+pub(super) fn binary_value_bytes(value: &Value) -> Option<Vec<u8>> {
     let hex = value.as_str()?.strip_prefix(MYSQL_BINARY_SENTINEL)?;
     if hex.len() % 2 != 0 {
         return None;
@@ -573,6 +573,18 @@ pub(super) fn eval_left_right(
         return Ok(Value::Null);
     }
     let len = value_to_i64(&len).unwrap_or(0).max(0) as usize;
+    if let Some(bytes) = binary_value_bytes(&value) {
+        let selected = if from_right {
+            &bytes[bytes.len().saturating_sub(len)..]
+        } else {
+            &bytes[..bytes.len().min(len)]
+        };
+        let hex = selected
+            .iter()
+            .map(|byte| format!("{byte:02X}"))
+            .collect::<String>();
+        return Ok(Value::String(format!("{MYSQL_BINARY_SENTINEL}{hex}")));
+    }
     let chars = json_scalar_to_string(&value).chars().collect::<Vec<_>>();
     let out = if from_right {
         chars

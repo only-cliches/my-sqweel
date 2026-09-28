@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "id": "nested_binary_charset_slices_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "antlr/grammars-v4",
+      "commit": "e199816b3f1a7a49ea1ad84fb6b87c382ea36a33",
+      "path": "sql/mysql/Positive-Technologies/examples/dml_select.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/e199816b3f1a7a49ea1ad84fb6b87c382ea36a33/sql/mysql/Positive-Technologies/examples/dml_select.sql",
+      "sha256": "0266157173bc9d8eabd9d01dcf389a0df5c8311ec1cc29863c4c893a5f3c9e23",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from sql/mysql/Positive-Technologies/examples/dml_select.sql: nested binary-to-UTF-8 conversion around LEFT",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A scalar expression slices a binary conversion by byte count and converts the result back to UTF-8 text.",
+      "mysql_mariadb_translation": "Reduced to one fixed three-character UTF-8 label and a six-byte LEFT slice, retaining only nested binary conversion, byte slicing, UTF-8 conversion, and hexadecimal observability."
+    },
+    "independently_authored": true,
+    "minimized_from": "nested_binary_charset_slices"
+  },
+  "features": ["convert-using-binary", "convert-using-utf8mb4", "byte-slice", "multibyte-text", "minimized-regression"],
+  "fixture_notes": "The first two three-byte UTF-8 characters must remain after the six-byte binary slice; the third character must be absent.",
+  "determinism_notes": "The label and byte length are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT CONVERT(LEFT(CONVERT('霜時計' USING binary), 6) USING utf8mb4) AS clipped_label, HEX(CONVERT(LEFT(CONVERT('霜時計' USING binary), 6) USING utf8mb4)) AS clipped_hex",
+      "ordered": true
+    }
+  ]
+}

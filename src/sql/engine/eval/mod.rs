@@ -3318,29 +3318,57 @@ fn eval_convert_charset(value: Value, charset: &str) -> Result<Value> {
         return Ok(Value::Null);
     }
     let text = json_scalar_to_string(&value);
+    let binary = binary_value_bytes(&value);
     let normalized = charset.to_ascii_lowercase();
-    let converted = match normalized.as_str() {
-        "ascii" | "ascii_bin" => text
-            .chars()
-            .map(
-                |character| {
-                    if character.is_ascii() { character } else { '?' }
-                },
-            )
-            .collect(),
-        "latin1" | "latin1_bin" | "latin1_general_ci" => text
-            .chars()
-            .map(|character| {
-                if (character as u32) <= 0xff {
-                    character
-                } else {
-                    '?'
-                }
-            })
-            .collect(),
-        _ => text,
+    let to_binary = |bytes: &[u8]| {
+        let hex = bytes
+            .iter()
+            .map(|byte| format!("{byte:02X}"))
+            .collect::<String>();
+        Value::String(format!("{MYSQL_BINARY_SENTINEL}{hex}"))
     };
-    Ok(Value::String(converted))
+    let converted = match normalized.as_str() {
+        "binary" | "binary_bin" => to_binary(binary.as_deref().unwrap_or_else(|| text.as_bytes())),
+        "ascii" | "ascii_bin" => binary.map_or_else(
+            || {
+                Value::String(
+                    text.chars()
+                        .map(|character| if character.is_ascii() { character } else { '?' })
+                        .collect(),
+                )
+            },
+            |bytes| {
+                Value::String(
+                    bytes
+                        .into_iter()
+                        .map(|byte| if byte.is_ascii() { byte as char } else { '?' })
+                        .collect(),
+                )
+            },
+        ),
+        "latin1" | "latin1_bin" | "latin1_general_ci" => binary.map_or_else(
+            || {
+                Value::String(
+                    text.chars()
+                        .map(|character| {
+                            if (character as u32) <= 0xff {
+                                character
+                            } else {
+                                '?'
+                            }
+                        })
+                        .collect(),
+                )
+            },
+            |bytes| Value::String(bytes.into_iter().map(char::from).collect()),
+        ),
+        "utf8" | "utf8mb3" | "utf8mb4" | "utf8mb4_bin" => binary.map_or_else(
+            || Value::String(text.clone()),
+            |bytes| Value::String(String::from_utf8_lossy(&bytes).into_owned()),
+        ),
+        _ => Value::String(text),
+    };
+    Ok(converted)
 }
 
 fn eval_trim_values(

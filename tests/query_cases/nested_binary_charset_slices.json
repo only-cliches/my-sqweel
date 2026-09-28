@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "nested_binary_charset_slices",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "antlr/grammars-v4",
+      "commit": "e199816b3f1a7a49ea1ad84fb6b87c382ea36a33",
+      "path": "sql/mysql/Positive-Technologies/examples/dml_select.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/e199816b3f1a7a49ea1ad84fb6b87c382ea36a33/sql/mysql/Positive-Technologies/examples/dml_select.sql",
+      "sha256": "0266157173bc9d8eabd9d01dcf389a0df5c8311ec1cc29863c4c893a5f3c9e23",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/mysql/Positive-Technologies/examples/dml_select.sql: CONVERT(LEFT(CONVERT(... USING binary), ...) USING utf8)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL projection converts text to binary bytes, slices the converted value with LEFT, and converts the slice back to UTF-8.",
+      "mysql_mariadb_translation": "Reauthored as an independent label-byte audit. Fixed multilingual labels undergo nested binary and utf8mb4 conversion with byte slices, while a short ASCII label verifies ordinary text behavior; hexadecimal projections make the byte-preserving result observable without copying source labels or schema."
+    },
+    "independently_authored": true
+  },
+  "features": ["convert-using-binary", "convert-using-utf8mb4", "nested-conversion", "byte-slice", "multibyte-text", "deterministic-order"],
+  "fixture_notes": "The multilingual label slices use byte lengths that end on complete UTF-8 characters: the first keeps two characters and the second keeps three. The ASCII label remains unchanged by the nested conversion.",
+  "determinism_notes": "Labels, byte lengths, character sets, and ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE label_byte_samples (sample_id INT PRIMARY KEY, label_text VARCHAR(64) CHARACTER SET utf8mb4 NOT NULL)",
+    "INSERT INTO label_byte_samples (sample_id, label_text) VALUES (901, '霜時計'), (902, 'cabin')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT sample_id, CONVERT(LEFT(CONVERT(label_text USING binary), CASE WHEN sample_id = 901 THEN 6 ELSE 3 END) USING utf8mb4) AS clipped_label, HEX(CONVERT(LEFT(CONVERT(label_text USING binary), CASE WHEN sample_id = 901 THEN 6 ELSE 3 END) USING utf8mb4)) AS clipped_hex FROM label_byte_samples ORDER BY sample_id",
+      "ordered": true
+    }
+  ]
+}
