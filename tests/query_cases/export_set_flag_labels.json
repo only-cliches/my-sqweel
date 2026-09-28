@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "id": "export_set_flag_labels",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/402.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/402.sql",
+      "sha256": "c14423acc8c551fe5288a77451aac74e0440ee2411cd9092d32c3368b388d11c",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/docker/fuzz_root/mysql_initlib/402.sql:54",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "MySQL EXPORT_SET expands the low-order bits of an integer into a separator-delimited string using caller-provided on and off labels and a fixed bit count.",
+      "mysql_mariadb_translation": "Reauthored as an independent feature-flag label report. Two fixed masks are rendered least-significant bit first with custom labels, separators, and four output positions; stable flag ordering makes the bit expansion observable without copying the source table, values, or fuzz setup."
+    },
+    "independently_authored": true
+  },
+  "features": ["export-set", "bitmask-to-labels", "custom-separator", "explicit-bit-count", "deterministic-order"],
+  "fixture_notes": "Mask 5 must render Y|N|Y|N and mask 10 must render N|Y|N|Y when each bit is mapped with on='Y', off='N', separator='|', and number_of_bits=4; the rows use complementary bit patterns.",
+  "determinism_notes": "Masks, labels, separator, bit count, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE rollout_flags (flag_id INT PRIMARY KEY, flag_mask INT NOT NULL, flag_name VARCHAR(32) NOT NULL)",
+    "INSERT INTO rollout_flags VALUES (7, 5, 'payments'), (8, 10, 'search')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT flag_id, flag_name, EXPORT_SET(flag_mask, 'Y', 'N', '|', 4) AS bit_labels FROM rollout_flags ORDER BY flag_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT COUNT(*) AS flag_count, SUM(flag_mask) AS mask_total FROM rollout_flags",
+      "ordered": true
+    }
+  ]
+}

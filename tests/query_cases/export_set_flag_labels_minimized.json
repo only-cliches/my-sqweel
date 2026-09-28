@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "id": "export_set_flag_labels_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "export_set_flag_labels",
+    "source": {
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/402.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/402.sql",
+      "sha256": "c14423acc8c551fe5288a77451aac74e0440ee2411cd9092d32c3368b388d11c",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from export_set_flag_labels",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "EXPORT_SET converts one integer mask into a fixed-width separator-delimited bit label string.",
+      "mysql_mariadb_translation": "Reduced to one scalar EXPORT_SET call with a five-bit mask, explicit labels, separator, and width so bit order and fixed output width remain observable without table setup."
+    },
+    "independently_authored": true,
+    "minimized_from": "export_set_flag_labels"
+  },
+  "features": ["export-set", "bitmask-to-labels", "custom-separator", "explicit-bit-count", "minimized-regression"],
+  "fixture_notes": "The five-bit mask 9 must render on|off|off|on|off from least significant bit to most significant bit.",
+  "determinism_notes": "The mask, labels, separator, and bit count are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "steps": [
+    {
+      "sql": "SELECT EXPORT_SET(9, 'on', 'off', '|', 5) AS bit_labels",
+      "ordered": true
+    }
+  ]
+}
