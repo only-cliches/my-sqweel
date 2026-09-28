@@ -89,6 +89,7 @@ fn rewrite_group_concat_limits_for_parser(sql: &str) -> String {
         };
         let body = &sql[open + 1..close];
         let Some(limit_position) = top_level_keyword_position(body, "LIMIT") else {
+            rewritten.push_str(&sql[search..close + 1]);
             search = close + 1;
             continue;
         };
@@ -96,10 +97,12 @@ fn rewrite_group_concat_limits_for_parser(sql: &str) -> String {
         let limit_text = body[limit_position + "LIMIT".len()..].trim();
         let mut limit_tokens = limit_text.split_whitespace();
         let Some(limit) = limit_tokens.next() else {
+            rewritten.push_str(&sql[search..close + 1]);
             search = close + 1;
             continue;
         };
         if !limit.bytes().all(|byte| byte.is_ascii_digit()) {
+            rewritten.push_str(&sql[search..close + 1]);
             search = close + 1;
             continue;
         }
@@ -112,6 +115,7 @@ fn rewrite_group_concat_limits_for_parser(sql: &str) -> String {
                 Some(value)
             }
             _ => {
+                rewritten.push_str(&sql[search..close + 1]);
                 search = close + 1;
                 continue;
             }

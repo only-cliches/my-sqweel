@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "group_concat_having_insert_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "nickovchinnikov/sql-box",
+      "commit": "ad0a396d388bcd5b8bb0c47c4e2056e261a86b76",
+      "path": "5.MightySelect/2.GROUPBY_HAVING.sql",
+      "url": "https://github.com/nickovchinnikov/sql-box/blob/ad0a396d388bcd5b8bb0c47c4e2056e261a86b76/5.MightySelect/2.GROUPBY_HAVING.sql",
+      "sha256": "5dcf35a88e2effa8fa5b2cfefc2eb0fefe9d6e1ad1eaa01f99c47245ebb3a6a5",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "5.MightySelect/2.GROUPBY_HAVING.sql:27-30",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "GROUP_CONCAT(DISTINCT ...) with aggregate-local ordering and a custom separator is used in a grouped report.",
+      "mysql_mariadb_translation": "Reduced to one independently authored collection with two active rows, one duplicate label, and a HAVING threshold that admits the group before persisting its ordered distinct label list."
+    },
+    "independently_authored": true,
+    "minimized_from": "group_concat_having_insert"
+  },
+  "features": ["group-concat-distinct", "aggregate-local-order", "custom-separator", "having-filter", "grouped-insert-select", "minimized-regression"],
+  "fixture_notes": "Collection 601 has ALPHA and BETA active rows and persists BETA|ALPHA with count 2.",
+  "determinism_notes": "Fixed collection rows, descending label order, pipe separator, HAVING threshold, and final ordering; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE collection_items_min (item_id INT PRIMARY KEY, collection_id INT NOT NULL, item_label VARCHAR(32) NOT NULL, active TINYINT NOT NULL)",
+    "CREATE TABLE collection_label_snapshots_min (collection_id INT PRIMARY KEY, active_item_count INT NOT NULL, distinct_labels VARCHAR(255) NOT NULL)",
+    "INSERT INTO collection_items_min VALUES (1, 601, 'ALPHA', 1), (2, 601, 'BETA', 1)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO collection_label_snapshots_min (collection_id, active_item_count, distinct_labels) SELECT collection_id, COUNT(*), GROUP_CONCAT(DISTINCT item_label ORDER BY item_label DESC SEPARATOR '|') FROM collection_items_min WHERE active = 1 GROUP BY collection_id HAVING COUNT(*) >= 2",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT collection_id, active_item_count, distinct_labels FROM collection_label_snapshots_min ORDER BY collection_id",
+      "ordered": true
+    }
+  ]
+}
