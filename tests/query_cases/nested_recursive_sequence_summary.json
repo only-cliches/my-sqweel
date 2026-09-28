@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "nested_recursive_sequence_summary",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "sbdchd/squawk",
+      "commit": "5451056da07699045e4f49de9e29d170b035c08e",
+      "path": "postgres/regression_suite/with.sql",
+      "url": "https://github.com/sbdchd/squawk/blob/5451056da07699045e4f49de9e29d170b035c08e/postgres/regression_suite/with.sql",
+      "sha256": "f96ec2391f486dee1c70380b75b64c78b57c73cd7c92fb7b9275470a315f8c65",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "postgres/regression_suite/with.sql:1125-1137",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A recursive CTE contains its own nested recursive CTE in the anchor term, then continues that generated anchor through an outer recursive member.",
+      "mysql_mariadb_translation": "Reauthored as a bounded sequence summary. The nested inner CTE expands fixed seed bounds to step three, the outer recursive CTE continues from that nested result to steps four and five, and a grouped final read reports one occurrence per step. PostgreSQL regression-only syntax and values are replaced with a MariaDB-compatible table and fixed literals."
+    },
+    "independently_authored": true
+  },
+  "features": ["nested-recursive-cte", "recursive-anchor-subquery", "recursive-union-all", "grouped-final-read", "deterministic-ordering"],
+  "fixture_notes": "Seed bounds 1 and 3 make the nested inner CTE produce steps 1, 2, and 3; the outer CTE selects step 3 as its anchor and extends it to steps 4 and 5. Each final step occurs exactly once.",
+  "determinism_notes": "Fixed seed bounds, recursion limits, grouping key, and final step ordering are used. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE sequence_seeds (seed_id INT PRIMARY KEY, seed_no INT NOT NULL)",
+    "INSERT INTO sequence_seeds VALUES (1, 1), (2, 3)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH RECURSIVE outer_sequence (step_no) AS (WITH RECURSIVE inner_seed (step_no) AS (SELECT MIN(seed_no) FROM sequence_seeds UNION ALL SELECT step_no + 1 FROM inner_seed WHERE step_no < (SELECT MAX(seed_no) FROM sequence_seeds)) SELECT step_no FROM inner_seed WHERE step_no = (SELECT MAX(seed_no) FROM sequence_seeds) UNION ALL SELECT step_no + 1 FROM outer_sequence WHERE step_no < 5) SELECT step_no, COUNT(*) AS occurrence_count FROM outer_sequence GROUP BY step_no ORDER BY step_no",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "WITH RECURSIVE outer_sequence (step_no) AS (WITH RECURSIVE inner_seed (step_no) AS (SELECT MIN(seed_no) FROM sequence_seeds UNION ALL SELECT step_no + 1 FROM inner_seed WHERE step_no < (SELECT MAX(seed_no) FROM sequence_seeds)) SELECT step_no FROM inner_seed WHERE step_no = (SELECT MAX(seed_no) FROM sequence_seeds) UNION ALL SELECT step_no + 1 FROM outer_sequence WHERE step_no < 5) SELECT step_no, COUNT(*) AS occurrence_count FROM outer_sequence GROUP BY step_no ORDER BY step_no",
+      "ordered": true
+    }
+  ]
+}

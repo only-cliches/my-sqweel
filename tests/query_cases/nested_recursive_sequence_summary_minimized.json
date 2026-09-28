@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "id": "nested_recursive_sequence_summary_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "nested_recursive_sequence_summary",
+    "source": {
+      "kind": "github",
+      "repository": "sbdchd/squawk",
+      "commit": "5451056da07699045e4f49de9e29d170b035c08e",
+      "path": "postgres/regression_suite/with.sql",
+      "url": "https://github.com/sbdchd/squawk/blob/5451056da07699045e4f49de9e29d170b035c08e/postgres/regression_suite/with.sql",
+      "sha256": "f96ec2391f486dee1c70380b75b64c78b57c73cd7c92fb7b9275470a315f8c65",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "postgres/regression_suite/with.sql:1125-1137",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A recursive CTE uses a nested recursive CTE as its anchor before the outer recursive member continues the result.",
+      "mysql_mariadb_translation": "Reduced to a literal nested sequence: the inner CTE emits step one, the outer CTE extends it through step three, and the final read orders the result."
+    },
+    "independently_authored": true
+  },
+  "features": ["nested-recursive-cte", "recursive-anchor-subquery", "recursive-union-all", "minimized-regression"],
+  "fixture_notes": "The inner recursive CTE emits only step one; the outer recursive CTE emits steps one, two, and three exactly once.",
+  "determinism_notes": "Literal recursion bounds and explicit ordering are used. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "WITH RECURSIVE outer_sequence (step_no) AS (WITH RECURSIVE inner_seed (step_no) AS (SELECT 1 UNION ALL SELECT step_no + 1 FROM inner_seed WHERE step_no < 1) SELECT step_no FROM inner_seed UNION ALL SELECT step_no + 1 FROM outer_sequence WHERE step_no < 3) SELECT step_no FROM outer_sequence ORDER BY step_no",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "WITH RECURSIVE outer_sequence (step_no) AS (WITH RECURSIVE inner_seed (step_no) AS (SELECT 1 UNION ALL SELECT step_no + 1 FROM inner_seed WHERE step_no < 1) SELECT step_no FROM inner_seed UNION ALL SELECT step_no + 1 FROM outer_sequence WHERE step_no < 3) SELECT step_no FROM outer_sequence ORDER BY step_no",
+      "ordered": true
+    }
+  ]
+}

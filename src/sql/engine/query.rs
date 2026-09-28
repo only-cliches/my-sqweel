@@ -216,6 +216,7 @@ impl RawEngine {
                 cte_query.with = Some(ordinary);
                 cte_query = inline_common_table_expressions(cte_query)?;
             }
+            let nested_with = cte_query.with.clone();
             let body = cte_query.body.as_ref().clone();
             let SetExpr::SetOperation {
                 op: sqlparser::ast::SetOperator::Union,
@@ -228,7 +229,8 @@ impl RawEngine {
                 return Err(anyhow!("recursive common table expressions require UNION"));
             };
 
-            let mut accumulated = self.select_query(query_from_body(*left))?;
+            let mut accumulated =
+                self.select_query(query_from_body_with_with(*left, nested_with.clone()))?;
             let mut frontier = accumulated.clone();
             let recursive_columns = if cte_columns.is_empty() {
                 accumulated
@@ -244,7 +246,7 @@ impl RawEngine {
                     break;
                 }
                 let recursive_body = replace_recursive_reference(
-                    query_from_body(*right.clone()),
+                    query_from_body_with_with(*right.clone(), nested_with.clone()),
                     &cte_name,
                     values_query(&frontier),
                     &recursive_columns,
@@ -8441,6 +8443,12 @@ fn query_from_body(body: SetExpr) -> Query {
         limit_by: vec![],
         settings: None,
     }
+}
+
+fn query_from_body_with_with(body: SetExpr, with: Option<sqlparser::ast::With>) -> Query {
+    let mut query = query_from_body(body);
+    query.with = with;
+    query
 }
 
 fn values_query(result: &QueryResult) -> Query {
