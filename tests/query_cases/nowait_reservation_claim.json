@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "nowait_reservation_claim",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "repository": "geldata/gel",
+      "commit": "85191063b4db8b87caf26499de40f8a9d90c8146",
+      "path": "edb_stat_statements/sql/select.sql",
+      "url": "https://github.com/geldata/gel/blob/85191063b4db8b87caf26499de40f8a9d90c8146/edb_stat_statements/sql/select.sql",
+      "sha256": "9fe5fb905f67df234cf73612c9745535bb92ad445e8d28453ceb1e92826dfd8e",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "edb_stat_statements/sql/select.sql:85",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A transactional SELECT locks rows with FOR UPDATE NOWAIT instead of waiting for another transaction.",
+      "mysql_mariadb_translation": "Reauthored as an independent reservation claim. A fixed ready reservation is selected in a transaction with an ordered FOR UPDATE NOWAIT clause, marked claimed, committed, and checked alongside untouched reservations; the source tables, names, and extension-specific context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["for-update", "nowait", "transaction-claim", "deterministic-order", "transaction-final-state"],
+  "fixture_notes": "Reservation 202 is the earliest ready reservation and must be returned by the ordered NOWAIT lock read, then marked claimed; reservation 201 is later and reservation 203 is already held, so both remain unchanged.",
+  "determinism_notes": "Reservation IDs, timestamps, states, ordering, and mutation are fixed; one connection executes the transaction sequentially with no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE reservation_queue (reservation_id INT PRIMARY KEY, reservation_label VARCHAR(32) NOT NULL, starts_at DATETIME NOT NULL, reservation_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO reservation_queue VALUES (201, 'morning-review', '2026-08-01 09:00:00', 'ready'), (202, 'priority-audit', '2026-08-01 10:00:00', 'ready'), (203, 'held-maintenance', '2026-08-01 08:00:00', 'held')"
+  ],
+  "steps": [
+    {"sql": "START TRANSACTION", "ordered": false},
+    {
+      "sql": "SELECT reservation_id, reservation_label, starts_at FROM reservation_queue WHERE reservation_state = 'ready' ORDER BY starts_at ASC, reservation_id ASC LIMIT 1 FOR UPDATE NOWAIT",
+      "ordered": true
+    },
+    {"sql": "UPDATE reservation_queue SET reservation_state = 'claimed' WHERE reservation_id = 202", "ordered": false},
+    {"sql": "COMMIT", "ordered": false}
+  ],
+  "checks": [
+    {
+      "sql": "SELECT reservation_id, reservation_label, reservation_state FROM reservation_queue ORDER BY reservation_id",
+      "ordered": true
+    }
+  ]
+}

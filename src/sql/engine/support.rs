@@ -3,8 +3,8 @@ use std::ops::ControlFlow;
 use anyhow::{Result, anyhow};
 use sqlparser::ast::{
     BinaryOperator, CastKind, Distinct, Expr, GroupByExpr, JoinConstraint, JoinOperator, LockType,
-    Query, Select, SelectItem, SetExpr, SetQuantifier, Statement, TableFactor, UnaryOperator,
-    Visit, Visitor,
+    NonBlock, Query, Select, SelectItem, SetExpr, SetQuantifier, Statement, TableFactor,
+    UnaryOperator, Visit, Visitor,
 };
 
 pub(super) fn validate_statement_support(statement: &Statement) -> Result<()> {
@@ -34,9 +34,9 @@ impl Visitor for SupportValidator {
         if query.locks.iter().any(|lock| {
             !matches!(lock.lock_type, LockType::Share | LockType::Update)
                 || lock.of.is_some()
-                || lock.nonblock.is_some()
+                || lock.nonblock == Some(NonBlock::SkipLocked)
         }) {
-            return unsupported("SELECT locking clauses with OF/NOWAIT/SKIP LOCKED modifiers");
+            return unsupported("SELECT locking clauses with OF/SKIP LOCKED modifiers");
         }
         if query.for_clause.is_some()
             || query.settings.is_some()

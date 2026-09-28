@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "id": "nowait_reservation_claim_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "nowait_reservation_claim",
+    "source": {
+      "repository": "geldata/gel",
+      "commit": "85191063b4db8b87caf26499de40f8a9d90c8146",
+      "path": "edb_stat_statements/sql/select.sql",
+      "url": "https://github.com/geldata/gel/blob/85191063b4db8b87caf26499de40f8a9d90c8146/edb_stat_statements/sql/select.sql",
+      "sha256": "9fe5fb905f67df234cf73612c9745535bb92ad445e8d28453ceb1e92826dfd8e",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "Minimized from nowait_reservation_claim",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A single-row SELECT FOR UPDATE NOWAIT must be accepted and return the locked row when no competing transaction exists.",
+      "mysql_mariadb_translation": "Reduced to one independently authored reservation row and one ordered locking read, removing mutation, scheduling fields, and the transaction's final-state report while retaining the MariaDB NOWAIT clause contract."
+    },
+    "independently_authored": true,
+    "minimized_from": "nowait_reservation_claim"
+  },
+  "features": ["for-update", "nowait", "minimized-regression", "deterministic-order"],
+  "fixture_notes": "The single ready reservation must be returned by the NOWAIT lock read; no competing connection exists, so MariaDB succeeds rather than raising a lock conflict.",
+  "determinism_notes": "The row and lock query are fixed; there are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE mini_reservation_queue (reservation_id INT PRIMARY KEY, reservation_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO mini_reservation_queue VALUES (901, 'ready')"
+  ],
+  "steps": [
+    {"sql": "START TRANSACTION", "ordered": false},
+    {"sql": "SELECT reservation_id, reservation_state FROM mini_reservation_queue ORDER BY reservation_id FOR UPDATE NOWAIT", "ordered": true},
+    {"sql": "ROLLBACK", "ordered": false}
+  ],
+  "checks": []
+}

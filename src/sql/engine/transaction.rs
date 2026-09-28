@@ -1053,10 +1053,11 @@ impl EngineSession {
                 .ok();
             let ast = parsed.as_ref().and_then(|items| items.first());
             self.last_query_read |= matches!(ast, Some(Statement::Query(_)));
-            if matches!(ast, Some(Statement::Query(query)) if query.locks.iter().any(|lock| lock.nonblock.is_some() || lock.of.is_some()))
-            {
+            if matches!(ast, Some(Statement::Query(query)) if query.locks.iter().any(|lock| {
+                lock.of.is_some() || lock.nonblock == Some(NonBlock::SkipLocked)
+            })) {
                 return Err(anyhow!(
-                    "unsupported SQL feature: SELECT locking clauses with OF/NOWAIT/SKIP LOCKED modifiers"
+                    "unsupported SQL feature: SELECT locking clauses with OF/SKIP LOCKED modifiers"
                 ));
             }
             if let Some(result) = self.advisory_query(ast)? {
