@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "log_base_signal_profiles",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "PacktWorkshops/The-SQL-Workshop",
+      "commit": "568c6f62fae9a22b37823ae4bf267553d5d60046",
+      "path": "Chapter10/Chapter 10 Activity.sql",
+      "url": "https://github.com/PacktWorkshops/The-SQL-Workshop/blob/568c6f62fae9a22b37823ae4bf267553d5d60046/Chapter10/Chapter%2010%20Activity.sql",
+      "sha256": "eb62bd4ce84fd98ac3cc09b34576b515526e7e6034ef6029c4d4a962475db62c",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Chapter10/Chapter 10 Activity.sql: arithmetic-function exercise steps 3-6",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL arithmetic-function exercise evaluates LOG on a session value, then composes EXP(LOG(value)) and LOG(EXP(value)) to demonstrate natural-logarithm round trips.",
+      "mysql_mariadb_translation": "Reauthored as an independent signal-profile report. Fixed positive, zero, negative, and NULL readings exercise natural LOG domain behavior; LOG(2, reading) adds the two-argument base form, and LOG(EXP(reading)) checks the base-e round trip. The source variables, schema, values, and lesson context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "natural-logarithm",
+    "arbitrary-log-base",
+    "nested-exp-log",
+    "domain-boundary",
+    "null-propagation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Signals 201 and 202 are positive; signal 202 verifies LOG base 2 of 8 equals 3. Signals 203 and 204 are zero and negative and therefore outside LOG's domain; signal 205 is NULL. LOG(EXP(reading)) round-trips each finite reading through base e.",
+  "determinism_notes": "Signal IDs and decimal readings are fixed; output ordering is by the unique signal ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE signal_measurements (measurement_id INT PRIMARY KEY, reading DECIMAL(10,4) NULL)",
+    "INSERT INTO signal_measurements VALUES (201, 1.0000), (202, 8.0000), (203, 0.0000), (204, -4.0000), (205, NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT measurement_id, LOG(reading) AS natural_log, LOG(2, reading) AS base_two_log, LOG(EXP(reading)) AS exp_log_round_trip FROM signal_measurements ORDER BY measurement_id",
+      "ordered": true
+    }
+  ]
+}

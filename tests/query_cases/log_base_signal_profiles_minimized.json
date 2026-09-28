@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "id": "log_base_signal_profiles_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "PacktWorkshops/The-SQL-Workshop",
+      "commit": "568c6f62fae9a22b37823ae4bf267553d5d60046",
+      "path": "Chapter10/Chapter 10 Activity.sql",
+      "url": "https://github.com/PacktWorkshops/The-SQL-Workshop/blob/568c6f62fae9a22b37823ae4bf267553d5d60046/Chapter10/Chapter%2010%20Activity.sql",
+      "sha256": "eb62bd4ce84fd98ac3cc09b34576b515526e7e6034ef6029c4d4a962475db62c",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Chapter10/Chapter 10 Activity.sql: LOG, EXP(LOG(...)), and LOG(EXP(...)) exercise expressions",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL scalar expression applies LOG to a positive value, uses LOG with an explicit base, and nests LOG with EXP.",
+      "mysql_mariadb_translation": "Reduced to one independently authored scalar projection containing LOG(8), LOG(2, 8), and LOG(EXP(2)). It isolates the natural-log evaluator, arbitrary-base form, and nested base-e round trip without the source variables or lesson statements."
+    },
+    "independently_authored": true,
+    "minimized_from": "log_base_signal_profiles"
+  },
+  "features": [
+    "natural-logarithm",
+    "arbitrary-log-base",
+    "nested-exp-log",
+    "deterministic-order"
+  ],
+  "fixture_notes": "LOG(8) is the natural logarithm, LOG(2, 8) must return 3, and LOG(EXP(2)) must return approximately 2.",
+  "determinism_notes": "The scalar literals are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT LOG(8) AS natural_log, LOG(2, 8) AS base_two_log, LOG(EXP(2)) AS exp_log_round_trip",
+      "ordered": true
+    }
+  ]
+}
