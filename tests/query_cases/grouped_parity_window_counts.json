@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "grouped_parity_window_counts",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "pgspider/sqlite_fdw",
+      "commit": "ea52a24f63dda31bbf72270ba32f8217cd6232be",
+      "path": "sql/13.15/extra/sqlite_fdw_post.sql",
+      "url": "https://github.com/pgspider/sqlite_fdw/blob/ea52a24f63dda31bbf72270ba32f8217cd6232be/sql/13.15/extra/sqlite_fdw_post.sql",
+      "sha256": "2dd6dcbfb2f09a7eebe7df186ef16d8c25bbc8c2de3480a42020e16963c8d381",
+      "source_dialect": "sqlite"
+    },
+    "inspiration": {
+      "source_location": "sql/13.15/extra/sqlite_fdw_post.sql:1169-1171 (grouped SUM with partitioned COUNT window)",
+      "source_dialect": "sqlite",
+      "observed_pattern": "A grouped query computes a SUM for each key, then applies COUNT(*) as a partitioned window over the grouped result using an arithmetic parity expression.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored warehouse receipt report. Fixed posted receipt rows aggregate units by zone, and COUNT(*) OVER partitions the resulting zone groups by even or odd zone ID; pending and cancelled receipts are excluded before grouping. The source tables, names, values, and foreign-data-wrapper context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "grouped-sum",
+    "window-count-over-grouped-result",
+    "partition-by-arithmetic-expression",
+    "filtered-source-rows",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Posted receipts produce four zones: even zones 10 and 12 have totals 7 and 3, while odd zones 11 and 13 have totals 5 and 6. Each output row must report two zones in its parity partition; non-posted receipts must not create groups.",
+  "determinism_notes": "Receipt IDs, zone IDs, states, unit counts, grouping, parity expression, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE warehouse_receipts (receipt_id INT PRIMARY KEY, zone_id INT NOT NULL, item_code VARCHAR(16) NOT NULL, units INT NOT NULL, receipt_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO warehouse_receipts (receipt_id, zone_id, item_code, units, receipt_state) VALUES (1, 10, 'bolt', 4, 'posted'), (2, 10, 'nut', 3, 'posted'), (3, 11, 'washer', 5, 'posted'), (4, 11, 'seal', 100, 'pending'), (5, 12, 'clip', 2, 'posted'), (6, 12, 'pin', 1, 'posted'), (7, 13, 'bracket', 6, 'posted'), (8, 14, 'lever', 9, 'cancelled')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT zone_id, SUM(units) AS posted_units, COUNT(*) OVER (PARTITION BY MOD(zone_id, 2)) AS zones_in_parity FROM warehouse_receipts WHERE receipt_state = 'posted' GROUP BY zone_id ORDER BY zone_id",
+      "ordered": true
+    }
+  ]
+}
