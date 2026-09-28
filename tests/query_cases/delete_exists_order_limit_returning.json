@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "delete_exists_order_limit_returning",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "dml/delete/mariadb.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/dml/delete/mariadb.sql",
+      "sha256": "de0a68900566a8edc6585ccd0e301c2b5a1196896546a014ee1d9698be0dca76",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "dml/delete/mariadb.sql: multi-table DELETE example and DELETE ... RETURNING section",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "MariaDB deletes rows selected through a related relation and exposes directly deleted columns with RETURNING.",
+      "mysql_mariadb_translation": "Reauthored as a bounded retention cleanup: closed events matching a purge rule are selected through a correlated EXISTS predicate, the highest-severity two are deleted deterministically, and RETURNING reports the deleted rows. Source tables, values, identifiers, and application context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["delete", "exists-subquery", "ordered-delete", "delete-limit", "returning", "deterministic-order"],
+  "fixture_notes": "Four events are present; three are closed and match a purge rule, but only the two highest-severity matching events are deleted. RETURNING and the final read are ordered by event_id.",
+  "determinism_notes": "Event identifiers, severities, states, and purge rules are fixed. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE purge_rules (event_kind VARCHAR(16) PRIMARY KEY, purge_enabled INT NOT NULL)",
+    "CREATE TABLE job_events (event_id INT PRIMARY KEY, event_kind VARCHAR(16) NOT NULL, severity INT NOT NULL, event_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO purge_rules VALUES ('deploy', 1), ('audit', 0), ('backup', 1)",
+    "INSERT INTO job_events VALUES (901, 'deploy', 40, 'closed'), (902, 'deploy', 90, 'closed'), (903, 'audit', 100, 'closed'), (904, 'backup', 70, 'closed'), (905, 'deploy', 110, 'open')"
+  ],
+  "steps": [
+    {
+      "sql": "DELETE FROM job_events WHERE event_state = 'closed' AND EXISTS (SELECT 1 FROM purge_rules AS r WHERE r.event_kind = job_events.event_kind AND r.purge_enabled = 1) ORDER BY severity DESC, event_id ASC LIMIT 2 RETURNING event_id, event_kind, severity",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT event_id, event_kind, severity, event_state FROM job_events ORDER BY event_id",
+      "ordered": true
+    }
+  ]
+}
