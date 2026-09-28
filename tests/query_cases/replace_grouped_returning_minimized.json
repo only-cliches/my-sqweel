@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "replace_grouped_returning_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "minimized_from": "replace_grouped_returning",
+    "source": {
+      "kind": "github",
+      "repository": "greenlion/swanhart-tools",
+      "commit": "7a69077c197b40e66aadff469b0226287097017f",
+      "path": "flexviews/procs/delta.sql",
+      "url": "https://github.com/greenlion/swanhart-tools/blob/7a69077c197b40e66aadff469b0226287097017f/flexviews/procs/delta.sql",
+      "sha256": "179c211d24b4f84dc04fb9a3c16941bdcc28f80e3f58fdafaff51e5bdfad30c5",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "flexviews/procs/delta.sql:589-597 and 1181-1189",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped SELECT feeds REPLACE INTO so one keyed aggregate row is refreshed from source data.",
+      "mysql_mariadb_translation": "Reduced to one existing channel rollup and one grouped source row while retaining REPLACE INTO, aggregation, and RETURNING of the resulting row."
+    },
+    "independently_authored": true
+  },
+  "features": ["replace-into", "grouped-select", "aggregate-refresh", "returning", "minimized-regression"],
+  "fixture_notes": "The existing web rollup starts with stale values and must be replaced by the one-event aggregate; RETURNING exposes the refreshed row.",
+  "determinism_notes": "One fixed grouping key and one final ordered row; RETURNING has one row. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE channel_rollups_min (rollup_day DATE NOT NULL, channel_code VARCHAR(16) NOT NULL, total_units INT NOT NULL, event_count INT NOT NULL, PRIMARY KEY (rollup_day, channel_code))",
+    "CREATE TABLE channel_events_min (event_id INT PRIMARY KEY, event_day DATE NOT NULL, channel_code VARCHAR(16) NOT NULL, units INT NOT NULL)",
+    "INSERT INTO channel_rollups_min VALUES ('2026-10-01', 'web', 99, 9)",
+    "INSERT INTO channel_events_min VALUES (1101, '2026-10-01', 'web', 6)"
+  ],
+  "steps": [
+    {
+      "sql": "REPLACE INTO channel_rollups_min (rollup_day, channel_code, total_units, event_count) SELECT event_day, channel_code, SUM(units), COUNT(*) FROM channel_events_min GROUP BY event_day, channel_code RETURNING rollup_day, channel_code, total_units, event_count",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT rollup_day, channel_code, total_units, event_count FROM channel_rollups_min ORDER BY rollup_day, channel_code",
+      "ordered": true
+    }
+  ]
+}

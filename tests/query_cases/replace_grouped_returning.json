@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "replace_grouped_returning",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "greenlion/swanhart-tools",
+      "commit": "7a69077c197b40e66aadff469b0226287097017f",
+      "path": "flexviews/procs/delta.sql",
+      "url": "https://github.com/greenlion/swanhart-tools/blob/7a69077c197b40e66aadff469b0226287097017f/flexviews/procs/delta.sql",
+      "sha256": "179c211d24b4f84dc04fb9a3c16941bdcc28f80e3f58fdafaff51e5bdfad30c5",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "flexviews/procs/delta.sql:589-597 and 1181-1189",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL maintenance routine builds a grouped SELECT and loads its result with REPLACE INTO so keyed summary rows are refreshed or inserted from aggregate source data.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored channel rollup refresh. Grouped event rows replace existing daily channel summaries or create new groups, and MariaDB RETURNING exposes each resulting aggregate row. The source routine, metadata tables, identifiers, values, and dynamic SQL are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["replace-into", "grouped-select", "aggregate-refresh", "returning", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "The existing web rollup is replaced by the aggregate of two web events, while a new mobile rollup is inserted from one event. RETURNING exposes both resulting groups and the final read confirms stored values.",
+  "determinism_notes": "Dates, channel codes, event IDs, units, grouping keys, and final ordering are fixed; RETURNING row order is intentionally unordered. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE channel_rollups (rollup_day DATE NOT NULL, channel_code VARCHAR(16) NOT NULL, total_units INT NOT NULL, event_count INT NOT NULL, PRIMARY KEY (rollup_day, channel_code))",
+    "CREATE TABLE channel_events (event_id INT PRIMARY KEY, event_day DATE NOT NULL, channel_code VARCHAR(16) NOT NULL, units INT NOT NULL)",
+    "INSERT INTO channel_rollups VALUES ('2026-10-01', 'web', 99, 9)",
+    "INSERT INTO channel_events VALUES (1001, '2026-10-01', 'web', 3), (1002, '2026-10-01', 'web', 2), (1003, '2026-10-01', 'mobile', 4), (1004, '2026-10-02', 'web', 8)"
+  ],
+  "steps": [
+    {
+      "sql": "REPLACE INTO channel_rollups (rollup_day, channel_code, total_units, event_count) SELECT event_day, channel_code, SUM(units), COUNT(*) FROM channel_events WHERE event_day = '2026-10-01' GROUP BY event_day, channel_code RETURNING rollup_day, channel_code, total_units, event_count",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT rollup_day, channel_code, total_units, event_count FROM channel_rollups ORDER BY rollup_day, channel_code",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT event_id, event_day, channel_code, units FROM channel_events ORDER BY event_id",
+      "ordered": true
+    }
+  ]
+}
