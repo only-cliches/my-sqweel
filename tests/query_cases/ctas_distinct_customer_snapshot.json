@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "ctas_distinct_customer_snapshot",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "kotauday2110/sql_problem_Practice",
+      "commit": "0d29768ca3cd15fcb5f591985d375e3891b3fadc",
+      "path": "q42.sql",
+      "url": "https://github.com/kotauday2110/sql_problem_Practice/blob/0d29768ca3cd15fcb5f591985d375e3891b3fadc/q42.sql",
+      "sha256": "87b540adb692c9a54e6afede425b58ccce0275ed948ce0bced502f5f79973b1a",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "q42.sql:256-266",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL report uses CREATE TABLE AS SELECT to materialize entity rows selected by membership in a DISTINCT subquery over recent activity.",
+      "mysql_mariadb_translation": "Reauthored as a customer engagement snapshot. CTAS materializes customer identity and segment columns for customers with at least one fulfilled order in a fixed reporting window, using an IN subquery with DISTINCT and deterministic ordering. The schema, names, values, dates, and checks are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": ["create-table-as-select", "in-distinct-subquery", "date-range-filter", "deterministic-final-state"],
+  "fixture_notes": "Customer C-101 has two qualifying orders and appears once, C-202 has one qualifying order, C-303 has only an older fulfilled order, and C-404 has a recent cancelled order; only C-101 and C-202 enter the snapshot.",
+  "determinism_notes": "Fixed customer identifiers, order dates, order states, inclusive/exclusive reporting bounds, DISTINCT membership, CTAS projection, and final ordering are used. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE customer_directory (customer_code VARCHAR(8) PRIMARY KEY, customer_name VARCHAR(64) NOT NULL, segment VARCHAR(16) NOT NULL)",
+    "CREATE TABLE customer_orders (order_id INT PRIMARY KEY, customer_code VARCHAR(8) NOT NULL, order_day DATE NOT NULL, order_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO customer_directory VALUES ('C-101', 'Aster Labs', 'growth'), ('C-202', 'Beryl Works', 'steady'), ('C-303', 'Cedar Goods', 'legacy'), ('C-404', 'Dune Retail', 'growth')",
+    "INSERT INTO customer_orders VALUES (1001, 'C-101', '2026-08-03', 'fulfilled'), (1002, 'C-101', '2026-08-19', 'fulfilled'), (2001, 'C-202', '2026-08-11', 'fulfilled'), (3001, 'C-303', '2026-07-31', 'fulfilled'), (4001, 'C-404', '2026-08-12', 'cancelled')"
+  ],
+  "steps": [
+    {
+      "sql": "CREATE TABLE engaged_customer_snapshot AS SELECT c.customer_code, c.customer_name, c.segment FROM customer_directory AS c WHERE c.customer_code IN (SELECT DISTINCT o.customer_code FROM customer_orders AS o WHERE o.order_state = 'fulfilled' AND o.order_day >= '2026-08-01' AND o.order_day < '2026-09-01') ORDER BY c.customer_code",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT customer_code, customer_name, segment FROM engaged_customer_snapshot ORDER BY customer_code",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT c.customer_code, c.customer_name, c.segment FROM customer_directory AS c WHERE c.customer_code IN (SELECT DISTINCT o.customer_code FROM customer_orders AS o WHERE o.order_state = 'fulfilled' AND o.order_day >= '2026-08-01' AND o.order_day < '2026-09-01') ORDER BY c.customer_code",
+      "ordered": true
+    }
+  ]
+}
