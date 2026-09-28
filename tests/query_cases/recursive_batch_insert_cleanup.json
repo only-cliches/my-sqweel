@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "id": "recursive_batch_insert_cleanup",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "dotnet/orleans",
+      "commit": "8bc9fd244427351ad24ccc039a9e7642a42c1cc4",
+      "path": "src/AdoNet/Orleans.GrainDirectory.AdoNet/MySQL-GrainDirectory.sql",
+      "url": "https://github.com/dotnet/orleans/blob/8bc9fd244427351ad24ccc039a9e7642a42c1cc4/src/AdoNet/Orleans.GrainDirectory.AdoNet/MySQL-GrainDirectory.sql",
+      "sha256": "c5b65e0bbb82deebc2b1e84696ffdb3a7686e266900f5132c8d68f0178483fa2",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL-GrainDirectory.sql: UnregisterGrainActivations recursive CTE batch insert",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL maintenance routine recursively splits a pipe-delimited batch into numbered rows, inserts the expansion into a staging table, and uses that staged set to remove matching records.",
+      "mysql_mariadb_translation": "Reauthored as a tenant-scoped endpoint retirement batch. A recursive CTE splits fixed endpoint labels into a numbered staging table, a set-membership delete removes only matching retired endpoints for one tenant, and the final read proves unrelated tenants and active endpoints remain; routines, temporary tables, source identifiers, and source values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["recursive-cte", "recursive-insert-select", "string-splitting", "staging-table", "delete-subquery", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "Tenant 7 retires edge-a and edge-c from a pipe-delimited batch. Endpoint edge-b remains active, tenant 8's edge-a remains isolated by the tenant predicate, and the recursive level values are materialized in the staging table for verification.",
+  "determinism_notes": "Endpoint labels, tenant IDs, recursive level values, and final endpoint ordering are fixed; the batch contains no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE tenant_endpoints (endpoint_id INT PRIMARY KEY, tenant_id INT NOT NULL, endpoint_label VARCHAR(32) NOT NULL, endpoint_state VARCHAR(16) NOT NULL, UNIQUE (tenant_id, endpoint_label))",
+    "CREATE TABLE retirement_batch (endpoint_label VARCHAR(32) PRIMARY KEY, batch_level INT NOT NULL)",
+    "INSERT INTO tenant_endpoints VALUES (101, 7, 'edge-a', 'retired'), (102, 7, 'edge-b', 'active'), (103, 7, 'edge-c', 'retired'), (104, 8, 'edge-a', 'retired'), (105, 8, 'edge-z', 'active')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO retirement_batch (endpoint_label, batch_level) WITH RECURSIVE endpoint_parts AS (SELECT SUBSTRING_INDEX('edge-a|edge-c', '|', 1) AS endpoint_label, SUBSTRING('edge-a|edge-c', CHAR_LENGTH(SUBSTRING_INDEX('edge-a|edge-c', '|', 1)) + 2, CHAR_LENGTH('edge-a|edge-c')) AS remaining, 1 AS batch_level UNION ALL SELECT SUBSTRING_INDEX(remaining, '|', 1), SUBSTRING(remaining, CHAR_LENGTH(SUBSTRING_INDEX(remaining, '|', 1)) + 2, CHAR_LENGTH(remaining)), batch_level + 1 FROM endpoint_parts WHERE remaining <> '') SELECT endpoint_label, batch_level FROM endpoint_parts",
+      "ordered": true
+    },
+    {
+      "sql": "DELETE FROM tenant_endpoints WHERE tenant_id = 7 AND endpoint_label IN (SELECT endpoint_label FROM retirement_batch)",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT endpoint_label, batch_level FROM retirement_batch ORDER BY batch_level",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT endpoint_id, tenant_id, endpoint_label, endpoint_state FROM tenant_endpoints ORDER BY endpoint_id",
+      "ordered": true
+    }
+  ]
+}
