@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "grouped_scalar_denominator_shares",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Apress/adv-analytics-w-transact-sql",
+      "commit": "6da89a56df505f491b90db5f7d412fea380cf27a",
+      "path": "Ch07.sql",
+      "url": "https://github.com/Apress/adv-analytics-w-transact-sql/blob/6da89a56df505f491b90db5f7d412fea380cf27a/Ch07.sql",
+      "sha256": "b6c538228e49971944f23e9b1927f2cd2d69c0e71a871b0b04b5574ce2c82f77",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Ch07.sql:817-825 (grouped feature distribution with scalar total cross join)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A filtered grouped report cross joins a scalar COUNT subquery for the filtered population, then divides each group's COUNT by that shared denominator while retaining the grouped output.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored warehouse availability report. Fixed available stock rows are grouped by aisle and divided by a scalar total-count relation from the same filtered population; reserved and damaged rows are excluded before both the group counts and denominator. The source schema, names, values, and machine-learning context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "grouped-count",
+    "scalar-aggregate-cross-join",
+    "shared-filtered-denominator",
+    "grouped-ratio",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Five available items are distributed as two in aisle A-1 and one each in B-2, C-3, and D-4, so the ratios are 0.4, 0.2, 0.2, and 0.2. Reserved and damaged rows must not affect either the grouped counts or the scalar denominator.",
+  "determinism_notes": "Item IDs, aisle codes, stock states, filters, scalar denominator, arithmetic, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE warehouse_stock (item_id INT PRIMARY KEY, aisle_code VARCHAR(16) NOT NULL, sku VARCHAR(16) NOT NULL, stock_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO warehouse_stock (item_id, aisle_code, sku, stock_state) VALUES (1, 'A-1', 'bolt', 'available'), (2, 'A-1', 'nut', 'available'), (3, 'B-2', 'washer', 'available'), (4, 'B-2', 'seal', 'reserved'), (5, 'C-3', 'clip', 'available'), (6, 'C-3', 'pin', 'damaged'), (7, 'D-4', 'bracket', 'available')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT aisle_code, COUNT(*) AS available_items, 1.0 * COUNT(*) / MIN(total.available_total) AS availability_share FROM warehouse_stock CROSS JOIN (SELECT COUNT(*) AS available_total FROM warehouse_stock WHERE stock_state = 'available') AS total WHERE stock_state = 'available' GROUP BY aisle_code ORDER BY aisle_code",
+      "ordered": true
+    }
+  ]
+}

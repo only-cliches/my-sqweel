@@ -2498,19 +2498,21 @@ impl RawEngine {
             Expr::BinaryOp {
                 left,
                 op:
-                    BinaryOperator::Plus
+                    op @ (BinaryOperator::Plus
                     | BinaryOperator::Minus
                     | BinaryOperator::Multiply
                     | BinaryOperator::Divide
                     | BinaryOperator::Modulo
-                    | BinaryOperator::MyIntegerDivide,
+                    | BinaryOperator::MyIntegerDivide),
                 right,
             } => {
                 // MariaDB widens arithmetic: integer operands yield BIGINT,
                 // a DECIMAL operand yields DECIMAL, and a floating operand
                 // yields DOUBLE. Preserve the widest decimal scale too; for
                 // example, `1000 + AVG(int_column) OVER (...)` must retain
-                // AVG's four fractional digits.
+                // AVG's four fractional digits. Division also applies
+                // MariaDB's four-digit div_precision_increment to the
+                // left operand's decimal scale.
                 let left_metadata =
                     self.expression_metadata(select, left, String::new(), first_row);
                 let right_metadata =
@@ -2535,7 +2537,11 @@ impl RawEngine {
                     }
                 };
                 if metadata.column_type == MysqlColumnType::Decimal {
-                    metadata.decimals = left_metadata.decimals.max(right_metadata.decimals);
+                    metadata.decimals = if matches!(op, BinaryOperator::Divide) {
+                        left_metadata.decimals.saturating_add(4)
+                    } else {
+                        left_metadata.decimals.max(right_metadata.decimals)
+                    };
                 }
             }
             Expr::AnyOp { .. } | Expr::AllOp { .. } => {
