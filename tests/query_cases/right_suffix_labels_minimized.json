@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "id": "right_suffix_labels_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "functions/string-functions/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/functions/string-functions/mysql.sql",
+      "sha256": "579d216a9bec0a4d380ee6f63483e595bb412f873ed757454e3719095f9c9421",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "functions/string-functions/mysql.sql: substring/search/replace section (RIGHT example)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL string-function reference projects the final three characters of a literal with RIGHT.",
+      "mysql_mariadb_translation": "Reduced to one scalar suffix extraction plus NULL propagation with independently authored literals, preserving the RIGHT compatibility contract without copying the source example."
+    },
+    "independently_authored": true,
+    "minimized_from": "right_suffix_labels"
+  },
+  "features": ["right", "string-suffix", "null-propagation", "minimized-regression"],
+  "fixture_notes": "A fixed label produces its final three characters, while a NULL argument remains NULL.",
+  "determinism_notes": "Both scalar arguments are fixed and no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT RIGHT('manifest-204', 3) AS suffix_text, RIGHT(NULL, 2) AS null_suffix",
+      "ordered": true
+    }
+  ]
+}
