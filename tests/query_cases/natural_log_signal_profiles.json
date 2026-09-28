@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "natural_log_signal_profiles",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "robertogallea/corso-backend-musa",
+      "commit": "3b8df1dd784c39fe58cca6164d8bb461fd72c011",
+      "path": "2024-04-19/07.mysql_functions.sql",
+      "url": "https://github.com/robertogallea/corso-backend-musa/blob/3b8df1dd784c39fe58cca6164d8bb461fd72c011/2024-04-19/07.mysql_functions.sql",
+      "sha256": "73971ca3fae855e0c8f1be7a521f3f74b9d7e2ed9c9098b121ff673a4805caa2",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "2024-04-19/07.mysql_functions.sql: mathematical-functions section, LN(EXP(2)) example",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL mathematical-function lesson evaluates LN over an exponential expression to demonstrate the natural logarithm and its base-e relationship.",
+      "mysql_mariadb_translation": "Reauthored as an independent signal-profile report. Fixed positive, zero, negative, and NULL readings exercise LN's domain and NULL behavior, while LN(EXP(reading)) checks nested base-e round trips; the source schema, values, and teaching context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "natural-logarithm",
+    "nested-exp-log",
+    "domain-boundary",
+    "null-propagation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Signals 101 and 102 are positive and produce natural logarithms; signal 103 is zero and signal 104 is negative, both outside LN's domain and therefore NULL; signal 105 is NULL. LN(EXP(reading)) round-trips each finite reading through base e.",
+  "determinism_notes": "Signal IDs and decimal readings are fixed; output ordering is by the unique signal ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE signal_profiles (signal_id INT PRIMARY KEY, reading DECIMAL(10,4) NULL)",
+    "INSERT INTO signal_profiles VALUES (101, 1.0000), (102, 2.0000), (103, 0.0000), (104, -4.0000), (105, NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT signal_id, LN(reading) AS natural_log, LN(EXP(reading)) AS exp_log_round_trip FROM signal_profiles ORDER BY signal_id",
+      "ordered": true
+    }
+  ]
+}

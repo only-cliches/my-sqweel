@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "natural_log_signal_profiles_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "robertogallea/corso-backend-musa",
+      "commit": "3b8df1dd784c39fe58cca6164d8bb461fd72c011",
+      "path": "2024-04-19/07.mysql_functions.sql",
+      "url": "https://github.com/robertogallea/corso-backend-musa/blob/3b8df1dd784c39fe58cca6164d8bb461fd72c011/2024-04-19/07.mysql_functions.sql",
+      "sha256": "73971ca3fae855e0c8f1be7a521f3f74b9d7e2ed9c9098b121ff673a4805caa2",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "2024-04-19/07.mysql_functions.sql: LN(EXP(2)) example",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL scalar expression applies LN to a positive numeric value and to an EXP result.",
+      "mysql_mariadb_translation": "Reduced to one independent scalar projection containing LN(2) and LN(EXP(2)). It isolates the natural-log evaluator and nested exponential round trip without the source schema or surrounding examples."
+    },
+    "independently_authored": true,
+    "minimized_from": "natural_log_signal_profiles"
+  },
+  "features": [
+    "natural-logarithm",
+    "nested-exp-log",
+    "deterministic-order"
+  ],
+  "fixture_notes": "LN(2) is the positive natural logarithm and LN(EXP(2)) must return approximately 2.",
+  "determinism_notes": "The scalar literals are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT LN(2) AS natural_log, LN(EXP(2)) AS exp_log_round_trip",
+      "ordered": true
+    }
+  ]
+}
