@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "dense_rank_group_limit_report",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "SpiderOak/nimbus.io",
+      "commit": "3ce4feef219d1d50e6257a3948a678cba28b42c0",
+      "path": "sql/gc.sql",
+      "url": "https://github.com/SpiderOak/nimbus.io/blob/3ce4feef219d1d50e6257a3948a678cba28b42c0/sql/gc.sql",
+      "sha256": "84904c22c34fc519326323f9e461f742b925ec90a404909645526b6245793208",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "sql/gc.sql:296-333",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A ranked CTE assigns DENSE_RANK by ordered archive key, then an outer query keeps only the first fixed number of distinct key groups while preserving every row in those groups.",
+      "mysql_mariadb_translation": "Reauthored as a partitioned release report. A MariaDB-compatible CTE assigns DENSE_RANK independently within each collection by release key, and the outer query retains the first two release-key groups per collection, including all tied files in each retained group. PostgreSQL parameters, functions, schemas, and archive rows are replaced with fixed tables and literals."
+    },
+    "independently_authored": true
+  },
+  "features": ["dense-rank-window", "partitioned-top-groups", "cte-filter", "tie-preservation", "deterministic-ordering"],
+  "fixture_notes": "Collection 11 retains both files at release key 10 and the file at key 20, excluding key 30. Collection 12 retains key 5 and both tied files at key 9, excluding key 11. Filtering by DENSE_RANK preserves every row in a retained tied group unlike ROW_NUMBER filtering.",
+  "determinism_notes": "Fixed collection IDs, release keys, file IDs, state predicates, partitioned ranking order, rank threshold, and unique final ordering are used. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE release_files (file_id INT PRIMARY KEY, collection_id INT NOT NULL, release_key INT NOT NULL, file_label VARCHAR(32) NOT NULL, file_state VARCHAR(12) NOT NULL)",
+    "INSERT INTO release_files VALUES (1101, 11, 10, 'north-a', 'ready'), (1102, 11, 10, 'north-b', 'ready'), (1103, 11, 20, 'north-c', 'ready'), (1104, 11, 30, 'north-d', 'ready'), (1201, 12, 5, 'south-a', 'ready'), (1202, 12, 9, 'south-b', 'ready'), (1203, 12, 9, 'south-c', 'ready'), (1204, 12, 11, 'south-d', 'held'), (1301, 13, 7, 'west-a', 'held')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH ranked_releases AS (SELECT collection_id, release_key, file_id, file_label, DENSE_RANK() OVER (PARTITION BY collection_id ORDER BY release_key) AS release_rank FROM release_files WHERE file_state = 'ready') SELECT collection_id, release_key, file_id, file_label, release_rank FROM ranked_releases WHERE release_rank <= 2 ORDER BY collection_id, release_key, file_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "WITH ranked_releases AS (SELECT collection_id, release_key, file_id, file_label, DENSE_RANK() OVER (PARTITION BY collection_id ORDER BY release_key) AS release_rank FROM release_files WHERE file_state = 'ready') SELECT collection_id, release_key, file_id, file_label, release_rank FROM ranked_releases WHERE release_rank <= 2 ORDER BY collection_id, release_key, file_id",
+      "ordered": true
+    }
+  ]
+}
