@@ -4331,6 +4331,17 @@ impl RawEngine {
                     self.last_insert_id.store(value, AtomicOrdering::Relaxed);
                     return Ok(Value::Number(Number::from(value)));
                 }
+                if matches!(function_name.as_str(), "VALUE" | "VALUES")
+                    && let Some(argument) = function_argument(function, 0)
+                {
+                    let column = projection_expr_column_name(argument);
+                    let hidden_column =
+                        historical_column_marker(&format!("__mysql_value.{column}"));
+                    if let Some(value) = data.get(&hidden_column) {
+                        return Ok(value.clone());
+                    }
+                    return self.eval_expr_ctx(argument, data, last_insert_id);
+                }
                 if function
                     .name
                     .0

@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "upsert_value_returning_expression",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "mariadb-corporation/mariadb-qa",
+      "commit": "57c1e074acb77f3cf077a48138f6151c089b44ea",
+      "path": "BUGS/MDEV-36355.sql",
+      "url": "https://github.com/mariadb-corporation/mariadb-qa/blob/57c1e074acb77f3cf077a48138f6151c089b44ea/BUGS/MDEV-36355.sql",
+      "sha256": "5237340eb527f0243f8f7e548dcd2634e8bfe888b7892f5fdfb25bfc7422269a",
+      "source_dialect": "mariadb"
+    },
+    "inspiration": {
+      "source_location": "BUGS/MDEV-36355.sql:42 (SET-form duplicate-key update with VALUE() in RETURNING)",
+      "source_dialect": "mariadb",
+      "observed_pattern": "A MariaDB upsert uses assignment-style INSERT, resets a duplicate row through DEFAULT in ON DUPLICATE KEY UPDATE, and evaluates VALUE(column) inside RETURNING.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored preference refresh. A conflicting preference is reset to its column default, while RETURNING projects both the resulting value and an expression using VALUE(preference_value); the source table, names, values, and fuzz expressions are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "insert-set",
+    "on-duplicate-key-update",
+    "default-assignment",
+    "value-function",
+    "returning-expression",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Preference 11 exists with a non-default value and is reset to the column default through the duplicate-key path. RETURNING exposes the resulting value and VALUE(preference_value) + 1; unrelated preference 12 remains unchanged in the final read.",
+  "determinism_notes": "Preference IDs, defaults, and values are fixed; the single returned row and final primary-key ordering are deterministic with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE user_preferences (preference_id INT PRIMARY KEY, preference_value INT NOT NULL DEFAULT 7, preference_label VARCHAR(32) NOT NULL DEFAULT 'unlabeled')",
+    "INSERT INTO user_preferences VALUES (11, 23, 'daily-summary'), (12, 4, 'weekly-digest')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO user_preferences SET preference_id = 11, preference_value = 99, preference_label = 'replacement' ON DUPLICATE KEY UPDATE preference_value = DEFAULT, preference_label = DEFAULT RETURNING preference_id, preference_value, VALUE(preference_value) + 1 AS value_plus_one",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT preference_id, preference_value, preference_label FROM user_preferences ORDER BY preference_id",
+      "ordered": true
+    }
+  ]
+}

@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "id": "upsert_value_returning_expression_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "upsert_value_returning_expression",
+    "source": {
+      "kind": "github",
+      "repository": "mariadb-corporation/mariadb-qa",
+      "commit": "57c1e074acb77f3cf077a48138f6151c089b44ea",
+      "path": "BUGS/MDEV-36355.sql",
+      "url": "https://github.com/mariadb-corporation/mariadb-qa/blob/57c1e074acb77f3cf077a48138f6151c089b44ea/BUGS/MDEV-36355.sql",
+      "sha256": "5237340eb527f0243f8f7e548dcd2634e8bfe888b7892f5fdfb25bfc7422269a",
+      "source_dialect": "mariadb"
+    },
+    "inspiration": {
+      "source_location": "BUGS/MDEV-36355.sql:42 (SET-form duplicate-key update with VALUE() in RETURNING)",
+      "source_dialect": "mariadb",
+      "observed_pattern": "A duplicate-key SET upsert resets one numeric column to DEFAULT and uses VALUE(column) in a RETURNING expression.",
+      "mysql_mariadb_translation": "Reduced from the preference refresh to one keyed row and one defaulted numeric column; the new names, values, and schema isolate the incoming-value projection from unrelated columns and rows."
+    },
+    "independently_authored": true,
+    "minimized_from": "upsert_value_returning_expression"
+  },
+  "features": [
+    "insert-set",
+    "on-duplicate-key-update",
+    "default-assignment",
+    "value-function",
+    "returning-expression",
+    "minimized-regression"
+  ],
+  "fixture_notes": "One existing row is reset from 23 to its default 7; VALUE(amount) + 1 must expose the incoming assignment 99 plus one, yielding 100.",
+  "determinism_notes": "The fixed primary key, default, incoming value, and single returned row have no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE value_probe (probe_id INT PRIMARY KEY, amount INT NOT NULL DEFAULT 7)",
+    "INSERT INTO value_probe VALUES (1, 23)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO value_probe SET probe_id = 1, amount = 99 ON DUPLICATE KEY UPDATE amount = DEFAULT RETURNING probe_id, amount, VALUE(amount) + 1 AS incoming_plus_one",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT probe_id, amount FROM value_probe ORDER BY probe_id",
+      "ordered": true
+    }
+  ]
+}

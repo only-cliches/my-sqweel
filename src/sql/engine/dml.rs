@@ -1,6 +1,10 @@
 use super::*;
 
 type ParentRowChange = (Map<String, Value>, Map<String, Value>);
+struct ReturningRow {
+    data: Map<String, Value>,
+    incoming: Option<Map<String, Value>>,
+}
 
 impl RawEngine {
     pub(super) fn delete_ignore_subquery_compat(&self, tables: &[&str]) -> QueryResult {
@@ -447,7 +451,7 @@ impl RawEngine {
         let mut affected = 0_u64;
         let mut first_insert_id = 0_u64;
         let mut duplicate_update_id = 0_u64;
-        let mut returned_rows = Vec::new();
+        let mut returned_rows: Vec<ReturningRow> = Vec::new();
         let mut warnings = Vec::new();
         let mut pending_rows_written = 0_usize;
         let mut pending_cells_written = 0_usize;
@@ -640,7 +644,10 @@ impl RawEngine {
                     }
                     self.apply_defaults(table, &mut existing.data)?;
                     if returning {
-                        returned_rows.push(existing.data.clone());
+                        returned_rows.push(ReturningRow {
+                            data: existing.data.clone(),
+                            incoming: Some(data.clone()),
+                        });
                     }
                     if existing.data != original_data {
                         // A changed identity must move the stored row with it
@@ -713,6 +720,7 @@ impl RawEngine {
                 }
             }
 
+            let incoming_data = data.clone();
             data.retain(|column, _| !column.contains('.') && !column.starts_with('@'));
             let stored = StoredRow::new(table.to_string(), row_id, data);
             table_rows.insert(key.clone(), stored);
@@ -730,7 +738,10 @@ impl RawEngine {
                 first_insert_id = row_insert_id.unwrap_or(0);
             }
             if returning {
-                returned_rows.push(stored.data.clone());
+                returned_rows.push(ReturningRow {
+                    data: stored.data.clone(),
+                    incoming: Some(incoming_data),
+                });
             }
 
             affected += 1;
@@ -1037,7 +1048,7 @@ impl RawEngine {
         let mut changed_rows = BTreeMap::new();
         let mut deleted_keys = BTreeSet::new();
         let mut parent_updates = Vec::new();
-        let mut returned_rows = Vec::new();
+        let mut returned_rows: Vec<ReturningRow> = Vec::new();
         let mut updated = 0_u64;
         let mut pending_cells_written = 0_usize;
         for (old_key, data) in pending {
@@ -1066,7 +1077,10 @@ impl RawEngine {
             }
             next_rows.insert(new_key.clone(), updated_row.clone());
             changed_rows.insert(new_key, updated_row.clone());
-            returned_rows.push(updated_row.data);
+            returned_rows.push(ReturningRow {
+                data: updated_row.data,
+                incoming: None,
+            });
         }
         self.validate_unique_constraints(&table_name, &next_rows)?;
         self.apply_parent_update_actions(&table_name, &parent_updates)?;
@@ -1128,7 +1142,7 @@ impl RawEngine {
         let mut next_rows = BTreeMap::new();
         let mut changed_rows: BTreeMap<String, StoredRow> = BTreeMap::new();
         let mut deleted_keys: BTreeSet<String> = BTreeSet::new();
-        let mut returned_rows = Vec::new();
+        let mut returned_rows: Vec<ReturningRow> = Vec::new();
         let mut parent_updates = Vec::new();
         let mut pending_rows_written = 0_usize;
         let mut pending_cells_written = 0_usize;
@@ -1320,7 +1334,10 @@ impl RawEngine {
             if current_row.data != updated_row.data {
                 updated += 1;
             }
-            returned_rows.push(updated_row.data.clone());
+            returned_rows.push(ReturningRow {
+                data: updated_row.data.clone(),
+                incoming: None,
+            });
             changed_rows.insert(new_key, updated_row);
         }
 
@@ -1501,7 +1518,7 @@ impl RawEngine {
 
         let mut deleted = 0_u64;
         let mut deleted_keys = Vec::new();
-        let mut returned_rows = Vec::new();
+        let mut returned_rows: Vec<ReturningRow> = Vec::new();
         let current_rows = self
             .rows
             .get(&table_name)
@@ -1573,7 +1590,10 @@ impl RawEngine {
                     && let Some(row) = next_rows.remove(&key)
                 {
                     record_query_row_write(0);
-                    returned_rows.push(row.data);
+                    returned_rows.push(ReturningRow {
+                        data: row.data,
+                        incoming: None,
+                    });
                     deleted_keys.push(key);
                     deleted += 1;
                 }
@@ -1749,7 +1769,7 @@ impl RawEngine {
         }
 
         let mut rows_affected = 0_u64;
-        let mut returned_rows = Vec::new();
+        let mut returned_rows: Vec<ReturningRow> = Vec::new();
         for target in &targets {
             let Some(keys) = keys_by_table.remove(&target.table) else {
                 continue;
@@ -1765,7 +1785,10 @@ impl RawEngine {
                     record_query_row_write(0);
                     rows_affected += 1;
                     if targets.len() == 1 {
-                        returned_rows.push(row.data);
+                        returned_rows.push(ReturningRow {
+                            data: row.data,
+                            incoming: None,
+                        });
                     }
                 }
             }
@@ -1796,7 +1819,7 @@ impl RawEngine {
         &self,
         table: &str,
         returning: Option<&[SelectItem]>,
-        rows: Vec<Map<String, Value>>,
+        rows: Vec<ReturningRow>,
         rows_affected: u64,
         last_insert_id: u64,
     ) -> Result<QueryResult> {
@@ -1817,11 +1840,19 @@ impl RawEngine {
             .map(|schema| super::query::RowMaterializationPlan::from_schema(&schema));
         let rows = rows
             .into_iter()
-            .map(|row| {
-                let row = materialization_plan.as_ref().map_or_else(
-                    || self.current_schema_row(table, &row),
-                    |plan| self.current_schema_row_with_plan(&row, plan),
+            .map(|returning_row| {
+                let mut row = materialization_plan.as_ref().map_or_else(
+                    || self.current_schema_row(table, &returning_row.data),
+                    |plan| self.current_schema_row_with_plan(&returning_row.data, plan),
                 );
+                if let Some(incoming) = returning_row.incoming {
+                    for (column, value) in incoming {
+                        row.insert(
+                            historical_column_marker(&format!("__mysql_value.{column}")),
+                            value,
+                        );
+                    }
+                }
                 self.project_row_ctx(projection, &row, last_insert_id)
             })
             .collect::<Result<Vec<_>>>()?;
