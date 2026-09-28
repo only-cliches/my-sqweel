@@ -5,37 +5,51 @@
     "kind": "inspired-by-public-query",
     "source": {
       "kind": "github",
-      "repository": "Nextpertise/freeradius-amqp",
-      "commit": "58047b4f02b97e41a168eef401b8f15aa18e432d",
-      "path": "data/freeradius/mods-config/sql/main/mysql/process-radacct.sql",
-      "url": "https://github.com/Nextpertise/freeradius-amqp/blob/58047b4f02b97e41a168eef401b8f15aa18e432d/data/freeradius/mods-config/sql/main/mysql/process-radacct.sql",
-      "sha256": "f8a5249721288ac8963c0034391be90feb8feec000ad6b9b084abbee9be464af",
+      "repository": "cobub/razor",
+      "commit": "2c991aff4a9c83f99e77a03e26056715706f15c0",
+      "path": "web/assets/sql/sp_rundaily.sql",
+      "url": "https://github.com/cobub/razor/blob/2c991aff4a9c83f99e77a03e26056715706f15c0/web/assets/sql/sp_rundaily.sql",
+      "sha256": "e46818f75deb438d53b449f340ae7b2d1c2ef870429a7676081c874d922d4388",
       "source_dialect": "mysql-mariadb"
     },
     "inspiration": {
-      "source_location": "data/freeradius/mods-config/sql/main/mysql/process-radacct.sql:102-132",
+      "source_location": "sp_rundaily.sql:92-146",
       "source_dialect": "mysql-mariadb",
-      "observed_pattern": "An INSERT ... SELECT aggregates a derived UNION ALL source and uses ON DUPLICATE KEY UPDATE to add incoming usage totals to an existing rollup row.",
-      "mysql_mariadb_translation": "Reauthored as a tenant-usage rollup. Two independently filtered event streams are UNION ALLed, grouped by tenant, inserted into a rollup table, and added to an existing tenant total through VALUES(...) in the duplicate-key clause; procedures, timestamps, and source schemas are omitted."
-    },
-    "independently_authored": true
+      "observed_pattern": "A MySQL reporting load combines two differently ordered GROUP BY ... WITH ROLLUP branches with UNION, normalizes rolled-up NULL dimensions to labels, and refreshes keyed summary rows through ON DUPLICATE KEY UPDATE.",
+      "mysql_mariadb_translation": "Reauthored as a device-usage summary. Two grouping orders produce detail, version, channel, product, and grand-total rows for one fixed day; COALESCE labels subtotal dimensions, COUNT(DISTINCT) preserves unique devices across repeated events, and a seeded product subtotal is refreshed by the duplicate-key clause. The source procedure, dynamic SQL, schema, identifiers, values, and application domain are not copied.",
+      "independently_authored": true
+    }
   },
-  "features": ["derived-union-all", "grouped-insert-select", "upsert-accumulation", "deterministic-order"],
-  "fixture_notes": "The first tenant already has a rollup row and receives both union branches; the second tenant is inserted from the grouped source. Event IDs and final tenant order are fixed.",
-  "determinism_notes": "All tenant IDs, event rows, branch predicates, grouping, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "features": [
+    "union-rollup",
+    "multi-order-grouping",
+    "coalesce-rollup-labels",
+    "count-distinct",
+    "insert-select-upsert",
+    "composite-key-refresh",
+    "deterministic-final-state"
+  ],
+  "fixture_notes": "The two grouping orders intentionally emit both version and channel subtotals. Device 1002 appears in two product-version groups but contributes once to the product total; the seeded P-A product subtotal must change from 99 to 3. Events from another day are excluded.",
+  "determinism_notes": "The report day, dimensions, device IDs, grouping orders, and final key ordering are fixed. UNION removes identical rows from overlapping rollup branches; there are no clocks, randomness, sleeps, or concurrent schedules.",
   "setup": [
-    "CREATE TABLE usage_events (event_id INT PRIMARY KEY, tenant_id INT NOT NULL, event_group CHAR(1) NOT NULL, units INT NOT NULL)",
-    "CREATE TABLE tenant_rollups (tenant_id INT PRIMARY KEY, total_units INT NOT NULL)",
-    "INSERT INTO usage_events VALUES (101, 7, 'A', 4), (102, 7, 'B', 3), (103, 7, 'A', 2), (201, 8, 'B', 6), (202, 8, 'C', 5)",
-    "INSERT INTO tenant_rollups VALUES (7, 10)"
+    "CREATE TABLE usage_events (event_id INT PRIMARY KEY, usage_day DATE NOT NULL, product_code VARCHAR(16) NOT NULL, version_label VARCHAR(16) NOT NULL, channel_label VARCHAR(16) NOT NULL, device_id INT NOT NULL)",
+    "CREATE TABLE usage_rollups (report_day DATE NOT NULL, product_code VARCHAR(16) NOT NULL, version_label VARCHAR(16) NOT NULL, channel_label VARCHAR(16) NOT NULL, device_count INT NOT NULL, PRIMARY KEY (report_day, product_code, version_label, channel_label))",
+    "INSERT INTO usage_events VALUES (1, '2026-03-10', 'P-A', 'v1', 'web', 1001), (2, '2026-03-10', 'P-A', 'v1', 'web', 1002), (3, '2026-03-10', 'P-A', 'v2', 'mobile', 1002), (4, '2026-03-10', 'P-A', 'v2', 'mobile', 1003), (5, '2026-03-10', 'P-B', 'v1', 'web', 2001), (6, '2026-03-09', 'P-A', 'v1', 'web', 9999)",
+    "INSERT INTO usage_rollups VALUES ('2026-03-10', 'P-A', 'ALL', 'ALL', 99)"
   ],
   "steps": [
     {
-      "sql": "INSERT INTO tenant_rollups (tenant_id, total_units) SELECT incoming.tenant_id, SUM(incoming.units) FROM (SELECT tenant_id, units FROM usage_events WHERE event_group = 'A' UNION ALL SELECT tenant_id, units FROM usage_events WHERE event_group = 'B') AS incoming GROUP BY incoming.tenant_id ON DUPLICATE KEY UPDATE total_units = tenant_rollups.total_units + VALUES(total_units)",
-      "ordered": true
+      "sql": "INSERT INTO usage_rollups (report_day, product_code, version_label, channel_label, device_count) SELECT '2026-03-10', COALESCE(product_code, 'ALL'), COALESCE(version_label, 'ALL'), COALESCE(channel_label, 'ALL'), COUNT(DISTINCT device_id) FROM usage_events WHERE usage_day = '2026-03-10' GROUP BY product_code, version_label, channel_label WITH ROLLUP UNION SELECT '2026-03-10', COALESCE(product_code, 'ALL'), COALESCE(channel_label, 'ALL'), COALESCE(version_label, 'ALL'), COUNT(DISTINCT device_id) FROM usage_events WHERE usage_day = '2026-03-10' GROUP BY product_code, channel_label, version_label WITH ROLLUP ON DUPLICATE KEY UPDATE device_count = VALUES(device_count)",
+      "ordered": false
     },
     {
-      "sql": "SELECT tenant_id, total_units FROM tenant_rollups ORDER BY tenant_id",
+      "sql": "SELECT report_day, product_code, version_label, channel_label, device_count FROM usage_rollups ORDER BY report_day, product_code, version_label, channel_label",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT report_day, product_code, version_label, channel_label, device_count FROM usage_rollups ORDER BY report_day, product_code, version_label, channel_label",
       "ordered": true
     }
   ]

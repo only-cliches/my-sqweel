@@ -3,40 +3,50 @@
   "id": "union_rollup_upsert_minimized",
   "provenance": {
     "kind": "minimized-regression",
+    "parent_case": "union_rollup_upsert",
     "source": {
       "kind": "github",
-      "repository": "Nextpertise/freeradius-amqp",
-      "commit": "58047b4f02b97e41a168eef401b8f15aa18e432d",
-      "path": "data/freeradius/mods-config/sql/main/mysql/process-radacct.sql",
-      "url": "https://github.com/Nextpertise/freeradius-amqp/blob/58047b4f02b97e41a168eef401b8f15aa18e432d/data/freeradius/mods-config/sql/main/mysql/process-radacct.sql",
-      "sha256": "f8a5249721288ac8963c0034391be90feb8feec000ad6b9b084abbee9be464af",
+      "repository": "cobub/razor",
+      "commit": "2c991aff4a9c83f99e77a03e26056715706f15c0",
+      "path": "web/assets/sql/sp_rundaily.sql",
+      "url": "https://github.com/cobub/razor/blob/2c991aff4a9c83f99e77a03e26056715706f15c0/web/assets/sql/sp_rundaily.sql",
+      "sha256": "e46818f75deb438d53b449f340ae7b2d1c2ef870429a7676081c874d922d4388",
       "source_dialect": "mysql-mariadb"
     },
     "inspiration": {
-      "source_location": "data/freeradius/mods-config/sql/main/mysql/process-radacct.sql:102-132",
+      "source_location": "Minimized from sp_rundaily.sql:92-146",
       "source_dialect": "mysql-mariadb",
-      "observed_pattern": "A grouped INSERT ... SELECT consumes a UNION ALL derived table and accumulates the grouped value on a duplicate key.",
-      "mysql_mariadb_translation": "Reduced to one existing tenant rollup, two independently filtered source rows, one derived UNION ALL, and one grouped duplicate-key addition while removing the second tenant and unrelated usage columns."
-    },
-    "independently_authored": true,
-    "minimized_from": "union_rollup_upsert"
+      "observed_pattern": "A UNION of two differently ordered GROUP BY ... WITH ROLLUP queries feeds an INSERT duplicate-key refresh, with NULL rollup dimensions normalized before insertion.",
+      "mysql_mariadb_translation": "Reduced to one report day, one product with two dimension combinations, one seeded product subtotal, and the two rollup orders. The source procedure and all unrelated dimensions are removed while retaining the parser and duplicate-key mismatch.",
+      "independently_authored": true
+    }
   },
-  "features": ["derived-union-all", "grouped-insert-select", "upsert-accumulation", "minimized-regression"],
-  "fixture_notes": "One existing rollup receives the sum of two union branches, isolating grouped derived-source upsert accumulation.",
-  "determinism_notes": "Two fixed source rows, one fixed target row, deterministic grouping, and one ordered final read; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "features": [
+    "union-rollup",
+    "duplicate-key-upsert",
+    "minimized-regression"
+  ],
+  "fixture_notes": "Two source rows generate detail and subtotal combinations. The seeded product subtotal must refresh from 2 rather than remain 99; the original mismatch is isolated to the UNION/ROLLUP/upsert statement.",
+  "determinism_notes": "All rows and grouping keys are fixed, with one ordered final read and no clocks, randomness, sleeps, or concurrent schedules.",
   "setup": [
-    "CREATE TABLE mini_usage (event_id INT PRIMARY KEY, tenant_id INT NOT NULL, event_group CHAR(1) NOT NULL, units INT NOT NULL)",
-    "CREATE TABLE mini_rollups (tenant_id INT PRIMARY KEY, total_units INT NOT NULL)",
-    "INSERT INTO mini_usage VALUES (301, 9, 'A', 4), (302, 9, 'B', 5)",
-    "INSERT INTO mini_rollups VALUES (9, 2)"
+    "CREATE TABLE rollup_events (event_id INT PRIMARY KEY, report_day DATE NOT NULL, product_code VARCHAR(16) NOT NULL, version_label VARCHAR(16) NOT NULL, channel_label VARCHAR(16) NOT NULL, device_id INT NOT NULL)",
+    "CREATE TABLE rollup_summary (report_day DATE NOT NULL, product_code VARCHAR(16) NOT NULL, version_label VARCHAR(16) NOT NULL, channel_label VARCHAR(16) NOT NULL, device_count INT NOT NULL, PRIMARY KEY (report_day, product_code, version_label, channel_label))",
+    "INSERT INTO rollup_events VALUES (1, '2026-03-10', 'P-A', 'v1', 'web', 1001), (2, '2026-03-10', 'P-A', 'v2', 'mobile', 1002)",
+    "INSERT INTO rollup_summary VALUES ('2026-03-10', 'P-A', 'ALL', 'ALL', 99)"
   ],
   "steps": [
     {
-      "sql": "INSERT INTO mini_rollups (tenant_id, total_units) SELECT incoming.tenant_id, SUM(incoming.units) FROM (SELECT tenant_id, units FROM mini_usage WHERE event_group = 'A' UNION ALL SELECT tenant_id, units FROM mini_usage WHERE event_group = 'B') AS incoming GROUP BY incoming.tenant_id ON DUPLICATE KEY UPDATE total_units = mini_rollups.total_units + VALUES(total_units)",
-      "ordered": true
+      "sql": "INSERT INTO rollup_summary (report_day, product_code, version_label, channel_label, device_count) SELECT '2026-03-10', COALESCE(product_code, 'ALL'), COALESCE(version_label, 'ALL'), COALESCE(channel_label, 'ALL'), COUNT(DISTINCT device_id) FROM rollup_events WHERE report_day = '2026-03-10' GROUP BY product_code, version_label, channel_label WITH ROLLUP UNION SELECT '2026-03-10', COALESCE(product_code, 'ALL'), COALESCE(channel_label, 'ALL'), COALESCE(version_label, 'ALL'), COUNT(DISTINCT device_id) FROM rollup_events WHERE report_day = '2026-03-10' GROUP BY product_code, channel_label, version_label WITH ROLLUP ON DUPLICATE KEY UPDATE device_count = VALUES(device_count)",
+      "ordered": false
     },
     {
-      "sql": "SELECT tenant_id, total_units FROM mini_rollups ORDER BY tenant_id",
+      "sql": "SELECT report_day, product_code, version_label, channel_label, device_count FROM rollup_summary ORDER BY report_day, product_code, version_label, channel_label",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT report_day, product_code, version_label, channel_label, device_count FROM rollup_summary ORDER BY report_day, product_code, version_label, channel_label",
       "ordered": true
     }
   ]

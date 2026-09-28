@@ -4901,24 +4901,47 @@ impl EmptyStringFallback for String {
 
 fn rewrite_group_by_with_rollup(sql: &str) -> String {
     let upper = sql.to_ascii_uppercase();
-    let Some(group_by) = find_top_level_keyword(&upper, "GROUP BY") else {
-        return sql.to_string();
-    };
-    let group_start = group_by + "GROUP BY".len();
-    let Some(rollup_offset) = find_top_level_keyword(&upper[group_start..], "WITH ROLLUP") else {
-        return sql.to_string();
-    };
-    let rollup = group_start + rollup_offset;
-    let expressions = sql[group_start..rollup].trim();
-    if expressions.is_empty() {
-        return sql.to_string();
+    let mut cursor = 0;
+    let mut pending_group = None;
+    let mut replacements = Vec::new();
+    while cursor < upper.len() {
+        let group =
+            find_top_level_keyword(&upper[cursor..], "GROUP BY").map(|offset| cursor + offset);
+        let rollup =
+            find_top_level_keyword(&upper[cursor..], "WITH ROLLUP").map(|offset| cursor + offset);
+        match (group, rollup) {
+            (Some(group), Some(rollup)) if group < rollup => {
+                pending_group = Some(group);
+                cursor = group + "GROUP BY".len();
+            }
+            (Some(_), Some(rollup)) | (None, Some(rollup)) => {
+                if let Some(group) = pending_group.take() {
+                    replacements.push((group, rollup));
+                }
+                cursor = rollup + "WITH ROLLUP".len();
+            }
+            (Some(group), None) => {
+                pending_group = Some(group);
+                cursor = group + "GROUP BY".len();
+            }
+            (None, None) => break,
+        }
     }
-    format!(
-        "{}GROUP BY ROLLUP({}){}",
-        &sql[..group_by],
-        expressions,
-        &sql[rollup + "WITH ROLLUP".len()..]
-    )
+    let mut rewritten = sql.to_string();
+    for (group, rollup) in replacements.into_iter().rev() {
+        let group_start = group + "GROUP BY".len();
+        let expressions = rewritten[group_start..rollup].trim();
+        if expressions.is_empty() {
+            continue;
+        }
+        rewritten = format!(
+            "{}GROUP BY ROLLUP({}){}",
+            &rewritten[..group],
+            expressions,
+            &rewritten[rollup + "WITH ROLLUP".len()..]
+        );
+    }
+    rewritten
 }
 
 fn rewrite_mod_operator(sql: &str) -> String {
