@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "update_join_order_limit_batch_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "dml/update/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/dml/update/mysql.sql",
+      "sha256": "e6a13493e1863b0278c167f5e5869d46a383a2e47a2cb9fc0a840a813dbc43e0",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from dml/update/mysql.sql multi-table UPDATE and bounded UPDATE syntax",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "The smallest joined UPDATE regression orders eligible target rows and limits the mutation to one joined match.",
+      "mysql_mariadb_translation": "Reduced to two ready tasks and two workers, isolating joined target filtering plus ORDER BY/LIMIT selection while removing unrelated queue states and assignments."
+    },
+    "independently_authored": true,
+    "minimized_from": "update_join_order_limit_batch"
+  },
+  "features": ["update-join", "ordered-update", "update-limit", "minimized-regression"],
+  "fixture_notes": "The higher-priority task on an available worker is claimed; the lower-priority task remains ready, proving the join filter and LIMIT 1 ordering together.",
+  "determinism_notes": "Task IDs, priorities, worker availability, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE mini_queue_tasks (task_id INT PRIMARY KEY, worker_id INT NOT NULL, task_state VARCHAR(16) NOT NULL, priority INT NOT NULL)",
+    "CREATE TABLE mini_queue_workers (worker_id INT PRIMARY KEY, worker_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO mini_queue_workers VALUES (21, 'available'), (22, 'available')",
+    "INSERT INTO mini_queue_tasks VALUES (701, 21, 'ready', 50), (702, 22, 'ready', 40)"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE mini_queue_tasks AS q INNER JOIN mini_queue_workers AS w ON w.worker_id = q.worker_id SET q.task_state = 'claimed' WHERE q.task_state = 'ready' AND w.worker_state = 'available' ORDER BY q.priority DESC, q.task_id ASC LIMIT 1",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT task_id, worker_id, task_state, priority FROM mini_queue_tasks ORDER BY task_id",
+      "ordered": true
+    }
+  ]
+}

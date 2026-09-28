@@ -1136,28 +1136,11 @@ impl RawEngine {
         let selected_keys = if order_by.is_empty() && limit.is_none() {
             None
         } else {
-            if !table.joins.is_empty() {
-                return Err(anyhow!(
-                    "ORDER BY and LIMIT are supported only for single-table UPDATE"
-                ));
-            }
             let mut candidates = Vec::new();
-            let materialization_plan = self
-                .schemas
-                .get(&table_name)
-                .map(|schema| super::query::RowMaterializationPlan::from_schema(&schema));
-            let (_, table_alias) = table_factor_name_and_alias(&table.relation)?;
             for (key, row) in &current_rows {
-                let base_view = materialization_plan.as_ref().map_or_else(
-                    || self.current_schema_row(&table_name, &row.data),
-                    |plan| self.current_schema_row_with_plan(&row.data, plan),
-                );
-                let mut view = base_view.clone();
-                add_qualified_columns(&mut view, &table_name, &base_view);
-                if let Some(alias) = &table_alias {
-                    add_qualified_columns(&mut view, alias, &base_view);
-                }
-                if self.matches_selection_ctx(selection.as_ref(), &view, 0)? {
+                if let Some(view) =
+                    self.update_match_context(&table, &table_name, row, selection.as_ref())?
+                {
                     candidates.push((key.clone(), row.clone(), view));
                 }
             }

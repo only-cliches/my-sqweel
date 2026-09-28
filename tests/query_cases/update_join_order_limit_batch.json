@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "update_join_order_limit_batch",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "dml/update/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/dml/update/mysql.sql",
+      "sha256": "e6a13493e1863b0278c167f5e5869d46a383a2e47a2cb9fc0a840a813dbc43e0",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "dml/update/mysql.sql: basic UPDATE ... ORDER BY ... LIMIT and multi-table UPDATE sections",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "MySQL update syntax supports both joined target filtering and deterministic ORDER BY/LIMIT batching for bounded mutations.",
+      "mysql_mariadb_translation": "Reauthored as a worker-queue claim batch. An UPDATE JOIN admits only rows owned by available workers, orders eligible ready tasks by urgency and ID, and claims the first two; unavailable workers, lower-ranked ready work, and already-claimed tasks remain unchanged. The source schema, names, and values are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["update-join", "ordered-update", "update-limit", "joined-filter", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "Tasks 601 and 602 are the two highest-priority ready tasks assigned to available workers and must be claimed. Task 603 is ready but assigned to an unavailable worker, task 604 is lower priority, and task 605 is already claimed.",
+  "determinism_notes": "Task priorities, IDs, worker availability, states, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE queue_tasks (task_id INT PRIMARY KEY, worker_id INT NOT NULL, task_state VARCHAR(16) NOT NULL, priority INT NOT NULL, attempts INT NOT NULL)",
+    "CREATE TABLE queue_workers (worker_id INT PRIMARY KEY, worker_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO queue_workers VALUES (11, 'available'), (12, 'available'), (13, 'busy')",
+    "INSERT INTO queue_tasks VALUES (601, 11, 'ready', 90, 0), (602, 12, 'ready', 80, 1), (603, 13, 'ready', 100, 2), (604, 11, 'ready', 70, 0), (605, 12, 'claimed', 110, 3)"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE queue_tasks AS q INNER JOIN queue_workers AS w ON w.worker_id = q.worker_id SET q.task_state = 'claimed', q.attempts = q.attempts + 1 WHERE q.task_state = 'ready' AND w.worker_state = 'available' ORDER BY q.priority DESC, q.task_id ASC LIMIT 2",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT task_id, worker_id, task_state, priority, attempts FROM queue_tasks ORDER BY task_id",
+      "ordered": true
+    }
+  ]
+}
