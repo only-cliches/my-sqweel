@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "small_result_dispatch",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "actiontech/dble-test-suite",
+      "commit": "19c95415de567f6b32072be7c501ec1db83c4e1f",
+      "path": "behave_dble/sqls/sqls_util/select/select.sql",
+      "url": "https://github.com/actiontech/dble-test-suite/blob/19c95415de567f6b32072be7c501ec1db83c4e1f/behave_dble/sqls/sqls_util/select/select.sql",
+      "sha256": "531a6c7c3e237dc9fbcc6adfce8e6e0ce732be7cb2c453dc32527adb57abee47",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "behave_dble/sqls/sqls_util/select/select.sql:122-126",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL SELECT uses the SQL_SMALL_RESULT modifier with DISTINCT duplicate elimination and grouped aggregate output.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored dispatch-zone report. SQL_SMALL_RESULT accompanies a distinct active-zone projection and a grouped active-service count with HAVING; the source tables, values, labels, and test-suite context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["sql-small-result", "distinct", "grouped-aggregate", "having", "deterministic-order"],
+  "fixture_notes": "Active services cover zones east twice, north once, and west twice; paused services are excluded. The distinct projection returns three zones, while the grouped query keeps only east and west at the two-service threshold.",
+  "determinism_notes": "Service IDs are fixed, both projections use stable zone ordering, and no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE dispatch_services (service_id INT PRIMARY KEY, zone_code VARCHAR(16) NOT NULL, service_name VARCHAR(32) NOT NULL, service_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO dispatch_services VALUES (2101, 'east', 'parcel-sort', 'active'), (2102, 'east', 'returns-check', 'active'), (2103, 'north', 'cold-chain', 'active'), (2104, 'west', 'dock-scan', 'active'), (2105, 'west', 'route-audit', 'active'), (2106, 'north', 'legacy-sync', 'paused')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT DISTINCT SQL_SMALL_RESULT zone_code FROM dispatch_services WHERE service_state = 'active' ORDER BY zone_code",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT SQL_SMALL_RESULT zone_code, COUNT(*) AS active_services FROM dispatch_services WHERE service_state = 'active' GROUP BY zone_code HAVING COUNT(*) >= 2 ORDER BY zone_code",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT service_id, zone_code, service_name, service_state FROM dispatch_services ORDER BY service_id",
+      "ordered": true
+    }
+  ]
+}
