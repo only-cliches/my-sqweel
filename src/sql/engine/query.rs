@@ -5717,7 +5717,9 @@ impl RawEngine {
                             "Default".to_string(),
                             hint.default
                                 .clone()
-                                .map(Value::String)
+                                .map(|default| {
+                                    Value::String(unquote_sql_string(&default).unwrap_or(default))
+                                })
                                 .unwrap_or(Value::Null),
                         );
                         row.insert(
@@ -5737,7 +5739,44 @@ impl RawEngine {
             rows_affected: 0,
             last_insert_id: 0,
             columns,
-            column_metadata: vec![],
+            column_metadata: vec![
+                ColumnMetadata {
+                    name: "Field".to_string(),
+                    column_type: MysqlColumnType::VarChar,
+                    nullable: true,
+                    ..ColumnMetadata::default()
+                },
+                ColumnMetadata {
+                    name: "Type".to_string(),
+                    column_type: MysqlColumnType::Blob,
+                    nullable: true,
+                    ..ColumnMetadata::default()
+                },
+                ColumnMetadata {
+                    name: "Null".to_string(),
+                    column_type: MysqlColumnType::VarChar,
+                    nullable: true,
+                    ..ColumnMetadata::default()
+                },
+                ColumnMetadata {
+                    name: "Key".to_string(),
+                    column_type: MysqlColumnType::VarChar,
+                    nullable: true,
+                    ..ColumnMetadata::default()
+                },
+                ColumnMetadata {
+                    name: "Default".to_string(),
+                    column_type: MysqlColumnType::Blob,
+                    nullable: true,
+                    ..ColumnMetadata::default()
+                },
+                ColumnMetadata {
+                    name: "Extra".to_string(),
+                    column_type: MysqlColumnType::VarChar,
+                    nullable: true,
+                    ..ColumnMetadata::default()
+                },
+            ],
             rows,
             warnings: vec![],
         }

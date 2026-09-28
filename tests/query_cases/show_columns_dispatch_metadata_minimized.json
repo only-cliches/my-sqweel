@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "id": "show_columns_dispatch_metadata_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "show_columns_dispatch_metadata",
+    "source": {
+      "kind": "github",
+      "repository": "ahmedsami76/sql",
+      "commit": "9ee48d91c4665f25bcf851b631f3337a47b2e1ff",
+      "path": "04-basic-sql.sql",
+      "url": "https://github.com/ahmedsami76/sql/blob/9ee48d91c4665f25bcf851b631f3337a47b2e1ff/04-basic-sql.sql",
+      "sha256": "ec388b2852be6b52aec29bf316fc6822ae23a0eb568f80ba22bfc06806e9a105",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from show_columns_dispatch_metadata",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "SHOW COLUMNS exposes typed schema metadata, including BLOB result columns for the Type and Default fields and unquoted string defaults.",
+      "mysql_mariadb_translation": "Reduced to one primary-key integer and one defaulted required VARCHAR so SHOW COLUMNS metadata and default rendering are isolated from the original dispatch schema."
+    },
+    "independently_authored": true
+  },
+  "features": ["show-columns", "schema-metadata", "metadata-regression", "minimized-regression"],
+  "fixture_notes": "The schema has one primary key and one required defaulted VARCHAR. MariaDB reports Type and Default as BLOB metadata and returns the default without SQL quotes.",
+  "determinism_notes": "DDL and column order are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE metadata_probe (probe_id INT PRIMARY KEY, probe_state VARCHAR(16) NOT NULL DEFAULT 'queued')"
+  ],
+  "steps": [
+    {
+      "sql": "SHOW COLUMNS FROM metadata_probe",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}

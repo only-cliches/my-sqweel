@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "show_columns_dispatch_metadata",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "ahmedsami76/sql",
+      "commit": "9ee48d91c4665f25bcf851b631f3337a47b2e1ff",
+      "path": "04-basic-sql.sql",
+      "url": "https://github.com/ahmedsami76/sql/blob/9ee48d91c4665f25bcf851b631f3337a47b2e1ff/04-basic-sql.sql",
+      "sha256": "ec388b2852be6b52aec29bf316fc6822ae23a0eb568f80ba22bfc06806e9a105",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "04-basic-sql.sql:32",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL schema exercise inspects a table's column metadata with SHOW COLUMNS FROM after defining the table.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored dispatch-slot metadata probe. SHOW COLUMNS FROM inspects a table with a primary key, required label, nullable capacity, and default state, followed by an ordered data read; the source table, column names, values, and teaching context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["show-columns", "schema-metadata", "primary-key", "nullable-default", "deterministic-order"],
+  "fixture_notes": "The dispatch_slots schema intentionally combines a primary key, required VARCHAR label, nullable INT capacity, and a defaulted state so SHOW COLUMNS exposes distinct Null, Key, and Default metadata while the final row remains unchanged.",
+  "determinism_notes": "DDL, column order, one fixed row, and final ordering are deterministic; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE dispatch_slots (slot_id INT PRIMARY KEY, slot_label VARCHAR(24) NOT NULL, capacity INT NULL, slot_state VARCHAR(16) NOT NULL DEFAULT 'queued')",
+    "INSERT INTO dispatch_slots (slot_id, slot_label, capacity) VALUES (4101, 'east-window', 32)"
+  ],
+  "steps": [
+    {
+      "sql": "SHOW COLUMNS FROM dispatch_slots",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT slot_id, slot_label, capacity, slot_state FROM dispatch_slots ORDER BY slot_id",
+      "ordered": true
+    }
+  ]
+}
