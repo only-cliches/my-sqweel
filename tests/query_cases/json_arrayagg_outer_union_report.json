@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "json_arrayagg_outer_union_report",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "crawl/dcss_tourney",
+      "commit": "de533574b12775f0eb8ebf2223350891118cb1c4",
+      "path": "database-views.sql",
+      "url": "https://github.com/crawl/dcss_tourney/blob/de533574b12775f0eb8ebf2223350891118cb1c4/database-views.sql",
+      "sha256": "2e84a7b9ce9bf7528a4addbe745bafc5fe829c55ebd37bb7d549f580b2bac327",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "database-views.sql:207-236",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A full-outer relationship is assembled from two outer-join branches with UNION ALL, then grouped JSON_ARRAYAGG projections preserve values from both sides while COUNT(DISTINCT ...) measures the combined signal set.",
+      "mysql_mariadb_translation": "Reauthored as a league badge-and-award report. A left-join branch plus an unmatched-award branch emulates a full outer relationship, grouped JSON arrays retain NULL placeholders and duplicate badges, and distinct counts summarize each player's observed signals. The schema, identifiers, rows, and game domain are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": ["cte-union-all", "outer-join-emulation", "json-arrayagg", "aggregate-local-ordering", "count-distinct", "null-extension", "deterministic-content"],
+  "fixture_notes": "Player 1 has two awards and one badge, player 2 has only a badge, and an award for player 4 has no matching player row. The union preserves player-side and award-side unmatched rows; JSON_ARRAYAGG exposes NULL placeholders while COUNT(DISTINCT) ignores them.",
+  "determinism_notes": "Player IDs, award IDs, labels, aggregate ordering, and final player ordering are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE league_players (player_id INT PRIMARY KEY, player_name VARCHAR(32) NOT NULL, best_badge VARCHAR(16) NOT NULL)",
+    "CREATE TABLE player_awards (award_id INT PRIMARY KEY, player_id INT NOT NULL, award_code VARCHAR(16) NOT NULL)",
+    "INSERT INTO league_players VALUES (1, 'Aster', 'gold'), (2, 'Beryl', 'silver')",
+    "INSERT INTO player_awards VALUES (101, 1, 'MVP'), (102, 1, 'CLUTCH'), (401, 4, 'ROOKIE')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH badge_award_usage AS (SELECT p.player_id, p.best_badge, a.award_code FROM league_players AS p LEFT JOIN player_awards AS a ON a.player_id = p.player_id UNION ALL SELECT a.player_id, p.best_badge, a.award_code FROM player_awards AS a LEFT JOIN league_players AS p ON p.player_id = a.player_id WHERE p.player_id IS NULL) SELECT player_id, JSON_ARRAYAGG(best_badge ORDER BY best_badge ASC) AS badges, JSON_ARRAYAGG(award_code ORDER BY award_code ASC) AS awards, COUNT(DISTINCT best_badge) + COUNT(DISTINCT award_code) AS signal_count FROM badge_award_usage GROUP BY player_id ORDER BY player_id",
+      "ordered": true
+    }
+  ]
+}
