@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "delete_using_multi_join_cleanup",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "caceresvalenciagiovanni-web/Dockerizando-una-base-de-datos-con-scripts-de-Python-y-DDL",
+      "commit": "fbf5dd7b0715a9ea04534340be43c8ba1ca5b264",
+      "path": "dml.sql",
+      "url": "https://github.com/caceresvalenciagiovanni-web/Dockerizando-una-base-de-datos-con-scripts-de-Python-y-DDL/blob/fbf5dd7b0715a9ea04534340be43c8ba1ca5b264/dml.sql",
+      "sha256": "d4d5202d2b746052f43cb9713d63c4e47de241d54314630f84287bdfe83b5c47",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "dml.sql:247-253",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A DELETE targets rows through a USING list containing two lookup tables, joins the target to both lookups in the predicate, and applies a category plus target-state filter.",
+      "mysql_mariadb_translation": "Reauthored as a queue cleanup. MariaDB DELETE ... USING names the target alias and two comma-joined lookup aliases, removing cancelled jobs owned by a retired unit while preserving active jobs, live units, and jobs without a matching owner. The source schema, identifiers, labels, and hospital application context are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": ["delete-using", "multi-join-comma-list", "joined-filter", "target-state-filter", "deterministic-final-state"],
+  "fixture_notes": "Job 101 is cancelled under retired unit 10 and is deleted. Job 102 shares that unit but is active, job 103 is cancelled under live unit 20, and job 104 has no owner row; all three remain.",
+  "determinism_notes": "Fixed job, owner, unit, state, and unit-code values are used. Each job maps to at most one owner and one unit, and the final read orders by the unique job ID. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE queue_jobs (job_id INT PRIMARY KEY, owner_id INT NOT NULL, job_state VARCHAR(16) NOT NULL, job_label VARCHAR(32) NOT NULL)",
+    "CREATE TABLE queue_owners (owner_id INT PRIMARY KEY, unit_id INT NOT NULL, owner_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE queue_units (unit_id INT PRIMARY KEY, unit_code VARCHAR(16) NOT NULL)",
+    "INSERT INTO queue_jobs VALUES (101, 1, 'cancelled', 'archive-me'), (102, 2, 'active', 'keep-active'), (103, 3, 'cancelled', 'keep-live'), (104, 4, 'cancelled', 'keep-unowned')",
+    "INSERT INTO queue_owners VALUES (1, 10, 'Rhea'), (2, 10, 'Soren'), (3, 20, 'Tala')",
+    "INSERT INTO queue_units VALUES (10, 'retired'), (20, 'live')"
+  ],
+  "steps": [
+    {
+      "sql": "DELETE FROM q USING queue_jobs AS q, queue_owners AS o, queue_units AS u WHERE q.owner_id = o.owner_id AND o.unit_id = u.unit_id AND u.unit_code = 'retired' AND q.job_state = 'cancelled'",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT job_id, owner_id, job_state, job_label FROM queue_jobs ORDER BY job_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT owner_id, unit_id, owner_name FROM queue_owners ORDER BY owner_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT unit_id, unit_code FROM queue_units ORDER BY unit_id",
+      "ordered": true
+    }
+  ]
+}
