@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "group_concat_rollup_inventory",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "mariadb-corporation/mariadb-qa",
+      "commit": "07ee123e1f894c7ac9eaf7af3086ab235d6a00dd",
+      "path": "BUGS/MDEV-33162.sql",
+      "url": "https://github.com/mariadb-corporation/mariadb-qa/blob/07ee123e1f894c7ac9eaf7af3086ab235d6a00dd/BUGS/MDEV-33162.sql",
+      "sha256": "a14162c1991f3677211936efcc07660158b94d0ae8dde7d5df6b2ffd561f1c2c",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "BUGS/MDEV-33162.sql:2-21,37",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped query combines aggregate-local GROUP_CONCAT ordering with GROUP BY ... WITH ROLLUP, producing detail groups and a NULL-marked subtotal row.",
+      "mysql_mariadb_translation": "Reauthored as an inventory-zone report. Open zone metadata joins stock rows, GROUP_CONCAT orders SKU labels within each detail or subtotal group, and WITH ROLLUP emits zone subtotals and a grand total without copying the source tables, identifiers, or prepared-statement wrapper."
+    },
+    "independently_authored": true
+  },
+  "features": ["group-concat", "aggregate-local-ordering", "group-by-rollup", "joined-filter", "null-subtotals", "deterministic-content"],
+  "fixture_notes": "North has two open zones and South has one open zone plus one closed zone. Detail rows list sorted SKUs, zone subtotal rows concatenate the zone's SKUs, and the grand total includes only open-zone stock. Source grouping columns are non-NULL, so NULL values identify rollup levels.",
+  "determinism_notes": "Depot, zone, SKU, state, and unit values are fixed. Rollup rows are compared as an unordered multiset because subtotal presentation order is not part of the SQL contract; GROUP_CONCAT has an explicit SKU ordering and separator.",
+  "setup": [
+    "CREATE TABLE inventory_zones (depot_code VARCHAR(16) NOT NULL, zone_code VARCHAR(16) NOT NULL, zone_state VARCHAR(16) NOT NULL, PRIMARY KEY (depot_code, zone_code))",
+    "CREATE TABLE inventory_stock (stock_id INT PRIMARY KEY, depot_code VARCHAR(16) NOT NULL, zone_code VARCHAR(16) NOT NULL, sku VARCHAR(16) NOT NULL, units INT NOT NULL)",
+    "INSERT INTO inventory_zones VALUES ('north', 'A', 'open'), ('north', 'B', 'open'), ('south', 'A', 'open'), ('south', 'B', 'closed')",
+    "INSERT INTO inventory_stock VALUES (1, 'north', 'A', 'bolt', 4), (2, 'north', 'A', 'nut', 2), (3, 'north', 'B', 'tape', 1), (4, 'south', 'A', 'bolt', 3), (5, 'south', 'B', 'label', 5)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT z.depot_code, z.zone_code, GROUP_CONCAT(s.sku ORDER BY s.sku ASC SEPARATOR ',') AS sku_list, SUM(s.units) AS total_units FROM inventory_zones AS z INNER JOIN inventory_stock AS s ON s.depot_code = z.depot_code AND s.zone_code = z.zone_code WHERE z.zone_state = 'open' GROUP BY z.depot_code, z.zone_code WITH ROLLUP",
+      "ordered": false
+    }
+  ]
+}
