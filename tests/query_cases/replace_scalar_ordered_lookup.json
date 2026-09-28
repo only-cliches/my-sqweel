@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "id": "replace_scalar_ordered_lookup",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "easysoft/zentaopms",
+      "commit": "d5bfff8c91cea48018275381e0a127ed6fa5c79f",
+      "path": "db/update18.8.sql",
+      "url": "https://github.com/easysoft/zentaopms/blob/d5bfff8c91cea48018275381e0a127ed6fa5c79f/db/update18.8.sql",
+      "sha256": "443881f6197a72974a06191a82877ff7919ecd2ef554590efe9a9ac16fec07c1",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "db/update18.8.sql:24 (REPLACE value sourced from an ordered scalar subquery)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL configuration migration places a scalar SELECT with filtering, ordering, and LIMIT inside one REPLACE value expression.",
+      "mysql_mariadb_translation": "Reauthored as a marker refresh. REPLACE INTO writes one registry key using the earliest eligible event selected by an ordered scalar subquery; the source table, target columns, values, predicates, and operational context are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "replace-into",
+    "scalar-subquery",
+    "subquery-order-by",
+    "subquery-limit",
+    "unique-key-replacement",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Marker 'bootstrap-event' already exists and must be replaced with the label from the lowest event_id whose state is eligible. A later eligible event, a non-eligible earlier event, and an ignored event make the ordered filter observable; the final read verifies the replacement and preserved unrelated marker.",
+  "determinism_notes": "Event IDs and states are fixed, the scalar subquery orders by the unique event_id before LIMIT 1, and final markers are ordered by marker_key with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE marker_events (event_id INT PRIMARY KEY, event_label VARCHAR(32) NOT NULL, event_state VARCHAR(16) NOT NULL)",
+    "CREATE TABLE marker_registry (marker_key VARCHAR(32) PRIMARY KEY, marker_value VARCHAR(32) NOT NULL)",
+    "INSERT INTO marker_events VALUES (401, 'discarded-seed', 'rejected'), (402, 'launch-alpha', 'eligible'), (403, 'launch-beta', 'eligible'), (404, 'hold-gamma', 'ignored')",
+    "INSERT INTO marker_registry VALUES ('bootstrap-event', 'stale-value'), ('unchanged-marker', 'keep-value')"
+  ],
+  "steps": [
+    {
+      "sql": "REPLACE INTO marker_registry (marker_key, marker_value) VALUES ('bootstrap-event', (SELECT event_label FROM marker_events WHERE event_state = 'eligible' ORDER BY event_id LIMIT 1))",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT marker_key, marker_value FROM marker_registry ORDER BY marker_key",
+      "ordered": true
+    }
+  ]
+}
