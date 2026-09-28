@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "update_nested_grouped_source_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "minimized_from": "update_nested_grouped_source",
+    "source": {
+      "kind": "github",
+      "repository": "logicalclocks/hopsworks-chef",
+      "commit": "4700243c3d3c5d054b8524c4b262bcc1a572d7f7",
+      "path": "files/default/sql/ddl/updates/0.4.2.sql",
+      "url": "https://github.com/logicalclocks/hopsworks-chef/blob/4700243c3d3c5d054b8524c4b262bcc1a572d7f7/files/default/sql/ddl/updates/0.4.2.sql",
+      "sha256": "092c80c75f84e79c4dd06b50ea09d6531a3871385444aa4dc69b33e27bd597e9",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "files/default/sql/ddl/updates/0.4.2.sql:3-11",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "An UPDATE JOIN consumes a nested derived source whose grouped inner query uses HAVING to select duplicate keys.",
+      "mysql_mariadb_translation": "Reduced to one duplicate tenant label and one untouched label while retaining the nested derived UPDATE JOIN, aggregate alias in HAVING, and deterministic final state."
+    },
+    "independently_authored": true
+  },
+  "features": ["update-join", "nested-derived-table", "grouped-having-source", "minimized-regression"],
+  "fixture_notes": "Only the duplicate alpha group qualifies, so catalog row 601 is repaired and row 602 remains unchanged.",
+  "determinism_notes": "Two fixed catalog rows and two fixed observation groups produce one deterministic mutation. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE catalog_rows_min (catalog_id INT PRIMARY KEY, tenant_id INT NOT NULL, label VARCHAR(32) NOT NULL, repaired_label VARCHAR(64) NOT NULL)",
+    "CREATE TABLE label_observations_min (observation_id INT PRIMARY KEY, tenant_id INT NOT NULL, label VARCHAR(32) NOT NULL)",
+    "INSERT INTO catalog_rows_min VALUES (701, 21, 'delta', 'delta'), (702, 22, 'epsilon', 'epsilon')",
+    "INSERT INTO label_observations_min VALUES (801, 21, 'delta'), (802, 21, 'delta'), (803, 22, 'epsilon')"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE catalog_rows_min AS r JOIN (SELECT c.catalog_id, c.label FROM catalog_rows_min AS c JOIN (SELECT tenant_id, label, COUNT(*) AS duplicate_count FROM label_observations_min GROUP BY tenant_id, label HAVING duplicate_count > 1 ORDER BY duplicate_count DESC, tenant_id ASC) AS d ON c.tenant_id = d.tenant_id AND c.label = d.label) AS targets ON r.catalog_id = targets.catalog_id SET r.repaired_label = CONCAT(targets.label, '-', r.catalog_id)",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT catalog_id, tenant_id, label, repaired_label FROM catalog_rows_min ORDER BY catalog_id",
+      "ordered": true
+    }
+  ]
+}
