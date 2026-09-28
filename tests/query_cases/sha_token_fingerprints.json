@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "sha_token_fingerprints",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "codinglin/StudyNotes",
+      "commit": "6fa91231e27302e8864ded5b258049e88245939a",
+      "path": "MySQL基础篇/MySQL基础篇课后练习/第07章_单行函数.sql",
+      "url": "https://github.com/codinglin/StudyNotes/blob/6fa91231e27302e8864ded5b258049e88245939a/MySQL%E5%9F%BA%E7%A1%80%E7%AF%87/MySQL%E5%9F%BA%E7%A1%80%E7%AF%87%E8%AF%BE%E5%90%8E%E7%BB%83%E4%B9%A0/%E7%AC%AC07%E7%AB%A0_%E5%8D%95%E8%A1%8C%E5%87%BD%E6%95%B0.sql",
+      "sha256": "90bcebbb15f243cb27d3bfb152e744b11562950f6fec92b74c2e6e0832a5bdb5",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL基础篇/MySQL基础篇课后练习/第07章_单行函数.sql:247",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL scalar-function exercise projects SHA alongside another digest and nests the digest function to demonstrate deterministic string checksums.",
+      "mysql_mariadb_translation": "Reauthored as an independent token-fingerprint report. Fixed token labels and nullable secret values exercise SHA output, nested SHA hashing, concatenated input, empty-string input, and NULL propagation. The source schema, literal values, and employee exercise context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "sha-digest",
+    "nested-hash",
+    "concatenated-input",
+    "empty-string-input",
+    "null-propagation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Tokens 501 and 502 have ordinary secrets, token 503 has an empty secret, and token 504 has NULL. SHA returns a deterministic hexadecimal digest for each non-NULL input and NULL for the NULL secret and NULL concatenation.",
+  "determinism_notes": "Token IDs, labels, and secrets are fixed; output ordering is by the unique token ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE token_fingerprints (token_id INT PRIMARY KEY, token_label VARCHAR(16) NOT NULL, secret_value VARCHAR(64) NULL)",
+    "INSERT INTO token_fingerprints VALUES (501, 'alpha', 'redwood'), (502, 'beta', 'bluebird'), (503, 'gamma', ''), (504, 'delta', NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT token_id, SHA(secret_value) AS secret_digest, SHA(CONCAT(token_label, ':', secret_value)) AS labeled_digest, SHA(SHA(secret_value)) AS nested_digest FROM token_fingerprints ORDER BY token_id",
+      "ordered": true
+    }
+  ]
+}

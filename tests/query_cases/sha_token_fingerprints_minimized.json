@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "id": "sha_token_fingerprints_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "codinglin/StudyNotes",
+      "commit": "6fa91231e27302e8864ded5b258049e88245939a",
+      "path": "MySQL基础篇/MySQL基础篇课后练习/第07章_单行函数.sql",
+      "url": "https://github.com/codinglin/StudyNotes/blob/6fa91231e27302e8864ded5b258049e88245939a/MySQL%E5%9F%BA%E7%A1%80%E7%AF%87/MySQL%E5%9F%BA%E7%A1%80%E7%AF%87%E8%AF%BE%E5%90%8E%E7%BB%83%E4%B9%A0/%E7%AC%AC07%E7%AB%A0_%E5%8D%95%E8%A1%8C%E5%87%BD%E6%95%B0.sql",
+      "sha256": "90bcebbb15f243cb27d3bfb152e744b11562950f6fec92b74c2e6e0832a5bdb5",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL基础篇/第07章_单行函数.sql: SHA scalar expression",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL scalar expression computes a SHA digest and applies the digest function again to a string result.",
+      "mysql_mariadb_translation": "Reduced to one independently authored scalar projection containing SHA('cedar'), SHA(SHA('cedar')), and SHA(NULL). It isolates the digest, nested-hash, and NULL behavior without the source table or lesson expressions."
+    },
+    "independently_authored": true,
+    "minimized_from": "sha_token_fingerprints"
+  },
+  "features": [
+    "sha-digest",
+    "nested-hash",
+    "null-propagation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "SHA('cedar') and its nested digest are deterministic hexadecimal strings; SHA(NULL) remains SQL NULL.",
+  "determinism_notes": "The scalar literals are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT SHA('cedar') AS secret_digest, SHA(SHA('cedar')) AS nested_digest, SHA(NULL) AS null_digest",
+      "ordered": true
+    }
+  ]
+}
