@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "id": "inet6_roundtrip_inventory",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "repository": "Xanoor/KeepIT-SAE",
+      "commit": "e14e5e178eb458375f53f0e953cd631516d8b26f",
+      "path": "Conception/Database/action.sql",
+      "url": "https://github.com/Xanoor/KeepIT-SAE/blob/e14e5e178eb458375f53f0e953cd631516d8b26f/Conception/Database/action.sql",
+      "sha256": "24cc77b087a81108fcdfa44512e3295ef7d2c92907fd09b9440ecbcb6a0a92fb",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Conception/Database/action.sql:66-69",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "Nested INET6_ATON and INET6_NTOA calls normalize both IPv6 and IPv4 text into MariaDB's canonical network-address representation.",
+      "mysql_mariadb_translation": "Reauthored as an independent endpoint-address inventory. Fixed IPv6, IPv4, and IPv4-mapped text values are round-tripped through binary form, with HEX exposing the packed bytes and deterministic endpoint ordering making canonicalization observable without copying the source schema or values."
+    },
+    "independently_authored": true
+  },
+  "features": ["inet6-aton", "inet6-ntoa", "nested-network-conversion", "ipv4-ipv6-canonicalization", "binary-hex-projection", "deterministic-order"],
+  "fixture_notes": "The report verifies canonical text and packed bytes for a link-local IPv6 address, a dotted IPv4 address, and an IPv4-mapped IPv6 address; each value is fixed and valid.",
+  "determinism_notes": "Endpoint IDs, labels, address literals, nested conversion order, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE endpoint_addresses (address_id INT PRIMARY KEY, endpoint_label VARCHAR(32) NOT NULL, address_text VARCHAR(64) NOT NULL)",
+    "INSERT INTO endpoint_addresses VALUES (31, 'link-local', 'fe80::4e59:5c08:7a13:ce20'), (32, 'service-v4', '10.188.119.17'), (33, 'mapped-v4', '::ffff:192.0.2.44')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT address_id, endpoint_label, INET6_NTOA(INET6_ATON(address_text)) AS canonical_address, HEX(INET6_ATON(address_text)) AS packed_hex FROM endpoint_addresses ORDER BY address_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT COUNT(*) AS endpoint_count FROM endpoint_addresses",
+      "ordered": true
+    }
+  ]
+}

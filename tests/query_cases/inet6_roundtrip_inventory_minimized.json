@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "id": "inet6_roundtrip_inventory_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "inet6_roundtrip_inventory",
+    "source": {
+      "repository": "Xanoor/KeepIT-SAE",
+      "commit": "e14e5e178eb458375f53f0e953cd631516d8b26f",
+      "path": "Conception/Database/action.sql",
+      "url": "https://github.com/Xanoor/KeepIT-SAE/blob/e14e5e178eb458375f53f0e953cd631516d8b26f/Conception/Database/action.sql",
+      "sha256": "24cc77b087a81108fcdfa44512e3295ef7d2c92907fd09b9440ecbcb6a0a92fb",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from inet6_roundtrip_inventory",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A scalar INET6_NTOA(INET6_ATON(...)) composition canonicalizes one IPv4 text value.",
+      "mysql_mariadb_translation": "Reduced to one fixed IPv4-mapped address and a HEX projection of its binary encoding, removing table state and multiple address families while retaining the nested conversion contract."
+    },
+    "independently_authored": true,
+    "minimized_from": "inet6_roundtrip_inventory"
+  },
+  "features": ["inet6-aton", "inet6-ntoa", "nested-network-conversion", "binary-hex-projection", "minimized-regression"],
+  "fixture_notes": "The IPv4-mapped address must canonicalize to ::ffff:192.0.2.44 and retain its 16-byte packed representation.",
+  "determinism_notes": "The address literal is fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "steps": [
+    {
+      "sql": "SELECT INET6_NTOA(INET6_ATON('::ffff:192.0.2.44')) AS canonical_address, HEX(INET6_ATON('::ffff:192.0.2.44')) AS packed_hex",
+      "ordered": true
+    }
+  ]
+}

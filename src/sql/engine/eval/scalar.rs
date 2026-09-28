@@ -468,10 +468,17 @@ pub(super) fn eval_inet6_ntoa_value(value: Value) -> Result<Value> {
     let Some(bytes) = binary_value_bytes(&value) else {
         return Ok(Value::Null);
     };
-    let Ok(bytes) = <[u8; 16]>::try_from(bytes.as_slice()) else {
-        return Ok(Value::Null);
-    };
-    Ok(Value::String(std::net::Ipv6Addr::from(bytes).to_string()))
+    match bytes.as_slice() {
+        [a, b, c, d] => Ok(Value::String(
+            std::net::Ipv4Addr::new(*a, *b, *c, *d).to_string(),
+        )),
+        bytes => {
+            let Ok(bytes) = <[u8; 16]>::try_from(bytes) else {
+                return Ok(Value::Null);
+            };
+            Ok(Value::String(std::net::Ipv6Addr::from(bytes).to_string()))
+        }
+    }
 }
 
 pub(super) fn eval_mod(
