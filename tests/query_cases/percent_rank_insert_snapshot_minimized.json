@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "percent_rank_insert_snapshot_minimized",
+  "provenance": {
+    "kind": "minimized-from-query-case",
+    "source": {
+      "kind": "github",
+      "repository": "CUBRID/cubrid-testcases",
+      "commit": "c7a58842a09521d205cec00bf13b5c456fdc9b29",
+      "path": "sql/_26_features_920/issue_10533_dml/cases/02_percent_rank_bug_from_web_001.sql",
+      "url": "https://github.com/CUBRID/cubrid-testcases/blob/c7a58842a09521d205cec00bf13b5c456fdc9b29/sql/_26_features_920/issue_10533_dml/cases/02_percent_rank_bug_from_web_001.sql",
+      "sha256": "3ff0e8069c8aebb07d97165c41fa98748441a5080fccf3f2038bd885d8329bff",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from sql/_26_features_920/issue_10533_dml/cases/02_percent_rank_bug_from_web_001.sql:6-28",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "The smallest DML probe computes PERCENT_RANK inside a partitioned derived query and persists rows selected by a percentile threshold.",
+      "mysql_mariadb_translation": "Reduced to one independently authored region with three ordered scores and an empty destination snapshot. The partitioned PERCENT_RANK window, derived INSERT ... SELECT, tie-break ordering, threshold, and final persisted rows remain while the second region is removed."
+    },
+    "independently_authored": true,
+    "minimized_from": "percent_rank_insert_snapshot"
+  },
+  "features": [
+    "percent-rank-window",
+    "partitioned-ranking",
+    "window-insert-select",
+    "minimized-regression"
+  ],
+  "fixture_notes": "Scores 90, 60, and 30 produce percentile ranks 0, 0.5, and 1; the INSERT ... SELECT must persist only the first two rows under the 0.5 threshold.",
+  "determinism_notes": "Representative IDs, scores, percentile threshold, derived ordering, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE mini_score_inputs (score_id INT PRIMARY KEY, region_id INT NOT NULL, representative_id INT NOT NULL, score INT NOT NULL)",
+    "CREATE TABLE mini_score_snapshots (region_id INT NOT NULL, representative_id INT NOT NULL, score INT NOT NULL, percentile_rank DOUBLE NOT NULL, PRIMARY KEY (region_id, representative_id))",
+    "INSERT INTO mini_score_inputs VALUES (5101, 51, 301, 90), (5102, 51, 302, 60), (5103, 51, 303, 30)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO mini_score_snapshots (region_id, representative_id, score, percentile_rank) SELECT ranked.region_id, ranked.representative_id, ranked.score, ranked.percentile_rank FROM (SELECT region_id, representative_id, score, PERCENT_RANK() OVER (PARTITION BY region_id ORDER BY score DESC, representative_id ASC) AS percentile_rank FROM mini_score_inputs) AS ranked WHERE ranked.percentile_rank <= 0.5 ORDER BY ranked.region_id, ranked.representative_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT region_id, representative_id, score, percentile_rank FROM mini_score_snapshots ORDER BY region_id, representative_id",
+      "ordered": true
+    }
+  ]
+}

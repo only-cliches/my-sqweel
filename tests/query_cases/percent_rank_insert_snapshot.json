@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "id": "percent_rank_insert_snapshot",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "CUBRID/cubrid-testcases",
+      "commit": "c7a58842a09521d205cec00bf13b5c456fdc9b29",
+      "path": "sql/_26_features_920/issue_10533_dml/cases/02_percent_rank_bug_from_web_001.sql",
+      "url": "https://github.com/CUBRID/cubrid-testcases/blob/c7a58842a09521d205cec00bf13b5c456fdc9b29/sql/_26_features_920/issue_10533_dml/cases/02_percent_rank_bug_from_web_001.sql",
+      "sha256": "3ff0e8069c8aebb07d97165c41fa98748441a5080fccf3f2038bd885d8329bff",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/_26_features_920/issue_10533_dml/cases/02_percent_rank_bug_from_web_001.sql:6-28, 78-86",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A DML-oriented SQL case seeds score rows, then evaluates PERCENT_RANK over global and partitioned orderings with tied values and deterministic projections.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored ranking snapshot. A derived SELECT computes partitioned PERCENT_RANK values with a unique representative tie-break, INSERT ... SELECT persists only the top half of each region, and final reads verify the stored ranks. The source tables, rows, schema, and salary context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "percent-rank-window",
+    "partitioned-ranking",
+    "window-insert-select",
+    "derived-table",
+    "tie-ordering",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Region 41 has scores 100, 80, 80, and 50; the two 80 scores share a percentile rank and the rep ID breaks window ordering, so the top-half filter stores all three rows at or below 0.5. Region 42 has scores 90 and 60, so only the 90 row is stored.",
+  "determinism_notes": "Region IDs, representative IDs, scores, percentile threshold, derived ordering, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE regional_score_inputs (score_id INT PRIMARY KEY, region_id INT NOT NULL, representative_id INT NOT NULL, score INT NOT NULL)",
+    "CREATE TABLE regional_score_snapshots (region_id INT NOT NULL, representative_id INT NOT NULL, score INT NOT NULL, percentile_rank DOUBLE NOT NULL, PRIMARY KEY (region_id, representative_id))",
+    "INSERT INTO regional_score_inputs VALUES (4101, 41, 101, 100), (4102, 41, 102, 80), (4103, 41, 103, 80), (4104, 41, 104, 50), (4201, 42, 201, 90), (4202, 42, 202, 60)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO regional_score_snapshots (region_id, representative_id, score, percentile_rank) SELECT ranked.region_id, ranked.representative_id, ranked.score, ranked.percentile_rank FROM (SELECT region_id, representative_id, score, PERCENT_RANK() OVER (PARTITION BY region_id ORDER BY score DESC, representative_id ASC) AS percentile_rank FROM regional_score_inputs) AS ranked WHERE ranked.percentile_rank <= 0.5 ORDER BY ranked.region_id, ranked.representative_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT region_id, representative_id, score, percentile_rank FROM regional_score_snapshots ORDER BY region_id, representative_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT score_id, region_id, representative_id, score FROM regional_score_inputs ORDER BY score_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT region_id, representative_id, score, percentile_rank FROM regional_score_snapshots ORDER BY region_id, representative_id",
+      "ordered": true
+    }
+  ]
+}
