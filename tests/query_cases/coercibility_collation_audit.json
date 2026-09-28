@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "coercibility_collation_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/4813.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/4813.sql",
+      "sha256": "1ec236518854c68efe32289afd5ac4d5b2a9fc1972bf814106bfbd726d8f37e7",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/docker/fuzz_root/mysql_initlib/4813.sql:58-77 (COERCIBILITY alongside charset/collation and session values)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL compatibility probe inspects COERCIBILITY for session values and explicitly collated strings while comparing text metadata.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored profile audit. COERCIBILITY is projected for a VARCHAR column, a string literal, and a CONCAT expression so column, literal, and derived-expression precedence remain observable without session variables, collations, or source data.",
+      "source_query_excerpt": "select charset(@a),collation(@a),coercibility(@a); select coercibility(@a:=_latin2'test' collate latin2_bin);"
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "coercibility",
+    "collation-metadata",
+    "string-expression",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Each fixed profile has a declared VARCHAR label. MariaDB reports coercibility 2 for the column and CONCAT expression and 4 for the unadorned string literal; IDs and labels are intentionally simple so collation precedence is the only varying factor.",
+  "determinism_notes": "Profile IDs, labels, expressions, and final ordering are fixed; no session variables, clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE coercibility_profiles (profile_id INT PRIMARY KEY, label VARCHAR(24) NOT NULL)",
+    "INSERT INTO coercibility_profiles VALUES (801, 'alpha'), (802, 'beta')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT profile_id, COERCIBILITY(label) AS column_coercibility, COERCIBILITY('literal') AS literal_coercibility, COERCIBILITY(CONCAT(label, '!')) AS expression_coercibility FROM coercibility_profiles ORDER BY profile_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT profile_id, label FROM coercibility_profiles ORDER BY profile_id",
+      "ordered": true
+    }
+  ]
+}
