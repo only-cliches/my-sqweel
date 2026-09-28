@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "id": "connection_identity_checks",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "striver619/db",
+      "commit": "918ce0e4618268d87d2d051466b448869c1c7098",
+      "path": "mysql/mysql-learn.sql",
+      "url": "https://github.com/striver619/db/blob/918ce0e4618268d87d2d051466b448869c1c7098/mysql/mysql-learn.sql",
+      "sha256": "ef20ef838fe720fb24e7939bf24d2bf9065adec9ec41a24d7e9c4e1bedc26c69",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "mysql/mysql-learn.sql:1437-1438",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL information-function example projects CONNECTION_ID() to expose the active session's unique connection identifier.",
+      "mysql_mariadb_translation": "Reauthored as a deterministic session-liveness report. Each fixed checkpoint row projects two boolean invariants derived from CONNECTION_ID(): the identifier is positive and repeated evaluation within the statement is stable. The source labels, schema, and tutorial context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "connection-metadata-function",
+    "session-liveness-predicate",
+    "repeated-scalar-evaluation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The actual connection number is intentionally not returned because it is server-assigned; the report asserts the stable positive-and-self-equal invariants for every fixed checkpoint row.",
+  "determinism_notes": "Only boolean properties of the server-assigned identifier are compared; checkpoint IDs and output ordering are fixed, with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE session_checkpoints (checkpoint_id INT PRIMARY KEY, checkpoint_label VARCHAR(24) NOT NULL)",
+    "INSERT INTO session_checkpoints VALUES (901, 'connected'), (902, 'authenticated')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT checkpoint_id, checkpoint_label, CONNECTION_ID() > 0 AS connection_is_live, CONNECTION_ID() = CONNECTION_ID() AS connection_id_stable FROM session_checkpoints ORDER BY checkpoint_id",
+      "ordered": true
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "connection_identity_checks_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "striver619/db",
+      "commit": "918ce0e4618268d87d2d051466b448869c1c7098",
+      "path": "mysql/mysql-learn.sql",
+      "url": "https://github.com/striver619/db/blob/918ce0e4618268d87d2d051466b448869c1c7098/mysql/mysql-learn.sql",
+      "sha256": "ef20ef838fe720fb24e7939bf24d2bf9065adec9ec41a24d7e9c4e1bedc26c69",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "mysql/mysql-learn.sql:1437-1438",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL scalar information-function query returns CONNECTION_ID().",
+      "mysql_mariadb_translation": "Reduced to one independently authored boolean scalar expression that compares CONNECTION_ID() with itself, retaining repeated connection-ID evaluation while removing table access and dynamic numeric output."
+    },
+    "independently_authored": true,
+    "minimized_from": "connection_identity_checks"
+  },
+  "features": [
+    "connection-metadata-function",
+    "repeated-scalar-evaluation",
+    "minimized-regression"
+  ],
+  "fixture_notes": "The scalar equality asserts that repeated CONNECTION_ID() evaluation remains stable without exposing the server-assigned number.",
+  "determinism_notes": "The result is a fixed boolean property of one session and uses no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT CONNECTION_ID() = CONNECTION_ID() AS connection_id_stable",
+      "ordered": true
+    }
+  ]
+}
