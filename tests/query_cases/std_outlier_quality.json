@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "std_outlier_quality",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "AchmadLutfi196/PSD",
+      "commit": "fb8492456fdd1b54deadb83eeee832cc79ac4587",
+      "path": "UTS/thyroid_numeric_mysql.sql",
+      "url": "https://github.com/AchmadLutfi196/PSD/blob/fb8492456fdd1b54deadb83eeee832cc79ac4587/UTS/thyroid_numeric_mysql.sql",
+      "sha256": "6d8f4815fe0ebefc80003627e064327ca9448b90e9beb7ceb2cf910e2007ac5a",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "UTS/thyroid_numeric_mysql.sql:81-82",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL outlier query compares each measurement against scalar AVG plus or minus two population standard deviations computed by STD in subqueries.",
+      "mysql_mariadb_translation": "Reauthored as an independent quality-control report. Fixed batch readings classify values outside the AVG +/- 2*STD bounds, including a NULL reading that remains unclassified; the source table, medical fields, values, and analysis context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "std-aggregate",
+    "scalar-aggregate-subquery",
+    "avg-standard-deviation-band",
+    "outlier-classification",
+    "null-propagation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Quality readings 2, 4, 4, 4, and 10 produce a population mean of 4.8 and STD of 2.9933, so 10 is outside the two-standard-deviation band while the NULL reading remains unclassified. The repeated scalar subqueries use the same fixed relation for both bounds.",
+  "determinism_notes": "Reading IDs and values are fixed; output ordering is by the unique reading ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE quality_readings (reading_id INT PRIMARY KEY, batch_code VARCHAR(16) NOT NULL, measurement DECIMAL(10,4) NULL)",
+    "INSERT INTO quality_readings VALUES (601, 'batch-a', 2.0000), (602, 'batch-a', 4.0000), (603, 'batch-a', 4.0000), (604, 'batch-a', 4.0000), (605, 'batch-a', 10.0000), (606, 'batch-a', NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT reading_id, measurement, CASE WHEN measurement > (SELECT AVG(measurement) + 2 * STD(measurement) FROM quality_readings) OR measurement < (SELECT AVG(measurement) - 2 * STD(measurement) FROM quality_readings) THEN 'outlier' ELSE 'within-band' END AS band_status FROM quality_readings ORDER BY reading_id",
+      "ordered": true
+    }
+  ]
+}

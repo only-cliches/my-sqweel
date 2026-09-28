@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "std_outlier_quality_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "AchmadLutfi196/PSD",
+      "commit": "fb8492456fdd1b54deadb83eeee832cc79ac4587",
+      "path": "UTS/thyroid_numeric_mysql.sql",
+      "url": "https://github.com/AchmadLutfi196/PSD/blob/fb8492456fdd1b54deadb83eeee832cc79ac4587/UTS/thyroid_numeric_mysql.sql",
+      "sha256": "6d8f4815fe0ebefc80003627e064327ca9448b90e9beb7ceb2cf910e2007ac5a",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "UTS/thyroid_numeric_mysql.sql: scalar AVG +/- 2*STD outlier bounds",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL scalar predicate compares a value with population-standard-deviation bounds from scalar aggregate subqueries.",
+      "mysql_mariadb_translation": "Reduced to one independently authored scalar projection over a fixed four-row relation, retaining STD in AVG +/- 2*STD subqueries and a CASE outlier label while removing the source schema and analysis columns."
+    },
+    "independently_authored": true,
+    "minimized_from": "std_outlier_quality"
+  },
+  "features": [
+    "std-aggregate",
+    "scalar-aggregate-subquery",
+    "avg-standard-deviation-band",
+    "minimized-regression"
+  ],
+  "fixture_notes": "The fixed measurements have a mean of 4.8 and a population STD of 2.9933; only 10 lies outside the two-standard-deviation band.",
+  "determinism_notes": "The measurements are fixed and the scalar relation is read without clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE quality_readings_min (reading_id INT PRIMARY KEY, measurement DECIMAL(10,4) NOT NULL)",
+    "INSERT INTO quality_readings_min VALUES (701, 2.0000), (702, 4.0000), (703, 4.0000), (704, 10.0000)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT reading_id, CASE WHEN measurement > (SELECT AVG(measurement) + 2 * STD(measurement) FROM quality_readings_min) OR measurement < (SELECT AVG(measurement) - 2 * STD(measurement) FROM quality_readings_min) THEN 'outlier' ELSE 'within-band' END AS band_status FROM quality_readings_min ORDER BY reading_id",
+      "ordered": true
+    }
+  ]
+}
