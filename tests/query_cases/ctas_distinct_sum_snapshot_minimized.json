@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "ctas_distinct_sum_snapshot_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/4570.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/4570.sql",
+      "sha256": "a7385b9ea4f1c7e91510ee00504949abd8e3757976a5e045d9a48865fdb57f4f",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/docker/fuzz_root/mysql_initlib/4570.sql:3-5,17-20",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "CREATE TABLE ... SELECT materializes a grouped source whose numeric projection includes SUM(DISTINCT ...).",
+      "mysql_mariadb_translation": "Reduced to one independently authored billing bucket with duplicate charges. The CTAS projection retains ordinary SUM, SUM(DISTINCT), COUNT(DISTINCT), and a positive-total HAVING filter."
+    },
+    "independently_authored": true,
+    "minimized_from": "ctas_distinct_sum_snapshot"
+  },
+  "features": ["create-table-as-select", "sum-distinct", "ordinary-sum", "count-distinct", "grouped-having", "minimized-regression"],
+  "fixture_notes": "Bucket 801 has two 90-cent base charges and one 40-cent addon, producing gross 220, distinct 130, and two distinct codes.",
+  "determinism_notes": "Fixed source rows, grouping, positive HAVING threshold, CTAS projection, and final ordering; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE billing_events_min (event_id INT PRIMARY KEY, bucket_id INT NOT NULL, charge_code VARCHAR(16) NOT NULL, charge_cents INT NOT NULL, event_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO billing_events_min VALUES (1, 801, 'base', 90, 'posted'), (2, 801, 'base', 90, 'posted'), (3, 801, 'addon', 40, 'posted')"
+  ],
+  "steps": [
+    {
+      "sql": "CREATE TABLE billing_bucket_snapshot_min AS SELECT bucket_id, COUNT(*) AS posted_rows, SUM(charge_cents) AS gross_cents, SUM(DISTINCT charge_cents) AS distinct_cents, COUNT(DISTINCT charge_code) AS distinct_codes FROM billing_events_min WHERE event_state = 'posted' GROUP BY bucket_id HAVING SUM(charge_cents) > 0",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT bucket_id, posted_rows, gross_cents, distinct_cents, distinct_codes FROM billing_bucket_snapshot_min ORDER BY bucket_id",
+      "ordered": true
+    }
+  ]
+}
