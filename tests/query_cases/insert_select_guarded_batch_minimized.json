@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "id": "insert_select_guarded_batch_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "minimized_from": "insert_select_guarded_batch",
+    "source": {
+      "kind": "github",
+      "repository": "OHDSI/Vocabulary-v5.0",
+      "commit": "90badee5c8e053a83e2fc23c9413a151bcea9983",
+      "path": "ICD10/load_stage.sql",
+      "url": "https://github.com/OHDSI/Vocabulary-v5.0/blob/90badee5c8e053a83e2fc23c9413a151bcea9983/ICD10/load_stage.sql",
+      "sha256": "10c67737f945108b427f149a0ecd4f672d30979c297bc5f6df8a619de9dcc21d",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "ICD10/load_stage.sql:372-400, 636-648",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "An INSERT SELECT load uses a correlated NOT EXISTS predicate to keep an already-present destination key from being inserted again.",
+      "mysql_mariadb_translation": "Reduced to one existing alert, one higher-priority new alert, and one lower-priority candidate while retaining LEFT JOIN enrichment, the anti-join guard, and an ordered LIMIT 1 batch."
+    },
+    "independently_authored": true
+  },
+  "features": ["insert-select", "left-join", "correlated-not-exists", "ordered-limit", "minimized-regression"],
+  "fixture_notes": "Alert 801 already exists and is excluded; alert 802 is the highest-priority new candidate and must be inserted, while alert 803 is held back by LIMIT 1.",
+  "determinism_notes": "Alert IDs, priorities, route mapping, and batch limit are fixed; the final destination read is ordered by alert ID. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE alert_delivery_min (alert_id INT PRIMARY KEY, route_code VARCHAR(16) NOT NULL, priority INT NOT NULL)",
+    "CREATE TABLE delivery_candidates_min (alert_id INT PRIMARY KEY, route_id INT NULL, priority INT NOT NULL)",
+    "CREATE TABLE delivery_routes_min (route_id INT PRIMARY KEY, route_code VARCHAR(16) NOT NULL)",
+    "INSERT INTO alert_delivery_min VALUES (801, 'pager', 95)",
+    "INSERT INTO delivery_candidates_min VALUES (801, 21, 99), (802, 21, 80), (803, NULL, 70)",
+    "INSERT INTO delivery_routes_min VALUES (21, 'pager')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO alert_delivery_min (alert_id, route_code, priority) SELECT c.alert_id, COALESCE(r.route_code, 'fallback'), c.priority FROM delivery_candidates_min AS c LEFT JOIN delivery_routes_min AS r ON r.route_id = c.route_id WHERE NOT EXISTS (SELECT 1 FROM alert_delivery_min AS existing WHERE existing.alert_id = c.alert_id) ORDER BY c.priority DESC, c.alert_id ASC LIMIT 1",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT alert_id, route_code, priority FROM alert_delivery_min ORDER BY alert_id",
+      "ordered": true
+    }
+  ]
+}

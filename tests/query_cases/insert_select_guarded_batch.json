@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "id": "insert_select_guarded_batch",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "OHDSI/Vocabulary-v5.0",
+      "commit": "90badee5c8e053a83e2fc23c9413a151bcea9983",
+      "path": "ICD10/load_stage.sql",
+      "url": "https://github.com/OHDSI/Vocabulary-v5.0/blob/90badee5c8e053a83e2fc23c9413a151bcea9983/ICD10/load_stage.sql",
+      "sha256": "10c67737f945108b427f149a0ecd4f672d30979c297bc5f6df8a619de9dcc21d",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "ICD10/load_stage.sql:372-400, 636-648",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A staged MySQL load inserts rows selected from source relations and uses correlated NOT EXISTS guards to avoid reloading keys already present in the destination.",
+      "mysql_mariadb_translation": "Reauthored as an alert-delivery staging batch. An optional route lookup enriches candidate rows, a correlated NOT EXISTS guard excludes already-staged alerts, and deterministic ORDER BY/LIMIT bounds the highest-priority new batch. The source vocabulary tables, identifiers, values, and loading workflow are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["insert-select", "left-join", "coalesce-enrichment", "correlated-not-exists", "ordered-limit", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "Alert 701 is already staged and must be excluded. New alerts 702 and 703 are the two highest-priority candidates after the guard; alert 704 is lower priority and remains in the candidate source. The missing route for alert 703 exercises the COALESCE fallback.",
+  "determinism_notes": "Alert IDs, priorities, route mappings, and batch limit are fixed; the final staged rows are ordered by alert ID. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE alert_delivery (alert_id INT PRIMARY KEY, route_code VARCHAR(16) NOT NULL, priority INT NOT NULL)",
+    "CREATE TABLE delivery_candidates (alert_id INT PRIMARY KEY, route_id INT NULL, priority INT NOT NULL)",
+    "CREATE TABLE delivery_routes (route_id INT PRIMARY KEY, route_code VARCHAR(16) NOT NULL)",
+    "INSERT INTO alert_delivery VALUES (701, 'pager', 95)",
+    "INSERT INTO delivery_candidates VALUES (701, 11, 99), (702, 11, 90), (703, NULL, 80), (704, 12, 70)",
+    "INSERT INTO delivery_routes VALUES (11, 'pager'), (12, 'email')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO alert_delivery (alert_id, route_code, priority) SELECT c.alert_id, COALESCE(r.route_code, 'fallback'), c.priority FROM delivery_candidates AS c LEFT JOIN delivery_routes AS r ON r.route_id = c.route_id WHERE NOT EXISTS (SELECT 1 FROM alert_delivery AS existing WHERE existing.alert_id = c.alert_id) ORDER BY c.priority DESC, c.alert_id ASC LIMIT 2",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT alert_id, route_code, priority FROM alert_delivery ORDER BY alert_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT alert_id, route_id, priority FROM delivery_candidates ORDER BY alert_id",
+      "ordered": true
+    }
+  ]
+}
