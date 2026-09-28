@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "id": "sessionized_event_windows",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "scenarios/window-analytics/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/scenarios/window-analytics/mysql.sql",
+      "sha256": "cfe5bd07baa23d84ab54915477310fee678124ea795371c0f5dc4de108ffdd18",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "scenarios/window-analytics/mysql.sql: sessionization section",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL sessionization query uses LAG and TIMESTAMPDIFF to mark gaps larger than thirty minutes, then uses a cumulative SUM window to assign session numbers before grouping each user's events.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored device-activity report. Fixed device events start a new session after a forty-minute gap, cumulative window numbering groups each device's activity, and the final aggregate reports session bounds, duration, and event count. The source schema, rows, labels, and application context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["cte", "lag-window", "timestampdiff", "cumulative-sum-window", "sessionization", "grouped-window-output", "deterministic-order"],
+  "fixture_notes": "Device 41 has two sessions split by a forty-minute gap; device 42 has one session with three events. The report verifies cumulative session numbering, bounds, duration, and event counts.",
+  "determinism_notes": "Event IDs and timestamps are fixed and unique per device; both window order and final session order use device ID, timestamp, and event ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE device_events (event_id INT PRIMARY KEY, device_id INT NOT NULL, event_time DATETIME NOT NULL, event_kind VARCHAR(16) NOT NULL)",
+    "INSERT INTO device_events VALUES (1101, 41, '2026-08-01 09:00:00', 'boot'), (1102, 41, '2026-08-01 09:20:00', 'sync'), (1103, 41, '2026-08-01 10:00:00', 'alert'), (1104, 41, '2026-08-01 10:12:00', 'clear'), (1105, 42, '2026-08-01 11:00:00', 'boot'), (1106, 42, '2026-08-01 11:15:00', 'sync'), (1107, 42, '2026-08-01 11:30:00', 'sleep')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH event_gaps AS (SELECT event_id, device_id, event_time, event_kind, CASE WHEN LAG(event_time) OVER (PARTITION BY device_id ORDER BY event_time, event_id) IS NULL OR TIMESTAMPDIFF(MINUTE, LAG(event_time) OVER (PARTITION BY device_id ORDER BY event_time, event_id), event_time) > 30 THEN 1 ELSE 0 END AS is_new_session FROM device_events), numbered_events AS (SELECT event_id, device_id, event_time, event_kind, SUM(is_new_session) OVER (PARTITION BY device_id ORDER BY event_time, event_id ROWS UNBOUNDED PRECEDING) AS session_number FROM event_gaps) SELECT device_id, session_number, MIN(event_time) AS session_start, MAX(event_time) AS session_end, TIMESTAMPDIFF(MINUTE, MIN(event_time), MAX(event_time)) AS duration_minutes, COUNT(*) AS event_count FROM numbered_events GROUP BY device_id, session_number ORDER BY device_id, session_number",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
