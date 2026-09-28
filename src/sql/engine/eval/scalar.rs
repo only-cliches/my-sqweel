@@ -1133,14 +1133,19 @@ pub(super) fn eval_chr(
     data: &Map<String, Value>,
     last_insert_id: u64,
 ) -> Result<Value> {
-    let mut output = String::new();
-    for arg in args {
-        let value = eval_scalar_text(arg, data, last_insert_id)?;
-        if value != Value::Null {
-            output.push((json_to_f64_lossy(&value)? as u8) as char);
-        }
+    let Some(arg) = args.first() else {
+        return Ok(Value::Null);
+    };
+    if arg.trim().eq_ignore_ascii_case("NULL") {
+        return Ok(Value::Null);
     }
-    Ok(Value::String(output))
+    let value = eval_scalar_text(arg, data, last_insert_id)?;
+    if value == Value::Null {
+        return Ok(Value::Null);
+    }
+    Ok(Value::String(
+        std::iter::once((json_to_f64_lossy(&value)? as u8) as char).collect(),
+    ))
 }
 
 pub(super) fn eval_nvl2(

@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "chr_label_rendering",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "DataLinkDC/dinky",
+      "commit": "63b5a5aa2438a4c30efd1067da8aedf844951143",
+      "path": "script/sql/dinky-mysql.sql",
+      "url": "https://github.com/DataLinkDC/dinky/blob/63b5a5aa2438a4c30efd1067da8aedf844951143/script/sql/dinky-mysql.sql",
+      "sha256": "a0196e96dc23e80c96b8fd054d80ffb17d205cfdf44a98f7997233d9329f736d",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "script/sql/dinky-mysql.sql: function catalog row for CHR(integer)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL function catalog exposes CHR(integer) as a string function that converts an integer code into a character.",
+      "mysql_mariadb_translation": "Reauthored as an independent label-rendering projection. CHR supplies a fixed prefix and suffix around stored text, while a NULL code verifies CONCAT NULL propagation and LENGTH exposes the rendered byte count. The catalog schema, values, metadata rows, and application terminology are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "chr-string-function",
+    "concat",
+    "length",
+    "null-propagation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Codes 65 and 66 render A and B around independent label fragments; the NULL code must produce a NULL concatenation rather than a textual placeholder. The final byte lengths make the character conversion observable.",
+  "determinism_notes": "IDs, integer codes, label fragments, punctuation, and ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE label_code_fragments (fragment_id INT PRIMARY KEY, prefix_code INT NULL, label_fragment VARCHAR(32) NOT NULL)",
+    "INSERT INTO label_code_fragments VALUES (601, 65, 'lpha'), (602, 66, 'eta'), (603, NULL, 'missing-prefix')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT fragment_id, CONCAT(CHR(prefix_code), label_fragment, CHR(33)) AS rendered_label, LENGTH(CONCAT(CHR(prefix_code), label_fragment, CHR(33))) AS rendered_bytes FROM label_code_fragments ORDER BY fragment_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT fragment_id, prefix_code, label_fragment FROM label_code_fragments ORDER BY fragment_id",
+      "ordered": true
+    }
+  ]
+}

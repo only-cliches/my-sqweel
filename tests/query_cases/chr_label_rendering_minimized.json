@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "id": "chr_label_rendering_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source_case": "chr_label_rendering",
+    "source": {
+      "kind": "github",
+      "repository": "DataLinkDC/dinky",
+      "commit": "63b5a5aa2438a4c30efd1067da8aedf844951143",
+      "path": "script/sql/dinky-mysql.sql",
+      "url": "https://github.com/DataLinkDC/dinky/blob/63b5a5aa2438a4c30efd1067da8aedf844951143/script/sql/dinky-mysql.sql",
+      "sha256": "a0196e96dc23e80c96b8fd054d80ffb17d205cfdf44a98f7997233d9329f736d",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "script/sql/dinky-mysql.sql: function catalog row for CHR(integer)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "The scalar CHR(integer) function converts one integer code into a character and propagates SQL NULL.",
+      "mysql_mariadb_translation": "Reduced to one scalar NULL CHR argument wrapped in CONCAT, removing table setup, non-NULL rows, byte-length reporting, and ordering while isolating NULL propagation through the character function."
+    },
+    "independently_authored": true,
+    "minimized_from": "chr_label_rendering"
+  },
+  "features": [
+    "chr-string-function",
+    "null-propagation",
+    "minimized-regression"
+  ],
+  "fixture_notes": "The single NULL CHR argument must make the surrounding CONCAT result NULL rather than an unprefixed fallback string.",
+  "determinism_notes": "The scalar expression is fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT CONCAT(CHR(NULL), 'fallback') AS rendered_label",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
