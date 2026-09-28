@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "variance_sensor_profiles",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "avargas10/CE3101-Examples",
+      "commit": "20c570328cfd1a5e54a020ac1afe30da01a3afda",
+      "path": "sql-basico/create/18-funciones-agregacion-MySQL.sql",
+      "url": "https://github.com/avargas10/CE3101-Examples/blob/20c570328cfd1a5e54a020ac1afe30da01a3afda/sql-basico/create/18-funciones-agregacion-MySQL.sql",
+      "sha256": "b7a99e8b9ca1b9a5de3afabf32f4600ea771086e6c0034c9817c3eb8eba0ea17",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql-basico/create/18-funciones-agregacion-MySQL.sql: aggregate-functions overview and VARIANCE example",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL aggregate-function guide identifies VARIANCE(expr) as the population variance aggregate and demonstrates it alongside other grouped summaries.",
+      "mysql_mariadb_translation": "Reauthored as an independent sensor-dispersion report. Readings are grouped by site, NULL readings are ignored, and a NULL-only site verifies the empty-input result; identifiers, values, and application context are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "variance-aggregate",
+    "grouped-aggregate",
+    "null-ignoring-aggregate",
+    "null-only-group",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Site 11 has readings 2.00 and 8.00 plus NULL, so population variance is 9.00. Site 22 has readings 4.00, 10.00, and 16.00, so population variance is 24.00. Site 33 has only NULL and must return NULL.",
+  "determinism_notes": "Site IDs and sensor readings are fixed; the grouped report is ordered by the unique site ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE sensor_variance (reading_id INT PRIMARY KEY, site_id INT NOT NULL, reading DECIMAL(10,2) NULL)",
+    "INSERT INTO sensor_variance VALUES (101, 11, 2.00), (102, 11, 8.00), (103, 11, NULL), (201, 22, 4.00), (202, 22, 10.00), (203, 22, 16.00), (301, 33, NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT site_id, VARIANCE(reading) AS population_variance FROM sensor_variance GROUP BY site_id ORDER BY site_id",
+      "ordered": true
+    }
+  ]
+}

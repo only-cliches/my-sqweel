@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "id": "variance_sensor_profiles_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "avargas10/CE3101-Examples",
+      "commit": "20c570328cfd1a5e54a020ac1afe30da01a3afda",
+      "path": "sql-basico/create/18-funciones-agregacion-MySQL.sql",
+      "url": "https://github.com/avargas10/CE3101-Examples/blob/20c570328cfd1a5e54a020ac1afe30da01a3afda/sql-basico/create/18-funciones-agregacion-MySQL.sql",
+      "sha256": "b7a99e8b9ca1b9a5de3afabf32f4600ea771086e6c0034c9817c3eb8eba0ea17",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql-basico/create/18-funciones-agregacion-MySQL.sql: VARIANCE aggregate example",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL aggregate query uses VARIANCE(expr) for population variance.",
+      "mysql_mariadb_translation": "Reduced to one independent sensor site with two decimal readings and one NULL reading. It isolates VARIANCE recognition, population-variance math, and NULL omission without grouping multiple sites or joining tables."
+    },
+    "independently_authored": true,
+    "minimized_from": "variance_sensor_profiles"
+  },
+  "features": [
+    "variance-aggregate",
+    "null-ignoring-aggregate",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The single site has readings 2.00 and 8.00 plus NULL, so population variance is 9.00; the NULL must be ignored.",
+  "determinism_notes": "Reading IDs and the site ID are fixed; the result is ordered by the unique site ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE mini_sensor_variance (reading_id INT PRIMARY KEY, site_id INT NOT NULL, reading DECIMAL(10,2) NULL)",
+    "INSERT INTO mini_sensor_variance VALUES (1, 7, 2.00), (2, 7, 8.00), (3, 7, NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT site_id, VARIANCE(reading) AS population_variance FROM mini_sensor_variance GROUP BY site_id ORDER BY site_id",
+      "ordered": true
+    }
+  ]
+}
