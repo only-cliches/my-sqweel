@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "id": "order_by_null_group_counts",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "kamyu104/LeetCode-Solutions",
+      "commit": "4351f2d3e00b32787c2c5c4763395f681dc723df",
+      "path": "MySQL/dynamic-pivoting-of-a-table.sql",
+      "url": "https://github.com/kamyu104/LeetCode-Solutions/blob/4351f2d3e00b32787c2c5c4763395f681dc723df/MySQL/dynamic-pivoting-of-a-table.sql",
+      "sha256": "5283ebcbd6e22876c90076ac018be99ab714e639d2076362c70b3f7b78157897",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/dynamic-pivoting-of-a-table.sql (GROUP BY ... ORDER BY NULL)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL grouped projection explicitly uses ORDER BY NULL to suppress an incidental ordering requirement after aggregation.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored category-mix summary. The grouped query counts distinct item kinds and total rows per channel, then uses ORDER BY NULL because the report intentionally treats group order as unspecified. The source pivot, schema, identifiers, and values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "order-by-null",
+    "grouped-aggregate",
+    "count-distinct",
+    "unordered-result"
+  ],
+  "fixture_notes": "Channels alpha and beta have distinct item-kind counts of 2 and 1; alpha has three total rows because one kind repeats. The result is intentionally unordered so the comparator must compare group rows as a multiset while accepting ORDER BY NULL syntax.",
+  "determinism_notes": "Input IDs, channel labels, item kinds, and values are fixed; no clocks, randomness, sleeps, or concurrent schedules are used. The grouped result deliberately has no required row order.",
+  "setup": [
+    "CREATE TABLE channel_items (item_id INT PRIMARY KEY, channel_code VARCHAR(16) NOT NULL, item_kind VARCHAR(16) NOT NULL, item_value INT NOT NULL)",
+    "INSERT INTO channel_items VALUES (10101, 'alpha', 'book', 4), (10102, 'alpha', 'book', 9), (10103, 'alpha', 'pen', 2), (10201, 'beta', 'book', 7), (10202, 'beta', 'lamp', 3)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT channel_code, COUNT(DISTINCT item_kind) AS kind_count, COUNT(*) AS row_count, SUM(item_value) AS value_total FROM channel_items GROUP BY channel_code ORDER BY NULL",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT item_id, channel_code, item_kind, item_value FROM channel_items ORDER BY item_id",
+      "ordered": true
+    }
+  ]
+}
