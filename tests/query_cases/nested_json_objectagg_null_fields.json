@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "id": "nested_json_objectagg_null_fields",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "repository": "mariadb-corporation/exasol-mariadb-compat",
+      "commit": "33b4b396a657e7681e7e6ff03eee9d38c78df922",
+      "path": "udfs/json/json_objectagg.sql",
+      "url": "https://github.com/mariadb-corporation/exasol-mariadb-compat/blob/33b4b396a657e7681e7e6ff03eee9d38c78df922/udfs/json/json_objectagg.sql",
+      "sha256": "0b5e229b9912c4373839a1247f4a5da2076385ef16312587069005603da4e932",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "udfs/json/json_objectagg.sql:36-40",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "JSON_OBJECTAGG embeds JSON_OBJECT values verbatim, so nested JSON documents retain their object structure and SQL NULL members remain JSON null values.",
+      "mysql_mariadb_translation": "Reauthored as an independent service-settings report. Each service aggregates property keys into nested JSON_OBJECT documents with nullable descriptions and numeric limits; grouped service ordering and unique keys make nested null propagation observable without copying the source schema or values."
+    },
+    "independently_authored": true
+  },
+  "features": ["json-objectagg", "nested-json-object", "nested-json-null", "grouped-report", "deterministic-order"],
+  "fixture_notes": "Service 601 has a NULL description and service 602 has a non-NULL description; JSON_OBJECT must preserve the NULL member as JSON null inside each aggregated nested object.",
+  "determinism_notes": "Service IDs, property keys, descriptions, numeric limits, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE service_settings (service_id INT NOT NULL, setting_key VARCHAR(32) NOT NULL, setting_description VARCHAR(64) NULL, setting_limit INT NOT NULL, PRIMARY KEY (service_id, setting_key))",
+    "INSERT INTO service_settings VALUES (601, 'quota', NULL, 80), (601, 'retry', 'bounded', 3), (602, 'quota', 'standard', 120)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT service_id, JSON_OBJECTAGG(setting_key, JSON_OBJECT('description', setting_description, 'limit', setting_limit)) AS settings FROM service_settings GROUP BY service_id ORDER BY service_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT service_id, COUNT(*) AS setting_count FROM service_settings GROUP BY service_id ORDER BY service_id",
+      "ordered": true
+    }
+  ]
+}

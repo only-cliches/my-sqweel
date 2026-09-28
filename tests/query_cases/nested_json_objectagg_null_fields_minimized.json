@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "id": "nested_json_objectagg_null_fields_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "nested_json_objectagg_null_fields",
+    "source": {
+      "repository": "mariadb-corporation/exasol-mariadb-compat",
+      "commit": "33b4b396a657e7681e7e6ff03eee9d38c78df922",
+      "path": "udfs/json/json_objectagg.sql",
+      "url": "https://github.com/mariadb-corporation/exasol-mariadb-compat/blob/33b4b396a657e7681e7e6ff03eee9d38c78df922/udfs/json/json_objectagg.sql",
+      "sha256": "0b5e229b9912c4373839a1247f4a5da2076385ef16312587069005603da4e932",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from nested_json_objectagg_null_fields",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A scalar JSON_OBJECTAGG result preserves a JSON null member inside its nested JSON_OBJECT value.",
+      "mysql_mariadb_translation": "Reduced to one fixed key and one nested object containing a NULL description and numeric limit, isolating nested null serialization from grouping and multiple settings."
+    },
+    "independently_authored": true,
+    "minimized_from": "nested_json_objectagg_null_fields"
+  },
+  "features": ["json-objectagg", "nested-json-object", "nested-json-null", "minimized-regression"],
+  "fixture_notes": "The nested description must render as JSON null rather than the string sentinel or an omitted member.",
+  "determinism_notes": "The key, NULL description, numeric limit, and one-row input are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE mini_service_settings (setting_key VARCHAR(32) PRIMARY KEY, setting_description VARCHAR(64) NULL, setting_limit INT NOT NULL)",
+    "INSERT INTO mini_service_settings VALUES ('quota', NULL, 80)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT JSON_OBJECTAGG(setting_key, JSON_OBJECT('description', setting_description, 'limit', setting_limit)) AS settings FROM mini_service_settings",
+      "ordered": true
+    }
+  ]
+}
