@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "group_concat_rollup_having_filter",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/1813.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/1813.sql",
+      "sha256": "e27ecddc1074e27e548902bfb72ced5d78ae6e70abd58e1d31126c3a86f70393",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/docker/fuzz_root/mysql_initlib/1813.sql:36",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped query uses WITH ROLLUP while HAVING evaluates GROUP_CONCAT, so the aggregate predicate is applied to both detail groups and the generated rollup group.",
+      "mysql_mariadb_translation": "Reauthored as an enabled-region dispatch report. Package codes are ordered within each region and the grand total, while HAVING retains groups whose concatenated codes contain a designated package; the schema, identifiers, rows, and predicate are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": ["group-concat", "aggregate-local-ordering", "group-by-rollup", "aggregate-having", "joined-filter", "deterministic-content"],
+  "fixture_notes": "East contains the qualifying package code, west and south do not. The HAVING predicate retains east and the grand-total rollup because both concatenations contain box-b; the other detail groups are filtered out.",
+  "determinism_notes": "Region and package identifiers are fixed. GROUP_CONCAT has explicit package ordering and a fixed separator. Rollup rows are compared as an unordered multiset because subtotal presentation order is not part of the SQL contract.",
+  "setup": [
+    "CREATE TABLE dispatch_regions (region_code VARCHAR(16) NOT NULL, region_name VARCHAR(32) NOT NULL, enabled TINYINT NOT NULL, PRIMARY KEY (region_code))",
+    "CREATE TABLE dispatch_packages (package_id INT PRIMARY KEY, region_code VARCHAR(16) NOT NULL, package_code VARCHAR(16) NOT NULL, weight_kg INT NOT NULL)",
+    "INSERT INTO dispatch_regions VALUES ('east', 'Eastern depot', 1), ('west', 'Western depot', 1), ('south', 'Southern depot', 1), ('closed', 'Closed depot', 0)",
+    "INSERT INTO dispatch_packages VALUES (11, 'east', 'box-a', 4), (12, 'east', 'box-b', 7), (21, 'west', 'box-c', 3), (31, 'south', 'box-d', 6), (41, 'closed', 'box-b', 99)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT r.region_code, GROUP_CONCAT(p.package_code ORDER BY p.package_code ASC SEPARATOR '|') AS package_codes, SUM(p.weight_kg) AS total_weight FROM dispatch_regions AS r INNER JOIN dispatch_packages AS p ON p.region_code = r.region_code WHERE r.enabled = 1 GROUP BY r.region_code WITH ROLLUP HAVING GROUP_CONCAT(p.package_code ORDER BY p.package_code ASC SEPARATOR '|') LIKE '%box-b%'",
+      "ordered": false
+    }
+  ]
+}
