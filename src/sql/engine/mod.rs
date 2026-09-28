@@ -94,15 +94,37 @@ fn rewrite_group_concat_limits_for_parser(sql: &str) -> String {
         };
         let before_limit = body[..limit_position].trim_end();
         let limit_text = body[limit_position + "LIMIT".len()..].trim();
-        if limit_text.is_empty() || !limit_text.bytes().all(|byte| byte.is_ascii_digit()) {
+        let mut limit_tokens = limit_text.split_whitespace();
+        let Some(limit) = limit_tokens.next() else {
+            search = close + 1;
+            continue;
+        };
+        if !limit.bytes().all(|byte| byte.is_ascii_digit()) {
             search = close + 1;
             continue;
         }
+        let offset = match (limit_tokens.next(), limit_tokens.next()) {
+            (None, None) => None,
+            (Some(keyword), Some(value))
+                if keyword.eq_ignore_ascii_case("OFFSET")
+                    && value.bytes().all(|byte| byte.is_ascii_digit()) =>
+            {
+                Some(value)
+            }
+            _ => {
+                search = close + 1;
+                continue;
+            }
+        };
+        let marker_text = match offset {
+            Some(offset) => format!("{limit}_{offset}"),
+            None => limit.to_string(),
+        };
         let clause_position = ["ORDER BY", "SEPARATOR"]
             .iter()
             .filter_map(|keyword| top_level_keyword_position(before_limit, keyword))
             .min();
-        let marker = format!("'{MARKER}{limit_text}'");
+        let marker = format!("'{MARKER}{marker_text}'");
         let rewritten_body = if let Some(position) = clause_position {
             format!(
                 "{}, {} {}",

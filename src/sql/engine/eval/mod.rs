@@ -1300,6 +1300,7 @@ struct AggregateCall {
     order_by: Vec<GroupConcatOrder>,
     separator: String,
     limit: Option<usize>,
+    offset: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -1370,6 +1371,7 @@ fn aggregate_call(expr: &Expr) -> Option<AggregateCall> {
         order_by: Vec::new(),
         separator: ",".to_string(),
         limit: None,
+        offset: None,
     })
 }
 
@@ -1407,11 +1409,20 @@ fn parse_group_concat_call(args: Vec<String>) -> AggregateCall {
     let mut body = args.join(", ");
     let limit_parts = split_top_level_keyword(&body, "LIMIT")
         .map(|(left, right)| (left.to_string(), right.trim().to_string()));
-    let mut limit = if let Some((left, right)) = limit_parts {
+    let (mut limit, mut offset) = if let Some((left, right)) = limit_parts {
         body = left;
-        right.parse::<usize>().ok()
+        let mut values = right.split_whitespace();
+        let limit = values.next().and_then(|value| value.parse::<usize>().ok());
+        let offset = match (values.next(), values.next()) {
+            (None, None) => None,
+            (Some(keyword), Some(value)) if keyword.eq_ignore_ascii_case("OFFSET") => {
+                value.parse::<usize>().ok()
+            }
+            _ => None,
+        };
+        (limit, offset)
     } else {
-        None
+        (None, None)
     };
     let mut separator = ",".to_string();
     if let Some((left, right)) = split_top_level_keyword(&body, "SEPARATOR") {
@@ -1435,16 +1446,27 @@ fn parse_group_concat_call(args: Vec<String>) -> AggregateCall {
     let marker_limit = args.iter().enumerate().find_map(|(index, arg)| {
         let trimmed = arg
             .trim()
-            .trim_matches(['`', '\'', '"'])
+            .trim_start_matches(['`', '\'', '"'])
             .to_ascii_uppercase();
-        trimmed
-            .strip_prefix(marker_prefix)
-            .and_then(|value| value.parse::<usize>().ok())
-            .map(|limit| (index, limit))
+        let value = trimmed.strip_prefix(marker_prefix)?;
+        let value = value
+            .split_whitespace()
+            .next()?
+            .trim_end_matches(['`', '\'', '"']);
+        let mut parts = value.split('_');
+        let limit = parts.next()?.parse::<usize>().ok()?;
+        let offset = parts.next().and_then(|value| value.parse::<usize>().ok());
+        if parts.next().is_some() {
+            return None;
+        }
+        Some((index, limit, offset))
     });
-    if let Some((index, marker_limit)) = marker_limit {
+    if let Some((index, marker_limit, marker_offset)) = marker_limit {
         args.remove(index);
         limit.get_or_insert(marker_limit);
+        if let Some(marker_offset) = marker_offset {
+            offset.get_or_insert(marker_offset);
+        }
     }
 
     let mut distinct = false;
@@ -1463,6 +1485,7 @@ fn parse_group_concat_call(args: Vec<String>) -> AggregateCall {
         order_by,
         separator,
         limit,
+        offset,
     }
 }
 
@@ -1492,6 +1515,7 @@ fn parse_json_arrayagg_call(args: Vec<String>) -> AggregateCall {
         order_by,
         separator: ",".to_string(),
         limit: None,
+        offset: None,
     }
 }
 
@@ -1634,6 +1658,9 @@ fn eval_aggregate_call_rows<'a>(
     if call.distinct {
         let mut seen = HashSet::new();
         values.retain(|value| seen.insert(encode_json_value(value)));
+    }
+    if let Some(offset) = call.offset {
+        values.drain(..offset.min(values.len()));
     }
     if let Some(limit) = call.limit {
         values.truncate(limit);
