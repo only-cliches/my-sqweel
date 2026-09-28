@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "id": "update_ignore_scalar_lookup",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "chenbk85/taomee",
+      "commit": "fd28313ee009b2f531cf9f94793f9655c474fdc0",
+      "path": "itl/script/mysql_metrics_1.sql",
+      "url": "https://github.com/chenbk85/taomee/blob/fd28313ee009b2f531cf9f94793f9655c474fdc0/itl/script/mysql_metrics_1.sql",
+      "sha256": "a08a2b0f5270b21a57e0f91f2479a9f20b31adeb658f836fbf0bf5d45f6b6c59",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "itl/script/mysql_metrics_1.sql:62 (UPDATE IGNORE assignment from ordered scalar SELECT)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL maintenance update combines UPDATE IGNORE with a scalar subquery in SET; the subquery filters a lookup relation and uses LIMIT 1 to select one value.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored node-owner refresh. Pending nodes receive the highest-priority ready owner from an ordered scalar lookup, while active nodes remain unchanged; the source tables, names, values, and metric-migration context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "update-ignore",
+    "scalar-subquery-assignment",
+    "subquery-order-by",
+    "subquery-limit",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Pending node 501 receives owner 900 from the highest-priority ready north candidate. A lower-priority ready candidate and a blocked higher-priority candidate make the filter and ordering observable; active node 502 remains unchanged.",
+  "determinism_notes": "Candidate priorities and IDs are fixed, the scalar subquery orders by priority and candidate_id before LIMIT 1, and final nodes are ordered by node_id with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE node_candidates (candidate_id INT PRIMARY KEY, candidate_code VARCHAR(16) NOT NULL, owner_id INT NOT NULL, priority INT NOT NULL, candidate_state VARCHAR(16) NOT NULL)",
+    "CREATE TABLE node_registry (node_id INT PRIMARY KEY, node_code VARCHAR(16) NOT NULL, owner_id INT NULL, node_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO node_candidates VALUES (601, 'north', 901, 10, 'ready'), (602, 'north', 900, 20, 'ready'), (603, 'north', 899, 99, 'blocked'), (604, 'south', 880, 50, 'ready')",
+    "INSERT INTO node_registry VALUES (501, 'edge-a', NULL, 'pending'), (502, 'edge-b', 777, 'active')"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE IGNORE node_registry SET owner_id = (SELECT owner_id FROM node_candidates WHERE candidate_code = 'north' AND candidate_state = 'ready' ORDER BY priority DESC, candidate_id ASC LIMIT 1) WHERE node_state = 'pending'",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT node_id, node_code, owner_id, node_state FROM node_registry ORDER BY node_id",
+      "ordered": true
+    }
+  ]
+}
