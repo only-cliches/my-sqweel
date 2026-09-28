@@ -1,0 +1,67 @@
+{
+  "version": 1,
+  "id": "aggregate_case_join_update",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "ashsal/sql",
+      "commit": "28f305975e08e5f20ddc7e1f764862b80ec85ffc",
+      "path": "Update.sql",
+      "url": "https://github.com/ashsal/sql/blob/28f305975e08e5f20ddc7e1f764862b80ec85ffc/Update.sql",
+      "sha256": "cd7df0d891887598cb29810f4af21e2618a82d3616b10cb531598ff8102226d8",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Update.sql:45-59",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL update workflow derives a scalar aggregate for every row, assigns a CASE-based status, copies values through an INNER JOIN, and applies an ORDER BY/LIMIT mutation to the highest-valued row.",
+      "mysql_mariadb_translation": "Reauthored as a campaign-metrics refresh. A fixed average budget fills a reserve column, quota drives a CASE status, a joined rating table supplies ratings, and only the highest-budget campaign is featured; the source tables, identifiers, values, and product tutorial data are not copied.",
+      "independently_authored": true
+    }
+  },
+  "features": [
+    "scalar-aggregate-update",
+    "case-update",
+    "inner-join-update",
+    "ordered-update-limit",
+    "multi-step-dml",
+    "deterministic-final-state"
+  ],
+  "fixture_notes": "All campaigns receive the same reserve computed from the pre-update average budget. Quotas split campaigns into ready/watch, ratings exist only for campaigns 101 and 102, and the highest-budget campaign 101 alone becomes featured.",
+  "determinism_notes": "The aggregate runs before any budget mutation, each campaign has at most one rating row, the highest budget is unique, and final reads use primary-key ordering; there are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE campaign_metrics (campaign_id INT PRIMARY KEY, campaign_name VARCHAR(32) NOT NULL, budget DECIMAL(10,2) NOT NULL, reserve DECIMAL(10,2) NULL, quota INT NOT NULL, campaign_state VARCHAR(16) NOT NULL, rating TINYINT NULL)",
+    "CREATE TABLE campaign_ratings (rating_id INT PRIMARY KEY, campaign_id INT NOT NULL, rating TINYINT NOT NULL)",
+    "INSERT INTO campaign_metrics VALUES (101, 'Aurora', 900.00, NULL, 24, 'new', NULL), (102, 'Beacon', 450.00, NULL, 11, 'new', NULL), (103, 'Cedar', 700.00, NULL, 18, 'new', NULL), (104, 'Drift', 300.00, NULL, 7, 'new', NULL)",
+    "INSERT INTO campaign_ratings VALUES (701, 101, 5), (702, 102, 3)"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE campaign_metrics SET reserve = (SELECT AVG(budget) FROM campaign_metrics) * 0.10",
+      "ordered": false
+    },
+    {
+      "sql": "UPDATE campaign_metrics SET campaign_state = CASE WHEN quota > 15 THEN 'ready' ELSE 'watch' END",
+      "ordered": false
+    },
+    {
+      "sql": "UPDATE campaign_metrics INNER JOIN campaign_ratings ON campaign_metrics.campaign_id = campaign_ratings.campaign_id SET campaign_metrics.rating = campaign_ratings.rating",
+      "ordered": false
+    },
+    {
+      "sql": "UPDATE campaign_metrics SET campaign_state = 'featured' WHERE campaign_state = 'ready' ORDER BY budget DESC, campaign_id ASC LIMIT 1",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT campaign_id, campaign_state, reserve, rating FROM campaign_metrics ORDER BY campaign_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT campaign_id, campaign_state, reserve, rating FROM campaign_metrics ORDER BY campaign_id",
+      "ordered": true
+    }
+  ]
+}
