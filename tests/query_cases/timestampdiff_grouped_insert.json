@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "id": "timestampdiff_grouped_insert",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "cobub/razor",
+      "commit": "2c991aff4a9c83f99e77a03e26056715706f15c0",
+      "path": "web/assets/sql/sp_rundaily.sql",
+      "url": "https://github.com/cobub/razor/blob/2c991aff4a9c83f99e77a03e26056715706f15c0/web/assets/sql/sp_rundaily.sql",
+      "sha256": "e46818f75deb438d53b449f340ae7b2d1c2ef870429a7676081c874d922d4388",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "web/assets/sql/sp_rundaily.sql: grouped daily aggregate INSERT ... SELECT sections",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL/MariaDB daily aggregation workflow persists grouped activity totals through INSERT ... SELECT while deriving time-based measures from event timestamps.",
+      "mysql_mariadb_translation": "Reauthored as a device-session duration rollup. Settled sessions are grouped by device, TIMESTAMPDIFF computes each session length in minutes inside SUM, and the aggregate is persisted into a keyed summary table; open sessions are excluded. The source procedure, schema, identifiers, and values are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": ["timestampdiff", "grouped-insert-select", "sum-of-time-differences", "filtered-source", "deterministic-final-state"],
+  "fixture_notes": "Device 71 has two closed sessions lasting 30 and 45 minutes; device 72 has one closed 20-minute session; device 73 has only an open session and is absent from the rollup.",
+  "determinism_notes": "Session timestamps, device IDs, states, grouping, and final ordering are fixed. No current-time functions, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE device_sessions (session_id INT PRIMARY KEY, device_id INT NOT NULL, started_at DATETIME NOT NULL, ended_at DATETIME NULL, session_state VARCHAR(16) NOT NULL)",
+    "CREATE TABLE device_duration_rollups (device_id INT PRIMARY KEY, closed_sessions INT NOT NULL, total_minutes INT NOT NULL)",
+    "INSERT INTO device_sessions VALUES (7101, 71, '2026-04-01 09:00:00', '2026-04-01 09:30:00', 'closed'), (7102, 71, '2026-04-01 10:00:00', '2026-04-01 10:45:00', 'closed'), (7201, 72, '2026-04-02 08:10:00', '2026-04-02 08:30:00', 'closed'), (7301, 73, '2026-04-02 12:00:00', NULL, 'open')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO device_duration_rollups (device_id, closed_sessions, total_minutes) SELECT device_id, COUNT(*), SUM(TIMESTAMPDIFF(MINUTE, started_at, ended_at)) FROM device_sessions WHERE session_state = 'closed' GROUP BY device_id ORDER BY device_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT device_id, closed_sessions, total_minutes FROM device_duration_rollups ORDER BY device_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT device_id, COUNT(*) AS closed_sessions, SUM(TIMESTAMPDIFF(MINUTE, started_at, ended_at)) AS total_minutes FROM device_sessions WHERE session_state = 'closed' GROUP BY device_id ORDER BY device_id",
+      "ordered": true
+    }
+  ]
+}

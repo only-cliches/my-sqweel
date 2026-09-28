@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "timestampdiff_grouped_insert_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "cobub/razor",
+      "commit": "2c991aff4a9c83f99e77a03e26056715706f15c0",
+      "path": "web/assets/sql/sp_rundaily.sql",
+      "url": "https://github.com/cobub/razor/blob/2c991aff4a9c83f99e77e03e26056715706f15c0/web/assets/sql/sp_rundaily.sql",
+      "sha256": "e46818f75deb438d53b449f340ae7b2d1c2ef870429a7676081c874d922d4388",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "web/assets/sql/sp_rundaily.sql: grouped daily aggregate INSERT ... SELECT sections",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped INSERT ... SELECT persists a time-derived aggregate for each entity.",
+      "mysql_mariadb_translation": "Reduced to one independently authored device with two closed sessions and a grouped INSERT ... SELECT that sums TIMESTAMPDIFF minute values."
+    },
+    "independently_authored": true,
+    "minimized_from": "timestampdiff_grouped_insert"
+  },
+  "features": ["timestampdiff", "grouped-insert-select", "sum-of-time-differences", "minimized-regression"],
+  "fixture_notes": "Device 81 has two closed sessions lasting 10 and 15 minutes, producing one persisted total of 25 minutes.",
+  "determinism_notes": "Fixed timestamps, one device, literal state, grouped output, and ordered final read; no current-time functions, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE device_sessions_min (session_id INT PRIMARY KEY, device_id INT NOT NULL, started_at DATETIME NOT NULL, ended_at DATETIME NOT NULL, session_state VARCHAR(16) NOT NULL)",
+    "CREATE TABLE device_duration_rollups_min (device_id INT PRIMARY KEY, closed_sessions INT NOT NULL, total_minutes INT NOT NULL)",
+    "INSERT INTO device_sessions_min VALUES (1, 81, '2026-04-03 09:00:00', '2026-04-03 09:10:00', 'closed'), (2, 81, '2026-04-03 10:00:00', '2026-04-03 10:15:00', 'closed')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO device_duration_rollups_min (device_id, closed_sessions, total_minutes) SELECT device_id, COUNT(*), SUM(TIMESTAMPDIFF(MINUTE, started_at, ended_at)) FROM device_sessions_min WHERE session_state = 'closed' GROUP BY device_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT device_id, closed_sessions, total_minutes FROM device_duration_rollups_min ORDER BY device_id",
+      "ordered": true
+    }
+  ]
+}
