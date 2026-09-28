@@ -1770,34 +1770,42 @@ impl RawEngine {
         }
     }
 
-    fn execute_parenthesized_union_compat(&self, sql: &str) -> Result<Option<QueryResult>> {
+    fn execute_parenthesized_set_compat(&self, sql: &str) -> Result<Option<QueryResult>> {
         let Some(close) = matching_close_paren(sql, 0) else {
             return Ok(None);
         };
         let after = sql[close + 1..].trim_start();
         let after_upper = after.to_ascii_uppercase();
-        let union_keyword = if after_upper.starts_with("UNION ALL") {
-            "UNION ALL"
+        let (operator, operator_len, all) = if after_upper.starts_with("UNION ALL") {
+            ("UNION", "UNION ALL".len(), true)
+        } else if after_upper.starts_with("INTERSECT ALL") {
+            ("INTERSECT", "INTERSECT ALL".len(), true)
+        } else if after_upper.starts_with("EXCEPT ALL") {
+            ("EXCEPT", "EXCEPT ALL".len(), true)
         } else if after_upper.starts_with("UNION") {
-            "UNION"
+            ("UNION", "UNION".len(), false)
+        } else if after_upper.starts_with("INTERSECT") {
+            ("INTERSECT", "INTERSECT".len(), false)
+        } else if after_upper.starts_with("EXCEPT") {
+            ("EXCEPT", "EXCEPT".len(), false)
         } else {
             return Ok(None);
         };
         let left_sql = sql[1..close].trim();
-        let union_body = after[union_keyword.len()..].trim_start();
-        let (right_sql, outer_tail) = if union_body.starts_with('(') {
-            let right_close =
-                matching_close_paren(union_body, 0).ok_or_else(|| anyhow!("invalid UNION"))?;
+        let set_body = after[operator_len..].trim_start();
+        let (right_sql, outer_tail) = if set_body.starts_with('(') {
+            let right_close = matching_close_paren(set_body, 0)
+                .ok_or_else(|| anyhow!("invalid set operation"))?;
             (
-                union_body[1..right_close].trim(),
-                union_body[right_close + 1..].trim(),
+                set_body[1..right_close].trim(),
+                set_body[right_close + 1..].trim(),
             )
         } else {
-            let union_upper = union_body.to_ascii_uppercase();
-            if let Some(limit_at) = find_top_level_keyword(&union_upper, "LIMIT") {
-                (union_body[..limit_at].trim(), union_body[limit_at..].trim())
+            let set_upper = set_body.to_ascii_uppercase();
+            if let Some(limit_at) = find_top_level_keyword(&set_upper, "LIMIT") {
+                (set_body[..limit_at].trim(), set_body[limit_at..].trim())
             } else {
-                (union_body, "")
+                (set_body, "")
             }
         };
         let (limit, offset) = if let Some(limit_at) =
@@ -1831,26 +1839,80 @@ impl RawEngine {
             .last()
             .unwrap_or_default();
         let columns = left.columns.clone();
-        let mut rows = left.rows;
-        if union_keyword == "UNION" {
-            for row in right.rows {
-                if !rows.iter().any(|existing| existing == &row) {
-                    rows.push(row);
+        let column_metadata = left.column_metadata.clone();
+        let mut rows = match (operator, all) {
+            ("UNION", false) => {
+                let mut rows = left.rows;
+                for row in right.rows {
+                    if !rows.iter().any(|existing| existing == &row) {
+                        rows.push(row);
+                    }
                 }
+                rows
             }
-        } else {
-            rows.extend(right.rows);
-        }
-        let rows = rows
+            ("UNION", true) => {
+                let mut rows = left.rows;
+                rows.extend(right.rows);
+                rows
+            }
+            ("INTERSECT", false) => left
+                .rows
+                .into_iter()
+                .filter(|row| right.rows.iter().any(|candidate| candidate == row))
+                .fold(Vec::new(), |mut rows, row| {
+                    if !rows.iter().any(|existing| existing == &row) {
+                        rows.push(row);
+                    }
+                    rows
+                }),
+            ("INTERSECT", true) => {
+                let mut remaining = right.rows;
+                left.rows
+                    .into_iter()
+                    .filter_map(|row| {
+                        let index = remaining.iter().position(|candidate| candidate == &row)?;
+                        remaining.remove(index);
+                        Some(row)
+                    })
+                    .collect()
+            }
+            ("EXCEPT", false) => left
+                .rows
+                .into_iter()
+                .filter(|row| !right.rows.iter().any(|candidate| candidate == row))
+                .collect(),
+            ("EXCEPT", true) => {
+                let mut remaining = right.rows;
+                left.rows
+                    .into_iter()
+                    .filter(|row| {
+                        if let Some(index) = remaining.iter().position(|candidate| candidate == row)
+                        {
+                            remaining.remove(index);
+                            false
+                        } else {
+                            true
+                        }
+                    })
+                    .collect()
+            }
+            _ => unreachable!(),
+        };
+        rows = rows
             .into_iter()
             .skip(offset)
             .take(limit.unwrap_or(usize::MAX))
             .collect();
         Ok(Some(QueryResult {
             columns,
+            column_metadata,
             rows,
             ..QueryResult::default()
         }))
+    }
+
+    fn execute_parenthesized_union_compat(&self, sql: &str) -> Result<Option<QueryResult>> {
+        self.execute_parenthesized_set_compat(sql)
     }
 
     fn execute_union_compat(&self, sql: &str) -> Result<Option<QueryResult>> {

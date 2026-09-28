@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "intersect_all_branch_limits",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "bernaysl/SQL-INTERSECT-EXCEPT",
+      "commit": "6701de942081ce11a7d2dc579ab4e5fbf1d4ffab",
+      "path": "except.sql",
+      "url": "https://github.com/bernaysl/SQL-INTERSECT-EXCEPT/blob/6701de942081ce11a7d2dc579ab4e5fbf1d4ffab/except.sql",
+      "sha256": "449a4e49d8979816c66b8e7ead4cde3c2619ec5b71e105f40bf5a01f090954d9",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "except.sql:3-14",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "Parenthesized INTERSECT and EXCEPT operands each apply their own ORDER BY and LIMIT before the set operation, followed by a final set result.",
+      "mysql_mariadb_translation": "Reauthored as a bounded label eligibility report. The top four ranked labels from two independent queues are intersected with duplicate multiplicity preserved, then a deterministic outer ordering and LIMIT returns the first three matches. The source table, values, and teaching examples are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": ["intersect-all", "branch-order-limit", "multiset-intersection", "outer-limit", "deterministic-order"],
+  "fixture_notes": "Each branch is ranked independently before intersection. The left branch contributes alpha twice, beta, and gamma; the right contributes alpha, beta, gamma, and epsilon, so INTERSECT ALL retains alpha twice, beta, and gamma before the outer LIMIT keeps alpha twice and beta.",
+  "determinism_notes": "Ranks and labels are fixed, each operand has a unique rank tie-breaker, and the outer result is ordered by label. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE requested_labels (row_id INT PRIMARY KEY, label VARCHAR(24) NOT NULL, rank_no INT NOT NULL)",
+    "CREATE TABLE approved_labels (row_id INT PRIMARY KEY, label VARCHAR(24) NOT NULL, rank_no INT NOT NULL)",
+    "INSERT INTO requested_labels VALUES (1, 'alpha', 1), (2, 'beta', 2), (3, 'gamma', 3), (4, 'alpha', 4), (5, 'delta', 5)",
+    "INSERT INTO approved_labels VALUES (11, 'alpha', 1), (12, 'beta', 2), (13, 'gamma', 3), (14, 'epsilon', 4), (15, 'alpha', 5)"
+  ],
+  "steps": [
+    {
+      "sql": "(SELECT label FROM requested_labels ORDER BY rank_no ASC LIMIT 4) INTERSECT ALL (SELECT label FROM approved_labels ORDER BY rank_no ASC LIMIT 4) ORDER BY label ASC LIMIT 3",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT row_id, label, rank_no FROM requested_labels ORDER BY row_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT row_id, label, rank_no FROM approved_labels ORDER BY row_id",
+      "ordered": true
+    }
+  ]
+}

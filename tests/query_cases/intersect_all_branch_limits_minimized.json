@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "intersect_all_branch_limits_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "bernaysl/SQL-INTERSECT-EXCEPT",
+      "commit": "6701de942081ce11a7d2dc579ab4e5fbf1d4ffab",
+      "path": "except.sql",
+      "url": "https://github.com/bernaysl/SQL-INTERSECT-EXCEPT/blob/6701de942081ce11a7d2dc579ab4e5fbf1d4ffab/except.sql",
+      "sha256": "449a4e49d8979816c66b8e7ead4cde3c2619ec5b71e105f40bf5a01f090954d9",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "except.sql:3-7",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "Two parenthesized ordered and limited SELECT operands feed an INTERSECT result.",
+      "mysql_mariadb_translation": "Reduced to one independently authored duplicate-free label in common, one local LIMIT per branch, and one outer LIMIT; the new schema and values isolate operand-local paging from the source tutorial."
+    },
+    "independently_authored": true,
+    "minimized_from": "intersect_all_branch_limits"
+  },
+  "features": ["intersect-all", "branch-order-limit", "outer-limit", "minimized-regression"],
+  "fixture_notes": "The first two rows from each branch are alpha and beta; the outer LIMIT returns only alpha after the two bounded operands are intersected.",
+  "determinism_notes": "Fixed rank values, unique row IDs, explicit branch ordering, and explicit outer ordering make the one-row result deterministic.",
+  "setup": [
+    "CREATE TABLE requested_labels_min (row_id INT PRIMARY KEY, label VARCHAR(24) NOT NULL, rank_no INT NOT NULL)",
+    "CREATE TABLE approved_labels_min (row_id INT PRIMARY KEY, label VARCHAR(24) NOT NULL, rank_no INT NOT NULL)",
+    "INSERT INTO requested_labels_min VALUES (1, 'alpha', 1), (2, 'beta', 2), (3, 'gamma', 3)",
+    "INSERT INTO approved_labels_min VALUES (11, 'alpha', 1), (12, 'beta', 2), (13, 'delta', 3)"
+  ],
+  "steps": [
+    {
+      "sql": "(SELECT label FROM requested_labels_min ORDER BY rank_no ASC LIMIT 2) INTERSECT ALL (SELECT label FROM approved_labels_min ORDER BY rank_no ASC LIMIT 2) ORDER BY label ASC LIMIT 1",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT row_id, label, rank_no FROM requested_labels_min ORDER BY row_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT row_id, label, rank_no FROM approved_labels_min ORDER BY row_id",
+      "ordered": true
+    }
+  ]
+}
