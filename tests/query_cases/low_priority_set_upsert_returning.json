@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "low_priority_set_upsert_returning",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "mariadb-corporation/mariadb-qa",
+      "commit": "20367fbdcd1d0236a279fa51a07edfa00d24cdf2",
+      "path": "BUGS/MDEV-36354.sql",
+      "url": "https://github.com/mariadb-corporation/mariadb-qa/blob/20367fbdcd1d0236a279fa51a07edfa00d24cdf2/BUGS/MDEV-36354.sql",
+      "sha256": "1ae10c4179d6ad13f1eeb45a3c440bc29cbd47e020c3cafbab07d9016df3a3f3",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "BUGS/MDEV-36354.sql:5, INSERT LOW_PRIORITY IGNORE ... SET ... ON DUPLICATE KEY UPDATE ... RETURNING",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB regression statement combines LOW_PRIORITY and IGNORE modifiers with assignment-style INSERT, duplicate-key defaults, and RETURNING.",
+      "mysql_mariadb_translation": "Reauthored as an independent inventory merge. A conflicting low-priority SET upsert resets fields to column defaults and returns them, while a second statement inserts a new item through the same modifier and assignment combination; final state verifies both paths. The source fuzz expressions, table, values, and bug context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["insert-low-priority", "insert-ignore", "insert-set", "on-duplicate-key-update", "default-values", "returning", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "Item 701 conflicts and must return default quantity/state values through the duplicate path; item 702 is newly inserted and returns its explicit values. The final read verifies both rows.",
+  "determinism_notes": "IDs, defaults, values, and return projections are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE inventory_merge (item_id INT PRIMARY KEY, quantity INT NOT NULL DEFAULT 0, item_state VARCHAR(16) NOT NULL DEFAULT 'pending')",
+    "INSERT INTO inventory_merge (item_id, quantity, item_state) VALUES (701, 4, 'queued')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT LOW_PRIORITY IGNORE INTO inventory_merge SET item_id = 701, quantity = 9, item_state = 'restocked' ON DUPLICATE KEY UPDATE quantity = DEFAULT, item_state = DEFAULT RETURNING item_id, quantity, item_state",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT LOW_PRIORITY IGNORE INTO inventory_merge SET item_id = 702, quantity = 6, item_state = 'ready' ON DUPLICATE KEY UPDATE quantity = DEFAULT, item_state = DEFAULT RETURNING item_id, quantity, item_state",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT item_id, quantity, item_state FROM inventory_merge ORDER BY item_id",
+      "ordered": true
+    }
+  ]
+}

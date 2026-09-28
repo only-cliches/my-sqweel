@@ -5862,13 +5862,29 @@ fn strip_create_table_index_prefixes(sql: &str) -> String {
 
 fn rewrite_insert_set(sql: &str) -> String {
     let upper = sql.to_ascii_uppercase();
-    let (prefix, output_prefix) = if upper.starts_with("INSERT DELAYED INTO ") {
-        ("INSERT DELAYED INTO ", "INSERT INTO ")
-    } else if upper.starts_with("INSERT INTO ") {
-        ("INSERT INTO ", "INSERT INTO ")
-    } else if upper.starts_with("REPLACE INTO ") {
-        ("REPLACE INTO ", "REPLACE INTO ")
-    } else {
+    let prefixes = [
+        ("INSERT LOW_PRIORITY IGNORE INTO ", "INSERT IGNORE INTO "),
+        ("INSERT LOW_PRIORITY IGNORE ", "INSERT IGNORE INTO "),
+        ("INSERT HIGH_PRIORITY IGNORE INTO ", "INSERT IGNORE INTO "),
+        ("INSERT HIGH_PRIORITY IGNORE ", "INSERT IGNORE INTO "),
+        ("INSERT DELAYED IGNORE INTO ", "INSERT IGNORE INTO "),
+        ("INSERT DELAYED IGNORE ", "INSERT IGNORE INTO "),
+        ("INSERT LOW_PRIORITY INTO ", "INSERT INTO "),
+        ("INSERT LOW_PRIORITY ", "INSERT INTO "),
+        ("INSERT HIGH_PRIORITY INTO ", "INSERT INTO "),
+        ("INSERT HIGH_PRIORITY ", "INSERT INTO "),
+        ("INSERT DELAYED INTO ", "INSERT INTO "),
+        ("INSERT DELAYED ", "INSERT INTO "),
+        ("INSERT IGNORE INTO ", "INSERT IGNORE INTO "),
+        ("INSERT IGNORE ", "INSERT IGNORE INTO "),
+        ("INSERT INTO ", "INSERT INTO "),
+        ("INSERT ", "INSERT INTO "),
+        ("REPLACE INTO ", "REPLACE INTO "),
+    ];
+    let Some((prefix, output_prefix)) = prefixes
+        .into_iter()
+        .find(|(prefix, _)| upper.starts_with(prefix))
+    else {
         return sql.to_string();
     };
     let Some(set_offset) = find_top_level_keyword(&upper, "SET") else {
