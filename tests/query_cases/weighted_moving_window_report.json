@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "weighted_moving_window_report",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "repository": "Apress/adv-analytics-w-transact-sql",
+      "commit": "6da89a56df505f491b90db5f7d412fea380cf27a",
+      "path": "Ch05.sql",
+      "url": "https://github.com/Apress/adv-analytics-w-transact-sql/blob/6da89a56df505f491b90db5f7d412fea380cf27a/Ch05.sql",
+      "sha256": "43f699e7b2eea3ca90507e9b13a11f037a6bfad728a83646fdd79158f2f7b182",
+      "source_dialect": "transact-sql"
+    },
+    "inspiration": {
+      "source_location": "Ch05.sql: time-series moving-average section around AVG/LAG window expressions",
+      "source_dialect": "transact-sql",
+      "observed_pattern": "A grouped time-series CTE feeds both a bounded moving average window and a weighted expression using the previous row from LAG.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored route-volume report. Daily posted units are grouped first, then a three-row AVG frame and LAG-derived weighted value are computed over each route; fixed integer weights replace the source variable and source-specific date tables, while the schema, rows, labels, and reporting purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "grouped-aggregate-cte",
+    "derived-window-input",
+    "bounded-rows-frame",
+    "moving-average",
+    "weighted-moving-average",
+    "lag-window",
+    "coalesce",
+    "rounding",
+    "deterministic-order"
+  ],
+  "fixture_notes": "North route days aggregate duplicate posted rows, skip a void row, and use the previous daily total for a 70/30 weighted value; South has a sparse two-day sequence. The first row in each route falls back to its own value because LAG is NULL.",
+  "determinism_notes": "Route codes, dates, quantities, state filters, frame bounds, and integer weights are fixed. Each route/day is unique and every result is ordered by route and service day; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE route_volume (volume_id INT PRIMARY KEY, route_code VARCHAR(16) NOT NULL, service_day DATE NOT NULL, units INT NOT NULL, volume_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO route_volume VALUES (1, 'North', '2024-03-01', 10, 'posted'), (2, 'North', '2024-03-01', 4, 'posted'), (3, 'North', '2024-03-02', 14, 'posted'), (4, 'North', '2024-03-03', 50, 'void'), (5, 'North', '2024-03-04', 8, 'posted'), (6, 'North', '2024-03-05', 20, 'posted'), (7, 'South', '2024-03-01', 5, 'posted'), (8, 'South', '2024-03-03', 9, 'posted')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH daily_totals AS (SELECT route_code, service_day, SUM(units) AS daily_units FROM route_volume WHERE volume_state = 'posted' GROUP BY route_code, service_day), windowed AS (SELECT route_code, service_day, daily_units, AVG(daily_units) OVER (PARTITION BY route_code ORDER BY service_day ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) AS moving_avg_3, LAG(daily_units) OVER (PARTITION BY route_code ORDER BY service_day) AS previous_units FROM daily_totals) SELECT route_code, service_day, daily_units, moving_avg_3, ROUND((7 * daily_units + 3 * COALESCE(previous_units, daily_units)) / 10, 2) AS weighted_units FROM windowed ORDER BY route_code, service_day",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
