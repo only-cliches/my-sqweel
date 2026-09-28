@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "update_case_exists_status",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "microfeed/microfeed",
+      "commit": "bb84a816c9ce32145b549798c01b05226a9c16e2",
+      "path": "migrations/0009_item_search.sql",
+      "url": "https://github.com/microfeed/microfeed/blob/bb84a816c9ce32145b549798c01b05226a9c16e2/migrations/0009_item_search.sql",
+      "sha256": "c0ec7c83535df8cdbbf0099f5f80845f3f1e1f0c2d288d5916a3c0ee05b3609f",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "migrations/0009_item_search.sql:5-27",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL migration assigns a derived status through CASE WHEN EXISTS checks over related rows, with the existence predicates deciding which source condition wins.",
+      "mysql_mariadb_translation": "Reauthored as an independent service-node health refresh. A correlated failure EXISTS branch takes precedence over a healthy-heartbeat branch, while nodes with no matching events receive an unknown label; a second CASE assignment marks only failed nodes for review. The source migration, trigger definitions, schema, values, and search workflow are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["update", "case-expression", "correlated-exists", "precedence", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "Node 501 has both healthy and failed heartbeats, so the failed branch must win and set review. Node 502 has only a healthy heartbeat, and node 503 has no heartbeat rows and receives unknown while retaining its queued state.",
+  "determinism_notes": "Node IDs, event IDs, event kinds, states, CASE branch order, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE service_nodes (node_id INT PRIMARY KEY, node_state VARCHAR(16) NOT NULL, health_label VARCHAR(16) NOT NULL)",
+    "CREATE TABLE node_events (event_id INT PRIMARY KEY, node_id INT NOT NULL, event_kind VARCHAR(16) NOT NULL, event_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO service_nodes VALUES (501, 'queued', 'unknown'), (502, 'queued', 'unknown'), (503, 'queued', 'unknown')",
+    "INSERT INTO node_events VALUES (7001, 501, 'heartbeat', 'ok'), (7002, 501, 'heartbeat', 'failed'), (7003, 502, 'heartbeat', 'ok'), (7004, 501, 'audit', 'failed')"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE service_nodes AS n SET health_label = CASE WHEN EXISTS (SELECT 1 FROM node_events AS failed WHERE failed.node_id = n.node_id AND failed.event_kind = 'heartbeat' AND failed.event_state = 'failed') THEN 'degraded' WHEN EXISTS (SELECT 1 FROM node_events AS healthy WHERE healthy.node_id = n.node_id AND healthy.event_kind = 'heartbeat' AND healthy.event_state = 'ok') THEN 'healthy' ELSE 'unknown' END, node_state = CASE WHEN EXISTS (SELECT 1 FROM node_events AS failed_state WHERE failed_state.node_id = n.node_id AND failed_state.event_kind = 'heartbeat' AND failed_state.event_state = 'failed') THEN 'review' ELSE n.node_state END",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT node_id, node_state, health_label FROM service_nodes ORDER BY node_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT event_id, node_id, event_kind, event_state FROM node_events ORDER BY event_id",
+      "ordered": true
+    }
+  ]
+}

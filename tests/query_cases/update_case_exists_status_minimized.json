@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "update_case_exists_status_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "minimized_from": "update_case_exists_status",
+    "source": {
+      "kind": "github",
+      "repository": "microfeed/microfeed",
+      "commit": "bb84a816c9ce32145b549798c01b05226a9c16e2",
+      "path": "migrations/0009_item_search.sql",
+      "url": "https://github.com/microfeed/microfeed/blob/bb84a816c9ce32145b549798c01b05226a9c16e2/migrations/0009_item_search.sql",
+      "sha256": "c0ec7c83535df8cdbbf0099f5f80845f3f1e1f0c2d288d5916a3c0ee05b3609f",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "migrations/0009_item_search.sql:5-27",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "An UPDATE assignment uses a correlated CASE WHEN EXISTS predicate to classify a target row from related evidence.",
+      "mysql_mariadb_translation": "Reduced to one node with one failed heartbeat, retaining a single correlated EXISTS-driven CASE assignment while removing the competing healthy branch, second assignment, and unrelated event row."
+    },
+    "independently_authored": true
+  },
+  "features": ["update", "case-expression", "correlated-exists", "minimized-regression"],
+  "fixture_notes": "The one node has a failed heartbeat and must receive the degraded label through the correlated EXISTS branch.",
+  "determinism_notes": "One fixed node, one event, and one ordered final row; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE service_nodes_min (node_id INT PRIMARY KEY, health_label VARCHAR(16) NOT NULL)",
+    "CREATE TABLE node_events_min (event_id INT PRIMARY KEY, node_id INT NOT NULL, event_kind VARCHAR(16) NOT NULL, event_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO service_nodes_min VALUES (601, 'unknown')",
+    "INSERT INTO node_events_min VALUES (8001, 601, 'heartbeat', 'failed')"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE service_nodes_min AS n SET health_label = CASE WHEN EXISTS (SELECT 1 FROM node_events_min AS failed WHERE failed.node_id = n.node_id AND failed.event_kind = 'heartbeat' AND failed.event_state = 'failed') THEN 'degraded' ELSE 'unknown' END",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT node_id, health_label FROM service_nodes_min ORDER BY node_id",
+      "ordered": true
+    }
+  ]
+}
