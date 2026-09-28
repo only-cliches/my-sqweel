@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "id": "daily_ip_rollup_insert",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "SunQQQ/CodingLife-ServerSide",
+      "commit": "73f16b74acea5c838ff31e3a6a8383f1960c3a44",
+      "path": "src/main/resources/sql/log_daily_ip_summary.sql",
+      "url": "https://github.com/SunQQQ/CodingLife-ServerSide/blob/73f16b74acea5c838ff31e3a6a8383f1960c3a44/src/main/resources/sql/log_daily_ip_summary.sql",
+      "sha256": "81a5bf66360cb4d681278fe92441fc8802a54de25c0c4ef29c02741ff480e9f0",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "src/main/resources/sql/log_daily_ip_summary.sql:L1-L34",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL INSERT ... SELECT daily rollup groups visit rows by IP while combining ordered GROUP_CONCAT expressions, a conditional DISTINCT user list, MIN/MAX timestamps, COUNT, and an ON DUPLICATE KEY UPDATE refresh.",
+      "mysql_mariadb_translation": "Reauthored as a deterministic access-session rollup. Fixed web events are grouped by visit day and IP, repeated pages collapse through DISTINCT, actions retain event order with a custom separator, positive user IDs form a conditional DISTINCT list, and the aggregate snapshot refreshes an existing summary or inserts a new one. Source tables, names, values, and application context are new; wall-clock expressions are removed."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "grouped-insert-select",
+    "multiple-group-concat",
+    "group-concat-distinct-case",
+    "aggregate-local-order",
+    "custom-separator",
+    "min-max-count",
+    "upsert-refresh",
+    "deterministic-final-state"
+  ],
+  "fixture_notes": "The north address starts with a stale summary row, then has a repeated /home page, two ordered actions, web and mobile platforms, and one anonymous event; its summary must refresh through the duplicate-key path, deduplicate pages and platforms, and retain only user 17. The south address contributes one inserted summary row with user 23.",
+  "determinism_notes": "Event IDs, day literals, IP addresses, seeded summary values, action order, timestamps, aggregate ordering, separators, duplicate-key assignments, and final reads are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE access_events (event_id INT PRIMARY KEY, visit_day DATE NOT NULL, ip_address VARCHAR(32) NOT NULL, page_path VARCHAR(64) NOT NULL, action_code VARCHAR(16) NOT NULL, action_target VARCHAR(32) NOT NULL, platform_name VARCHAR(16) NOT NULL, user_id INT NOT NULL, created_at DATETIME NOT NULL)",
+    "CREATE TABLE daily_ip_rollups (visit_day DATE NOT NULL, ip_address VARCHAR(32) NOT NULL, page_list VARCHAR(255) NULL, action_list VARCHAR(255) NULL, platform_list VARCHAR(255) NULL, user_ids VARCHAR(255) NULL, first_seen DATETIME NOT NULL, last_seen DATETIME NOT NULL, page_views INT NOT NULL, PRIMARY KEY (visit_day, ip_address))",
+    "INSERT INTO daily_ip_rollups VALUES ('2026-06-01', '192.0.2.10', 'stale', 'stale', 'stale', '999', '2026-05-31 00:00:00', '2026-05-31 00:00:00', 99)",
+    "INSERT INTO access_events VALUES (1, '2026-06-01', '192.0.2.10', '/home', 'view', 'home', 'web', 17, '2026-06-01 08:00:00'), (2, '2026-06-01', '192.0.2.10', '/shop', 'click', 'buy', 'web', 17, '2026-06-01 08:03:00'), (3, '2026-06-01', '192.0.2.10', '/home', 'view', 'home', 'mobile', 0, '2026-06-01 08:05:00'), (4, '2026-06-01', '192.0.2.11', '/home', 'view', 'home', 'mobile', 23, '2026-06-01 09:00:00')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO daily_ip_rollups (visit_day, ip_address, page_list, action_list, platform_list, user_ids, first_seen, last_seen, page_views) SELECT visit_day, ip_address, GROUP_CONCAT(DISTINCT page_path ORDER BY page_path ASC SEPARATOR ','), GROUP_CONCAT(CONCAT(action_code, ':', action_target) ORDER BY created_at ASC, event_id ASC SEPARATOR '+'), GROUP_CONCAT(DISTINCT platform_name ORDER BY platform_name ASC SEPARATOR ','), GROUP_CONCAT(DISTINCT CASE WHEN user_id > 0 THEN user_id END ORDER BY user_id ASC SEPARATOR ','), MIN(created_at), MAX(created_at), COUNT(*) FROM access_events WHERE visit_day = '2026-06-01' GROUP BY visit_day, ip_address ORDER BY visit_day, ip_address ON DUPLICATE KEY UPDATE page_list = VALUES(page_list), action_list = VALUES(action_list), platform_list = VALUES(platform_list), user_ids = VALUES(user_ids), first_seen = VALUES(first_seen), last_seen = VALUES(last_seen), page_views = VALUES(page_views)",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT visit_day, ip_address, page_list, action_list, platform_list, user_ids, first_seen, last_seen, page_views FROM daily_ip_rollups ORDER BY visit_day, ip_address",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT visit_day, ip_address, GROUP_CONCAT(DISTINCT page_path ORDER BY page_path ASC SEPARATOR ',') AS page_list, GROUP_CONCAT(CONCAT(action_code, ':', action_target) ORDER BY created_at ASC, event_id ASC SEPARATOR '+') AS action_list, GROUP_CONCAT(DISTINCT platform_name ORDER BY platform_name ASC SEPARATOR ',') AS platform_list, GROUP_CONCAT(DISTINCT CASE WHEN user_id > 0 THEN user_id END ORDER BY user_id ASC SEPARATOR ',') AS user_ids, MIN(created_at) AS first_seen, MAX(created_at) AS last_seen, COUNT(*) AS page_views FROM access_events WHERE visit_day = '2026-06-01' GROUP BY visit_day, ip_address ORDER BY visit_day, ip_address",
+      "ordered": true
+    }
+  ]
+}
