@@ -1901,6 +1901,12 @@ impl RawEngine {
                             metadata.column_type
                         }
                     }
+                    "GREATEST" | "LEAST" => self.widest_function_argument_type(
+                        function,
+                        select,
+                        first_row,
+                        metadata.column_type,
+                    ),
                     "ABS" => {
                         let argument = function_arguments(function)
                             .ok()

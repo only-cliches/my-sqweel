@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "project_window_overlap_priority",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "gortadevosyan/task_management_db",
+      "commit": "62bcb7aff1eeb83a6c0d41fa5b4bc2fc31636ac6",
+      "path": "DQL.sql",
+      "url": "https://github.com/gortadevosyan/task_management_db/blob/62bcb7aff1eeb83a6c0d41fa5b4bc2fc31636ac6/DQL.sql",
+      "sha256": "3cc0b8172cd810e9c8b513b064dedab14f532698f19c3072ca6ca5667b378793",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "DQL.sql:249-298 (overlapping projects report)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A report pairs rows from one project table through an inclusive date-range self-join, filters mirrored pairs with a canonical ID inequality, computes each pair's earlier deadline, and orders the overlaps by that priority date.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored project-window scheduling report. Fixed DATE rows exercise ordinary overlaps, an inclusive endpoint, disjoint windows, mirrored-pair suppression, a CTE boundary, and LEAST-based priority ordering; the source schema, names, values, and report columns are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "cte",
+    "date-range-self-join",
+    "inclusive-overlap-boundaries",
+    "canonical-pair-filter",
+    "least",
+    "deterministic-tie-order"
+  ],
+  "fixture_notes": "Window 201 overlaps 202 and touches 203 at its end boundary; window 202 overlaps 203 and 205; window 204 is disjoint. The report must emit each overlapping pair once, with the earlier pair deadline first and IDs breaking deadline ties.",
+  "determinism_notes": "Window IDs, DATE literals, inclusive predicates, LEAST priority, and final ID ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE project_windows (window_id INT PRIMARY KEY, window_name VARCHAR(32) NOT NULL, starts_on DATE NOT NULL, ends_on DATE NOT NULL)",
+    "INSERT INTO project_windows (window_id, window_name, starts_on, ends_on) VALUES (201, 'atlas', '2026-03-01', '2026-03-10'), (202, 'beacon', '2026-03-05', '2026-03-12'), (203, 'comet', '2026-03-10', '2026-03-14'), (204, 'delta', '2026-03-20', '2026-03-25'), (205, 'epsilon', '2026-03-08', '2026-03-09')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH overlapping_windows AS (SELECT earlier_window.window_id AS first_window_id, later_window.window_id AS second_window_id, earlier_window.window_name AS first_window_name, later_window.window_name AS second_window_name, earlier_window.starts_on AS first_starts_on, earlier_window.ends_on AS first_ends_on, later_window.starts_on AS second_starts_on, later_window.ends_on AS second_ends_on FROM project_windows AS earlier_window INNER JOIN project_windows AS later_window ON earlier_window.window_id > later_window.window_id AND earlier_window.starts_on <= later_window.ends_on AND later_window.starts_on <= earlier_window.ends_on), prioritized_windows AS (SELECT first_window_id, second_window_id, first_window_name, second_window_name, first_starts_on, first_ends_on, second_starts_on, second_ends_on, LEAST(first_ends_on, second_ends_on) AS priority_deadline FROM overlapping_windows) SELECT first_window_id, first_window_name, second_window_id, second_window_name, first_starts_on, first_ends_on, second_starts_on, second_ends_on, priority_deadline FROM prioritized_windows ORDER BY priority_deadline, first_window_id, second_window_id",
+      "ordered": true
+    }
+  ]
+}
