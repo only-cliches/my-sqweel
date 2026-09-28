@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "id": "full_outer_union_window_inventory",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "repository": "MMR16/SQL-Join",
+      "commit": "d86f9675f5c82f6af7842e2b2a91024e6e028ab6",
+      "path": "Join.sql",
+      "url": "https://github.com/MMR16/SQL-Join/blob/d86f9675f5c82f6af7842e2b2a91024e6e028ab6/Join.sql",
+      "sha256": "3a8db87e7278025c340097fa646560a86ae29ce446359f71c3e2b73c998bafdd",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Join.sql: full outer join examples",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A full outer relationship preserves matched rows plus rows present only on either side of a join key.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored shipment coverage report. MariaDB-compatible LEFT JOIN and unmatched-right UNION ALL branches emulate the full outer relationship, then ROW_NUMBER orders matched and unmatched inventory rows together while CASE and COALESCE classify the preserved side. The source tables, names, values, aliases, and educational examples are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "outer-join-emulation",
+    "left-join-null-extension",
+    "union-all",
+    "window-row-number",
+    "coalesce",
+    "case-classification",
+    "unmatched-right-row",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Depot 11 has a shipment and must be classified matched; depot 12 has no shipment and must remain as a NULL-extended left row; shipment 903 has no depot and must survive through the unmatched-right branch. ROW_NUMBER assigns a stable report order across all three rows.",
+  "determinism_notes": "Depot and shipment identifiers, branch predicates, CASE labels, and window ordering are fixed. The final projection orders by its generated row number; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE shipping_depots (depot_id INT PRIMARY KEY, depot_name VARCHAR(24) NOT NULL)",
+    "CREATE TABLE depot_shipments (shipment_id INT PRIMARY KEY, depot_id INT NULL, package_count INT NOT NULL)",
+    "INSERT INTO shipping_depots VALUES (11, 'North dock'), (12, 'South dock')",
+    "INSERT INTO depot_shipments VALUES (901, 11, 8), (903, 19, 4)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH full_rows AS (SELECT d.depot_id, d.depot_name, s.shipment_id, s.package_count FROM shipping_depots AS d LEFT JOIN depot_shipments AS s ON s.depot_id = d.depot_id UNION ALL SELECT d.depot_id, d.depot_name, s.shipment_id, s.package_count FROM depot_shipments AS s LEFT JOIN shipping_depots AS d ON d.depot_id = s.depot_id WHERE d.depot_id IS NULL) SELECT ROW_NUMBER() OVER (ORDER BY CASE WHEN depot_id IS NULL THEN 1 ELSE 0 END, COALESCE(depot_id, shipment_id), shipment_id) AS report_order, depot_id, depot_name, shipment_id, package_count, CASE WHEN depot_id IS NULL THEN 'shipment-only' WHEN shipment_id IS NULL THEN 'depot-only' ELSE 'matched' END AS coverage_state FROM full_rows ORDER BY report_order",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT depot_id, depot_name, shipment_id, package_count FROM (SELECT d.depot_id, d.depot_name, s.shipment_id, s.package_count FROM shipping_depots AS d LEFT JOIN depot_shipments AS s ON s.depot_id = d.depot_id UNION ALL SELECT d.depot_id, d.depot_name, s.shipment_id, s.package_count FROM depot_shipments AS s LEFT JOIN shipping_depots AS d ON d.depot_id = s.depot_id WHERE d.depot_id IS NULL) AS full_rows ORDER BY COALESCE(depot_id, shipment_id), shipment_id",
+      "ordered": true
+    }
+  ]
+}
