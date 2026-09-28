@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "id": "paginated_window_total_count",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "query/pagination/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/query/pagination/mysql.sql",
+      "sha256": "f3d9d63334b4330798aef26599fa66e57c45bfbb6d3b9d82dc20cf840190089b",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "query/pagination/mysql.sql: COUNT(*) OVER() pagination example",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A paginated MySQL query computes COUNT(*) OVER() before applying deterministic ORDER BY, LIMIT, and OFFSET so each returned row carries the full filtered result count.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored catalog page. Active fixed-price entries are sorted by descending score and item ID, the second and third rows are returned, and each carries the total number of active entries before pagination. The source schema, names, values, and application context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["window-count", "filtered-pagination", "limit-offset", "deterministic-order", "total-before-pagination"],
+  "fixture_notes": "Five catalog entries are active and three are archived. LIMIT 2 OFFSET 1 returns active items ranked second and third while total_count remains 5 on both rows.",
+  "determinism_notes": "Item IDs, scores, states, and page bounds are fixed; the result uses score and item ID tie-breaking with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE catalog_items (item_id INT PRIMARY KEY, item_label VARCHAR(24) NOT NULL, score INT NOT NULL, item_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO catalog_items VALUES (1001, 'atlas', 95, 'active'), (1002, 'birch', 88, 'active'), (1003, 'cobalt', 88, 'active'), (1004, 'delta', 72, 'active'), (1005, 'ember', 60, 'active'), (1006, 'frost', 99, 'archived'), (1007, 'grove', 91, 'archived'), (1008, 'harbor', 77, 'archived')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT item_id, item_label, score, COUNT(*) OVER() AS total_count FROM catalog_items WHERE item_state = 'active' ORDER BY score DESC, item_id ASC LIMIT 2 OFFSET 1",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
