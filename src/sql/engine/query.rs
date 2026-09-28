@@ -1718,6 +1718,43 @@ impl RawEngine {
                     }
                     "GET_LOCK" | "RELEASE_LOCK" | "COERCIBILITY" => MysqlColumnType::Integer,
                     "COLLATION" => MysqlColumnType::VarChar,
+                    "IF" => {
+                        let branch_metadata = [
+                            function_argument(function, 1),
+                            function_argument(function, 2),
+                        ]
+                        .into_iter()
+                        .flatten()
+                        .map(|branch| {
+                            self.expression_metadata(select, branch, String::new(), first_row)
+                        })
+                        .collect::<Vec<_>>();
+                        if !branch_metadata.is_empty()
+                            && branch_metadata
+                                .iter()
+                                .all(|branch| numeric_type_rank(branch.column_type) > 0)
+                        {
+                            let rank = branch_metadata
+                                .iter()
+                                .map(|branch| numeric_type_rank(branch.column_type))
+                                .max()
+                                .unwrap_or_default();
+                            match rank {
+                                1 if branch_metadata.iter().any(|branch| {
+                                    branch.column_type == MysqlColumnType::BigInt
+                                }) =>
+                                {
+                                    MysqlColumnType::BigInt
+                                }
+                                1 => MysqlColumnType::Integer,
+                                2 => MysqlColumnType::Decimal,
+                                3 => MysqlColumnType::Double,
+                                _ => metadata.column_type,
+                            }
+                        } else {
+                            metadata.column_type
+                        }
+                    }
                     "CONCAT" | "CONCAT_WS" => {
                         let argument_types = function_arguments(function)
                             .unwrap_or_default()

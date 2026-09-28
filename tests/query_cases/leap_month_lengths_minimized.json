@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "id": "leap_month_lengths_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "svetasmirnova/mysqlcookbook",
+      "commit": "77a51ec49062d4853106ec0c242d44f965422501",
+      "path": "recipes/dates/leap.sql",
+      "url": "https://github.com/svetasmirnova/mysqlcookbook/blob/77a51ec49062d4853106ec0c242d44f965422501/recipes/dates/leap.sql",
+      "sha256": "29dfe2a14e6dff9e752fa7064d1fe39a16f40065da1a019ad981c8e4c3df5916",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "recipes/dates/leap.sql: leap-year IF expression",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A numeric MySQL IF expression returns one of two integer literals after evaluating a modulo-based leap-year predicate.",
+      "mysql_mariadb_translation": "Reduced to one fixed date and one aliased IF projection, isolating MariaDB's integer result metadata for numeric IF branches while removing ELT month selection and the broader calendar report."
+    },
+    "independently_authored": true,
+    "minimized_from": "leap_month_lengths"
+  },
+  "features": ["if-expression", "year", "modulo", "minimized-regression"],
+  "fixture_notes": "The single 2000 date exercises the true branch of the Gregorian century-leap predicate and must return integer 1 with MYSQL_TYPE_LONG metadata.",
+  "determinism_notes": "The date is fixed and the query has no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE leap_month_min (calendar_id INT PRIMARY KEY, period_start DATE NOT NULL)",
+    "INSERT INTO leap_month_min VALUES (1601, '2000-02-01')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT IF((YEAR(period_start) % 4 = 0) AND ((YEAR(period_start) % 100 <> 0) OR (YEAR(period_start) % 400 = 0)), 1, 0) AS is_leap_year FROM leap_month_min ORDER BY calendar_id",
+      "ordered": true
+    }
+  ]
+}

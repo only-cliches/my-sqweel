@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "id": "leap_month_lengths",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "svetasmirnova/mysqlcookbook",
+      "commit": "77a51ec49062d4853106ec0c242d44f965422501",
+      "path": "recipes/dates/leap.sql",
+      "url": "https://github.com/svetasmirnova/mysqlcookbook/blob/77a51ec49062d4853106ec0c242d44f965422501/recipes/dates/leap.sql",
+      "sha256": "29dfe2a14e6dff9e752fa7064d1fe39a16f40065da1a019ad981c8e4c3df5916",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "recipes/dates/leap.sql: days-in-month SELECT",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL date query combines YEAR and MONTH with modulo-based leap-year logic, then uses ELT to select the month length and IF to choose February's leap-day branch.",
+      "mysql_mariadb_translation": "Reauthored as a fixed billing-calendar audit. Each supplied month is classified by the Gregorian leap-year rule and its day count is selected with ELT; the source table, dates, labels, and cookbook context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["year", "month", "elt", "if-expression", "modulo", "leap-year", "deterministic-order"],
+  "fixture_notes": "The rows cover a regular February, century non-leap year, century leap year, April, and December. Day counts must be 28, 28, 29, 30, and 31 respectively.",
+  "determinism_notes": "Dates and output ordering are fixed. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE billing_calendar (calendar_id INT PRIMARY KEY, period_start DATE NOT NULL, period_label VARCHAR(24) NOT NULL)",
+    "INSERT INTO billing_calendar VALUES (1501, '2023-02-01', 'regular February'), (1502, '2100-02-01', 'century non-leap'), (1503, '2000-02-01', 'century leap'), (1504, '2024-04-01', 'April'), (1505, '2024-12-01', 'December')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT calendar_id, period_label, YEAR(period_start) AS period_year, MONTH(period_start) AS period_month, IF((YEAR(period_start) % 4 = 0) AND ((YEAR(period_start) % 100 <> 0) OR (YEAR(period_start) % 400 = 0)), 1, 0) AS is_leap_year, ELT(MONTH(period_start), 31, IF((YEAR(period_start) % 4 = 0) AND ((YEAR(period_start) % 100 <> 0) OR (YEAR(period_start) % 400 = 0)), 29, 28), 31, 30, 31, 30, 31, 31, 30, 31, 30, 31) AS days_in_month FROM billing_calendar ORDER BY calendar_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
