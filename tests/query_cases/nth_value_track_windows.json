@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "id": "nth_value_track_windows",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "antlr/grammars-v4",
+      "commit": "e199816b3f1a7a49ea1ad84fb6b87c382ea36a33",
+      "path": "sql/sqlite/examples/WindowsFunctionsForSqLite.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/e199816b3f1a7a49ea1ad84fb6b87c382ea36a33/sql/sqlite/examples/WindowsFunctionsForSqLite.sql",
+      "sha256": "cd37716f8e54ae08801820feccee3cbaef8181be466478f920f77963d1e7cd5a",
+      "source_dialect": "sqlite"
+    },
+    "inspiration": {
+      "source_location": "sql/sqlite/examples/WindowsFunctionsForSqLite.sql:129-145",
+      "source_dialect": "sqlite",
+      "observed_pattern": "A window query uses NTH_VALUE to project the second-longest value within each partition, with an explicit full-partition frame for rows beyond the first one.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored album-track report. Fixed tracks are partitioned by album and ordered by descending duration with a track-ID tie-breaker; one full-frame NTH_VALUE projection repeats the second-longest title on every row, while a default-frame projection exposes the current-row boundary. SQLite table names, track data, and example labels are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "nth-value-window",
+    "partitioned-window",
+    "full-row-frame",
+    "default-row-frame",
+    "deterministic-tie-order"
+  ],
+  "fixture_notes": "Album 501 has three tracks ordered by 420, 360, and 300 seconds; album 502 has two tracks ordered by 515 and 250 seconds. The explicit track ID tie-breaker makes every window order unique, and the full-frame projection must expose each album's second-longest title on all rows.",
+  "determinism_notes": "Album IDs, track IDs, titles, durations, frame clauses, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE album_tracks (track_id INT PRIMARY KEY, album_id INT NOT NULL, track_title VARCHAR(64) NOT NULL, duration_seconds INT NOT NULL)",
+    "INSERT INTO album_tracks VALUES (4101, 501, 'Dawn Signal', 420), (4102, 501, 'Harbor Lights', 360), (4103, 501, 'Night Relay', 300), (4201, 502, 'Copper Road', 515), (4202, 502, 'Glass Station', 250)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT album_id, track_id, track_title, duration_seconds, NTH_VALUE(track_title, 2) OVER (PARTITION BY album_id ORDER BY duration_seconds DESC, track_id ASC ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS second_longest_title FROM album_tracks ORDER BY album_id, duration_seconds DESC, track_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT album_id, track_id, NTH_VALUE(track_title, 2) OVER (PARTITION BY album_id ORDER BY duration_seconds DESC, track_id ASC) AS default_frame_second_title FROM album_tracks ORDER BY album_id, duration_seconds DESC, track_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
