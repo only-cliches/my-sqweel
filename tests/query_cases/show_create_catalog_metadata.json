@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "show_create_catalog_metadata",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/1219.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/1219.sql",
+      "sha256": "7ae7c711a221c310a6b88011e0678bcecddc3dd409d063f77a1a86d94334605f",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/docker/fuzz_root/mysql_initlib/1219.sql:3-5 (CREATE TABLE followed by SHOW CREATE TABLE)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL compatibility probe creates a table, inspects its server-rendered definition with SHOW CREATE TABLE, then continues with DDL and diagnostics.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored catalog-schema inspection. SHOW CREATE TABLE must render declared column nullability and defaults, primary and unique keys, and MariaDB's default engine/charset metadata while a final row read proves inspection did not alter data; source partitions, table names, and values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "show-create-table",
+    "schema-metadata",
+    "column-defaults",
+    "primary-and-unique-keys",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The catalog table intentionally combines an INT primary key, a required VARCHAR label, and a nullable INT revision with DEFAULT 0 plus an unnamed unique key. SHOW CREATE TABLE must expose the full definition with the helper MariaDB server's default InnoDB, utf8mb4, and utf8mb4_general_ci table options.",
+  "determinism_notes": "The DDL, table name, column order, key columns, and final row order are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE catalog_schema (catalog_id INT PRIMARY KEY, catalog_label VARCHAR(24) NOT NULL, revision INT NULL DEFAULT 0, UNIQUE (catalog_label))",
+    "INSERT INTO catalog_schema VALUES (901, 'alpha', DEFAULT), (902, 'beta', 3)"
+  ],
+  "steps": [
+    {
+      "sql": "SHOW CREATE TABLE catalog_schema",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT catalog_id, catalog_label, revision FROM catalog_schema ORDER BY catalog_id",
+      "ordered": true
+    }
+  ]
+}

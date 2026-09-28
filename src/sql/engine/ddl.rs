@@ -1649,6 +1649,29 @@ pub(super) fn parse_referential_action(sql: &str, marker: &str) -> Option<String
     }
 }
 
+fn render_show_create_type(sql_type: &str) -> String {
+    let lower = sql_type.trim().to_ascii_lowercase();
+    if lower == "int" || lower == "integer" {
+        return "int(11)".to_string();
+    }
+    if let Some(rest) = lower.strip_prefix("int ") {
+        return format!("int(11) {rest}");
+    }
+    if lower == "bigint" {
+        return "bigint(20)".to_string();
+    }
+    if lower == "smallint" {
+        return "smallint(6)".to_string();
+    }
+    if lower == "tinyint" {
+        return "tinyint(4)".to_string();
+    }
+    if lower == "mediumint" {
+        return "mediumint(9)".to_string();
+    }
+    lower
+}
+
 pub(super) fn render_create_table(schema: &TableSchemaHint) -> String {
     let mut parts = Vec::new();
     for column in ordered_schema_columns(schema) {
@@ -1658,7 +1681,7 @@ pub(super) fn render_create_table(schema: &TableSchemaHint) -> String {
         let mut line = format!(
             "  `{}` {}",
             column,
-            hint.sql_type.clone().unwrap_or_else(|| "TEXT".to_string())
+            render_show_create_type(hint.sql_type.as_deref().unwrap_or("TEXT"))
         );
         if hint.nullable == Some(false) {
             line.push_str(" NOT NULL");
@@ -1743,7 +1766,7 @@ pub(super) fn render_create_table(schema: &TableSchemaHint) -> String {
         parts.push(line);
     }
     format!(
-        "CREATE {}TABLE `{}` (\n{}\n)",
+        "CREATE {}TABLE `{}` (\n{}\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci",
         if schema.temporary { "TEMPORARY " } else { "" },
         schema.table,
         parts.join(",\n")

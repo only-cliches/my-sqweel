@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "id": "show_create_catalog_metadata_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "show_create_catalog_metadata",
+    "source": {
+      "kind": "github",
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/1219.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/1219.sql",
+      "sha256": "7ae7c711a221c310a6b88011e0678bcecddc3dd409d063f77a1a86d94334605f",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/docker/fuzz_root/mysql_initlib/1219.sql:3-5 (CREATE TABLE followed by SHOW CREATE TABLE)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL compatibility probe inspects the server-rendered CREATE TABLE definition immediately after creating a table.",
+      "mysql_mariadb_translation": "Minimized to one fixed table with an INT primary key and VARCHAR column so SHOW CREATE TABLE metadata type, canonical type spelling, and default table options remain observable without rows or secondary keys."
+    },
+    "independently_authored": true,
+    "minimized_from": "show_create_catalog_metadata"
+  },
+  "features": ["show-create-table", "schema-metadata", "deterministic-order"],
+  "fixture_notes": "The fixed table isolates SHOW CREATE TABLE rendering from data and secondary constraints. The helper MariaDB server emits int(11), varchar(16), and default InnoDB/utf8mb4 table options.",
+  "determinism_notes": "The DDL and table name are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE schema_probe (probe_id INT PRIMARY KEY, probe_label VARCHAR(16) NOT NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SHOW CREATE TABLE schema_probe",
+      "ordered": true
+    }
+  ]
+}

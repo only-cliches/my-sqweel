@@ -5954,11 +5954,22 @@ impl RawEngine {
         row.insert("Table".to_string(), Value::String(table.to_string()));
         row.insert("Create Table".to_string(), Value::String(create));
         QueryResult {
+            columns,
+            column_metadata: vec![
+                ColumnMetadata {
+                    name: "Table".to_string(),
+                    column_type: MysqlColumnType::VarChar,
+                    ..ColumnMetadata::default()
+                },
+                ColumnMetadata {
+                    name: "Create Table".to_string(),
+                    column_type: MysqlColumnType::VarChar,
+                    ..ColumnMetadata::default()
+                },
+            ],
+            rows: vec![row],
             rows_affected: 0,
             last_insert_id: 0,
-            columns,
-            column_metadata: vec![],
-            rows: vec![row],
             warnings: vec![],
         }
     }
