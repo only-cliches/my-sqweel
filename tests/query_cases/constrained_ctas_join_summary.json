@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "constrained_ctas_join_summary",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "learning-mysql-2nd/learning-mysql-2nd",
+      "commit": "11eeb0229eae77fec564d2485e976aaf7a94c027",
+      "path": "ch07/snippets.sql",
+      "url": "https://github.com/learning-mysql-2nd/learning-mysql-2nd/blob/11eeb0229eae77fec564d2485e976aaf7a94c027/ch07/snippets.sql",
+      "sha256": "f4e7b3218f17492216afa8bd508a5f10b48fe28698704a5237b1607da04d176a",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "ch07/snippets.sql:173-188",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "MySQL materializes a joined query into a table while declaring result columns and a uniqueness constraint in the CREATE TABLE header.",
+      "mysql_mariadb_translation": "Reauthored as an open-aisle inventory summary. A constrained CTAS joins aisle metadata to bin stock, filters open aisles and available units, groups by aisle, and preserves deterministic ordering. The tables, identifiers, values, and final-state checks are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": ["create-table-as-select", "explicit-ctas-columns", "ctas-unique-constraint", "join", "grouped-count", "deterministic-final-state"],
+  "fixture_notes": "A-1 has two available bins, B-2 has one available bin after a reserved row, and C-3 is excluded because its aisle is closed. The unique aisle constraint is valid because grouping produces one row per aisle.",
+  "determinism_notes": "Fixed primary keys, aisle states, stock states, grouped projection, explicit CTAS column definitions, unique constraint, and final ordering are used. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE aisle_catalog (aisle_id INT PRIMARY KEY, aisle_code VARCHAR(8) NOT NULL, aisle_state VARCHAR(16) NOT NULL)",
+    "CREATE TABLE aisle_bins (aisle_id INT NOT NULL, bin_code VARCHAR(16) NOT NULL, stock_state VARCHAR(16) NOT NULL, PRIMARY KEY (aisle_id, bin_code))",
+    "INSERT INTO aisle_catalog VALUES (1, 'A-1', 'open'), (2, 'B-2', 'open'), (3, 'C-3', 'closed')",
+    "INSERT INTO aisle_bins VALUES (1, 'A1-01', 'available'), (1, 'A1-02', 'available'), (1, 'A1-03', 'reserved'), (2, 'B2-01', 'available'), (2, 'B2-02', 'reserved'), (3, 'C3-01', 'available')"
+  ],
+  "steps": [
+    {
+      "sql": "CREATE TABLE open_aisle_summary (aisle_code VARCHAR(8), available_bins INT, UNIQUE (aisle_code)) SELECT c.aisle_code, COUNT(*) AS available_bins FROM aisle_catalog AS c JOIN aisle_bins AS b ON b.aisle_id = c.aisle_id WHERE c.aisle_state = 'open' AND b.stock_state = 'available' GROUP BY c.aisle_code ORDER BY c.aisle_code",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT aisle_code, available_bins FROM open_aisle_summary ORDER BY aisle_code",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT c.aisle_code, COUNT(*) AS available_bins FROM aisle_catalog AS c JOIN aisle_bins AS b ON b.aisle_id = c.aisle_id WHERE c.aisle_state = 'open' AND b.stock_state = 'available' GROUP BY c.aisle_code ORDER BY c.aisle_code",
+      "ordered": true
+    }
+  ]
+}
