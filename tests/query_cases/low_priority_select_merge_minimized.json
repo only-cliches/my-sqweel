@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "low_priority_select_merge_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "minimized_from": "low_priority_select_merge",
+    "source": {
+      "kind": "github",
+      "repository": "box/Anemometer",
+      "commit": "929f3385e4ecb539890e4d33e8b6aff052688318",
+      "path": "mysql56-save_history.sql",
+      "url": "https://github.com/box/Anemometer/blob/929f3385e4ecb539890e4d33e8b6aff052688318/mysql56-save_history.sql",
+      "sha256": "c10aa2b222a6963a91c70bdee6350736e09f9aafc44008f87527f56cd6175e59",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "mysql56-save_history.sql:7-14",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "An INSERT SELECT upsert merges incoming lower and upper observations into one existing row with LEAST and GREATEST.",
+      "mysql_mariadb_translation": "Reduced to one existing quota window and one incoming batch row while retaining LOW_PRIORITY IGNORE, INSERT SELECT, and the duplicate-key bound merge."
+    },
+    "independently_authored": true
+  },
+  "features": ["low-priority-insert", "insert-ignore", "insert-select", "least-greatest-merge", "minimized-regression"],
+  "fixture_notes": "The one existing window starts at 10 and 20; the incoming row must widen it to 7 and 26 through the duplicate-key update path.",
+  "determinism_notes": "One fixed key and one ordered final row; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE quota_window_min (window_key VARCHAR(16) PRIMARY KEY, minimum_value INT NOT NULL, maximum_value INT NOT NULL)",
+    "CREATE TABLE quota_batch_min (window_key VARCHAR(16) PRIMARY KEY, observed_minimum INT NOT NULL, observed_maximum INT NOT NULL)",
+    "INSERT INTO quota_window_min VALUES ('north', 10, 20)",
+    "INSERT INTO quota_batch_min VALUES ('north', 7, 26)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT LOW_PRIORITY IGNORE INTO quota_window_min (window_key, minimum_value, maximum_value) SELECT window_key, observed_minimum, observed_maximum FROM quota_batch_min ON DUPLICATE KEY UPDATE minimum_value = LEAST(quota_window_min.minimum_value, VALUES(minimum_value)), maximum_value = GREATEST(quota_window_min.maximum_value, VALUES(maximum_value))",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT window_key, minimum_value, maximum_value FROM quota_window_min ORDER BY window_key",
+      "ordered": true
+    }
+  ]
+}

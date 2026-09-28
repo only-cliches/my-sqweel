@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "low_priority_select_merge",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "box/Anemometer",
+      "commit": "929f3385e4ecb539890e4d33e8b6aff052688318",
+      "path": "mysql56-save_history.sql",
+      "url": "https://github.com/box/Anemometer/blob/929f3385e4ecb539890e4d33e8b6aff052688318/mysql56-save_history.sql",
+      "sha256": "c10aa2b222a6963a91c70bdee6350736e09f9aafc44008f87527f56cd6175e59",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "mysql56-save_history.sql:7-14",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL maintenance load inserts rows from a SELECT and uses ON DUPLICATE KEY UPDATE with LEAST and GREATEST to merge lower and upper observations into an existing summary.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored quota-window merge. LOW_PRIORITY and IGNORE are combined with an INSERT SELECT upsert; an existing window keeps the lower minimum and higher maximum while a new window is inserted. The source schema, identifiers, values, and performance-history purpose are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["low-priority-insert", "insert-ignore", "insert-select", "least-greatest-merge", "duplicate-key-update", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "The north quota window already stores minimum 10 and maximum 20; incoming observations 7 and 26 must widen it to 7 and 26. The south window is new and must be inserted unchanged.",
+  "determinism_notes": "Window keys, bounds, and source ordering are fixed; the final read is ordered by the unique window key. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE quota_windows (window_key VARCHAR(16) PRIMARY KEY, minimum_value INT NOT NULL, maximum_value INT NOT NULL)",
+    "CREATE TABLE quota_window_batch (window_key VARCHAR(16) PRIMARY KEY, observed_minimum INT NOT NULL, observed_maximum INT NOT NULL)",
+    "INSERT INTO quota_windows VALUES ('north', 10, 20)",
+    "INSERT INTO quota_window_batch VALUES ('north', 7, 26), ('south', 4, 9)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT LOW_PRIORITY IGNORE INTO quota_windows (window_key, minimum_value, maximum_value) SELECT window_key, observed_minimum, observed_maximum FROM quota_window_batch ORDER BY window_key ON DUPLICATE KEY UPDATE minimum_value = LEAST(quota_windows.minimum_value, VALUES(minimum_value)), maximum_value = GREATEST(quota_windows.maximum_value, VALUES(maximum_value))",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT window_key, minimum_value, maximum_value FROM quota_windows ORDER BY window_key",
+      "ordered": true
+    }
+  ]
+}
