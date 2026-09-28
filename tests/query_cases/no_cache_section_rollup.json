@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "no_cache_section_rollup",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "dhaval1406/SQL",
+      "commit": "d15da0d4b266f244ad21a1195b2d10856590c93a",
+      "path": "MySQL/Analysis_query.sql",
+      "url": "https://github.com/dhaval1406/SQL/blob/d15da0d4b266f244ad21a1195b2d10856590c93a/MySQL/Analysis_query.sql",
+      "sha256": "241095a6d928cd442f3157d0a7776526556f2da4ff7f4363d29cfc3fe288860e",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/Analysis_query.sql (SQL_NO_CACHE SELECT examples)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL read places SQL_NO_CACHE on a SELECT used for a filtered catalog lookup.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored section inventory rollup. SQL_NO_CACHE prefixes a filtered grouped LEFT JOIN, while COUNT and COALESCE(SUM) preserve sections with no matching stock rows. The source tables, identifiers, filters, values, and application context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "sql-no-cache",
+    "left-join",
+    "grouped-aggregate",
+    "null-extension",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Active section north has two stock rows, active section south has no stock rows and must remain visible with zero totals, and inactive section west is filtered out. SQL_NO_CACHE must preserve the grouped LEFT JOIN result.",
+  "determinism_notes": "Section IDs, stock quantities, active flags, grouping keys, and final section ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE inventory_sections (section_id INT PRIMARY KEY, section_code VARCHAR(16) NOT NULL, active TINYINT NOT NULL)",
+    "CREATE TABLE section_stock (stock_id INT PRIMARY KEY, section_id INT NOT NULL, units INT NOT NULL)",
+    "INSERT INTO inventory_sections VALUES (9101, 'north', 1), (9102, 'south', 1), (9103, 'west', 0)",
+    "INSERT INTO section_stock VALUES (9201, 9101, 7), (9202, 9101, 5), (9203, 9103, 99)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT SQL_NO_CACHE s.section_code, COUNT(i.stock_id) AS stock_rows, COALESCE(SUM(i.units), 0) AS total_units FROM inventory_sections AS s LEFT JOIN section_stock AS i ON i.section_id = s.section_id WHERE s.active = 1 GROUP BY s.section_id, s.section_code ORDER BY s.section_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT section_id, section_code, active FROM inventory_sections ORDER BY section_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT stock_id, section_id, units FROM section_stock ORDER BY stock_id",
+      "ordered": true
+    }
+  ]
+}
