@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "order_item_pair_support",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Apress/adv-analytics-w-transact-sql",
+      "commit": "6da89a56df505f491b90db5f7d412fea380cf27a",
+      "path": "Ch07.sql",
+      "url": "https://github.com/Apress/adv-analytics-w-transact-sql/blob/6da89a56df505f491b90db5f7d412fea380cf27a/Ch07.sql",
+      "sha256": "b6c538228e49971944f23e9b1927f2cd2d69c0e71a871b0b04b5574ce2c82f77",
+      "source_dialect": "transact-sql"
+    },
+    "inspiration": {
+      "source_location": "Ch07.sql:253-263 (frequency of itemsets with two models)",
+      "source_dialect": "transact-sql",
+      "observed_pattern": "A market-basket query self-joins line items from the same order, keeps one canonical item ordering with an inequality predicate, and groups the resulting pairs to count support.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored order-item affinity report. Fixed orders contain unique item rows, the self-join pairs items from the same order, the lexical item predicate prevents mirrored duplicates, and grouped support counts are ordered by support and item labels. The source schema, model names, values, and application context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "self-join",
+    "same-parent-pairing",
+    "canonical-pair-order",
+    "grouped-count",
+    "deterministic-tie-order"
+  ],
+  "fixture_notes": "Orders 701, 702, 703, and 704 deliberately create three pairs with support two; order 705 adds a single alpha-delta pair. The strict lexical predicate emits each pair once rather than returning both item orientations.",
+  "determinism_notes": "Order IDs, item labels, join predicates, support counts, and tie ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE order_items (line_id INT PRIMARY KEY, order_id INT NOT NULL, item_code VARCHAR(16) NOT NULL)",
+    "INSERT INTO order_items VALUES (7011, 701, 'alpha'), (7012, 701, 'beta'), (7013, 701, 'gamma'), (7021, 702, 'alpha'), (7022, 702, 'beta'), (7031, 703, 'alpha'), (7032, 703, 'gamma'), (7041, 704, 'beta'), (7042, 704, 'gamma'), (7051, 705, 'alpha'), (7052, 705, 'delta')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT left_item.item_code AS first_item, right_item.item_code AS second_item, COUNT(*) AS order_support FROM order_items AS left_item INNER JOIN order_items AS right_item ON right_item.order_id = left_item.order_id AND left_item.item_code < right_item.item_code GROUP BY left_item.item_code, right_item.item_code ORDER BY order_support DESC, first_item ASC, second_item ASC",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
