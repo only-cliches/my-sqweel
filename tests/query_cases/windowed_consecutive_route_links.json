@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "windowed_consecutive_route_links",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "bliksemlabs/bliksemintegration",
+      "commit": "38f4a4b6e7ea28e8f5c4f7fe1a75868549ee4677",
+      "path": "sql_schema/rid.sql",
+      "url": "https://github.com/bliksemlabs/bliksemintegration/blob/38f4a4b6e7ea28e8f5c4f7fe1a75868549ee4677/sql_schema/rid.sql",
+      "sha256": "1e1edc05876e887868d75c13d60abd10acda2d09022367785f629c30e88fb26a",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql_schema/rid.sql:372-380",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A route-link view independently numbers ordered points within each journey and joins two copies on the same journey with the second ordinal immediately after the first to emit consecutive links.",
+      "mysql_mariadb_translation": "Reauthored as a route segment report. Two independently window-numbered derived stop streams are joined by route and adjacent ordinal, emitting each consecutive stop pair in deterministic route order. The schema, names, values, and transit application context are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": ["partitioned-row-number", "consecutive-ordinal-self-join", "derived-table-pairing", "deterministic-ordering"],
+  "fixture_notes": "Route R-7 has three active stops and yields two links. Route R-8 has two active stops and yields one link. A cancelled stop on R-7 is excluded before numbering, so it cannot create a spurious segment.",
+  "determinism_notes": "Fixed route and stop identifiers, active-state filtering, unique stop positions, explicit ROW_NUMBER tie-breakers, adjacent ordinal joins, and final ordering are used. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE route_stops (stop_id INT PRIMARY KEY, route_code VARCHAR(8) NOT NULL, stop_position INT NOT NULL, stop_name VARCHAR(32) NOT NULL, stop_state VARCHAR(12) NOT NULL)",
+    "INSERT INTO route_stops VALUES (701, 'R-7', 10, 'North Gate', 'active'), (702, 'R-7', 20, 'Market', 'active'), (703, 'R-7', 25, 'Maintenance Spur', 'cancelled'), (704, 'R-7', 30, 'South Gate', 'active'), (801, 'R-8', 10, 'River Dock', 'active'), (802, 'R-8', 20, 'Hill Depot', 'active'), (901, 'R-9', 10, 'One Stop', 'active')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT first_leg.route_code, first_leg.stop_name AS from_stop, next_leg.stop_name AS to_stop, first_leg.stop_position AS from_position, next_leg.stop_position AS to_position FROM (SELECT route_code, stop_position, stop_name, ROW_NUMBER() OVER (PARTITION BY route_code ORDER BY stop_position, stop_id) AS stop_rank FROM route_stops WHERE stop_state = 'active') AS first_leg INNER JOIN (SELECT route_code, stop_position, stop_name, ROW_NUMBER() OVER (PARTITION BY route_code ORDER BY stop_position, stop_id) AS stop_rank FROM route_stops WHERE stop_state = 'active') AS next_leg ON next_leg.route_code = first_leg.route_code AND next_leg.stop_rank = first_leg.stop_rank + 1 ORDER BY first_leg.route_code, first_leg.stop_rank",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT first_leg.route_code, first_leg.stop_name AS from_stop, next_leg.stop_name AS to_stop, first_leg.stop_position AS from_position, next_leg.stop_position AS to_position FROM (SELECT route_code, stop_position, stop_name, ROW_NUMBER() OVER (PARTITION BY route_code ORDER BY stop_position, stop_id) AS stop_rank FROM route_stops WHERE stop_state = 'active') AS first_leg INNER JOIN (SELECT route_code, stop_position, stop_name, ROW_NUMBER() OVER (PARTITION BY route_code ORDER BY stop_position, stop_id) AS stop_rank FROM route_stops WHERE stop_state = 'active') AS next_leg ON next_leg.route_code = first_leg.route_code AND next_leg.stop_rank = first_leg.stop_rank + 1 ORDER BY first_leg.route_code, first_leg.stop_rank",
+      "ordered": true
+    }
+  ]
+}
