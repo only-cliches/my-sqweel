@@ -122,6 +122,12 @@ fn mysql_json_text(value: &Value) -> Result<String> {
     }
 }
 
+fn mysql_json_agg_element_text(value: &Value) -> Result<String> {
+    if let Value::Bool(value) = value {
+        return Ok(if *value { "1" } else { "0" }.to_string());
+    }
+    mysql_json_text(value)
+}
 /// MariaDB renders JSON_ARRAYAGG/JSON_OBJECTAGG results with aggregate-style
 /// separators: arrays join with "," and objects join "key:value" pairs with
 /// ", " (unlike JSON_ARRAY/JSON_OBJECT, which add spaces after colons too).
@@ -138,7 +144,7 @@ pub(crate) fn mysql_json_agg_text(value: &Value) -> Result<String> {
             "[{}]",
             values
                 .iter()
-                .map(mysql_json_text)
+                .map(mysql_json_agg_element_text)
                 .collect::<Result<Vec<_>>>()?
                 .join(",")
         )),

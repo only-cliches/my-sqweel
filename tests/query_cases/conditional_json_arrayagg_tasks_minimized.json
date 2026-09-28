@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "id": "conditional_json_arrayagg_tasks_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "conditional_json_arrayagg_tasks",
+    "source": {
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/2344.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/2344.sql",
+      "sha256": "b7bcc44a68bcc3aee085d3537d4695fa813cf1460ad77599abfae1f4de1fc9bc",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from conditional_json_arrayagg_tasks",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "JSON_ARRAYAGG of a CASE expression with a boolean true branch must render the MariaDB numeric boolean value inside the JSON array.",
+      "mysql_mariadb_translation": "Reduced to one scalar conditional JSON aggregate, removing table state, grouping, ordering, and numeric task IDs while retaining the CASE NULL branch and boolean result rendering."
+    },
+    "independently_authored": true,
+    "minimized_from": "conditional_json_arrayagg_tasks"
+  },
+  "features": ["json-arrayagg", "conditional-expression", "boolean-json-value", "minimized-regression"],
+  "fixture_notes": "The true CASE branch must render as numeric 1 inside the aggregate JSON array; the false branch remains JSON null.",
+  "determinism_notes": "The scalar expression is fixed and has no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT JSON_ARRAYAGG(CASE WHEN TRUE = TRUE THEN TRUE ELSE NULL END) AS flags",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}

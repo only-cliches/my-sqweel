@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "id": "conditional_json_arrayagg_tasks",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/2344.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/2344.sql",
+      "sha256": "b7bcc44a68bcc3aee085d3537d4695fa813cf1460ad77599abfae1f4de1fc9bc",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/docker/fuzz_root/mysql_initlib/2344.sql:82-85",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "JSON_ARRAYAGG accepts conditional expressions whose false branch is SQL NULL, preserving the aggregate's JSON result semantics for both numeric and boolean branches.",
+      "mysql_mariadb_translation": "Reauthored as an independent task-batch summary. Grouped JSON_ARRAYAGG projections use CASE to collect ready task IDs and boolean escalation markers while returning SQL NULL for nonmatching rows; deterministic task ordering and batch checks make both conditional JSON arrays observable without copying the source literals or fuzz context."
+    },
+    "independently_authored": true
+  },
+  "features": ["json-arrayagg", "conditional-expression", "sql-null-branch", "ordered-json-aggregate", "grouped-report", "deterministic-order"],
+  "fixture_notes": "Batch 41 contains two ready tasks and one completed task; its ready-task JSON array must omit the completed row through the NULL CASE branch, while the escalation array includes only high-priority tasks. Batch 42 has no ready tasks and exposes the all-NULL aggregate behavior.",
+  "determinism_notes": "Batch IDs, task IDs, states, priorities, JSON ordering, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE task_batches (batch_id INT NOT NULL, task_id INT PRIMARY KEY, task_state VARCHAR(16) NOT NULL, priority INT NOT NULL)",
+    "INSERT INTO task_batches VALUES (41, 4101, 'ready', 3), (41, 4102, 'done', 9), (41, 4103, 'ready', 8), (42, 4201, 'done', 2)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT batch_id, JSON_ARRAYAGG(CASE WHEN task_state = 'ready' THEN task_id ELSE NULL END ORDER BY task_id) AS ready_tasks, JSON_ARRAYAGG(CASE WHEN priority >= 5 THEN TRUE ELSE NULL END ORDER BY task_id) AS escalation_flags FROM task_batches GROUP BY batch_id ORDER BY batch_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT batch_id, COUNT(*) AS task_count FROM task_batches GROUP BY batch_id ORDER BY batch_id",
+      "ordered": true
+    }
+  ]
+}
