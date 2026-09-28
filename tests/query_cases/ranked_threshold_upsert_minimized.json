@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "id": "ranked_threshold_upsert_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "minimized_from": "ranked_threshold_upsert",
+    "source": {
+      "kind": "github",
+      "repository": "Derpthemeus/ChampionMastery.GG",
+      "commit": "79ab169fa53f7bf0bde64d63a17d7516f6bbfa02",
+      "path": "mysql/schema.sql",
+      "url": "https://github.com/Derpthemeus/ChampionMastery.GG/blob/79ab169fa53f7bf0bde64d63a17d7516f6bbfa02/mysql/schema.sql",
+      "sha256": "af68ccc0bce20a98af9a1dcb985c4af341d77ca2e7548963f8b33eb5c2cf392e",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from mysql/schema.sql:L121-L123",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A derived ROW_NUMBER partition is filtered to one selected rank and persisted through an INSERT ... SELECT duplicate-key refresh.",
+      "mysql_mariadb_translation": "Reduced to two divisions, two existing rank checkpoints, and one new rank-one checkpoint while retaining the partitioned window, derived filter, ordered insert source, and multiple duplicate-key assignments."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "partitioned-row-number",
+    "derived-table-filter",
+    "window-insert-select",
+    "duplicate-key-refresh",
+    "minimized-regression"
+  ],
+  "fixture_notes": "Division 71's two existing rank checkpoints are stale and must refresh; division 72 has no checkpoint and must be inserted by the same statement.",
+  "determinism_notes": "Two divisions, fixed participant scores, selected ranks one and two, and ordered final rows; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE division_scores_min (score_id INT PRIMARY KEY, division_id INT NOT NULL, participant_id INT NOT NULL, score INT NOT NULL)",
+    "CREATE TABLE division_checkpoints_min (division_id INT NOT NULL, rank_no INT NOT NULL, participant_id INT NOT NULL, score INT NOT NULL, PRIMARY KEY (division_id, rank_no))",
+    "INSERT INTO division_checkpoints_min VALUES (71, 1, 999, 1), (71, 2, 998, 2)",
+    "INSERT INTO division_scores_min VALUES (1, 71, 7101, 95), (2, 71, 7102, 90), (3, 72, 7201, 88)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO division_checkpoints_min (division_id, rank_no, participant_id, score) SELECT ranked.division_id, ranked.rank_no, ranked.participant_id, ranked.score FROM (SELECT division_id, participant_id, score, ROW_NUMBER() OVER (PARTITION BY division_id ORDER BY score DESC, participant_id ASC) AS rank_no FROM division_scores_min) AS ranked WHERE ranked.rank_no IN (1, 2) ORDER BY ranked.division_id, ranked.rank_no ON DUPLICATE KEY UPDATE participant_id = VALUES(participant_id), score = VALUES(score)",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT division_id, rank_no, participant_id, score FROM division_checkpoints_min ORDER BY division_id, rank_no",
+      "ordered": true
+    }
+  ]
+}

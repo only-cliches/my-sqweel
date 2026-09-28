@@ -2421,17 +2421,28 @@ impl RawEngine {
         current_row: &StoredRow,
         data: &Map<String, Value>,
     ) -> (Value, String) {
-        let pk_col = self
+        let primary_key = self
             .schemas
             .get(table)
-            .and_then(|schema| schema.primary_key.first().cloned())
-            .or_else(|| {
-                self.schemas
-                    .get(table)
-                    .and_then(|schema| schema.columns.get("id").map(|hint| hint.auto_increment))
-                    .unwrap_or(false)
-                    .then(|| "id".to_string())
-            });
+            .map(|schema| schema.primary_key.clone())
+            .unwrap_or_default();
+        if primary_key.len() > 1 {
+            let id = Value::Array(
+                primary_key
+                    .iter()
+                    .map(|column| data.get(column).cloned().unwrap_or(Value::Null))
+                    .collect(),
+            );
+            return (id.clone(), id.to_string());
+        }
+
+        let pk_col = primary_key.first().cloned().or_else(|| {
+            self.schemas
+                .get(table)
+                .and_then(|schema| schema.columns.get("id").map(|hint| hint.auto_increment))
+                .unwrap_or(false)
+                .then(|| "id".to_string())
+        });
 
         let id = pk_col
             .as_deref()
