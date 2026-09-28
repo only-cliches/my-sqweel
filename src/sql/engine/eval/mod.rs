@@ -3489,9 +3489,18 @@ pub(super) fn eval_binary_values(
     right_value: Value,
 ) -> Result<Value> {
     match op {
-        BinaryOperator::Plus => numeric_binary(left_value, right_value, |l, r| l + r),
-        BinaryOperator::Minus => numeric_binary(left_value, right_value, |l, r| l - r),
-        BinaryOperator::Multiply => numeric_binary(left_value, right_value, |l, r| l * r),
+        BinaryOperator::Plus => {
+            decimal_binary(left_value.clone(), right_value.clone(), DecimalOp::Add)
+                .map_or_else(|| numeric_binary(left_value, right_value, |l, r| l + r), Ok)
+        }
+        BinaryOperator::Minus => {
+            decimal_binary(left_value.clone(), right_value.clone(), DecimalOp::Subtract)
+                .map_or_else(|| numeric_binary(left_value, right_value, |l, r| l - r), Ok)
+        }
+        BinaryOperator::Multiply => {
+            decimal_binary(left_value.clone(), right_value.clone(), DecimalOp::Multiply)
+                .map_or_else(|| numeric_binary(left_value, right_value, |l, r| l * r), Ok)
+        }
         BinaryOperator::Divide => {
             if left_value == Value::Null || right_value == Value::Null {
                 return Ok(Value::Null);
@@ -3599,6 +3608,92 @@ pub(super) fn projected_row_value(row: &Map<String, Value>, columns: &[String]) 
             .map(|key| row.get(&key).cloned().unwrap_or(Value::Null))
             .collect(),
     )
+}
+
+#[derive(Clone, Copy)]
+enum DecimalOp {
+    Add,
+    Subtract,
+    Multiply,
+}
+
+fn decimal_binary(left: Value, right: Value, op: DecimalOp) -> Option<Value> {
+    let decimal_text = |value: &Value| matches!(value, Value::String(text) if text.contains('.'));
+    if !decimal_text(&left) && !decimal_text(&right) {
+        return None;
+    }
+    let (left_coefficient, left_scale) = decimal_operand(&left)?;
+    let (right_coefficient, right_scale) = decimal_operand(&right)?;
+    let (coefficient, scale) = match op {
+        DecimalOp::Add | DecimalOp::Subtract => {
+            let scale = left_scale.max(right_scale);
+            let left_factor = 10_i128.checked_pow((scale - left_scale) as u32)?;
+            let right_factor = 10_i128.checked_pow((scale - right_scale) as u32)?;
+            let left = left_coefficient.checked_mul(left_factor)?;
+            let right = right_coefficient.checked_mul(right_factor)?;
+            let coefficient = match op {
+                DecimalOp::Add => left.checked_add(right)?,
+                DecimalOp::Subtract => left.checked_sub(right)?,
+                DecimalOp::Multiply => unreachable!(),
+            };
+            (coefficient, scale)
+        }
+        DecimalOp::Multiply => (
+            left_coefficient.checked_mul(right_coefficient)?,
+            left_scale.checked_add(right_scale)?,
+        ),
+    };
+    Some(Value::String(format_decimal_coefficient(
+        coefficient,
+        scale,
+    )))
+}
+
+fn decimal_operand(value: &Value) -> Option<(i128, usize)> {
+    let text = match value {
+        Value::Number(number) => number.to_string(),
+        Value::String(text) => text.clone(),
+        _ => return None,
+    };
+    let (negative, text) = text
+        .strip_prefix('-')
+        .map_or((false, text.as_str()), |text| (true, text));
+    let text = text.strip_prefix('+').unwrap_or(text);
+    let (integer, fraction) = text.split_once('.').map_or((text, ""), |parts| parts);
+    if integer.is_empty() && fraction.is_empty()
+        || !integer.chars().all(|character| character.is_ascii_digit())
+        || !fraction.chars().all(|character| character.is_ascii_digit())
+    {
+        return None;
+    }
+    let digits = format!("{integer}{fraction}");
+    let coefficient = digits.parse::<i128>().ok()?;
+    Some((
+        if negative {
+            coefficient.checked_neg()?
+        } else {
+            coefficient
+        },
+        fraction.len(),
+    ))
+}
+
+fn format_decimal_coefficient(coefficient: i128, scale: usize) -> String {
+    let negative = coefficient < 0;
+    let digits = coefficient.unsigned_abs().to_string();
+    let body = if scale == 0 {
+        digits
+    } else if digits.len() <= scale {
+        format!("0.{}{}", "0".repeat(scale - digits.len()), digits)
+    } else {
+        let split = digits.len() - scale;
+        format!("{}.{}", &digits[..split], &digits[split..])
+    };
+    if negative && coefficient != 0 {
+        format!("-{body}")
+    } else {
+        body
+    }
 }
 
 pub(super) fn numeric_binary(

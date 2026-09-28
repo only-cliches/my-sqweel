@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "id": "replace_generated_returning_inventory",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "repository": "mariadb-corporation/mariadb-qa",
+      "commit": "07ee123e1f894c7ac9eaf7af3086ab235d6a00dd",
+      "path": "BUGS/MDEV-39448.sql",
+      "url": "https://github.com/mariadb-corporation/mariadb-qa/blob/07ee123e1f894c7ac9eaf7af3086ab235d6a00dd/BUGS/MDEV-39448.sql",
+      "sha256": "874c6ef5b51fcb4622f218799120027558e8da3110551c03885d03d54bfedcc3",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "BUGS/MDEV-39448.sql:1-4",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB REPLACE statement writes rows into a table with a generated virtual column and uses RETURNING to expose a stored and derived value from the write.",
+      "mysql_mariadb_translation": "Reauthored as an inventory valuation refresh. REPLACE INTO supplies base quantity and unit price for one existing item and one new item; a virtual generated line total is recomputed for both rows and RETURNING exposes the resulting base and derived values. The source table, generated expression, identifiers, values, trigger, and bug-reproduction context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "replace-into",
+    "virtual-generated-column",
+    "generated-expression",
+    "returning",
+    "replacement-semantics",
+    "multi-row-write",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Inventory item 41 already exists with stale quantity and price and must be fully replaced; item 44 is inserted. The virtual line_total must be recalculated from each replacement row, and the final read confirms the stale values are gone.",
+  "determinism_notes": "Item IDs, quantities, prices, generated arithmetic, and final ordering are fixed. RETURNING rows are compared unordered because the multi-row write does not promise row order; no clocks, randomness, sleeps, triggers, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE inventory_values (item_id INT PRIMARY KEY, item_code VARCHAR(16) NOT NULL, units INT NOT NULL, unit_price DECIMAL(8,2) NOT NULL, line_total DECIMAL(10,2) GENERATED ALWAYS AS (units * unit_price) VIRTUAL)",
+    "INSERT INTO inventory_values (item_id, item_code, units, unit_price) VALUES (41, 'cable-kit', 2, 12.50), (43, 'adapter-pack', 5, 4.00)"
+  ],
+  "steps": [
+    {
+      "sql": "REPLACE INTO inventory_values (item_id, item_code, units, unit_price) VALUES (41, 'cable-kit', 7, 13.25), (44, 'sensor-case', 3, 18.40) RETURNING item_id, item_code, units, unit_price, line_total",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT item_id, item_code, units, unit_price, line_total FROM inventory_values ORDER BY item_id",
+      "ordered": true
+    }
+  ]
+}
