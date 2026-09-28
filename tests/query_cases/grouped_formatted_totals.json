@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "id": "grouped_formatted_totals",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "jin-co/practice-database",
+      "commit": "ccb5d2f65c1a0ab0f84e68d1ea71d7ac4504fa00",
+      "path": "MySQL_Cheatsheet/cheatsheet_1_functions.sql",
+      "url": "https://github.com/jin-co/practice-database/blob/ccb5d2f65c1a0ab0f84e68d1ea71d7ac4504fa00/MySQL_Cheatsheet/cheatsheet_1_functions.sql",
+      "sha256": "feeff769842b6969decfd589bd43dfe294044a41d07558b52be32509c15f1788",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL_Cheatsheet/cheatsheet_1_functions.sql: FORMAT(number, decimal) example",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL scalar FORMAT call converts a numeric value to a grouped thousands-separated string with a fixed decimal precision.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored regional revenue summary. Delivered invoice amounts are grouped by region, a HAVING threshold filters small totals, and FORMAT renders each aggregate total with two decimal places and thousands separators. The source literals, tables, and application context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["format-number", "grouped-aggregate", "having", "decimal-sum", "thousands-separator", "deterministic-order"],
+  "fixture_notes": "North and south exceed the revenue threshold and are formatted; west is excluded. North's three delivered invoices total 12345.67 and must render as 12,345.67.",
+  "determinism_notes": "Invoice IDs, regions, amounts, delivery states, and output ordering are fixed. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE regional_invoices (invoice_id INT PRIMARY KEY, region_code VARCHAR(16) NOT NULL, amount DECIMAL(12,2) NOT NULL, invoice_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO regional_invoices VALUES (1401, 'north', 10000.12, 'delivered'), (1402, 'north', 2345.55, 'delivered'), (1403, 'north', 100.00, 'delivered'), (1404, 'south', 4500.00, 'delivered'), (1405, 'south', 25.25, 'delivered'), (1406, 'west', 900.00, 'delivered'), (1407, 'north', 9999.99, 'pending')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT region_code, COUNT(*) AS delivered_invoices, SUM(amount) AS total_amount, FORMAT(SUM(amount), 2) AS formatted_total FROM regional_invoices WHERE invoice_state = 'delivered' GROUP BY region_code HAVING SUM(amount) >= 1000 ORDER BY region_code",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
