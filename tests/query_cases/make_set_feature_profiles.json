@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "make_set_feature_profiles",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "TrinityCore/TrinityCore",
+      "commit": "7fd1b8105496b1e0001b26bb367e576f581588c4",
+      "path": "sql/old/7/world/19061_2019_07_15/2018_09_15_00_world.sql",
+      "url": "https://github.com/TrinityCore/TrinityCore/blob/7fd1b8105496b1e0001b26bb367e576f581588c4/sql/old/7/world/19061_2019_07_15/2018_09_15_00_world.sql",
+      "sha256": "550727ccb5fa6086cc04d2960028e41a299fabe0e2783703b7b48cafd4b50156",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "2018_09_15_00_world.sql (UPDATE ... SET ... = MAKE_SET(spawnMask, ...))",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL data update derives a comma-separated value from a bitmask with MAKE_SET, including NULL placeholders among the positional labels.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored feature-profile projection. MAKE_SET maps fixed bitmask values to enabled channel labels, skips a NULL positional label, and preserves the zero-mask empty result; the source tables, columns, values, and game-data purpose are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "make-set",
+    "bitmask-labels",
+    "null-label-arguments",
+    "zero-mask-result",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Profile 1001 selects bits one and three, profile 1002 selects bits two and four but omits the NULL second label, profile 1003 has no selected bits and must return an empty string, and profile 1004 selects only the fourth label.",
+  "determinism_notes": "Profile IDs, masks, labels, and argument positions are fixed; the projection is ordered by the primary key with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE feature_profiles (profile_id INT PRIMARY KEY, feature_mask INT NOT NULL, profile_name VARCHAR(32) NOT NULL)",
+    "INSERT INTO feature_profiles VALUES (1001, 5, 'alpha'), (1002, 10, 'beta'), (1003, 0, 'gamma'), (1004, 8, 'delta')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT profile_id, profile_name, feature_mask, MAKE_SET(feature_mask, 'mail', NULL, 'push', 'export') AS enabled_channels FROM feature_profiles ORDER BY profile_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT profile_id, feature_mask, profile_name FROM feature_profiles ORDER BY profile_id",
+      "ordered": true
+    }
+  ]
+}
