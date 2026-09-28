@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "universal_extrema_update_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "CryAndRRich/hustack",
+      "commit": "aceb6d73014e73cd8b71bca9747b39fbf64f0a37",
+      "path": "leetcode/database/1412_Find_the_Quiet_Students_in_All_Exams/codes/database.sql",
+      "url": "https://github.com/CryAndRRich/hustack/blob/aceb6d73014e73cd8b71bca9747b39fbf64f0a37/leetcode/database/1412_Find_the_Quiet_Students_in_All_Exams/codes/database.sql",
+      "sha256": "f0d053ff8e028ed23accd092df91894aa7a3099387775fd4451fb59e1646e956",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "leetcode/database/1412_Find_the_Quiet_Students_in_All_Exams/codes/database.sql:1-11",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "COUNT(*) = SUM(CASE ...) keeps only groups whose every score passes a correlated per-batch extrema test.",
+      "mysql_mariadb_translation": "Reduced to two independently authored reviewers and one batch. One reviewer has an interior score and is updated; the other has an extrema score and is not."
+    },
+    "independently_authored": true,
+    "minimized_from": "universal_extrema_update"
+  },
+  "features": ["universal-aggregate-filter", "correlated-min-max", "case-aggregate", "update-in-subquery", "minimized-regression"],
+  "fixture_notes": "Reviewer 201 has score 20 between batch bounds 10 and 30; reviewer 202 has the batch maximum 30 and remains unqualified.",
+  "determinism_notes": "Fixed non-NULL scores, one batch, grouped candidates, and ordered final state; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE reviewer_status_min (reviewer_id INT PRIMARY KEY, qualified TINYINT NOT NULL)",
+    "CREATE TABLE reviewer_scores_min (score_id INT PRIMARY KEY, reviewer_id INT NOT NULL, batch_id INT NOT NULL, score INT NOT NULL)",
+    "INSERT INTO reviewer_status_min VALUES (201, 0), (202, 0)",
+    "INSERT INTO reviewer_scores_min VALUES (1, 201, 21, 20), (2, 202, 21, 30), (3, 202, 21, 10)"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE reviewer_status_min SET qualified = 1 WHERE reviewer_id IN (SELECT candidates.reviewer_id FROM (SELECT reviewer_id FROM reviewer_scores_min GROUP BY reviewer_id HAVING COUNT(*) = SUM(CASE WHEN score NOT IN ((SELECT MAX(score) FROM reviewer_scores_min bounds_max WHERE bounds_max.batch_id = reviewer_scores_min.batch_id), (SELECT MIN(score) FROM reviewer_scores_min bounds_min WHERE bounds_min.batch_id = reviewer_scores_min.batch_id)) THEN 1 ELSE 0 END)) candidates)",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT reviewer_id, qualified FROM reviewer_status_min ORDER BY reviewer_id",
+      "ordered": true
+    }
+  ]
+}

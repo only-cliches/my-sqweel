@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "universal_extrema_update",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "CryAndRRich/hustack",
+      "commit": "aceb6d73014e73cd8b71bca9747b39fbf64f0a37",
+      "path": "leetcode/database/1412_Find_the_Quiet_Students_in_All_Exams/codes/database.sql",
+      "url": "https://github.com/CryAndRRich/hustack/blob/aceb6d73014e73cd8b71bca9747b39fbf64f0a37/leetcode/database/1412_Find_the_Quiet_Students_in_All_Exams/codes/database.sql",
+      "sha256": "f0d053ff8e028ed23accd092df91894aa7a3099387775fd4451fb59e1646e956",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "leetcode/database/1412_Find_the_Quiet_Students_in_All_Exams/codes/database.sql:1-11",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped query uses COUNT(*) = SUM(CASE ...) to require that every row in each entity group satisfies a condition, with correlated per-group MIN and MAX scalar subqueries.",
+      "mysql_mariadb_translation": "Reauthored as a reviewer qualification update. Every score for a reviewer must be strictly between the minimum and maximum score of its batch; a derived grouped candidate set drives an UPDATE through an IN subquery. The source schema, identifiers, data, and domain are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": ["universal-aggregate-filter", "correlated-min-max", "case-aggregate", "update-in-subquery", "deterministic-final-state"],
+  "fixture_notes": "Reviewer 101 has only interior scores and is qualified. Reviewer 102 has one batch maximum, reviewer 103 has a single-score batch where minimum equals maximum, and reviewer 104 has only batch extrema; those reviewers remain unqualified.",
+  "determinism_notes": "All scores and batch IDs are fixed and non-NULL. The candidate grouping and final reviewer ordering are deterministic; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE reviewer_status (reviewer_id INT PRIMARY KEY, reviewer_name VARCHAR(32) NOT NULL, qualified TINYINT NOT NULL)",
+    "CREATE TABLE reviewer_scores (score_id INT PRIMARY KEY, reviewer_id INT NOT NULL, batch_id INT NOT NULL, score INT NOT NULL)",
+    "INSERT INTO reviewer_status VALUES (101, 'Aster', 0), (102, 'Beryl', 0), (103, 'Cobalt', 0), (104, 'Dune', 0)",
+    "INSERT INTO reviewer_scores VALUES (1, 101, 11, 70), (2, 101, 11, 80), (3, 101, 11, 90), (4, 101, 12, 80), (5, 101, 12, 85), (6, 101, 12, 95), (7, 102, 11, 60), (8, 102, 11, 75), (9, 102, 11, 90), (10, 102, 12, 75), (11, 102, 12, 80), (12, 102, 12, 95), (13, 103, 13, 50), (14, 104, 14, 20), (15, 104, 14, 40)"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE reviewer_status SET qualified = 1 WHERE reviewer_id IN (SELECT candidates.reviewer_id FROM (SELECT reviewer_id FROM reviewer_scores GROUP BY reviewer_id HAVING COUNT(*) = SUM(CASE WHEN score NOT IN ((SELECT MAX(score) FROM reviewer_scores bounds_max WHERE bounds_max.batch_id = reviewer_scores.batch_id), (SELECT MIN(score) FROM reviewer_scores bounds_min WHERE bounds_min.batch_id = reviewer_scores.batch_id)) THEN 1 ELSE 0 END)) candidates)",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT reviewer_id, reviewer_name, qualified FROM reviewer_status ORDER BY reviewer_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT reviewer_id, COUNT(*) AS score_count, SUM(CASE WHEN score NOT IN ((SELECT MAX(score) FROM reviewer_scores bounds_max WHERE bounds_max.batch_id = reviewer_scores.batch_id), (SELECT MIN(score) FROM reviewer_scores bounds_min WHERE bounds_min.batch_id = reviewer_scores.batch_id)) THEN 1 ELSE 0 END) AS interior_count FROM reviewer_scores GROUP BY reviewer_id ORDER BY reviewer_id",
+      "ordered": true
+    }
+  ]
+}
