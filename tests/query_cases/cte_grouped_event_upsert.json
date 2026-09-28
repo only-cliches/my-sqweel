@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "id": "cte_grouped_event_upsert",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "pingcap/ossinsight",
+      "commit": "d98a10e7244cfc9e2d1da02bace1c2a9fe9d7738",
+      "path": "configs/pipelines/sync_repo_pull_request_creators/process.sql",
+      "url": "https://github.com/pingcap/ossinsight/blob/d98a10e7244cfc9e2d1da02bace1c2a9fe9d7738/configs/pipelines/sync_repo_pull_request_creators/process.sql",
+      "sha256": "51ae4fcf0bb508737c44ee5b7fd86311728c01553d93b54d85f4d438f321be19",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "process.sql:1-38",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A CTE identifies recent actor keys, a joined event stream uses CASE and OR predicates to select grouped facts, COUNT(DISTINCT) and conditional MIN(IF(...)) derive summary fields, and INSERT ... SELECT refreshes duplicate keys with VALUES().",
+      "mysql_mariadb_translation": "Reauthored as a repository contributor summary. A fixed event window identifies active repository users, opened and merged pull-request events contribute through a joined OR predicate, distinct pull-request counts and conditional first timestamps are grouped into a composite-key summary, and duplicate rows are refreshed; source tables, hints, parameters, identifiers, and values are not copied.",
+      "independently_authored": true
+    }
+  },
+  "features": [
+    "cte-insert-select",
+    "joined-event-filter",
+    "case-projection",
+    "or-predicate",
+    "count-distinct",
+    "conditional-min-if",
+    "composite-key-upsert",
+    "deterministic-final-state"
+  ],
+  "fixture_notes": "Repository 41/user 501 has two distinct pull requests and both opened and merged timestamps, so its seeded summary is refreshed. Repository 41/user 502 has one opened but unmerged request, so its merge timestamp remains NULL. Repository 52/user 601 is inserted as a new composite key. Unrelated event kinds and outside-window events are excluded.",
+  "determinism_notes": "All event IDs, repository/user keys, pull-request numbers, timestamps, predicates, and final ordering are fixed. Each qualifying repository/user pair has one grouped output row; there are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE contributor_events (event_id INT PRIMARY KEY, repository_id INT NOT NULL, actor_user_id INT NOT NULL, creator_user_id INT NOT NULL, event_kind VARCHAR(24) NOT NULL, event_action VARCHAR(16) NOT NULL, pull_request_number INT NOT NULL, merged TINYINT NOT NULL, created_at DATETIME NOT NULL)",
+    "CREATE TABLE contributor_summary (repository_id INT NOT NULL, user_id INT NOT NULL, pull_requests INT NOT NULL, first_opened_at DATETIME NULL, first_merged_at DATETIME NULL, PRIMARY KEY (repository_id, user_id))",
+    "INSERT INTO contributor_events VALUES (1, 41, 501, 501, 'pull_request', 'opened', 9001, 0, '2026-01-02 09:00:00'), (2, 41, 501, 501, 'pull_request', 'opened', 9002, 0, '2026-01-03 09:00:00'), (3, 41, 501, 501, 'pull_request', 'closed', 9001, 1, '2026-01-05 12:00:00'), (4, 41, 502, 502, 'pull_request', 'opened', 9003, 0, '2026-01-04 10:00:00'), (5, 41, 502, 502, 'pull_request', 'closed', 9003, 0, '2026-01-06 10:00:00'), (6, 52, 601, 601, 'pull_request', 'opened', 9101, 0, '2026-01-07 11:00:00'), (7, 52, 601, 601, 'pull_request', 'closed', 9101, 1, '2026-01-08 13:00:00'), (8, 41, 501, 501, 'issue', 'opened', 9999, 0, '2026-01-04 08:00:00'), (9, 41, 501, 501, 'pull_request', 'opened', 9010, 0, '2025-12-31 23:00:00')",
+    "INSERT INTO contributor_summary VALUES (41, 501, 99, '2025-12-01 00:00:00', NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO contributor_summary (repository_id, user_id, pull_requests, first_opened_at, first_merged_at) WITH recent_users AS (SELECT repository_id, actor_user_id AS user_id FROM contributor_events WHERE event_kind = 'pull_request' AND created_at >= '2026-01-01 00:00:00' AND created_at < '2026-02-01 00:00:00' GROUP BY repository_id, actor_user_id) SELECT e.repository_id, CASE WHEN e.event_action = 'opened' THEN e.actor_user_id WHEN e.event_action = 'closed' AND e.merged = 1 THEN e.creator_user_id END AS user_id, COUNT(DISTINCT e.pull_request_number), MIN(IF(e.event_action = 'opened', e.created_at, NULL)), MIN(IF(e.event_action = 'closed' AND e.merged = 1, e.created_at, NULL)) FROM contributor_events AS e INNER JOIN recent_users AS u ON e.repository_id = u.repository_id WHERE e.event_kind = 'pull_request' AND ((e.event_action = 'opened' AND e.actor_user_id = u.user_id) OR (e.event_action = 'closed' AND e.merged = 1 AND e.creator_user_id = u.user_id)) AND e.created_at >= '2026-01-01 00:00:00' AND e.created_at < '2026-02-01 00:00:00' GROUP BY e.repository_id, user_id ON DUPLICATE KEY UPDATE pull_requests = VALUES(pull_requests), first_opened_at = VALUES(first_opened_at), first_merged_at = VALUES(first_merged_at)",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT repository_id, user_id, pull_requests, first_opened_at, first_merged_at FROM contributor_summary ORDER BY repository_id, user_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT repository_id, user_id, pull_requests, first_opened_at, first_merged_at FROM contributor_summary ORDER BY repository_id, user_id",
+      "ordered": true
+    }
+  ]
+}
