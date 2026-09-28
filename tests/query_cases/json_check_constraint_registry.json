@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "id": "json_check_constraint_registry",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "ais-one/novex-kit",
+      "commit": "7c716f720a4b00b84ac513e6d6b23e8b115f611a",
+      "path": "db/iam/identity-schema.mysql.sql",
+      "url": "https://github.com/ais-one/novex-kit/blob/7c716f720a4b00b84ac513e6d6b23e8b115f611a/db/iam/identity-schema.mysql.sql",
+      "sha256": "962eae92c0c925acb15948a128858079f7a57a28793c3ac4a2ecb904cb03acaf",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "db/iam/identity-schema.mysql.sql: users.metadata CHECK (JSON_VALID(metadata))",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL schema protects a text-compatible JSON payload with a CHECK constraint calling JSON_VALID.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored webhook-payload registry. A TEXT payload column is constrained by JSON_VALID, and valid object, array, and scalar documents are classified in an ordered audit query; malformed source data, table names, and identity context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["json-valid", "json-check-constraint", "json-type", "check-constraint", "deterministic-order"],
+  "fixture_notes": "Three accepted payloads cover object, array, and scalar JSON documents. The table-level CHECK requires every non-NULL payload to pass JSON_VALID before the audit query reads it.",
+  "determinism_notes": "Payload IDs and JSON text are fixed and output is ordered by payload_id. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE webhook_payloads (payload_id INT PRIMARY KEY, payload_label VARCHAR(24) NOT NULL, payload_text TEXT NOT NULL, CONSTRAINT payload_is_json CHECK (JSON_VALID(payload_text)))",
+    "INSERT INTO webhook_payloads VALUES (1301, 'object', '{\"event\":\"created\",\"ok\":true}'), (1302, 'array', '[\"alpha\",\"beta\"]'), (1303, 'scalar', '42')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT payload_id, payload_label, JSON_VALID(payload_text) AS is_valid, JSON_TYPE(payload_text) AS payload_type FROM webhook_payloads ORDER BY payload_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
