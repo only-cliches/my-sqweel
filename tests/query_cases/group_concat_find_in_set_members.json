@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "id": "group_concat_find_in_set_members",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "NelsonBN/mysql-tips",
+      "commit": "e5679e0eeaf0d0f2622dc2e8d291ba81e5113c0b",
+      "path": "src/group_concat_and_FIND_IN_SET.sql",
+      "url": "https://github.com/NelsonBN/mysql-tips/blob/e5679e0eeaf0d0f2622dc2e8d291ba81e5113c0b/src/group_concat_and_FIND_IN_SET.sql",
+      "sha256": "1dd962df2e2f5b76c018ffc583ba4fc4bc68d3ed87d831657415ec5a43cb71c8",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "src/group_concat_and_FIND_IN_SET.sql:1-6",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL query builds a comma-separated identifier list with GROUP_CONCAT and feeds that list into FIND_IN_SET to recover matching rows.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored team-membership audit. A grouped report summarizes active member IDs, while a second query uses a correlated scalar GROUP_CONCAT subquery inside FIND_IN_SET to select directory users from one team. Session variables, source tables, identifiers, and values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "group-concat",
+    "find-in-set",
+    "scalar-subquery",
+    "conditional-aggregation",
+    "left-join-null-extension",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Team 71 has active members 501 and 503 plus an inactive member 502; the grouped report emits 501,503 and count two, and the membership query returns only Alice and Cara. Team 72 has no active members and must emit the fallback none with count zero. User 504 is not assigned to either team.",
+  "determinism_notes": "Team IDs, user IDs, membership states, aggregate ordering, scalar-subquery predicate, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE directory_users (user_id INT PRIMARY KEY, user_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE membership_teams (team_id INT PRIMARY KEY, team_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE team_members (membership_id INT PRIMARY KEY, team_id INT NOT NULL, user_id INT NOT NULL, active TINYINT NOT NULL)",
+    "INSERT INTO directory_users VALUES (501, 'alice'), (502, 'bob'), (503, 'cara'), (504, 'dave')",
+    "INSERT INTO membership_teams VALUES (71, 'release'), (72, 'research')",
+    "INSERT INTO team_members VALUES (7001, 71, 501, 1), (7002, 71, 502, 0), (7003, 71, 503, 1)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT t.team_id, t.team_name, COALESCE(GROUP_CONCAT(CASE WHEN m.active = 1 THEN m.user_id END ORDER BY m.user_id SEPARATOR ','), 'none') AS active_member_ids, COALESCE(SUM(CASE WHEN m.active = 1 THEN 1 ELSE 0 END), 0) AS active_count FROM membership_teams AS t LEFT JOIN team_members AS m ON m.team_id = t.team_id GROUP BY t.team_id, t.team_name ORDER BY t.team_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT u.user_id, u.user_name FROM directory_users AS u WHERE FIND_IN_SET(u.user_id, (SELECT GROUP_CONCAT(m.user_id ORDER BY m.user_id SEPARATOR ',') FROM team_members AS m WHERE m.team_id = 71 AND m.active = 1)) > 0 ORDER BY u.user_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT user_id, user_name FROM directory_users ORDER BY user_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT team_id, team_name FROM membership_teams ORDER BY team_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT membership_id, team_id, user_id, active FROM team_members ORDER BY membership_id",
+      "ordered": true
+    }
+  ]
+}
