@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "id": "bookmark_tag_pagination_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "dangrossman/Bookmarkly",
+      "commit": "2e6e7591cb4f9c22b244abfa31a74b0a47e62a46",
+      "path": "server.js",
+      "url": "https://github.com/dangrossman/Bookmarkly/blob/2e6e7591cb4f9c22b244abfa31a74b0a47e62a46/server.js",
+      "sha256": "8c6bc8dc6376c15c608b6c4d01e836aff7abdada0c5dff1b9917d7dc67f81b33",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "server.js:303 (bookmark listing query)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped MySQL listing combines DISTINCT ordered GROUP_CONCAT with an outer ORDER BY and LIMIT page.",
+      "mysql_mariadb_translation": "Reduced to one independently authored tag group plus a second group that proves bounded output. Duplicate tag labels are collapsed and the grouped rows are deterministically ordered before LIMIT 1; source tables, labels, and application fields are not copied."
+    },
+    "independently_authored": true,
+    "minimized_from": "bookmark_tag_pagination"
+  },
+  "features": ["group-concat-distinct", "ordered-aggregate", "grouped-pagination", "minimized-regression"],
+  "fixture_notes": "The first grouped project retains one copy of each duplicate label and wins the deterministic one-row page.",
+  "determinism_notes": "Project IDs and labels are fixed, aggregate ordering is lexical, and grouped output has an explicit project-ID order before LIMIT 1; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE project_tag_probe (tag_id INT PRIMARY KEY, project_id INT NOT NULL, tag_label VARCHAR(32) NOT NULL)",
+    "INSERT INTO project_tag_probe VALUES (1, 201, 'beta'), (2, 201, 'alpha'), (3, 201, 'beta'), (4, 202, 'gamma')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT project_id, GROUP_CONCAT(DISTINCT tag_label ORDER BY tag_label ASC SEPARATOR '|') AS tag_list FROM project_tag_probe GROUP BY project_id ORDER BY project_id ASC LIMIT 1",
+      "ordered": true
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "bookmark_tag_pagination",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "dangrossman/Bookmarkly",
+      "commit": "2e6e7591cb4f9c22b244abfa31a74b0a47e62a46",
+      "path": "server.js",
+      "url": "https://github.com/dangrossman/Bookmarkly/blob/2e6e7591cb4f9c22b244abfa31a74b0a47e62a46/server.js",
+      "sha256": "8c6bc8dc6376c15c608b6c4d01e836aff7abdada0c5dff1b9917d7dc67f81b33",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "server.js:303 (bookmark listing query)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL bookmark listing left joins tags, aggregates distinct tags in lexical order, groups by the bookmark, and applies a bounded recency page after ordering.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored owner-scoped bookmark report. Fixed rows include duplicate tags and a tagless bookmark; GROUP_CONCAT(DISTINCT ... ORDER BY ...) removes repeated labels, LEFT JOIN preserves the tagless row, and a unique bookmark/date order makes LIMIT 2 deterministic without copying the source schema, values, or pagination parameters."
+    },
+    "independently_authored": true
+  },
+  "features": ["left-join", "group-concat-distinct", "ordered-aggregate", "grouped-pagination", "null-extension", "deterministic-order"],
+  "fixture_notes": "Bookmark 103 is the newest owner-7 row with no tags and must survive the LEFT JOIN as NULL. Bookmark 101 is the second newest and has a duplicate 'sql' tag that GROUP_CONCAT(DISTINCT ...) removes; bookmark 102 is outside the two-row page and owner 8 is filtered out.",
+  "determinism_notes": "Owner IDs, bookmark timestamps, tag IDs, tag labels, grouping columns, and the recency/id tie-break order are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE bookmark_cards (bookmark_id INT PRIMARY KEY, owner_id INT NOT NULL, bookmark_title VARCHAR(64) NOT NULL, created_at DATETIME NOT NULL)",
+    "CREATE TABLE bookmark_tags (tag_id INT PRIMARY KEY, bookmark_id INT NOT NULL, tag_label VARCHAR(32) NULL)",
+    "INSERT INTO bookmark_cards VALUES (101, 7, 'Query notes', '2025-01-03 10:00:00'), (102, 7, 'Rust notes', '2025-01-01 09:00:00'), (103, 7, 'Untagged note', '2025-01-04 08:00:00'), (104, 8, 'Private note', '2025-01-05 12:00:00')",
+    "INSERT INTO bookmark_tags VALUES (1, 101, 'sql'), (2, 101, 'mysql'), (3, 101, 'sql'), (4, 102, 'rust'), (5, 104, 'private')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT b.bookmark_id, b.bookmark_title, GROUP_CONCAT(DISTINCT t.tag_label ORDER BY t.tag_label ASC SEPARATOR '|') AS tag_list, COUNT(t.tag_id) AS tag_rows FROM bookmark_cards AS b LEFT JOIN bookmark_tags AS t ON t.bookmark_id = b.bookmark_id WHERE b.owner_id = 7 GROUP BY b.bookmark_id, b.bookmark_title, b.created_at ORDER BY b.created_at DESC, b.bookmark_id DESC LIMIT 2",
+      "ordered": true
+    }
+  ]
+}

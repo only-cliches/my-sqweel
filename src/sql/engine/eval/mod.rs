@@ -595,6 +595,20 @@ pub(super) fn aggregate_select_result(
             }
         }
     }
+    let projected_keys = item_keys.iter().flatten().cloned().collect::<HashSet<_>>();
+    let mut hidden_order_keys = HashSet::new();
+    for (row, base) in output.iter_mut().zip(bases.iter()) {
+        for order in order_by {
+            let key = projection_expr_column_name(&order.expr);
+            if !projected_keys.contains(&key)
+                && !row.contains_key(&key)
+                && let Ok(value) = eval(&order.expr, base, last_insert_id)
+            {
+                row.insert(key.clone(), value);
+                hidden_order_keys.insert(key);
+            }
+        }
+    }
 
     if select.distinct.is_some() {
         deduplicate_rows(&mut output);
@@ -606,6 +620,11 @@ pub(super) fn aggregate_select_result(
         limit_offset_end(limit, offset)?,
         expr_resolved_value,
     )?;
+    for row in &mut output {
+        for key in &hidden_order_keys {
+            row.remove(key);
+        }
+    }
     apply_limit_offset(&mut output, limit, offset)?;
 
     Ok(Some(QueryResult {
