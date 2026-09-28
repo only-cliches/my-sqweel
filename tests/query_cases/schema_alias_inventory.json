@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "schema_alias_inventory",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "antlr/grammars-v4",
+      "commit": "e199816b3f1a7a49ea1ad84fb6b87c382ea36a33",
+      "path": "sql/mariadb/examples/fast/dml_select.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/e199816b3f1a7a49ea1ad84fb6b87c382ea36a33/sql/mariadb/examples/fast/dml_select.sql",
+      "sha256": "b9128ffb5b50bea79c534bc24a127d9d626fd2d21be8cb0a45deafd8d6c84f79",
+      "source_dialect": "mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/mariadb/examples/fast/dml_select.sql:173",
+      "source_dialect": "mariadb",
+      "observed_pattern": "A MariaDB scalar metadata function returns the current schema with SCHEMA().",
+      "mysql_mariadb_translation": "Reauthored as a deterministic schema-alias inventory query. It compares SCHEMA() with DATABASE() and counts rows from one independently named probe table without copying the source fixture or schema."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "schema-metadata-function",
+    "database-schema-alias",
+    "scalar-function-predicate",
+    "aggregate-count",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The harness database name is generated per disposable server, so the query asserts the stable SCHEMA()/DATABASE() alias relation and counts the fixed probe row instead of returning the dynamic name.",
+  "determinism_notes": "The database name is intentionally not projected; the fixed probe table yields one stable aggregate row with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE schema_alias_probe (probe_id INT PRIMARY KEY, probe_label VARCHAR(16) NOT NULL)",
+    "INSERT INTO schema_alias_probe VALUES (801, 'visible')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT SCHEMA() = DATABASE() AS aliases_match, COUNT(*) AS probe_rows FROM schema_alias_probe",
+      "ordered": true
+    }
+  ]
+}
