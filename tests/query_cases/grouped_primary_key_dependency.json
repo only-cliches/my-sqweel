@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "id": "grouped_primary_key_dependency",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "functions/aggregate/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/functions/aggregate/mysql.sql",
+      "sha256": "0160718d9ccf135c9938eaf3879a37c672cd171e68065046c953d55e95a33425",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "functions/aggregate/mysql.sql: ONLY_FULL_GROUP_BY functional-dependency example",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped MySQL join groups by a primary key while projecting that table's functionally dependent descriptive columns beside aggregate child-row values.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored product-order summary. The product primary key determines its label and department, so only product_id is grouped while a LEFT JOIN aggregates order units; HAVING removes products without orders and deterministic product ordering completes the report. The source schema, names, values, and application context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["functional-dependency-grouping", "left-join", "grouped-aggregate", "having", "deterministic-order"],
+  "fixture_notes": "Products 501 and 502 have orders and retain their functionally dependent labels; product 503 has no orders and is removed by HAVING. Product 501's two order rows aggregate to seven units.",
+  "determinism_notes": "Product IDs are primary keys, order IDs and units are fixed, and output is ordered by product_id. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE product_catalog (product_id INT PRIMARY KEY, product_label VARCHAR(32) NOT NULL, department VARCHAR(16) NOT NULL)",
+    "CREATE TABLE product_orders (order_id INT PRIMARY KEY, product_id INT NOT NULL, units INT NOT NULL)",
+    "INSERT INTO product_catalog VALUES (501, 'atlas kit', 'tools'), (502, 'birch pack', 'outdoor'), (503, 'cobalt case', 'tools')",
+    "INSERT INTO product_orders VALUES (7001, 501, 4), (7002, 501, 3), (7003, 502, 2)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT p.product_id, p.product_label, p.department, COUNT(o.order_id) AS order_count, COALESCE(SUM(o.units), 0) AS total_units FROM product_catalog AS p LEFT JOIN product_orders AS o ON o.product_id = p.product_id GROUP BY p.product_id HAVING COUNT(o.order_id) > 0 ORDER BY p.product_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
