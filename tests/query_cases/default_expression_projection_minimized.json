@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "id": "default_expression_projection_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "default_expression_projection",
+    "source": {
+      "kind": "github",
+      "repository": "timcuber37/tcg-tracker",
+      "commit": "3ccd0168024a4d42842fc54a90958c2520f76a69",
+      "path": "db/mysql_schema.sql",
+      "url": "https://github.com/timcuber37/tcg-tracker/blob/3ccd0168024a4d42842fc54a90958c2520f76a69/db/mysql_schema.sql",
+      "sha256": "eab5e436ac794c8d9f55df65bf5d27211e2d72a5cc378906504339ef1d90fee3",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "db/mysql_schema.sql:7-11 (expression default syntax)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A column with a parenthesized literal default is read through DEFAULT(column) after an omitted-value insert.",
+      "mysql_mariadb_translation": "Reduced to one independently authored notification row and one VARCHAR default, isolating DEFAULT(column) projection from the original UUID schema and unrelated columns."
+    },
+    "independently_authored": true
+  },
+  "features": ["expression-default", "default-function", "minimized-regression"],
+  "fixture_notes": "One inserted row receives the declared queued default; the projection must return both the stored label and the declared default label.",
+  "determinism_notes": "The schema default, row ID, and projection are fixed; no clocks, randomness, UUIDs, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE default_probe (probe_id INT PRIMARY KEY, probe_label VARCHAR(16) NOT NULL DEFAULT ('queued'))",
+    "INSERT INTO default_probe (probe_id) VALUES (701)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT probe_label, DEFAULT(probe_label) AS declared_label FROM default_probe ORDER BY probe_id",
+      "ordered": true
+    }
+  ]
+}

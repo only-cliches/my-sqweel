@@ -1706,6 +1706,24 @@ impl RawEngine {
                     .map(|name| name.value.to_ascii_uppercase())
                     .unwrap_or_default();
                 metadata.column_type = match name.as_str() {
+                    "DEFAULT" => {
+                        if let Some(argument) = function_argument(function, 0) {
+                            let argument_metadata = self.expression_metadata(
+                                select,
+                                argument,
+                                String::new(),
+                                first_row,
+                            );
+                            metadata.nullable = argument_metadata.nullable;
+                            metadata.unsigned = argument_metadata.unsigned;
+                            metadata.decimals = argument_metadata.decimals;
+                            metadata.character_set = argument_metadata.character_set;
+                            metadata.collation = argument_metadata.collation;
+                            argument_metadata.column_type
+                        } else {
+                            metadata.column_type
+                        }
+                    }
                     "CRC32" => {
                         metadata.unsigned = true;
                         MysqlColumnType::BigInt
@@ -4301,6 +4319,11 @@ impl RawEngine {
                     .last()
                     .map(|name| name.value.to_ascii_uppercase())
                     .unwrap_or_default();
+                if function_name == "DEFAULT"
+                    && let Some(argument) = function_argument(function, 0)
+                {
+                    return self.eval_default_column(argument, data);
+                }
                 if matches!(function_name.as_str(), "COLLATION" | "COERCIBILITY")
                     && let Some(argument) = function_argument(function, 0)
                 {
@@ -4407,6 +4430,56 @@ impl RawEngine {
                 eval_function_text(&function.to_string(), &context, last_insert_id)
             }
             _ => eval_expr(expr, data, last_insert_id),
+        }
+    }
+    fn eval_default_column(&self, argument: &Expr, data: &Map<String, Value>) -> Result<Value> {
+        let (qualifier, column) = match argument {
+            Expr::Identifier(identifier) => (None, identifier.value.clone()),
+            Expr::CompoundIdentifier(parts) if !parts.is_empty() => (
+                Some(
+                    parts[..parts.len() - 1]
+                        .iter()
+                        .map(|part| part.value.as_str())
+                        .collect::<Vec<_>>()
+                        .join("."),
+                ),
+                parts
+                    .last()
+                    .map(|part| part.value.clone())
+                    .unwrap_or_default(),
+            ),
+            _ => return Err(anyhow!("DEFAULT() requires a column reference")),
+        };
+        let mut matched = false;
+        let mut found = None;
+        for entry in self.schemas.iter() {
+            let table = entry.key();
+            let schema = entry.value();
+            if let Some(qualifier) = qualifier.as_deref()
+                && !table.eq_ignore_ascii_case(qualifier)
+            {
+                continue;
+            }
+            let Some((_, hint)) = schema
+                .columns
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case(&column))
+            else {
+                continue;
+            };
+            if qualifier.is_none() && !data.keys().any(|name| name.eq_ignore_ascii_case(&column)) {
+                continue;
+            }
+            if matched && qualifier.is_none() {
+                return Err(anyhow!("ambiguous DEFAULT() column: {column}"));
+            }
+            matched = true;
+            found = hint.default.clone();
+        }
+        match (matched, found) {
+            (_, Some(default)) => eval::eval_default_value(&default),
+            (true, None) => Ok(Value::Null),
+            (false, _) => Err(anyhow!("unknown DEFAULT() column: {column}")),
         }
     }
     fn comparison_column_hint(&self, expr: &Expr) -> Option<ColumnHint> {
