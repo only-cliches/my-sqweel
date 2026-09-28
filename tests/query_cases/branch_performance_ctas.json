@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "branch_performance_ctas",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "kotauday2110/sql_problem_Practice",
+      "commit": "0d29768ca3cd15fcb5f591985d375e3891b3fadc",
+      "path": "q42.sql",
+      "url": "https://github.com/kotauday2110/sql_problem_Practice/blob/0d29768ca3cd15fcb5f591985d375e3891b3fadc/q42.sql",
+      "sha256": "87b540adb692c9a54e6afede425b58ccce0275ed948ce0bced502f5f79973b1a",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "q42.sql:230-250",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL reporting query materializes a grouped performance table from several joined dimensions and facts, counts optional child rows through a left join, and sums a numeric measure.",
+      "mysql_mariadb_translation": "Reauthored as a depot shipment report. CTAS joins depots, staff, completed shipments, and products, left joins optional return records, groups by depot and supervisor, counts completed and returned shipments, sums decimal product prices, and orders the materialized report deterministically. The schema, names, values, and checks are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": ["create-table-as-select", "multi-table-join", "left-join-optional-count", "grouped-counts", "decimal-sum", "deterministic-final-state"],
+  "fixture_notes": "Depot D-1 has two completed shipments and one return, D-2 has two completed shipments and no returns, and D-3 has one completed shipment and one return. A pending shipment is excluded from the report.",
+  "determinism_notes": "Fixed depot, staff, product, shipment, and return identifiers; explicit completed-state filtering; grouped report dimensions; and final depot ordering are used. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE depot_catalog (depot_code VARCHAR(8) PRIMARY KEY, supervisor_code VARCHAR(8) NOT NULL)",
+    "CREATE TABLE depot_staff (staff_code VARCHAR(8) PRIMARY KEY, depot_code VARCHAR(8) NOT NULL)",
+    "CREATE TABLE depot_products (product_code VARCHAR(16) PRIMARY KEY, unit_price DECIMAL(8,2) NOT NULL)",
+    "CREATE TABLE depot_shipments (shipment_id INT PRIMARY KEY, staff_code VARCHAR(8) NOT NULL, product_code VARCHAR(16) NOT NULL, shipment_state VARCHAR(16) NOT NULL)",
+    "CREATE TABLE depot_returns (return_id INT PRIMARY KEY, shipment_id INT NOT NULL)",
+    "INSERT INTO depot_catalog VALUES ('D-1', 'SUP-1'), ('D-2', 'SUP-2'), ('D-3', 'SUP-3')",
+    "INSERT INTO depot_staff VALUES ('ST-1', 'D-1'), ('ST-2', 'D-2'), ('ST-3', 'D-3')",
+    "INSERT INTO depot_products VALUES ('bolt', 12.50), ('nut', 8.25), ('washer', 5.75)",
+    "INSERT INTO depot_shipments VALUES (101, 'ST-1', 'bolt', 'completed'), (102, 'ST-1', 'nut', 'completed'), (103, 'ST-1', 'washer', 'pending'), (201, 'ST-2', 'bolt', 'completed'), (202, 'ST-2', 'nut', 'completed'), (301, 'ST-3', 'washer', 'completed')",
+    "INSERT INTO depot_returns VALUES (9001, 101), (9002, 301)"
+  ],
+  "steps": [
+    {
+      "sql": "CREATE TABLE depot_performance AS SELECT d.depot_code, d.supervisor_code, COUNT(s.shipment_id) AS completed_shipments, COUNT(r.return_id) AS returned_shipments, SUM(p.unit_price) AS gross_value FROM depot_catalog AS d JOIN depot_staff AS e ON e.depot_code = d.depot_code JOIN depot_shipments AS s ON s.staff_code = e.staff_code LEFT JOIN depot_returns AS r ON r.shipment_id = s.shipment_id JOIN depot_products AS p ON p.product_code = s.product_code WHERE s.shipment_state = 'completed' GROUP BY d.depot_code, d.supervisor_code ORDER BY d.depot_code",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT depot_code, supervisor_code, completed_shipments, returned_shipments, gross_value FROM depot_performance ORDER BY depot_code",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT d.depot_code, d.supervisor_code, COUNT(s.shipment_id) AS completed_shipments, COUNT(r.return_id) AS returned_shipments, SUM(p.unit_price) AS gross_value FROM depot_catalog AS d JOIN depot_staff AS e ON e.depot_code = d.depot_code JOIN depot_shipments AS s ON s.staff_code = e.staff_code LEFT JOIN depot_returns AS r ON r.shipment_id = s.shipment_id JOIN depot_products AS p ON p.product_code = s.product_code WHERE s.shipment_state = 'completed' GROUP BY d.depot_code, d.supervisor_code ORDER BY d.depot_code",
+      "ordered": true
+    }
+  ]
+}

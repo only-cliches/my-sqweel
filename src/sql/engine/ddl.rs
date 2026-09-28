@@ -683,7 +683,7 @@ fn inferred_sql_type_from_metadata(
         MysqlColumnType::BigInt => "BIGINT",
         MysqlColumnType::Float => "FLOAT",
         MysqlColumnType::Double => "DOUBLE",
-        MysqlColumnType::Decimal => "DECIMAL",
+        MysqlColumnType::Decimal => return format!("DECIMAL(65,{})", metadata.decimals),
         MysqlColumnType::Date => "DATE",
         MysqlColumnType::Time => "TIME",
         MysqlColumnType::DateTime => "DATETIME",
