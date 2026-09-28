@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "space_label_padding",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "zufuliu/notepad4",
+      "commit": "a5d72aa04f3ea8f3dc425c4f1fd562ee7ae872c9",
+      "path": "tools/lang/MySQL.sql",
+      "url": "https://github.com/zufuliu/notepad4/blob/a5d72aa04f3ea8f3dc425c4f1fd562ee7ae872c9/tools/lang/MySQL.sql",
+      "sha256": "f60d37c6d9596173ba20b9d552abf22d6b396f8d000dc2e61b6ff13d8e5f612c",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "tools/lang/MySQL.sql: MySQL string-function syntax list, SPACE(N)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "The MySQL string-function catalog lists SPACE(N) as the scalar function that produces a requested number of spaces.",
+      "mysql_mariadb_translation": "Reauthored as an independent label-padding report. Fixed rows combine SPACE with CONCAT and CHAR_LENGTH, exercising zero, positive, negative, and NULL counts; the source catalog, identifiers, and values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "space-string-function",
+    "concat",
+    "char-length",
+    "null-propagation",
+    "negative-count-boundary",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Label 11 has no gap, label 22 has three spaces, label 33 has a NULL gap count and therefore a NULL concatenated label, and label 44 has a negative count that produces no spaces.",
+  "determinism_notes": "Label IDs, text, counts, and output ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE label_padding (label_id INT PRIMARY KEY, label_text VARCHAR(16) NOT NULL, gap_count INT NULL)",
+    "INSERT INTO label_padding VALUES (11, 'north', 0), (22, 'south', 3), (33, 'east', NULL), (44, 'west', -2)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT label_id, CONCAT('<', label_text, SPACE(gap_count), '>') AS framed_label, CHAR_LENGTH(SPACE(gap_count)) AS gap_length FROM label_padding ORDER BY label_id",
+      "ordered": true
+    }
+  ]
+}

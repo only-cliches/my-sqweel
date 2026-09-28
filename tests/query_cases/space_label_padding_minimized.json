@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "id": "space_label_padding_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "zufuliu/notepad4",
+      "commit": "a5d72aa04f3ea8f3dc425c4f1fd562ee7ae872c9",
+      "path": "tools/lang/MySQL.sql",
+      "url": "https://github.com/zufuliu/notepad4/blob/a5d72aa04f3ea8f3dc425c4f1fd562ee7ae872c9/tools/lang/MySQL.sql",
+      "sha256": "f60d37c6d9596173ba20b9d552abf22d6b396f8d000dc2e61b6ff13d8e5f612c",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "tools/lang/MySQL.sql: SPACE(N) string-function entry",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL string function produces a fixed number of spaces from an integer count.",
+      "mysql_mariadb_translation": "Reduced to one independent table row and the SPACE projection itself. It isolates MariaDB's long-blob metadata for SPACE from MySqweel's shorter string metadata without CONCAT, the source catalog, or surrounding application text."
+    },
+    "independently_authored": true,
+    "minimized_from": "space_label_padding"
+  },
+  "features": [
+    "space-string-function",
+    "char-length",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The single label has a positive gap count, so SPACE returns three spaces; the projection isolates the result metadata difference for SPACE.",
+  "determinism_notes": "The label ID and count are fixed; the result is a single deterministic row with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE mini_label_padding (label_id INT PRIMARY KEY, gap_count INT NOT NULL)",
+    "INSERT INTO mini_label_padding VALUES (7, 3)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT label_id, SPACE(gap_count) AS padding FROM mini_label_padding ORDER BY label_id",
+      "ordered": true
+    }
+  ]
+}
