@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "timestampadd_schedule_windows_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "timestampadd_schedule_windows",
+    "source": {
+      "repository": "mapr/drill-test-framework",
+      "commit": "9fffe6af74d4ce54e32cd48fd26a16c9d838aba2",
+      "path": "framework/resources/Functional/timestamp_functions/timestampadd_diff_year.sql",
+      "url": "https://github.com/mapr/drill-test-framework/blob/9fffe6af74d4ce54e32cd48fd26a16c9d838aba2/framework/resources/Functional/timestamp_functions/timestampadd_diff_year.sql",
+      "sha256": "d087efbb6910ae6d5c2094a931fec8334157229d44233234e0de10a8e05c2ce6",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from framework/resources/Functional/timestamp_functions/timestampadd_diff_year.sql:1-5",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A scalar TIMESTAMPADD expression shifts one fixed temporal value by a calendar month.",
+      "mysql_mariadb_translation": "Reduced to one independently authored month-end scalar query so TIMESTAMPADD's calendar clamping and temporal result metadata are isolated from table state and TIMESTAMPDIFF composition."
+    },
+    "independently_authored": true,
+    "minimized_from": "timestampadd_schedule_windows"
+  },
+  "features": [
+    "timestampadd",
+    "month-end-clamping",
+    "minimized-regression"
+  ],
+  "fixture_notes": "Adding one month to the fixed January 31 timestamp must clamp to the last valid February day according to MariaDB semantics.",
+  "determinism_notes": "The timestamp, unit, and amount are fixed scalar literals with no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT TIMESTAMPADD(MONTH, 1, '2024-01-31 12:00:00') AS shifted_at",
+      "ordered": true
+    }
+  ]
+}

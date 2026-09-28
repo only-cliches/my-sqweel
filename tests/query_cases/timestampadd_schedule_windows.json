@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "timestampadd_schedule_windows",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "repository": "mapr/drill-test-framework",
+      "commit": "9fffe6af74d4ce54e32cd48fd26a16c9d838aba2",
+      "path": "framework/resources/Functional/timestamp_functions/timestampadd_diff_year.sql",
+      "url": "https://github.com/mapr/drill-test-framework/blob/9fffe6af74d4ce54e32cd48fd26a16c9d838aba2/framework/resources/Functional/timestamp_functions/timestampadd_diff_year.sql",
+      "sha256": "d087efbb6910ae6d5c2094a931fec8334157229d44233234e0de10a8e05c2ce6",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "framework/resources/Functional/timestamp_functions/timestampadd_diff_year.sql:1-5",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A temporal expression composes TIMESTAMPADD with TIMESTAMPDIFF to measure the interval introduced by a date shift.",
+      "mysql_mariadb_translation": "Reauthored as an independent schedule-window audit. Fixed event timestamps apply day, month, hour, and minute TIMESTAMPADD shifts, a paired TIMESTAMPDIFF reports the hour delta, and a NULL timestamp verifies propagation; the source order schema, identifiers, and values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "timestampadd",
+    "timestampdiff",
+    "day-shift",
+    "month-end-clamping",
+    "negative-hour-shift",
+    "null-propagation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The February event crosses into March, the January event exercises month-end clamping and a negative hour shift, and the NULL event must produce NULL temporal results. The hour delta is calculated from the shifted timestamp rather than copied as a literal.",
+  "determinism_notes": "Event timestamps, interval magnitudes, units, and ordering keys are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE schedule_windows (window_id INT PRIMARY KEY, started_at DATETIME NULL, day_shift INT NOT NULL, month_shift INT NOT NULL, hour_shift INT NOT NULL, minute_shift INT NOT NULL)",
+    "INSERT INTO schedule_windows VALUES (401, '2024-02-28 23:30:00', 2, 1, 3, 90), (402, '2025-01-31 10:15:00', 0, 1, -2, -120), (403, NULL, 1, 1, 1, 30)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT window_id, TIMESTAMPADD(DAY, day_shift, started_at) AS day_window, TIMESTAMPADD(MONTH, month_shift, started_at) AS month_window, TIMESTAMPADD(HOUR, hour_shift, started_at) AS hour_window, TIMESTAMPADD(MINUTE, minute_shift, started_at) AS minute_window, TIMESTAMPDIFF(HOUR, started_at, TIMESTAMPADD(HOUR, hour_shift, started_at)) AS shifted_hours FROM schedule_windows ORDER BY window_id",
+      "ordered": true
+    }
+  ]
+}
