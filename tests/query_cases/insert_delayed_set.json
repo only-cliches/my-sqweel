@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "insert_delayed_set",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "mariadb-corporation/mariadb-qa",
+      "commit": "20367fbdcd1d0236a279fa51a07edfa00d24cdf2",
+      "path": "BUGS/MDEV-29932.sql",
+      "url": "https://github.com/mariadb-corporation/mariadb-qa/blob/20367fbdcd1d0236a279fa51a07edfa00d24cdf2/BUGS/MDEV-29932.sql",
+      "sha256": "0395889f29c2f2acedee5480809bc9d548cdc59ff77cd85b632701307855fc1e",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "BUGS/MDEV-29932.sql:2-6, INSERT DELAYED with SET assignments",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB regression script uses INSERT DELAYED with SET-style column assignments as an alternative to a VALUES clause.",
+      "mysql_mariadb_translation": "Reauthored as an independent MyISAM event-log append. Two delayed rows use SET assignments with distinct payloads, and an ordered final read verifies that delayed syntax preserves assigned values; the source table, bug setup, and source values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["insert-delayed", "insert-set", "myisam-table", "multi-step-dml", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "Events 1401 and 1402 are inserted through separate INSERT DELAYED ... SET statements and must retain their assigned state and payload in primary-key order.",
+  "determinism_notes": "Event IDs, assigned values, storage engine, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE delayed_set_events (event_id INT PRIMARY KEY, event_state VARCHAR(16) NOT NULL, payload VARCHAR(64) NOT NULL) ENGINE=MyISAM"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT DELAYED INTO delayed_set_events SET event_id = 1401, event_state = 'queued', payload = 'node-a-ready'",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT DELAYED INTO delayed_set_events SET event_id = 1402, event_state = 'processed', payload = 'node-b-checked'",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT event_id, event_state, payload FROM delayed_set_events ORDER BY event_id",
+      "ordered": true
+    }
+  ]
+}

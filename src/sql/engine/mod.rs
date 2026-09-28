@@ -5048,9 +5048,12 @@ fn find_top_level_keyword(sql: &str, keyword: &str) -> Option<usize> {
                 _ if depth == 0
                     && bytes[index..index + keyword_bytes.len()]
                         .eq_ignore_ascii_case(keyword_bytes)
-                    && (index == 0 || !bytes[index - 1].is_ascii_alphanumeric())
+                    && (index == 0
+                        || !(bytes[index - 1].is_ascii_alphanumeric()
+                            || bytes[index - 1] == b'_'))
                     && (index + keyword_bytes.len() == bytes.len()
-                        || !bytes[index + keyword_bytes.len()].is_ascii_alphanumeric()) =>
+                        || !(bytes[index + keyword_bytes.len()].is_ascii_alphanumeric()
+                            || bytes[index + keyword_bytes.len()] == b'_')) =>
                 {
                     return Some(index);
                 }
@@ -5859,10 +5862,13 @@ fn strip_create_table_index_prefixes(sql: &str) -> String {
 
 fn rewrite_insert_set(sql: &str) -> String {
     let upper = sql.to_ascii_uppercase();
-    let Some(prefix) = ["INSERT INTO ", "REPLACE INTO "]
-        .into_iter()
-        .find(|prefix| upper.starts_with(prefix))
-    else {
+    let (prefix, output_prefix) = if upper.starts_with("INSERT DELAYED INTO ") {
+        ("INSERT DELAYED INTO ", "INSERT INTO ")
+    } else if upper.starts_with("INSERT INTO ") {
+        ("INSERT INTO ", "INSERT INTO ")
+    } else if upper.starts_with("REPLACE INTO ") {
+        ("REPLACE INTO ", "REPLACE INTO ")
+    } else {
         return sql.to_string();
     };
     let Some(set_offset) = find_top_level_keyword(&upper, "SET") else {
@@ -5913,7 +5919,7 @@ fn rewrite_insert_set(sql: &str) -> String {
     }
     let mut rewritten = format!(
         "{} {target} ({}) VALUES ({})",
-        prefix.trim_end(),
+        output_prefix.trim_end(),
         columns.join(", "),
         values.join(", ")
     );
