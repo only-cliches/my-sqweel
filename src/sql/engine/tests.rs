@@ -1,6 +1,6 @@
 use super::{Engine, EngineConfig, JSON_AGGREGATE_TEXT_SENTINEL, QueryEvent, QueryEventOptions};
 use chrono::{Duration, NaiveDateTime, Utc};
-use serde_json::json;
+use serde_json::{Value, json};
 use std::time::Duration as StdDuration;
 
 #[test]
@@ -949,4 +949,23 @@ fn supports_correlated_monthly_status_summary() {
         )
         .expect("correlated monthly status summary should execute");
     assert_eq!(result[0].rows[0]["queued_events"], 1);
+}
+
+#[test]
+fn preserves_null_through_abs_log2() {
+    let engine = Engine::new(EngineConfig::mysql_strict());
+    engine
+        .execute_sql(
+            "CREATE TABLE abs_log2_probe (signal_value DOUBLE NULL); \
+             INSERT INTO abs_log2_probe VALUES (NULL), (2.0);",
+        )
+        .expect("nested numeric functions should execute");
+    let result = engine
+        .execute_sql(
+            "SELECT signal_value, ABS(LOG2(signal_value)) AS magnitude_log2 \
+             FROM abs_log2_probe ORDER BY signal_value IS NOT NULL, signal_value",
+        )
+        .expect("nested numeric functions should execute");
+    assert_eq!(result[0].rows[0]["magnitude_log2"], Value::Null);
+    assert_eq!(result[0].rows[1]["magnitude_log2"], 1);
 }

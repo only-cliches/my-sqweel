@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "log2_magnitude_profiles",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "pgspider/sqlite_fdw",
+      "commit": "ea52a24f63dda31bbf72270ba32f8217cd6232be",
+      "path": "sql/17.0/selectfunc.sql",
+      "url": "https://github.com/pgspider/sqlite_fdw/blob/ea52a24f63dda31bbf72270ba32f8217cd6232be/sql/17.0/selectfunc.sql",
+      "sha256": "525d3f9d86f9da42fdfe1c5f120520b34602d0d24fde8f5c1ee274a1016a7f38",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "sql/17.0/selectfunc.sql:152-159 (ABS nested with LOG2)",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A SQL function-compatibility query nests LOG2 inside ABS and also evaluates the reciprocal input to compare symmetric logarithmic magnitudes.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored power-profile report. Fixed positive measurements, reciprocal magnitudes, NULL propagation, and rounded LOG2 projections are grouped by sensor family; PostgreSQL casts, FDW wrappers, source table names, and values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["log2", "nested-scalar-function", "abs", "reciprocal-arithmetic", "null-propagation", "grouped-average", "rounding", "deterministic-order"],
+  "fixture_notes": "Sensor family north has values 1, 2, and 8; family south has 0.5 and 4 plus one NULL. LOG2 exposes negative, zero, and positive signed values, while ABS(LOG2(value)) and ABS(LOG2(1/value)) agree for non-NULL reciprocal pairs.",
+  "determinism_notes": "Measurement IDs, families, numeric values, reciprocal expression, rounding scale, and ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE power_measurements (measurement_id INT PRIMARY KEY, sensor_family VARCHAR(16) NOT NULL, signal_value DOUBLE NULL)",
+    "INSERT INTO power_measurements VALUES (1101, 'north', 1.0), (1102, 'north', 2.0), (1103, 'north', 8.0), (1104, 'south', 0.5), (1105, 'south', 4.0), (1106, 'south', NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT measurement_id, sensor_family, signal_value, ROUND(LOG2(signal_value), 3) AS signed_log2, ROUND(ABS(LOG2(signal_value)), 3) AS magnitude_log2, ROUND(ABS(LOG2(1 / signal_value)), 3) AS reciprocal_magnitude FROM power_measurements ORDER BY measurement_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT sensor_family, COUNT(signal_value) AS measured_count, ROUND(AVG(ABS(LOG2(signal_value))), 3) AS mean_magnitude FROM power_measurements WHERE signal_value IS NOT NULL GROUP BY sensor_family ORDER BY sensor_family",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT measurement_id, sensor_family, signal_value FROM power_measurements ORDER BY measurement_id",
+      "ordered": true
+    }
+  ]
+}

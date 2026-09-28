@@ -1864,6 +1864,26 @@ impl RawEngine {
                             metadata.column_type
                         }
                     }
+                    "ABS" => {
+                        let argument = function_arguments(function)
+                            .ok()
+                            .and_then(|arguments| arguments.into_iter().next().flatten())
+                            .map(|argument| {
+                                self.expression_metadata(
+                                    select,
+                                    &argument,
+                                    String::new(),
+                                    first_row,
+                                )
+                            });
+                        if let Some(argument) = argument {
+                            metadata.nullable = argument.nullable;
+                            metadata.decimals = argument.decimals;
+                            argument.column_type
+                        } else {
+                            metadata.column_type
+                        }
+                    }
                     "AVG" | "SUM" | "STD" | "STDDEV" | "STDDEV_POP" | "STDDEV_SAMP" | "VAR_POP"
                     | "VAR_SAMP" | "VARIANCE" | "MEDIAN" => {
                         let argument = function_arguments(function)
