@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "id": "json_arrayagg_guarded_insert",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "bitsianruthvik/multi_app_be",
+      "commit": "15cadcc710d29698334827b1f391ebf7e9e062a2",
+      "path": "apps/fab_erp/models/seed.sql",
+      "url": "https://github.com/bitsianruthvik/multi_app_be/blob/15cadcc710d29698334827b1f391ebf7e9e062a2/apps/fab_erp/models/seed.sql",
+      "sha256": "a3946e2bdf6417ba12d2f685eb455e2b7923f5e22de23a0be5d98f8a0a9d4bca",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "apps/fab_erp/models/seed.sql:112-143",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "An INSERT ... SELECT builds a JSON_ARRAYAGG from filtered source rows, uses a correlated NOT EXISTS guard to make the seed rerunnable, and uses HAVING JSON_ARRAYAGG(...) IS NOT NULL to suppress the implicit NULL row produced by an empty ungrouped aggregate.",
+      "mysql_mariadb_translation": "Reauthored as a capability registry. Enabled feature rows are collected into ordered JSON arrays and inserted only when the capability is absent; a missing feature family produces no row, and a repeated insert remains a no-op. The schema, identifiers, rows, and feature names are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": ["json-arrayagg", "insert-select", "not-exists-guard", "aggregate-having", "rerunnable-seed", "deterministic-final-state"],
+  "fixture_notes": "The alpha capability receives two enabled features in feature ID order. The beta capability receives one feature. A missing gamma family is blocked by the aggregate HAVING clause, and repeating alpha is blocked by NOT EXISTS without changing the existing JSON document.",
+  "determinism_notes": "Feature IDs and capability names are fixed. JSON_ARRAYAGG explicitly orders feature IDs, and all final reads use capability-name ordering. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE feature_catalog (feature_id INT PRIMARY KEY, feature_key VARCHAR(32) NOT NULL, retired TINYINT NOT NULL)",
+    "CREATE TABLE capability_registry (capability_name VARCHAR(32) PRIMARY KEY, feature_ids JSON NOT NULL)",
+    "INSERT INTO feature_catalog VALUES (101, 'alpha-view', 0), (102, 'alpha-manage', 0), (103, 'alpha-legacy', 1), (201, 'beta-view', 0), (202, 'other-view', 0)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO capability_registry (capability_name, feature_ids) SELECT 'alpha', JSON_ARRAYAGG(feature_id ORDER BY feature_id) FROM feature_catalog WHERE feature_key IN ('alpha-view', 'alpha-manage') AND retired = 0 AND NOT EXISTS (SELECT 1 FROM capability_registry WHERE capability_name = 'alpha') HAVING JSON_ARRAYAGG(feature_id ORDER BY feature_id) IS NOT NULL",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO capability_registry (capability_name, feature_ids) SELECT 'gamma', JSON_ARRAYAGG(feature_id ORDER BY feature_id) FROM feature_catalog WHERE feature_key IN ('gamma-view', 'gamma-manage') AND retired = 0 AND NOT EXISTS (SELECT 1 FROM capability_registry WHERE capability_name = 'gamma') HAVING JSON_ARRAYAGG(feature_id ORDER BY feature_id) IS NOT NULL",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO capability_registry (capability_name, feature_ids) SELECT 'alpha', JSON_ARRAYAGG(feature_id ORDER BY feature_id) FROM feature_catalog WHERE feature_key IN ('alpha-view', 'alpha-manage') AND retired = 0 AND NOT EXISTS (SELECT 1 FROM capability_registry WHERE capability_name = 'alpha') HAVING JSON_ARRAYAGG(feature_id ORDER BY feature_id) IS NOT NULL",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO capability_registry (capability_name, feature_ids) SELECT 'beta', JSON_ARRAYAGG(feature_id ORDER BY feature_id) FROM feature_catalog WHERE feature_key IN ('beta-view', 'beta-manage') AND retired = 0 AND NOT EXISTS (SELECT 1 FROM capability_registry WHERE capability_name = 'beta') HAVING JSON_ARRAYAGG(feature_id ORDER BY feature_id) IS NOT NULL",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT capability_name, feature_ids FROM capability_registry ORDER BY capability_name",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT COUNT(*) AS capability_count FROM capability_registry",
+      "ordered": true
+    }
+  ]
+}

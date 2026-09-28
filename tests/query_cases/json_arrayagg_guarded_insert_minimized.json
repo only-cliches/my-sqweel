@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "id": "json_arrayagg_guarded_insert_minimized",
+  "provenance": {
+    "kind": "minimized-from-public-query-case",
+    "source": {
+      "kind": "github",
+      "repository": "bitsianruthvik/multi_app_be",
+      "commit": "15cadcc710d29698334827b1f391ebf7e9e062a2",
+      "path": "apps/fab_erp/models/seed.sql",
+      "url": "https://github.com/bitsianruthvik/multi_app_be/blob/15cadcc710d29698334827b1f391ebf7e9e062a2/apps/fab_erp/models/seed.sql",
+      "sha256": "a3946e2bdf6417ba12d2f685eb455e2b7923f5e22de23a0be5d98f8a0a9d4bca",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "apps/fab_erp/models/seed.sql:112-121",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "An ungrouped JSON_ARRAYAGG INSERT is guarded by NOT EXISTS and HAVING JSON_ARRAYAGG(...) IS NOT NULL so an empty source produces no junk row.",
+      "mysql_mariadb_translation": "Reduced to one enabled feature family and one capability target while preserving the aggregate INSERT, correlated absence guard, and empty-result HAVING filter."
+    },
+    "independently_authored": true
+  },
+  "features": ["json-arrayagg", "insert-select", "not-exists-guard", "aggregate-having", "deterministic-final-state"],
+  "fixture_notes": "One matching feature must produce one JSON array row; an absent family must produce no row.",
+  "determinism_notes": "The feature ID and final capability ordering are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE feature_probe (feature_id INT PRIMARY KEY, feature_key VARCHAR(32) NOT NULL)",
+    "CREATE TABLE capability_probe (capability_name VARCHAR(32) PRIMARY KEY, feature_ids JSON NOT NULL)",
+    "INSERT INTO feature_probe VALUES (7, 'alpha-view')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO capability_probe (capability_name, feature_ids) SELECT 'alpha', JSON_ARRAYAGG(feature_id) FROM feature_probe WHERE feature_key = 'alpha-view' AND NOT EXISTS (SELECT 1 FROM capability_probe WHERE capability_name = 'alpha') HAVING JSON_ARRAYAGG(feature_id) IS NOT NULL",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO capability_probe (capability_name, feature_ids) SELECT 'gamma', JSON_ARRAYAGG(feature_id) FROM feature_probe WHERE feature_key = 'gamma-view' AND NOT EXISTS (SELECT 1 FROM capability_probe WHERE capability_name = 'gamma') HAVING JSON_ARRAYAGG(feature_id) IS NOT NULL",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT capability_name, feature_ids FROM capability_probe ORDER BY capability_name",
+      "ordered": true
+    }
+  ]
+}

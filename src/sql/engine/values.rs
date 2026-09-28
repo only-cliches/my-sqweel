@@ -488,7 +488,12 @@ pub(super) fn coerce_value_for_column(value: Value, hint: &ColumnHint) -> Value 
 
     if ascii_contains_ignore_case(sql_type, "json") {
         return match value {
-            Value::String(s) if s.starts_with(JSON_MUTATION_TEXT_SENTINEL) => Value::String(s),
+            Value::String(s)
+                if s.starts_with(JSON_MUTATION_TEXT_SENTINEL)
+                    || s.starts_with(JSON_AGGREGATE_TEXT_SENTINEL) =>
+            {
+                Value::String(s)
+            }
             Value::String(s) => match serde_json::from_str::<Value>(&s) {
                 // Preserve the serialized form of JSON strings. Otherwise a
                 // JSON document such as `"text"` becomes the indistinguishable
@@ -500,7 +505,6 @@ pub(super) fn coerce_value_for_column(value: Value, hint: &ColumnHint) -> Value 
             other => other,
         };
     }
-
     value
 }
 
@@ -684,6 +688,7 @@ pub(super) fn validate_mysql_column_value(
         && {
             let text = value
                 .strip_prefix(JSON_MUTATION_TEXT_SENTINEL)
+                .or_else(|| value.strip_prefix(JSON_AGGREGATE_TEXT_SENTINEL))
                 .unwrap_or(value);
             serde_json::from_str::<Value>(text).is_err()
         }
