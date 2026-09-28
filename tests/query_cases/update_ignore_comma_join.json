@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "id": "update_ignore_comma_join",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "jpatokal/openflights",
+      "commit": "7d1a611e070295dba776d6afb86e57d0d1aa1cef",
+      "path": "sql/import-arm.sql",
+      "url": "https://github.com/jpatokal/openflights/blob/7d1a611e070295dba776d6afb86e57d0d1aa1cef/sql/import-arm.sql",
+      "sha256": "1f0debb6bdb398e9d865b419308f34678dbddf05df1ffc747b2beaf36d453641",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/import-arm.sql:31 (UPDATE IGNORE over comma-joined routes and airlines)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL import repair updates one table from a comma-joined lookup table with UPDATE IGNORE, allowing duplicate-key conflicts to be skipped while matching rows continue processing.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored route-directory reconciliation. A comma-joined UPDATE IGNORE copies active carrier IDs into matching routes; one route conflicts with an existing unique carrier assignment and must remain unchanged, one compatible route updates, and an inactive carrier plus unmatched route remain untouched. The source schema, identifiers, values, and import context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "update-ignore",
+    "comma-joined-update",
+    "unique-conflict-skip",
+    "joined-filter",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Route 4101 maps to active carrier 88 but conflicts with route 4103's existing unique carrier assignment, so UPDATE IGNORE must skip that row. Route 4102 maps to active carrier 77 and updates. Route 4104 maps only to inactive carrier 99 and remains NULL.",
+  "determinism_notes": "Route IDs, carrier IDs, codes, active flags, unique constraints, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE route_directory (route_id INT PRIMARY KEY, carrier_code VARCHAR(12) NOT NULL, carrier_id INT NULL UNIQUE)",
+    "CREATE TABLE carrier_directory (carrier_id INT PRIMARY KEY, carrier_code VARCHAR(12) NOT NULL UNIQUE, active TINYINT NOT NULL)",
+    "INSERT INTO route_directory VALUES (4101, 'AR1', NULL), (4102, 'AR2', NULL), (4103, 'AR1', 88), (4104, 'AR3', NULL)",
+    "INSERT INTO carrier_directory VALUES (88, 'AR1', 1), (77, 'AR2', 1), (99, 'AR3', 0)"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE IGNORE route_directory AS r, carrier_directory AS c SET r.carrier_id = c.carrier_id WHERE c.carrier_code = r.carrier_code AND c.active = 1",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT route_id, carrier_code, carrier_id FROM route_directory ORDER BY route_id",
+      "ordered": true
+    }
+  ]
+}
