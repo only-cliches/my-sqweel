@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "field_elt_plan_labels",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "hyee/dbcli",
+      "commit": "4fc0c76a5db8811baa34612f7b96d258dd3f6da2",
+      "path": "mysql/sql/obj.sql",
+      "url": "https://github.com/hyee/dbcli/blob/4fc0c76a5db8811baa34612f7b96d258dd3f6da2/mysql/sql/obj.sql",
+      "sha256": "66d4a34a1e73f13463e58dbe25c37d9f5987f537f8eae42ed980bb8d201e6d72",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "mysql/sql/obj.sql (ELT(FIELD(...), ...) object-type label expression)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL metadata projection composes FIELD to find a category position and ELT to turn that position into a human-readable label.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored subscription-plan audit. FIELD ranks known plan codes and ELT maps the rank to a display label; unknown and NULL codes must retain FIELD rank zero and a NULL ELT label. The source metadata schema, identifiers, labels, and application context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "field-elt-composition",
+    "custom-ranking",
+    "null-propagation",
+    "unknown-value",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Known plans trial, standard, and enterprise map to ranks 1, 2, and 3. A legacy code and a NULL code both have FIELD rank zero; ELT must return NULL for those zero positions rather than inventing a label.",
+  "determinism_notes": "Plan event IDs and fixed plan codes are ordered by the primary key; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE plan_events (event_id INT PRIMARY KEY, plan_code VARCHAR(24) NULL, event_label VARCHAR(64) NOT NULL)",
+    "INSERT INTO plan_events VALUES (8101, 'trial', 'new trial'), (8102, 'enterprise', 'renewal'), (8103, 'legacy', 'migration'), (8104, NULL, 'unclassified'), (8105, 'standard', 'upgrade')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT event_id, plan_code, FIELD(plan_code, 'trial', 'standard', 'enterprise') AS plan_rank, ELT(FIELD(plan_code, 'trial', 'standard', 'enterprise'), 'Trial', 'Standard', 'Enterprise') AS plan_label FROM plan_events ORDER BY event_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT event_id, plan_code, event_label FROM plan_events ORDER BY event_id",
+      "ordered": true
+    }
+  ]
+}
