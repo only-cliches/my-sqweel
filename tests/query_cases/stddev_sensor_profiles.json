@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "stddev_sensor_profiles",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "avargas10/CE3101-Examples",
+      "commit": "20c570328cfd1a5e54a020ac1afe30da01a3afda",
+      "path": "sql-basico/create/18-funciones-agregacion-MySQL.sql",
+      "url": "https://github.com/avargas10/CE3101-Examples/blob/20c570328cfd1a5e54a020ac1afe30da01a3afda/sql-basico/create/18-funciones-agregacion-MySQL.sql",
+      "sha256": "b7a99e8b9ca1b9a5de3afabf32f4600ea771086e6c0034c9817c3eb8eba0ea17",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql-basico/create/18-funciones-agregacion-MySQL.sql:334-440, STDDEV examples",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL aggregate-function lesson applies STDDEV to numeric columns in grouped and ungrouped reports to measure population standard deviation.",
+      "mysql_mariadb_translation": "Reauthored as an independent sensor-variability report. Fixed readings are grouped by zone; STDDEV ignores NULL readings, produces zero for a single non-NULL reading, and produces NULL for a NULL-only group. Counts and rounded output make population semantics observable without copying the source schema, values, or lesson context."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "stddev-aggregate",
+    "grouped-aggregate",
+    "null-omission",
+    "single-value-zero",
+    "null-only-group",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Zone north has readings 2, 4, and 6 plus one NULL, so STDDEV uses the three numeric values. Zone east has one numeric reading and therefore a zero population deviation; zone west has only NULL and therefore NULL deviation.",
+  "determinism_notes": "Sensor IDs, zones, readings, and grouping order are fixed. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE sensor_variability (sensor_id INT PRIMARY KEY, zone_code VARCHAR(16) NOT NULL, reading DECIMAL(10,4) NULL)",
+    "INSERT INTO sensor_variability VALUES (301, 'north', 2.0000), (302, 'north', 4.0000), (303, 'north', 6.0000), (304, 'north', NULL), (305, 'east', 5.0000), (306, 'west', NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT zone_code, COUNT(reading) AS numeric_readings, ROUND(STDDEV(reading), 4) AS population_stddev FROM sensor_variability GROUP BY zone_code ORDER BY zone_code",
+      "ordered": true
+    }
+  ]
+}
