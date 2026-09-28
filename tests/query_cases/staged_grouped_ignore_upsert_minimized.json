@@ -1,0 +1,67 @@
+{
+  "version": 1,
+  "id": "staged_grouped_ignore_upsert_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "minimized_from": "staged_grouped_ignore_upsert",
+    "source": {
+      "kind": "github",
+      "repository": "greasyfork-org/greasyfork",
+      "commit": "4a9619f51176af23204f4ff9da6ae8724a9bd674",
+      "path": "shellscripts/update_install_counts.sql",
+      "url": "https://github.com/greasyfork-org/greasyfork/blob/4a9619f51176af23204f4ff9da6ae8724a9bd674/shellscripts/update_install_counts.sql",
+      "sha256": "ce7c6eced4d87055fcf35e164d096dab112e66af028301a5c9f68c52440ecff0",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "shellscripts/update_install_counts.sql:14-22",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "Grouped INSERT IGNORE ingestion is followed by grouped staging and a duplicate-key aggregate merge.",
+      "mysql_mariadb_translation": "Reduced to one existing key, one ignored historical conflict, and one live grouped merge that retains INSERT IGNORE, temporary staging, and ON DUPLICATE KEY UPDATE arithmetic."
+    },
+    "independently_authored": true
+  },
+  "features": ["insert-ignore", "grouped-insert-select", "temporary-staging", "duplicate-key-update", "minimized-regression"],
+  "fixture_notes": "The archived web group conflicts and is ignored; two live web events then raise its total from 5 to 7.",
+  "determinism_notes": "One fixed composite key and fixed event rows produce one deterministic aggregate merge. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE event_totals_min (channel_code VARCHAR(16) NOT NULL, event_day DATE NOT NULL, event_count INT NOT NULL, PRIMARY KEY (channel_code, event_day))",
+    "CREATE TABLE archived_events_min (event_id INT PRIMARY KEY, channel_code VARCHAR(16) NOT NULL, event_day DATE NOT NULL)",
+    "CREATE TABLE live_events_min (event_id INT PRIMARY KEY, channel_code VARCHAR(16) NOT NULL, event_day DATE NOT NULL)",
+    "INSERT INTO event_totals_min VALUES ('web', '2026-09-01', 5)",
+    "INSERT INTO archived_events_min VALUES (3001, 'web', '2026-09-01')",
+    "INSERT INTO live_events_min VALUES (4001, 'web', '2026-09-01'), (4002, 'web', '2026-09-01')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT IGNORE INTO event_totals_min (channel_code, event_day, event_count) SELECT channel_code, event_day, COUNT(*) FROM archived_events_min GROUP BY channel_code, event_day",
+      "ordered": true
+    },
+    {
+      "sql": "CREATE TEMPORARY TABLE live_event_totals_min (channel_code VARCHAR(16) NOT NULL, event_day DATE NOT NULL, event_count INT NOT NULL, PRIMARY KEY (channel_code, event_day))",
+      "ordered": false
+    },
+    {
+      "sql": "INSERT INTO live_event_totals_min SELECT channel_code, event_day, COUNT(*) FROM live_events_min GROUP BY channel_code, event_day",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO event_totals_min (channel_code, event_day, event_count) SELECT channel_code, event_day, event_count FROM live_event_totals_min ON DUPLICATE KEY UPDATE event_count = event_totals_min.event_count + VALUES(event_count)",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT channel_code, event_day, event_count FROM event_totals_min ORDER BY channel_code, event_day",
+      "ordered": true
+    },
+    {
+      "sql": "DROP TEMPORARY TABLE live_event_totals_min",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT channel_code, event_day, event_count FROM event_totals_min ORDER BY channel_code, event_day",
+      "ordered": true
+    }
+  ]
+}

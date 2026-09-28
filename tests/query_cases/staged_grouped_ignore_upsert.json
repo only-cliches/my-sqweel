@@ -1,0 +1,74 @@
+{
+  "version": 1,
+  "id": "staged_grouped_ignore_upsert",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "greasyfork-org/greasyfork",
+      "commit": "4a9619f51176af23204f4ff9da6ae8724a9bd674",
+      "path": "shellscripts/update_install_counts.sql",
+      "url": "https://github.com/greasyfork-org/greasyfork/blob/4a9619f51176af23204f4ff9da6ae8724a9bd674/shellscripts/update_install_counts.sql",
+      "sha256": "ce7c6eced4d87055fcf35e164d096dab112e66af028301a5c9f68c52440ecff0",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "shellscripts/update_install_counts.sql:14-22",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL maintenance load first inserts grouped historical counts with INSERT IGNORE, then materializes another grouped source and merges it into a summary with INSERT ... SELECT ... ON DUPLICATE KEY UPDATE.",
+      "mysql_mariadb_translation": "Reauthored as a deterministic event-count consolidation. Historical event groups are inserted without disturbing existing totals, live groups are materialized in a temporary table, and a second grouped load adds each live count to existing or newly inserted summary keys. The source tables, identifiers, values, dates, and application workflow are newly authored; no clock expressions are used."
+    },
+    "independently_authored": true
+  },
+  "features": ["insert-ignore", "grouped-insert-select", "temporary-staging", "duplicate-key-update", "aggregate-merge", "multi-step-dml", "deterministic-order"],
+  "fixture_notes": "The archived web group conflicts and is ignored; archived batch is inserted. Live web and api groups add to existing totals, while live batch adds to the newly inserted archived row.",
+  "determinism_notes": "Channel keys, fixed dates, event IDs, aggregate groups, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE event_totals (channel_code VARCHAR(16) NOT NULL, event_day DATE NOT NULL, event_count INT NOT NULL, PRIMARY KEY (channel_code, event_day))",
+    "CREATE TABLE archived_events (event_id INT PRIMARY KEY, channel_code VARCHAR(16) NOT NULL, event_day DATE NOT NULL)",
+    "CREATE TABLE live_events (event_id INT PRIMARY KEY, channel_code VARCHAR(16) NOT NULL, event_day DATE NOT NULL)",
+    "INSERT INTO event_totals VALUES ('web', '2026-08-01', 10), ('api', '2026-08-01', 4)",
+    "INSERT INTO archived_events VALUES (1001, 'web', '2026-08-01'), (1002, 'batch', '2026-08-01'), (1003, 'web', '2026-08-01')",
+    "INSERT INTO live_events VALUES (2001, 'web', '2026-08-01'), (2002, 'web', '2026-08-01'), (2003, 'web', '2026-08-01'), (2004, 'api', '2026-08-01'), (2005, 'api', '2026-08-01'), (2006, 'batch', '2026-08-01')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT IGNORE INTO event_totals (channel_code, event_day, event_count) SELECT channel_code, event_day, COUNT(*) FROM archived_events GROUP BY channel_code, event_day ORDER BY channel_code",
+      "ordered": true
+    },
+    {
+      "sql": "CREATE TEMPORARY TABLE live_event_totals (channel_code VARCHAR(16) NOT NULL, event_day DATE NOT NULL, event_count INT NOT NULL, PRIMARY KEY (channel_code, event_day))",
+      "ordered": false
+    },
+    {
+      "sql": "INSERT INTO live_event_totals SELECT channel_code, event_day, COUNT(*) FROM live_events GROUP BY channel_code, event_day ORDER BY channel_code",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO event_totals (channel_code, event_day, event_count) SELECT channel_code, event_day, event_count FROM live_event_totals ORDER BY channel_code ON DUPLICATE KEY UPDATE event_count = event_totals.event_count + VALUES(event_count)",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT channel_code, event_day, event_count FROM event_totals ORDER BY channel_code, event_day",
+      "ordered": true
+    },
+    {
+      "sql": "DROP TEMPORARY TABLE live_event_totals",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT channel_code, event_day, event_count FROM event_totals ORDER BY channel_code, event_day",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT event_id, channel_code, event_day FROM archived_events ORDER BY event_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT event_id, channel_code, event_day FROM live_events ORDER BY event_id",
+      "ordered": true
+    }
+  ]
+}
