@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "update_correlated_group_count_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "minimized_from": "update_correlated_group_count",
+    "source": {
+      "kind": "github",
+      "repository": "GoesToEleven/postgresql-course",
+      "commit": "e50dc7cd80bd153eb04e7b57eafcbb5bbccaa507",
+      "path": "207/n16e5.sql",
+      "url": "https://github.com/GoesToEleven/postgresql-course/blob/e50dc7cd80bd153eb04e7b57eafcbb5bbccaa507/207/n16e5.sql",
+      "sha256": "2e9fa404f73ae8f589668271d29968708b0e29828cfaed31a95c7da38eba71a9",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "207/n16e5.sql:13-24",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "An UPDATE selects keys through an IN subquery whose nested correlated COUNT is grouped and thresholded.",
+      "mysql_mariadb_translation": "Reduced to one qualifying account with two subscriptions and one nonqualifying account with one subscription while retaining the nested correlated aggregate and final ordered state."
+    },
+    "independently_authored": true
+  },
+  "features": ["update", "in-subquery", "correlated-aggregate", "group-by", "minimized-regression"],
+  "fixture_notes": "Only account 901 has more than one subscription and must increase from 40 to 65.",
+  "determinism_notes": "Two fixed accounts and three fixed subscriptions produce one deterministic update. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE support_accounts_min (account_id INT PRIMARY KEY, account_label VARCHAR(32) NOT NULL, score INT NOT NULL)",
+    "CREATE TABLE account_subscriptions_min (subscription_id INT PRIMARY KEY, account_id INT NOT NULL, plan_code VARCHAR(16) NOT NULL)",
+    "INSERT INTO support_accounts_min VALUES (901, 'Echo', 40), (902, 'Fable', 40)",
+    "INSERT INTO account_subscriptions_min VALUES (1001, 901, 'base'), (1002, 901, 'plus'), (1003, 902, 'base')"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE support_accounts_min AS a SET score = score + 25 WHERE a.account_id IN (SELECT s.account_id FROM account_subscriptions_min AS s WHERE (SELECT COUNT(*) FROM account_subscriptions_min AS nested_s WHERE nested_s.account_id = s.account_id GROUP BY nested_s.account_id) > 1 GROUP BY s.account_id)",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT account_id, account_label, score FROM support_accounts_min ORDER BY account_id",
+      "ordered": true
+    }
+  ]
+}

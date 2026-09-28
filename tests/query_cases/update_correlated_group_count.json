@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "update_correlated_group_count",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "GoesToEleven/postgresql-course",
+      "commit": "e50dc7cd80bd153eb04e7b57eafcbb5bbccaa507",
+      "path": "207/n16e5.sql",
+      "url": "https://github.com/GoesToEleven/postgresql-course/blob/e50dc7cd80bd153eb04e7b57eafcbb5bbccaa507/207/n16e5.sql",
+      "sha256": "2e9fa404f73ae8f589668271d29968708b0e29828cfaed31a95c7da38eba71a9",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "207/n16e5.sql:13-24",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "An UPDATE uses an IN subquery whose eligibility test contains a correlated COUNT aggregate grouped by the outer relation's key.",
+      "mysql_mariadb_translation": "Reauthored as a support-plan refresh. Accounts with more than one fixed service subscription receive a score increment through an UPDATE filtered by a nested correlated aggregate subquery; accounts with one or zero subscriptions remain unchanged. The source tables, identifiers, values, and learning examples are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": ["update", "in-subquery", "correlated-aggregate", "group-by", "partial-mutation", "deterministic-final-state"],
+  "fixture_notes": "Accounts 801 and 803 have more than one subscription and gain 25 points; account 802 has one subscription and account 804 has none, so both remain unchanged.",
+  "determinism_notes": "Account and subscription IDs are fixed, the grouped correlation is unique per account, and the final state is ordered by account ID. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE support_accounts (account_id INT PRIMARY KEY, account_label VARCHAR(32) NOT NULL, score INT NOT NULL)",
+    "CREATE TABLE account_subscriptions (subscription_id INT PRIMARY KEY, account_id INT NOT NULL, plan_code VARCHAR(16) NOT NULL)",
+    "INSERT INTO support_accounts VALUES (801, 'Atlas', 100), (802, 'Beryl', 100), (803, 'Cobalt', 75), (804, 'Dune', 60)",
+    "INSERT INTO account_subscriptions VALUES (901, 801, 'base'), (902, 801, 'plus'), (903, 802, 'base'), (904, 803, 'base'), (905, 803, 'plus'), (906, 803, 'audit')"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE support_accounts AS a SET score = score + 25 WHERE a.account_id IN (SELECT s.account_id FROM account_subscriptions AS s WHERE (SELECT COUNT(*) FROM account_subscriptions AS nested_s WHERE nested_s.account_id = s.account_id GROUP BY nested_s.account_id) > 1 GROUP BY s.account_id)",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT account_id, account_label, score FROM support_accounts ORDER BY account_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT account_id, COUNT(*) AS subscription_count FROM account_subscriptions GROUP BY account_id ORDER BY account_id",
+      "ordered": true
+    }
+  ]
+}
