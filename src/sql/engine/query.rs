@@ -2445,7 +2445,9 @@ impl RawEngine {
             Expr::Subquery(query) => {
                 if let Some(subquery_metadata) = self.scalar_subquery_metadata(&query.body) {
                     metadata.column_type = subquery_metadata.column_type;
-                    metadata.nullable = subquery_metadata.nullable;
+                    // A scalar subquery yields NULL when it returns no rows,
+                    // even when its projected source column is NOT NULL.
+                    metadata.nullable = true;
                     metadata.unsigned = subquery_metadata.unsigned;
                     metadata.decimals = subquery_metadata.decimals;
                     metadata.character_set = subquery_metadata.character_set;

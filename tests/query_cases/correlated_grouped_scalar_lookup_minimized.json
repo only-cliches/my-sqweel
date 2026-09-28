@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "correlated_grouped_scalar_lookup_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "minimized_from": "correlated_grouped_scalar_lookup",
+    "source": {
+      "kind": "github",
+      "repository": "USEPA/EPA_MOVES_Model",
+      "commit": "25dc6c833dd8c88198f82cee93ca30be1456df8b",
+      "path": "database/PreAggYEAR.sql",
+      "url": "https://github.com/USEPA/EPA_MOVES_Model/blob/25dc6c833dd8c88198f82cee93ca30be1456df8b/database/PreAggYEAR.sql",
+      "sha256": "0f583041285224d478a24eba60479167a222208e21ab457e04d265ef560d02d2",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "database/PreAggYEAR.sql:91-92",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A scalar subquery groups candidate values, filters groups with HAVING, and uses ORDER BY/LIMIT to return one selected value.",
+      "mysql_mariadb_translation": "Reduced to one site and two grouped rate codes while retaining the correlated grouped scalar, positive-sum HAVING predicate, descending order, and LIMIT 1."
+    },
+    "independently_authored": true
+  },
+  "features": ["correlated-subquery", "grouped-scalar-subquery", "having", "ordered-limit", "minimized-regression"],
+  "fixture_notes": "The premium rate group has a positive total and sorts above basic, so the scalar subquery must return premium.",
+  "determinism_notes": "One fixed site, two rate groups, and one ordered result row; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE service_sites_min (site_id INT PRIMARY KEY, site_label VARCHAR(32) NOT NULL)",
+    "CREATE TABLE site_rate_credits_min (credit_id INT PRIMARY KEY, site_id INT NOT NULL, rate_code VARCHAR(16) NOT NULL, credit_value INT NOT NULL)",
+    "INSERT INTO service_sites_min VALUES (401, 'Central hub')",
+    "INSERT INTO site_rate_credits_min VALUES (9101, 401, 'basic', 3), (9102, 401, 'premium', 1)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT s.site_id, (SELECT c.rate_code FROM site_rate_credits_min AS c WHERE c.site_id = s.site_id GROUP BY c.rate_code HAVING SUM(c.credit_value) > 0 ORDER BY c.rate_code DESC LIMIT 1) AS selected_rate FROM service_sites_min AS s ORDER BY s.site_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT site_id, site_label FROM service_sites_min ORDER BY site_id",
+      "ordered": true
+    }
+  ]
+}

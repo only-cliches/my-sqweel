@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "correlated_grouped_scalar_lookup",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "USEPA/EPA_MOVES_Model",
+      "commit": "25dc6c833dd8c88198f82cee93ca30be1456df8b",
+      "path": "database/PreAggYEAR.sql",
+      "url": "https://github.com/USEPA/EPA_MOVES_Model/blob/25dc6c833dd8c88198f82cee93ca30be1456df8b/database/PreAggYEAR.sql",
+      "sha256": "0f583041285224d478a24eba60479167a222208e21ab457e04d265ef560d02d2",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "database/PreAggYEAR.sql:91-92",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL query uses a scalar subquery that groups candidate rows, filters groups with HAVING, orders the surviving group keys, and limits the selected scalar result.",
+      "mysql_mariadb_translation": "Reauthored as an independent service-rate report. Each site uses a correlated grouped scalar subquery to select the highest eligible rate code whose total credit is positive; sites without eligible groups return NULL. The source tables, identifiers, values, and transportation model are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["correlated-subquery", "grouped-scalar-subquery", "having", "ordered-limit", "null-propagation", "deterministic-order"],
+  "fixture_notes": "Site 301 has two eligible rate codes and must select the lexically highest code after HAVING; site 302 has only nonpositive totals and returns NULL; site 303 has one eligible code.",
+  "determinism_notes": "Site IDs, rate codes, credit values, grouping keys, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE service_sites (site_id INT PRIMARY KEY, site_label VARCHAR(32) NOT NULL)",
+    "CREATE TABLE site_rate_credits (credit_id INT PRIMARY KEY, site_id INT NOT NULL, rate_code VARCHAR(16) NOT NULL, credit_value INT NOT NULL)",
+    "INSERT INTO service_sites VALUES (301, 'North hub'), (302, 'South hub'), (303, 'West hub')",
+    "INSERT INTO site_rate_credits VALUES (9001, 301, 'basic', 4), (9002, 301, 'premium', 2), (9003, 301, 'premium', 3), (9004, 302, 'basic', 0), (9005, 302, 'legacy', -1), (9006, 303, 'standard', 5)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT s.site_id, s.site_label, (SELECT c.rate_code FROM site_rate_credits AS c WHERE c.site_id = s.site_id GROUP BY c.rate_code HAVING SUM(c.credit_value) > 0 ORDER BY c.rate_code DESC LIMIT 1) AS selected_rate FROM service_sites AS s ORDER BY s.site_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT site_id, site_label FROM service_sites ORDER BY site_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT credit_id, site_id, rate_code, credit_value FROM site_rate_credits ORDER BY credit_id",
+      "ordered": true
+    }
+  ]
+}
