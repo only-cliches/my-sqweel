@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "conditional_distinct_insert_retention_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "deltaDNA/sql-cookbook",
+      "commit": "3b55f905879ac4486cc0d77e5fc71b1d6b8da515",
+      "path": "KPIs/churn.sql",
+      "url": "https://github.com/deltaDNA/sql-cookbook/blob/3b55f905879ac4486cc0d77e5fc71b1d6b8da515/KPIs/churn.sql",
+      "sha256": "7d9544b85d9405d5b5277ad9ed13bf23c59e88cc0b58bc0f58c49a1a3f0ffe5c",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "KPIs/churn.sql:1-17",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped report uses overall distinct counts and conditional distinct counts to calculate a retained-user ratio.",
+      "mysql_mariadb_translation": "Reduced to one independently authored cohort, two active users, one day-seven user, and one CTE-backed grouped INSERT ... SELECT with a guarded percentage."
+    },
+    "independently_authored": true,
+    "minimized_from": "conditional_distinct_insert_retention"
+  },
+  "features": ["cte-insert-select", "conditional-distinct", "minimized-regression"],
+  "fixture_notes": "One cohort has two active users and one retained user, so the persisted result is 50.00 percent.",
+  "determinism_notes": "Fixed cohort, user IDs, day numbers, literal percentage calculation, and ordered final read; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE cohort_activity_min (activity_id INT PRIMARY KEY, cohort_day DATE NOT NULL, user_id INT NOT NULL, day_number INT NOT NULL)",
+    "CREATE TABLE cohort_retention_min (cohort_day DATE PRIMARY KEY, install_count INT NOT NULL, retained_count INT NOT NULL, retention_pct DECIMAL(6,2) NOT NULL)",
+    "INSERT INTO cohort_activity_min VALUES (1, '2026-03-01', 31, 0), (2, '2026-03-01', 31, 7), (3, '2026-03-01', 32, 2)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO cohort_retention_min (cohort_day, install_count, retained_count, retention_pct) WITH activity_data AS (SELECT cohort_day, user_id, day_number FROM cohort_activity_min) SELECT cohort_day, COUNT(DISTINCT user_id), COUNT(DISTINCT CASE WHEN day_number >= 7 THEN user_id END), ROUND(100 * COUNT(DISTINCT CASE WHEN day_number >= 7 THEN user_id END) / NULLIF(COUNT(DISTINCT user_id), 0), 2) FROM activity_data GROUP BY cohort_day",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT cohort_day, install_count, retained_count, retention_pct FROM cohort_retention_min ORDER BY cohort_day",
+      "ordered": true
+    }
+  ]
+}

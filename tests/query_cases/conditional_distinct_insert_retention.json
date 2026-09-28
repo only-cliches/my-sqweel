@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "id": "conditional_distinct_insert_retention",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "deltaDNA/sql-cookbook",
+      "commit": "3b55f905879ac4486cc0d77e5fc71b1d6b8da515",
+      "path": "KPIs/churn.sql",
+      "url": "https://github.com/deltaDNA/sql-cookbook/blob/3b55f905879ac4486cc0d77e5fc71b1d6b8da515/KPIs/churn.sql",
+      "sha256": "7d9544b85d9405d5b5277ad9ed13bf23c59e88cc0b58bc0f58c49a1a3f0ffe5c",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "KPIs/churn.sql:1-17",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A CTE-backed grouped retention report counts distinct users overall and conditionally with COUNT(DISTINCT CASE WHEN ... END), then derives a percentage from the two aggregates.",
+      "mysql_mariadb_translation": "Reauthored as a cohort retention snapshot persisted with INSERT ... SELECT. An activity CTE filters active observations, grouped counts measure cohort installs and users reaching day seven, and a guarded percentage is stored for each cohort. The source schema, dates, identifiers, and KPI names are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": ["cte-insert-select", "count-distinct", "conditional-distinct", "nullif-division", "grouped-persistence", "deterministic-final-state"],
+  "fixture_notes": "The January cohort has three active users and two reaching day seven, while the February cohort has two active users and one reaching day seven. An inactive observation is excluded before the conditional distinct counts; stored percentages are rounded to two decimals.",
+  "determinism_notes": "Cohort dates, user IDs, day numbers, active flags, and final ordering are fixed. NULLIF only guards the denominator; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE cohort_activity (activity_id INT PRIMARY KEY, cohort_day DATE NOT NULL, user_id INT NOT NULL, day_number INT NOT NULL, active TINYINT NOT NULL)",
+    "CREATE TABLE cohort_retention (cohort_day DATE PRIMARY KEY, install_count INT NOT NULL, retained_count INT NOT NULL, retention_pct DECIMAL(6,2) NOT NULL)",
+    "INSERT INTO cohort_activity VALUES (1001, '2026-01-01', 11, 0, 1), (1002, '2026-01-01', 11, 7, 1), (1003, '2026-01-01', 12, 3, 1), (1004, '2026-01-01', 13, 9, 1), (1005, '2026-01-01', 14, 7, 0), (2001, '2026-02-01', 21, 0, 1), (2002, '2026-02-01', 22, 8, 1), (2003, '2026-02-01', 21, 4, 1)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO cohort_retention (cohort_day, install_count, retained_count, retention_pct) WITH activity_data AS (SELECT cohort_day, user_id, day_number FROM cohort_activity WHERE active = 1) SELECT cohort_day, COUNT(DISTINCT user_id), COUNT(DISTINCT CASE WHEN day_number >= 7 THEN user_id END), ROUND(100 * COUNT(DISTINCT CASE WHEN day_number >= 7 THEN user_id END) / NULLIF(COUNT(DISTINCT user_id), 0), 2) FROM activity_data GROUP BY cohort_day ORDER BY cohort_day",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT cohort_day, install_count, retained_count, retention_pct FROM cohort_retention ORDER BY cohort_day",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT cohort_day, COUNT(DISTINCT user_id) AS active_users FROM cohort_activity WHERE active = 1 GROUP BY cohort_day ORDER BY cohort_day",
+      "ordered": true
+    }
+  ]
+}
