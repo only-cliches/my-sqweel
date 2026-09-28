@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "id": "convert_tz_epoch_view_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "minimized_from": "convert_tz_epoch_view",
+    "source": {
+      "kind": "github",
+      "repository": "SBFspot/SBFspot",
+      "commit": "b77f65047e9f4a136a09677838f6b4e5024862ee",
+      "path": "SBFspot/CreateMySQLDB.sql",
+      "url": "https://github.com/SBFspot/SBFspot/blob/b77f65047e9f4a136a09677838f6b4e5024862ee/SBFspot/CreateMySQLDB.sql",
+      "sha256": "39ecc5cb002a20d2547736452e996a58f7505d16aa687a752ad99f23e47faba2",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "CreateMySQLDB.sql:129-132, vwMonthData view",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL datetime expression converts an epoch-derived value between explicit timezone offsets.",
+      "mysql_mariadb_translation": "Reduced to one fixed FROM_UNIXTIME expression and explicit offsets. The view, join, schema, and application data are removed while the expression-result formatting contract remains isolated."
+    },
+    "independently_authored": true
+  },
+  "features": ["from-unix-time", "convert-tz", "metadata-minimized", "deterministic-select"],
+  "fixture_notes": "MariaDB returns a whole-second DATETIME without a fractional suffix for this epoch-derived expression. Before the fix, MySqweel appended .000000 to the same expression result.",
+  "determinism_notes": "The epoch literal and timezone offsets are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT CONVERT_TZ(FROM_UNIXTIME(1777631400), '+02:00', '+00:00') AS observed_at",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT CONVERT_TZ(FROM_UNIXTIME(1777631400), '+02:00', '+00:00') AS observed_at",
+      "ordered": true
+    }
+  ]
+}

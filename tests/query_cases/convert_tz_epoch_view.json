@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "convert_tz_epoch_view",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "SBFspot/SBFspot",
+      "commit": "b77f65047e9f4a136a09677838f6b4e5024862ee",
+      "path": "SBFspot/CreateMySQLDB.sql",
+      "url": "https://github.com/SBFspot/SBFspot/blob/b77f65047e9f4a136a09677838f6b4e5024862ee/SBFspot/CreateMySQLDB.sql",
+      "sha256": "39ecc5cb002a20d2547736452e996a58f7505d16aa687a752ad99f23e47faba2",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "CreateMySQLDB.sql:129-132, vwMonthData view",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL view converts an epoch column with FROM_UNIXTIME, shifts the resulting datetime with CONVERT_TZ, joins a catalog table, and carries an ORDER BY clause in the view definition.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored energy-snapshot view. Fixed epoch values are interpreted as UTC+02:00 and converted to UTC explicitly, avoiding the source's environment-dependent SYSTEM timezone; a catalog join and descending view order remain. The source tables, identifiers, rows, and photovoltaic application context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["create-view", "from-unix-time", "convert-tz", "inner-join", "view-order-by", "deterministic-order"],
+  "fixture_notes": "Snapshot epochs 1777631400 and 1777624200 represent fixed UTC+02:00 inputs. The view must expose the two joined rows in descending source-epoch order with UTC timestamps; the orphan snapshot is excluded by the inner join.",
+  "determinism_notes": "Epoch literals, explicit timezone offsets, catalog rows, join keys, and view ordering are fixed. No clocks, system timezone, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE energy_snapshots (snapshot_id INT PRIMARY KEY, site_id INT NOT NULL, observed_epoch INT NOT NULL, energy_wh INT NOT NULL)",
+    "CREATE TABLE energy_sites (site_id INT PRIMARY KEY, site_code VARCHAR(16) NOT NULL)",
+    "INSERT INTO energy_sites VALUES (71, 'NORTH-7'), (72, 'SOUTH-2')",
+    "INSERT INTO energy_snapshots VALUES (501, 71, 1777631400, 640), (502, 72, 1777624200, 510), (503, 99, 1777635000, 900)"
+  ],
+  "steps": [
+    {
+      "sql": "CREATE VIEW utc_energy_snapshots AS SELECT CONVERT_TZ(FROM_UNIXTIME(s.observed_epoch), '+02:00', '+00:00') AS observed_at, c.site_code, s.energy_wh FROM energy_snapshots AS s INNER JOIN energy_sites AS c ON c.site_id = s.site_id ORDER BY s.observed_epoch DESC",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT site_code, observed_at, energy_wh FROM utc_energy_snapshots",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT site_code, observed_at, energy_wh FROM utc_energy_snapshots",
+      "ordered": true
+    }
+  ]
+}

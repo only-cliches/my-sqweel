@@ -32,6 +32,17 @@ pub(super) fn eval_convert_tz(
         .map(|arg| eval_scalar_text(arg, data, last_insert_id))
         .transpose()?
         .unwrap_or(Value::Null);
+    let datetime_is_from_unixtime = datetime_arg.is_some_and(|arg| {
+        arg.trim()
+            .to_ascii_uppercase()
+            .starts_with("FROM_UNIXTIME(")
+    });
+    let datetime_has_fraction = datetime.as_str().is_some_and(|value| {
+        value
+            .split_once(' ')
+            .and_then(|(_, time)| time.split_once('.'))
+            .is_some()
+    });
     let from_tz = from_tz_arg
         .map(|arg| eval_scalar_text(arg, data, last_insert_id))
         .transpose()?
@@ -56,7 +67,9 @@ pub(super) fn eval_convert_tz(
     Ok(datetime
         .checked_add_signed(Duration::seconds(offset))
         .map(|value| {
-            let text = if datetime_is_expression {
+            let text = if datetime_is_expression
+                && (datetime_has_fraction || !datetime_is_from_unixtime)
+            {
                 value.format("%Y-%m-%d %H:%M:%S%.6f").to_string()
             } else {
                 value.to_string()
