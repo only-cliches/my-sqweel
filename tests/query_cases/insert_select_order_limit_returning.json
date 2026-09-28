@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "insert_select_order_limit_returning",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "dml/insert/mariadb.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/dml/insert/mariadb.sql",
+      "sha256": "de0a68900566a8edc6585ccd0e301c2b5a1196896546a014ee1d9698be0dca76",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "dml/insert/mariadb.sql: INSERT INTO ... SELECT example and RETURNING section",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "MariaDB inserts rows selected from a source relation and exposes inserted values with RETURNING.",
+      "mysql_mariadb_translation": "Reauthored as a bounded priority import: ready feed rows are selected in deterministic priority order, only the top two are inserted into an archive, and RETURNING reports the inserted rows. Source tables, values, identifiers, and application context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["insert-select", "ordered-insert-selection", "insert-limit", "returning", "deterministic-order"],
+  "fixture_notes": "Four feed rows are present, three are ready, and only the two highest-priority ready rows are inserted. RETURNING and the final read use feed_id ordering.",
+  "determinism_notes": "Feed identifiers, priorities, states, and target rows are fixed. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE import_feed (feed_id INT PRIMARY KEY, item_code VARCHAR(16) NOT NULL, priority INT NOT NULL, feed_state VARCHAR(16) NOT NULL)",
+    "CREATE TABLE import_archive (feed_id INT PRIMARY KEY, item_code VARCHAR(16) NOT NULL, priority INT NOT NULL)",
+    "INSERT INTO import_feed VALUES (801, 'A-10', 40, 'ready'), (802, 'B-20', 90, 'ready'), (803, 'C-30', 70, 'held'), (804, 'D-40', 80, 'ready')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO import_archive (feed_id, item_code, priority) SELECT feed_id, item_code, priority FROM import_feed WHERE feed_state = 'ready' ORDER BY priority DESC, feed_id ASC LIMIT 2 RETURNING feed_id, item_code, priority",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT feed_id, item_code, priority FROM import_archive ORDER BY feed_id",
+      "ordered": true
+    }
+  ]
+}
