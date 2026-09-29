@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "id": "no_cache_filtered_inventory_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "repository": "you-n-g/cheatsheets",
+      "commit": "fddea855c4065cdd8f6517c77190446de81e7369",
+      "path": "SA/db/config_mysql.sql",
+      "url": "https://github.com/you-n-g/cheatsheets/blob/fddea855c4065cdd8f6517c77190446de81e7369/SA/db/config_mysql.sql",
+      "sha256": "af0e5238848c136101b31d9646c48e6c7f04340c2e82f3656bc5861c6ff94658",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from SA/db/config_mysql.sql:64",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "SQL_NO_CACHE is accepted on a scalar SELECT read.",
+      "mysql_mariadb_translation": "Reduced to one independently authored scalar SQL_NO_CACHE projection so modifier parsing and result metadata are isolated from table setup and filtering."
+    },
+    "independently_authored": true,
+    "minimized_from": "no_cache_filtered_inventory"
+  },
+  "features": [
+    "sql-no-cache",
+    "minimized-regression"
+  ],
+  "fixture_notes": "The scalar literal must be returned unchanged while SQL_NO_CACHE is parsed as a SELECT modifier.",
+  "determinism_notes": "The scalar projection contains only fixed literals; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT SQL_NO_CACHE 42 AS probe_value",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}

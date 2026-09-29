@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "no_cache_filtered_inventory",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "repository": "you-n-g/cheatsheets",
+      "commit": "fddea855c4065cdd8f6517c77190446de81e7369",
+      "path": "SA/db/config_mysql.sql",
+      "url": "https://github.com/you-n-g/cheatsheets/blob/fddea855c4065cdd8f6517c77190446de81e7369/SA/db/config_mysql.sql",
+      "sha256": "af0e5238848c136101b31d9646c48e6c7f04340c2e82f3656bc5861c6ff94658",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "SA/db/config_mysql.sql:64",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL read can apply the SQL_NO_CACHE optimizer modifier to a SELECT projection.",
+      "mysql_mariadb_translation": "Reauthored as an independent inventory read. SQL_NO_CACHE accompanies a filtered available-item projection with deterministic ordering; the source configuration file, table names, values, and performance context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "sql-no-cache",
+    "filtered-select",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Items 301 and 303 are available and returned in item ID order; reserved item 302 is excluded. SQL_NO_CACHE must not alter rows or declared metadata.",
+  "determinism_notes": "Item IDs, states, labels, and quantities are fixed; the final projection is ordered by the primary item ID with no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE no_cache_inventory (item_id INT PRIMARY KEY, item_label VARCHAR(32) NOT NULL, item_state VARCHAR(16) NOT NULL, quantity INT NOT NULL)",
+    "INSERT INTO no_cache_inventory VALUES (301, 'north-kit', 'available', 12), (302, 'south-kit', 'reserved', 4), (303, 'west-kit', 'available', 7)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT SQL_NO_CACHE item_id, item_label, quantity FROM no_cache_inventory WHERE item_state = 'available' ORDER BY item_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT item_id, item_label, quantity FROM no_cache_inventory ORDER BY item_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
