@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "id": "partial_profile_set_upsert",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "phylogeography/spread",
+      "commit": "bf6ccf538df5c766a5c21da2f0029a28e236d832",
+      "path": "resources/sql/analysis.sql",
+      "url": "https://github.com/phylogeography/spread/blob/bf6ccf538df5c766a5c21da2f0029a28e236d832/resources/sql/analysis.sql",
+      "sha256": "b4828f8954ab67afb89bbfa0ecf891795ded929b15b5248f9b78256f95a7c9c",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "resources/sql/analysis.sql:24-31",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL upsert conditionally overwrites each duplicate-row field only when its incoming parameter is non-NULL, preserving existing values for omitted updates.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored profile registry refresh. Assignment-style INSERT supplies nullable partial updates, duplicate-key IF expressions preserve existing fields for NULL inputs while refreshing non-NULL fields, a version guard rejects stale updates, and RETURNING exposes both the conflict and insertion paths. The source parameters, schema, identifiers, and phylogeography workflow are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "insert-set",
+    "on-duplicate-key-update",
+    "conditional-null-preservation",
+    "values-reference",
+    "monotonic-version-guard",
+    "returning",
+    "existing-and-new-rows",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Profile 701 starts with a legacy label, region, note, and version. The conflicting SET upsert preserves label and note because incoming values are NULL, refreshes region, and advances version from 4 to 5. Profile 702 is new and keeps its nullable note. The returned rows and final table verify both conflict and insertion behavior.",
+  "determinism_notes": "Profile IDs, nullable incoming fields, version values, and final ordering are fixed; the duplicate update has one unique target per input row. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE profile_registry (profile_id INT PRIMARY KEY, display_name VARCHAR(32) NULL, region_code VARCHAR(16) NULL, profile_note VARCHAR(64) NULL, revision INT NOT NULL)",
+    "INSERT INTO profile_registry VALUES (701, 'legacy-node', 'EU', 'retain-this-note', 4)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO profile_registry SET profile_id = 701, display_name = NULL, region_code = 'APAC', profile_note = NULL, revision = 5 ON DUPLICATE KEY UPDATE display_name = IF(VALUES(display_name) IS NOT NULL, VALUES(display_name), display_name), region_code = IF(VALUES(region_code) IS NOT NULL, VALUES(region_code), region_code), profile_note = IF(VALUES(profile_note) IS NOT NULL, VALUES(profile_note), profile_note), revision = IF(VALUES(revision) > revision, VALUES(revision), revision) RETURNING profile_id, display_name, region_code, profile_note, revision",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO profile_registry SET profile_id = 702, display_name = 'new-node', region_code = 'NA', profile_note = NULL, revision = 1 ON DUPLICATE KEY UPDATE display_name = IF(VALUES(display_name) IS NOT NULL, VALUES(display_name), display_name), region_code = IF(VALUES(region_code) IS NOT NULL, VALUES(region_code), region_code), profile_note = IF(VALUES(profile_note) IS NOT NULL, VALUES(profile_note), profile_note), revision = IF(VALUES(revision) > revision, VALUES(revision), revision) RETURNING profile_id, display_name, region_code, profile_note, revision",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT profile_id, display_name, region_code, profile_note, revision FROM profile_registry ORDER BY profile_id",
+      "ordered": true
+    }
+  ]
+}
