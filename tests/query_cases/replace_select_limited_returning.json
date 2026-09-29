@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "replace_select_limited_returning",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "mariadb-corporation/mariadb-qa",
+      "commit": "5f7898e3a89feb85af301091143617716b4705c5",
+      "path": "OLD/generator/generator.prev.sh",
+      "url": "https://github.com/mariadb-corporation/mariadb-qa/blob/5f7898e3a89feb85af301091143617716b4705c5/OLD/generator/generator.prev.sh",
+      "sha256": "e4fece069b7b7c1741a8377f881936a0949c87b6c4cf1949f0ad15367e6100dc",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "OLD/generator/generator.prev.sh:1809 (REPLACE INTO ${_t1} SELECT * FROM ${_t2} ${REPLY})",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB query generator emits REPLACE INTO ... SELECT ... RETURNING, combining source-table loading with replacement semantics and a result projection.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored priority-feed refresh. An ordered ready-row source is bounded with LIMIT before REPLACE INTO refreshes one existing target and inserts one new target, while RETURNING exposes only the two selected results; the source generator's tables, values, aliases, and random workload are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["replace-into", "insert-select", "ordered-source", "limit", "returning", "primary-key-replacement", "deterministic-final-state"],
+  "fixture_notes": "Feed rows 701 and 702 are the first two ready rows by feed_rank; 701 fully replaces a stale target row and 702 is inserted. Ready row 703 is outside LIMIT 2, paused row 704 is filtered, and unrelated target row 799 remains. RETURNING must expose only rows 701 and 702.",
+  "determinism_notes": "Feed ranks and IDs provide a unique source order, RETURNING is compared unordered, and the final target read is ordered by the primary key. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE priority_refresh_target (entry_id INT PRIMARY KEY, entry_code VARCHAR(16) NOT NULL, entry_value VARCHAR(32) NOT NULL, generation INT NOT NULL, entry_state VARCHAR(16) NOT NULL)",
+    "CREATE TABLE priority_refresh_feed (feed_id INT PRIMARY KEY, entry_id INT NOT NULL, entry_code VARCHAR(16) NOT NULL, entry_value VARCHAR(32) NOT NULL, generation INT NOT NULL, entry_state VARCHAR(16) NOT NULL, feed_rank INT NOT NULL)",
+    "INSERT INTO priority_refresh_target VALUES (701, 'old-alpha', 'stale', 1, 'retired'), (799, 'keep-me', 'untouched', 4, 'active')",
+    "INSERT INTO priority_refresh_feed VALUES (41, 701, 'alpha', 'refreshed', 8, 'ready', 10), (42, 702, 'beta', 'created', 3, 'ready', 20), (43, 703, 'gamma', 'deferred', 2, 'ready', 30), (44, 704, 'delta', 'paused', 9, 'paused', 5)"
+  ],
+  "steps": [
+    {
+      "sql": "REPLACE INTO priority_refresh_target (entry_id, entry_code, entry_value, generation, entry_state) SELECT entry_id, entry_code, entry_value, generation, entry_state FROM priority_refresh_feed WHERE entry_state = 'ready' ORDER BY feed_rank, feed_id LIMIT 2 RETURNING entry_id, entry_code, entry_value, generation, entry_state",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT entry_id, entry_code, entry_value, generation, entry_state FROM priority_refresh_target ORDER BY entry_id",
+      "ordered": true
+    }
+  ]
+}

@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "replace_select_limited_returning_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "mariadb-corporation/mariadb-qa",
+      "commit": "5f7898e3a89feb85af301091143617716b4705c5",
+      "path": "OLD/generator/generator.prev.sh",
+      "url": "https://github.com/mariadb-corporation/mariadb-qa/blob/5f7898e3a89feb85af301091143617716b4705c5/OLD/generator/generator.prev.sh",
+      "sha256": "e4fece069b7b7c1741a8377f881936a0949c87b6c4cf1949f0ad15367e6100dc",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "OLD/generator/generator.prev.sh:1809 (REPLACE INTO ... SELECT ... RETURNING)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "REPLACE INTO ... SELECT ... RETURNING exposes rows produced by a source-table replacement load.",
+      "mysql_mariadb_translation": "Reduced to one existing target, two ordered source rows, and LIMIT 1 so only the replacement row is returned; the independently authored target and source names, values, and domain are new."
+    },
+    "independently_authored": true,
+    "minimized_from": "replace_select_limited_returning"
+  },
+  "features": ["replace-into", "insert-select", "ordered-source", "limit", "returning", "minimized-regression"],
+  "fixture_notes": "Source row 901 is first by source_rank and replaces the existing target; source row 902 is outside LIMIT 1 and must not be written or returned.",
+  "determinism_notes": "The fixed source ranks define the LIMIT 1 selection, RETURNING has one row, and the final read is ordered by the primary key. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE replace_limit_target_min (entry_id INT PRIMARY KEY, entry_value VARCHAR(24) NOT NULL, generation INT NOT NULL)",
+    "CREATE TABLE replace_limit_feed_min (feed_id INT PRIMARY KEY, entry_id INT NOT NULL, entry_value VARCHAR(24) NOT NULL, generation INT NOT NULL, source_rank INT NOT NULL)",
+    "INSERT INTO replace_limit_target_min VALUES (901, 'old', 1)",
+    "INSERT INTO replace_limit_feed_min VALUES (11, 901, 'new', 7, 1), (12, 902, 'outside', 8, 2)"
+  ],
+  "steps": [
+    {
+      "sql": "REPLACE INTO replace_limit_target_min (entry_id, entry_value, generation) SELECT entry_id, entry_value, generation FROM replace_limit_feed_min ORDER BY source_rank, feed_id LIMIT 1 RETURNING entry_id, entry_value, generation",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT entry_id, entry_value, generation FROM replace_limit_target_min ORDER BY entry_id",
+      "ordered": true
+    }
+  ]
+}
