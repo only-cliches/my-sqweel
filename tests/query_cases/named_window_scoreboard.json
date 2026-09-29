@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "named_window_scoreboard",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "repository": "clapdb/pg_regress_input",
+      "commit": "e9722c2377b0a491256f9f8001777745735ee537",
+      "path": "sql/window.sql",
+      "url": "https://github.com/clapdb/pg_regress_input/blob/e9722c2377b0a491256f9f8001777745735ee537/sql/window.sql",
+      "sha256": "ce8ac2bbad671985d989101319832cb9fc9a9d791bd8ad26898690616b09bf2e",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/window.sql:32-35, 108-109, 118-119",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A SELECT defines a named window after the FROM clause and reuses that window specification across multiple analytic expressions, including partitioning and ordering.",
+      "mysql_mariadb_translation": "Reauthored as a dispatch scoreboard. One named window partitions fixed shift events by team and orders scores with an event-ID tie-breaker; SUM and ROW_NUMBER reuse the shared definition, and the outer order makes every row deterministic. The source tables, identifiers, and values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "named-window-clause",
+    "window-reuse",
+    "partitioned-sum",
+    "row-number",
+    "window-ordering",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Team 10 has scores 8 and 5 and team 20 has scores 7 and 3. Each row receives its team total and descending score position from the same named window, with event ID breaking no-score ties.",
+  "determinism_notes": "Team IDs, event IDs, scores, named-window partitioning, window ordering, and final row ordering are fixed; the case is read-only with no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE shift_scores (event_id INT PRIMARY KEY, team_id INT NOT NULL, event_label VARCHAR(32) NOT NULL, score INT NOT NULL)",
+    "INSERT INTO shift_scores VALUES (101, 10, 'north-alpha', 8), (102, 10, 'north-beta', 5), (201, 20, 'south-alpha', 7), (202, 20, 'south-beta', 3)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT event_id, team_id, event_label, score, SUM(score) OVER team_scores AS team_total, ROW_NUMBER() OVER team_scores AS team_position FROM shift_scores WINDOW team_scores AS (PARTITION BY team_id ORDER BY score DESC, event_id ASC) ORDER BY event_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
