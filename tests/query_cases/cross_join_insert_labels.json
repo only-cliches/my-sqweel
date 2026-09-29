@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "cross_join_insert_labels",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "gabilgg07/SQL_queries",
+      "commit": "01b6b6a5613165e97d0a06820860e67e6724b9d1",
+      "path": "12. Cross join.sql",
+      "url": "https://github.com/gabilgg07/SQL_queries/blob/01b6b6a5613165e97d0a06820860e67e6724b9d1/12.%20Cross%20join.sql",
+      "sha256": "94c5bcb98f31e53f50a14192a4560a04d7f3f8cd0b180a4091eaff262e06e065",
+      "source_dialect": "sql-server"
+    },
+    "inspiration": {
+      "source_location": "12. Cross join.sql:54-61",
+      "source_dialect": "sql-server",
+      "observed_pattern": "An INSERT ... SELECT combines rows from a source table with every row of a second table through CROSS JOIN, while projecting a target-side identifier into each generated row.",
+      "mysql_mariadb_translation": "Reauthored as a package-label matrix. Each fixed receiving batch is paired with each fixed label kind by a direct INSERT ... SELECT CROSS JOIN, and a composite key plus ordered reads exposes the complete Cartesian expansion. SQL Server brackets, aliases, and application tables are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["insert-select", "cross-join", "cartesian-expansion", "composite-primary-key", "deterministic-order"],
+  "fixture_notes": "Two receiving batches and three label kinds must create exactly six batch-label rows, preserving every batch/kind pair without source filtering.",
+  "determinism_notes": "Batch IDs, label kinds, generated descriptions, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE receiving_batches (batch_id INT PRIMARY KEY, batch_code VARCHAR(16) NOT NULL)",
+    "CREATE TABLE label_kinds (kind_code VARCHAR(16) PRIMARY KEY, kind_title VARCHAR(32) NOT NULL)",
+    "CREATE TABLE batch_labels (batch_id INT NOT NULL, kind_code VARCHAR(16) NOT NULL, label_text VARCHAR(64) NOT NULL, PRIMARY KEY (batch_id, kind_code))",
+    "INSERT INTO receiving_batches VALUES (801, 'BATCH-RED'), (802, 'BATCH-BLUE')",
+    "INSERT INTO label_kinds VALUES ('outer', 'Outer carton'), ('inner', 'Inner pack'), ('scan', 'Scan marker')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO batch_labels (batch_id, kind_code, label_text) SELECT b.batch_id, k.kind_code, CONCAT(b.batch_code, ':', k.kind_title) FROM receiving_batches AS b CROSS JOIN label_kinds AS k",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT batch_id, kind_code, label_text FROM batch_labels ORDER BY batch_id, kind_code",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT batch_id, COUNT(*) AS label_count FROM batch_labels GROUP BY batch_id ORDER BY batch_id",
+      "ordered": true
+    }
+  ]
+}
