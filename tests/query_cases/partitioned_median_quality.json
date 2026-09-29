@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "partitioned_median_quality",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "jkstill/oracle-script-lib",
+      "commit": "1646c9d9676edb916c7b7bc30a6c235f539734cd",
+      "path": "sql/sql-exe-times-awr.sql",
+      "url": "https://github.com/jkstill/oracle-script-lib/blob/1646c9d9676edb916c7b7bc30a6c235f539734cd/sql/sql-exe-times-awr.sql",
+      "sha256": "7efa8ab1191338d4958ad31d7743f3a8f11891922e70594283cfe2478a0b21b7",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/sql-exe-times-awr.sql:100",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A windowed analytical projection computes MEDIAN over a measurement series alongside other per-row execution metrics.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored batch-quality scan. MariaDB window functions compute a median and sample spread independently within each batch, while ROW_NUMBER supplies a deterministic within-batch ordinal; a NULL reading verifies statistical omission and an explicit outer order stabilizes the report. The source performance views, identifiers, and Oracle reporting context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "median-window",
+    "partitioned-median",
+    "stddev-samp-window",
+    "partitioned-statistics",
+    "partitioned-row-number",
+    "null-omission",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Batch 801 has readings 4.00, 8.00, 12.00, and NULL, so every non-NULL row receives median 8.00 and sample spread 4.00 while the NULL row is omitted from both statistics. Batch 802 has readings 3.00 and 9.00, producing median 6.00 and sample spread approximately 4.2426. ROW_NUMBER resets within each batch.",
+  "determinism_notes": "Batch IDs and measurement IDs are fixed; partition ordering uses the unique measurement ID and the final report is ordered by batch and measurement. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE batch_quality_readings (reading_id INT PRIMARY KEY, batch_id INT NOT NULL, reading DECIMAL(10,2) NULL)",
+    "INSERT INTO batch_quality_readings VALUES (80101, 801, 4.00), (80102, 801, 8.00), (80103, 801, 12.00), (80104, 801, NULL), (80201, 802, 3.00), (80202, 802, 9.00)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT reading_id, batch_id, reading, MEDIAN(reading) OVER (PARTITION BY batch_id) AS batch_median, STDDEV_SAMP(reading) OVER (PARTITION BY batch_id) AS batch_sample_spread, ROW_NUMBER() OVER (PARTITION BY batch_id ORDER BY reading_id) AS batch_position FROM batch_quality_readings ORDER BY batch_id, reading_id",
+      "ordered": true
+    }
+  ]
+}
