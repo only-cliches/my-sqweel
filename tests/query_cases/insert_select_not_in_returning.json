@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "insert_select_not_in_returning",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "mariadb-corporation/mariadb-qa",
+      "commit": "5f7898e3a89feb85af301091143617716b4705c5",
+      "path": "BUGS/MDEV-25187.sql",
+      "url": "https://github.com/mariadb-corporation/mariadb-qa/blob/5f7898e3a89feb85af301091143617716b4705c5/BUGS/MDEV-25187.sql",
+      "sha256": "869769a8a6d1aebeeb6e413888252e04f5aaaaf4036a13ddee3b66dc9e130b32",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "BUGS/MDEV-25187.sql:1-4, INSERT ... SELECT with NOT IN subquery and RETURNING",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "MariaDB can insert rows selected by an INSERT ... SELECT whose eligibility depends on a NOT IN subquery, then expose the inserted rows through RETURNING.",
+      "mysql_mariadb_translation": "Reauthored as a badge-award load. Two pending badges are copied into an award ledger only when a fixed sentinel is absent from the ledger's existing identifiers; RETURNING exposes both inserted badges and a final read verifies the preserved sentinel. The source table, values, and regression context are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["insert-select", "not-in-subquery", "returning", "empty-match-guard", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "The award ledger starts with sentinel 1500. Because sentinel 1499 is absent, both pending badges are inserted and returned; the existing sentinel remains in the final ordered ledger.",
+  "determinism_notes": "Badge IDs, sentinel value, predicates, returned columns, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE pending_badges (badge_id INT PRIMARY KEY, badge_code VARCHAR(16) NOT NULL, badge_state VARCHAR(16) NOT NULL)",
+    "CREATE TABLE badge_awards (badge_id INT PRIMARY KEY, badge_code VARCHAR(16) NOT NULL)",
+    "INSERT INTO pending_badges VALUES (1401, 'amber', 'pending'), (1402, 'cobalt', 'pending')",
+    "INSERT INTO badge_awards VALUES (1500, 'legacy')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO badge_awards (badge_id, badge_code) SELECT badge_id, badge_code FROM pending_badges WHERE 1499 NOT IN (SELECT badge_id FROM badge_awards) RETURNING badge_id, badge_code",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT badge_id, badge_code FROM badge_awards ORDER BY badge_id",
+      "ordered": true
+    }
+  ]
+}
