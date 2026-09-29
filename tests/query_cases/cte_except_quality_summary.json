@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "id": "cte_except_quality_summary",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "rlatrish/SQL2_Info21_v1.0",
+      "commit": "ece943b72095bef65ebf25ab1e9183f095f7cc9b",
+      "path": "src/part3.sql",
+      "url": "https://github.com/rlatrish/SQL2_Info21_v1.0/blob/ece943b72095bef65ebf25ab1e9183f095f7cc9b/src/part3.sql",
+      "sha256": "cbaff48e6316677ab2dab91c3663dad9fae97b1e6c1ecb760b5f2b904b94ffe7",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "src/part3.sql: FncPeerTaskXP() body, the CTE c set difference",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped reporting query builds positive and negative candidate sets in CTEs, removes blocked identifiers with EXCEPT, then joins the surviving identifiers back to detail rows and aggregates a score.",
+      "mysql_mariadb_translation": "Reauthored as an independent audit-quality summary. Passed review IDs are reduced by a UNION of direct blocks and odd-count reopen events through EXCEPT, then surviving audits are joined to fixed point rows and grouped by reviewer and check name; the source routine, tables, identifiers, and values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["common-table-expressions", "except", "union", "grouped-join", "having-modulo", "left-join", "null-aggregate", "deterministic-order"],
+  "fixture_notes": "Audits 101, 103, and 104 pass the positive review filter. Audit 102 is directly blocked; audit 105 is blocked because it has one reopen event, while audit 103 has two reopen events and remains eligible. Audit 101 totals seven points, audit 103 totals five, and audit 104 has no point rows so its SUM is SQL NULL.",
+  "determinism_notes": "All audit IDs, review states, reopen counts, points, reviewer codes, and check names are fixed. The grouped result is ordered by reviewer and check name; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE audit_checks (check_id INT PRIMARY KEY, reviewer_code VARCHAR(16) NOT NULL, check_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE review_results (result_id INT PRIMARY KEY, check_id INT NOT NULL, review_state VARCHAR(16) NOT NULL)",
+    "CREATE TABLE review_blocks (block_id INT PRIMARY KEY, check_id INT NOT NULL)",
+    "CREATE TABLE reopen_events (event_id INT PRIMARY KEY, check_id INT NOT NULL)",
+    "CREATE TABLE quality_points (point_id INT PRIMARY KEY, check_id INT NOT NULL, points INT NULL)",
+    "INSERT INTO audit_checks VALUES (101, 'linh', 'Inbound'), (102, 'linh', 'Outbound'), (103, 'omar', 'Inbound'), (104, 'pia', 'Inbound'), (105, 'rui', 'Outbound')",
+    "INSERT INTO review_results VALUES (201, 101, 'passed'), (202, 102, 'passed'), (203, 103, 'passed'), (204, 104, 'passed'), (205, 105, 'passed')",
+    "INSERT INTO review_blocks VALUES (301, 102)",
+    "INSERT INTO reopen_events VALUES (401, 103), (402, 103), (403, 105)",
+    "INSERT INTO quality_points VALUES (501, 101, 4), (502, 101, 3), (503, 102, 9), (504, 103, 5), (505, 105, 8)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH passed_checks AS (SELECT check_id FROM review_results WHERE review_state = 'passed'), blocked_checks AS (SELECT check_id FROM review_blocks UNION SELECT check_id FROM reopen_events GROUP BY check_id HAVING COUNT(*) % 2 = 1), approved_checks AS (SELECT check_id FROM passed_checks EXCEPT SELECT check_id FROM blocked_checks) SELECT c.reviewer_code, c.check_name, SUM(p.points) AS total_points FROM approved_checks AS a INNER JOIN audit_checks AS c ON c.check_id = a.check_id LEFT JOIN quality_points AS p ON p.check_id = a.check_id GROUP BY c.reviewer_code, c.check_name ORDER BY c.reviewer_code, c.check_name",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT check_id, reviewer_code, check_name FROM audit_checks ORDER BY check_id",
+      "ordered": true
+    }
+  ]
+}
