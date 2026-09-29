@@ -1496,6 +1496,9 @@ impl RawEngine {
             parse_sql = strip_alter_auto_increment(&parse_sql);
             parse_sql = strip_alter_order_by_clause(&parse_sql);
             parse_sql = strip_alter_execution_options(&parse_sql);
+            if let Some(table) = bare_alter_table_name(&parse_sql) {
+                parse_sql = format!("ALTER TABLE {table} RENAME TO {table}");
+            }
             parse_sql = parse_sql
                 .replace("ADD FULLTEXT INDEX", "ADD INDEX")
                 .replace("add fulltext index", "add index")
@@ -2203,11 +2206,19 @@ impl RawEngine {
         if upper.starts_with("ALTER TABLE") {
             let normalized = strip_alter_execution_options(trimmed);
             if normalized != trimmed {
+                let normalized_upper = normalized.to_ascii_uppercase();
+                let normalized_tail = normalized_upper
+                    .strip_prefix("ALTER TABLE ")
+                    .unwrap_or_default();
+                if normalized_tail.split_whitespace().count() == 1 {
+                    return Ok(Some(QueryResult::default()));
+                }
                 let mut results =
                     self.execute_sql_internal(&normalized, &normalized, true, false)?;
                 return Ok(Some(results.drain(..).next().unwrap_or_default()));
             }
         }
+
         if let Some(result) = self.execute_alter_add_column_if_not_exists_compat(trimmed)? {
             return Ok(Some(result));
         }
@@ -5246,7 +5257,44 @@ fn strip_alter_execution_options(sql: &str) -> String {
             result = result.replace(&format!(", lock{spacing}{option}"), "");
         }
     }
-    result
+
+    let trimmed = result.trim().trim_end_matches(';').trim();
+    let upper = trimmed.to_ascii_uppercase();
+    if !upper.starts_with("ALTER TABLE ") {
+        return result;
+    }
+    let remainder = &trimmed["ALTER TABLE ".len()..];
+    let Some(table_end) = remainder.find(char::is_whitespace) else {
+        return result;
+    };
+    let table = remainder[..table_end].trim();
+    let operations = eval::split_sql_args(remainder[table_end..].trim());
+    if !operations
+        .iter()
+        .any(|operation| operation.trim().eq_ignore_ascii_case("FORCE"))
+    {
+        return result;
+    }
+    let retained = operations
+        .into_iter()
+        .filter(|operation| !operation.trim().eq_ignore_ascii_case("FORCE"))
+        .map(|operation| operation.trim().to_string())
+        .collect::<Vec<_>>();
+    if retained.is_empty() {
+        format!("ALTER TABLE {table}")
+    } else {
+        format!("ALTER TABLE {table} {}", retained.join(", "))
+    }
+}
+fn bare_alter_table_name(sql: &str) -> Option<&str> {
+    let trimmed = sql.trim().trim_end_matches(';').trim();
+    let mut words = trimmed.split_whitespace();
+    if !words.next()?.eq_ignore_ascii_case("ALTER") || !words.next()?.eq_ignore_ascii_case("TABLE")
+    {
+        return None;
+    }
+    let table = words.next()?;
+    words.next().is_none().then_some(table)
 }
 
 fn strip_create_table_tablespace(sql: &str) -> String {
