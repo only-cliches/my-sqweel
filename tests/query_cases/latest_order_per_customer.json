@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "latest_order_per_customer",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "guruvecgp/SummaLaude",
+      "commit": "b290c84308ef695b8bce9057de5f47ce781b3758",
+      "path": "sample.sql",
+      "url": "https://github.com/guruvecgp/SummaLaude/blob/b290c84308ef695b8bce9057de5f47ce781b3758/sample.sql",
+      "sha256": "d82343c00be8e72a29c7e9c36609e33e4abb585052db178440f425d7974b2e7d",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sample.sql:5-18",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A customer-facing query uses a left join to preserve entities without child rows while a derived relation assigns ROW_NUMBER per customer and keeps the newest child row.",
+      "mysql_mariadb_translation": "Reauthored as a customer order snapshot. Fixed customers are left joined to a ranked order relation; the newest order wins by order date and order ID, while a customer without orders remains with NULL order fields. The source schema, identifiers, values, and application context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["left-join", "derived-table", "row-number", "latest-per-group", "nullable-preservation", "deterministic-tie-break", "deterministic-order"],
+  "fixture_notes": "Customer 501 has two orders on the same latest date, so order 9102 wins by descending order ID. Customer 502 selects its later order. Customer 503 has no orders and must remain in the output with NULL order columns.",
+  "determinism_notes": "Customer IDs, order dates, order IDs, amounts, partition ordering, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE order_customers (customer_id INT PRIMARY KEY, customer_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE order_history (order_id INT PRIMARY KEY, customer_id INT NOT NULL, order_date DATE NOT NULL, total_amount DECIMAL(10,2) NOT NULL)",
+    "INSERT INTO order_customers VALUES (501, 'Northwind Lab'), (502, 'Riverbend Studio'), (503, 'Cedar Grove')",
+    "INSERT INTO order_history VALUES (9101, 501, '2026-09-01', 125.50), (9102, 501, '2026-09-03', 220.00), (9103, 501, '2026-09-03', 245.75), (9201, 502, '2026-08-10', 80.00), (9202, 502, '2026-09-05', 95.25)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT c.customer_id, c.customer_name, o.order_id, o.order_date, o.total_amount FROM order_customers AS c LEFT JOIN (SELECT order_id, customer_id, order_date, total_amount, ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY order_date DESC, order_id DESC) AS row_no FROM order_history) AS o ON c.customer_id = o.customer_id AND o.row_no = 1 ORDER BY c.customer_id",
+      "ordered": true
+    }
+  ]
+}
