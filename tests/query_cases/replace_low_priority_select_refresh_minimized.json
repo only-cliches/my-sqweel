@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "id": "replace_low_priority_select_refresh_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "antlr/grammars-v4",
+      "commit": "e199816b3f1a7a49ea1ad84fb6b87c382ea36a33",
+      "path": "sql/mysql/Oracle/examples/dml_replace.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/e199816b3f1a7a49ea1ad84fb6b87c382ea36a33/sql/mysql/Oracle/examples/dml_replace.sql",
+      "sha256": "e64c03f67dddb82c3c8131aa3ac0899bedc3ae60d51661d2850218511767fb3a",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/mysql/Oracle/examples/dml_replace.sql:2-5,9-12",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "MySQL REPLACE loads rows from a SELECT and supports the LOW_PRIORITY modifier, replacing conflicting unique-key rows instead of updating them in place.",
+      "mysql_mariadb_translation": "Reduced to one existing unique-key entry and one new ready feed row while retaining REPLACE LOW_PRIORITY INTO ... SELECT, full replacement, and an ordered final registry read."
+    },
+    "independently_authored": true,
+    "focused_variant_of": "replace_low_priority_select_refresh"
+  },
+  "features": [
+    "replace-low-priority",
+    "replace-select",
+    "unique-key-replacement",
+    "focused-variant"
+  ],
+  "fixture_notes": "Registry key alpha is replaced with a new primary key and value; beta is inserted from the same ready feed.",
+  "determinism_notes": "Registry keys, source IDs, feed states, values, source ordering, unique conflict, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE priority_registry_min (entry_id INT PRIMARY KEY, entry_key VARCHAR(16) NOT NULL, entry_value VARCHAR(32) NOT NULL, generation INT NOT NULL, UNIQUE KEY uq_priority_registry_min_key (entry_key))",
+    "CREATE TABLE priority_feed_min (feed_id INT PRIMARY KEY, entry_id INT NOT NULL, entry_key VARCHAR(16) NOT NULL, entry_value VARCHAR(32) NOT NULL, generation INT NOT NULL, feed_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO priority_registry_min VALUES (10, 'alpha', 'old-alpha', 1)",
+    "INSERT INTO priority_feed_min VALUES (101, 20, 'alpha', 'new-alpha', 2, 'ready'), (102, 30, 'beta', 'new-beta', 1, 'ready')"
+  ],
+  "steps": [
+    {
+      "sql": "REPLACE LOW_PRIORITY INTO priority_registry_min (entry_id, entry_key, entry_value, generation) SELECT entry_id, entry_key, entry_value, generation FROM priority_feed_min WHERE feed_state = 'ready' ORDER BY feed_id",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT entry_id, entry_key, entry_value, generation FROM priority_registry_min ORDER BY entry_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT entry_id, entry_key, entry_value, generation FROM priority_registry_min ORDER BY entry_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT feed_id, entry_key, feed_state FROM priority_feed_min ORDER BY feed_id",
+      "ordered": true
+    }
+  ]
+}
