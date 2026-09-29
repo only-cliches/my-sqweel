@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "id": "create_index_if_not_exists_catalog",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "PowerDNS-AuthAdmin/powerdns-authadmin",
+      "commit": "c67703f65f332eb09ef4b89a47dac420c6e1d5e3",
+      "path": "docker/pdns/schema.mysql.sql",
+      "url": "https://github.com/PowerDNS-AuthAdmin/powerdns-authadmin/blob/c67703f65f332eb09ef4b89a47dac420c6e1d5e3/docker/pdns/schema.mysql.sql",
+      "sha256": "7bfef32b15a0db3ad74e5d7047f03154cb49bee2fb27e4bf43ccc80d33cfa718",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "docker/pdns/schema.mysql.sql:25-26, 43-45",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL-compatible schema declares named indexes with CREATE INDEX IF NOT EXISTS so repeated bootstrap runs can safely preserve an existing relation and its indexes.",
+      "mysql_mariadb_translation": "Reauthored as an independent parcel-catalog index bootstrap. A unique parcel code index and a composite depot/state index are created idempotently, repeated declarations must remain no-ops, and information_schema plus ordered reads verify the resulting index definitions and preserved rows. The source schema, names, values, and DNS application context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "create-index-if-not-exists",
+    "unique-index",
+    "composite-index",
+    "idempotent-ddl",
+    "information-schema",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Parcel rows 701 and 702 begin without secondary indexes. The first declarations add a unique parcel-code index and a depot/state index; repeating both declarations must preserve the rows and index definitions without duplicate-index errors.",
+  "determinism_notes": "Index names, columns, rows, and metadata projections are fixed; information_schema rows are ordered by index name and sequence, parcel rows by the primary key, and no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE parcel_catalog (parcel_id INT PRIMARY KEY, parcel_code VARCHAR(24) NOT NULL, depot_code VARCHAR(12) NOT NULL, parcel_state VARCHAR(12) NOT NULL, declared_value INT NOT NULL)",
+    "INSERT INTO parcel_catalog (parcel_id, parcel_code, depot_code, parcel_state, declared_value) VALUES (701, 'PX-701', 'north', 'ready', 80), (702, 'PX-702', 'north', 'held', 120), (703, 'PX-703', 'south', 'ready', 45)"
+  ],
+  "steps": [
+    {
+      "sql": "CREATE UNIQUE INDEX IF NOT EXISTS parcel_code_uq ON parcel_catalog (parcel_code)",
+      "ordered": true
+    },
+    {
+      "sql": "CREATE INDEX IF NOT EXISTS depot_state_idx ON parcel_catalog (depot_code, parcel_state)",
+      "ordered": true
+    },
+    {
+      "sql": "CREATE UNIQUE INDEX IF NOT EXISTS parcel_code_uq ON parcel_catalog (parcel_code)",
+      "ordered": true
+    },
+    {
+      "sql": "CREATE INDEX IF NOT EXISTS depot_state_idx ON parcel_catalog (depot_code, parcel_state)",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT index_name, non_unique, seq_in_index, column_name FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = 'parcel_catalog' AND index_name IN ('parcel_code_uq', 'depot_state_idx') ORDER BY index_name, seq_in_index",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT parcel_id, parcel_code, depot_code, parcel_state, declared_value FROM parcel_catalog ORDER BY parcel_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
