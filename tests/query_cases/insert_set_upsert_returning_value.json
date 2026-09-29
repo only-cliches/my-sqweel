@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "insert_set_upsert_returning_value",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "repository": "mariadb-corporation/mariadb-qa",
+      "commit": "5f7898e3a89feb85af301091143617716b4705c5",
+      "path": "BUGS/MDEV-35725.sql",
+      "url": "https://github.com/mariadb-corporation/mariadb-qa/blob/5f7898e3a89feb85af301091143617716b4705c5/BUGS/MDEV-35725.sql",
+      "sha256": "6bf6d4d746ddd221ed7f7a8f1cf9e75dd7d6cdcedb8eb0073608fa59fd1fce32",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "BUGS/MDEV-35725.sql:8",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "An assignment-style INSERT upsert can use a duplicate-key DEFAULT assignment while RETURNING projects VALUE(column) in an expression.",
+      "mysql_mariadb_translation": "Reauthored as a one-row quota registry refresh. An existing registry row is targeted through INSERT ... SET, the duplicate path restores the declared default, and RETURNING exposes the incoming VALUE(quota) through arithmetic. The source's SET type, names, values, and bug context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "insert-set",
+    "on-duplicate-key-update",
+    "duplicate-default-assignment",
+    "returning-value-expression",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Registry row 801 already exists with quota 4. The SET-form upsert supplies quota 9, the duplicate path restores the declared default quota 7, and RETURNING VALUE(quota)+0 exposes the incoming value 9 before the final read verifies stored state.",
+  "determinism_notes": "One fixed primary-key conflict, one declared default, and ordered returned/final reads use no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE quota_registry (registry_id INT PRIMARY KEY, quota INT NOT NULL DEFAULT 7, registry_state VARCHAR(16) NOT NULL DEFAULT 'ready')",
+    "INSERT INTO quota_registry VALUES (801, 4, 'active')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO quota_registry SET registry_id = 801, quota = 9, registry_state = 'refreshing' ON DUPLICATE KEY UPDATE quota = DEFAULT, registry_state = DEFAULT RETURNING VALUE(quota) + 0 AS incoming_quota",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT registry_id, quota, registry_state FROM quota_registry ORDER BY registry_id",
+      "ordered": true
+    }
+  ]
+}
