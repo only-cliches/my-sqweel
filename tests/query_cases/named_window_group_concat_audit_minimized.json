@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "id": "named_window_group_concat_audit_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "antlr/grammars-v4",
+      "commit": "e199816b3f1a7a49ea1ad84fb6b87c382ea36a33",
+      "path": "sql/mariadb/examples/fast/dml_select.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/e199816b3f1a7a49ea1ad84fb6b87c382ea36a33/sql/mariadb/examples/fast/dml_select.sql",
+      "sha256": "b9128ffb5b50bea79c534bc24a127d9d626fd2d21be8cb0a45deafd8d6c84f79",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/mariadb/examples/fast/dml_select.sql:185-199 (named windows with aggregate projection)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB SELECT defines reusable named window specifications beside running aggregates and an ordered GROUP_CONCAT projection.",
+      "mysql_mariadb_translation": "Reauthored as one team's two-task progress report. A named window computes cumulative points, then an outer grouped query serializes task labels and running totals with ordered GROUP_CONCAT; the source tables, names, values, and corpus context are not copied."
+    },
+    "independently_authored": true,
+    "focused_variant_of": "named_window_group_concat_audit"
+  },
+  "features": [
+    "named-window",
+    "window-running-sum",
+    "group-concat",
+    "ordered-aggregate",
+    "common-table-expression",
+    "focused-variant"
+  ],
+  "fixture_notes": "One team has two ordered tasks with running totals 3 and 8. The report must retain task order inside the grouped concatenation.",
+  "determinism_notes": "Team ID, task IDs, labels, points, named-window ordering, aggregate ordering, separator, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE progress_tasks_min (task_id INT PRIMARY KEY, team_id INT NOT NULL, task_label VARCHAR(32) NOT NULL, points INT NOT NULL)",
+    "INSERT INTO progress_tasks_min VALUES (3101, 31, 'draft', 3), (3102, 31, 'review', 5)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH scored_tasks AS (SELECT team_id, task_id, task_label, points, SUM(points) OVER task_order AS running_points FROM progress_tasks_min WINDOW task_order AS (PARTITION BY team_id ORDER BY task_id ROWS UNBOUNDED PRECEDING)) SELECT team_id, GROUP_CONCAT(CONCAT(task_label, '=', running_points) ORDER BY task_id ASC SEPARATOR '|') AS progress_path, SUM(points) AS total_points FROM scored_tasks GROUP BY team_id ORDER BY team_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "WITH scored_tasks AS (SELECT team_id, task_id, task_label, points, SUM(points) OVER task_order AS running_points FROM progress_tasks_min WINDOW task_order AS (PARTITION BY team_id ORDER BY task_id ROWS UNBOUNDED PRECEDING)) SELECT team_id, GROUP_CONCAT(CONCAT(task_label, '=', running_points) ORDER BY task_id ASC SEPARATOR '|') AS progress_path, SUM(points) AS total_points FROM scored_tasks GROUP BY team_id ORDER BY team_id",
+      "ordered": true
+    }
+  ]
+}
