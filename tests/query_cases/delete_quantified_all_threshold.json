@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "id": "delete_quantified_all_threshold",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "EnterpriseDB/mysql_fdw",
+      "commit": "4948d8bfc7145646b94aa154eea39669e85d9d42",
+      "path": "sql/select.sql",
+      "url": "https://github.com/EnterpriseDB/mysql_fdw/blob/4948d8bfc7145646b94aa154eea39669e85d9d42/sql/select.sql",
+      "sha256": "409b3b050ae729c46c7c22b014d3aec0b19c4c6ecd12fd6ca59cf8ddbbabcfe3",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/select.sql:88",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL-compatible SELECT compares a row value against every value produced by a correlated-independent subquery with a quantified ALL predicate.",
+      "mysql_mariadb_translation": "Reauthored as a deterministic archive purge. DELETE removes only obsolete records whose score is below every threshold in a selected policy band; an empty candidate band exercises vacuous ALL semantics while active and high-score records remain. The source FDW tables, identifiers, values, and test harness are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "delete",
+    "quantified-all-subquery",
+    "strict-threshold-comparison",
+    "empty-subquery-vacuous-truth",
+    "deterministic-final-state"
+  ],
+  "fixture_notes": "Archive row 301 has score 10 and is below every enabled legacy threshold (20 and 30), so it is deleted. Row 302 has score 25 and is not below all thresholds; row 303 is active; row 304 uses a disabled policy band; and row 305's policy band has no thresholds, so its ALL predicate is true but its state filter prevents deletion.",
+  "determinism_notes": "Record IDs, policy bands, enabled flags, scores, states, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE archive_records (record_id INT PRIMARY KEY, policy_band VARCHAR(16) NOT NULL, record_state VARCHAR(16) NOT NULL, score INT NOT NULL)",
+    "CREATE TABLE policy_thresholds (threshold_id INT PRIMARY KEY, policy_band VARCHAR(16) NOT NULL, enabled TINYINT NOT NULL, threshold_value INT NOT NULL)",
+    "INSERT INTO archive_records VALUES (301, 'legacy', 'obsolete', 10), (302, 'legacy', 'obsolete', 25), (303, 'legacy', 'active', 5), (304, 'disabled', 'obsolete', 1), (305, 'empty', 'active', 0)",
+    "INSERT INTO policy_thresholds VALUES (401, 'legacy', 1, 20), (402, 'legacy', 1, 30), (403, 'disabled', 0, 0)"
+  ],
+  "steps": [
+    {
+      "sql": "DELETE FROM archive_records WHERE record_state = 'obsolete' AND EXISTS (SELECT 1 FROM policy_thresholds AS e WHERE e.policy_band = archive_records.policy_band AND e.enabled = 1) AND score < ALL (SELECT t.threshold_value FROM policy_thresholds AS t WHERE t.policy_band = archive_records.policy_band AND t.enabled = 1)",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT record_id, policy_band, record_state, score FROM archive_records ORDER BY record_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT record_id, policy_band, record_state, score FROM archive_records ORDER BY record_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT threshold_id, policy_band, enabled, threshold_value FROM policy_thresholds ORDER BY threshold_id",
+      "ordered": true
+    }
+  ]
+}
