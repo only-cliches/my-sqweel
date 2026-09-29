@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "id": "natural_right_grouped_routes",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "actiontech/dble-test-suite",
+      "commit": "19c95415de567f6b32072be7c501ec1db83c4e1f",
+      "path": "behave_dble/sqls/sqls_mixed/bugs/bug.sql",
+      "url": "https://github.com/actiontech/dble-test-suite/blob/19c95415de567f6b32072be7c501ec1db83c4e1f/behave_dble/sqls/sqls_mixed/bugs/bug.sql",
+      "sha256": "2ee76fe66fe5b2fac15967c962aec36202affe1505e8410ed424c88c3f3b2599",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "behave_dble/sqls/sqls_mixed/bugs/bug.sql:104",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A derived relation is combined with another derived relation through NATURAL RIGHT JOIN, preserving rows from the right-hand relation after independent filters.",
+      "mysql_mariadb_translation": "Reauthored as a route activity report. Active shipment events are projected in one derived relation and open routes in another; NATURAL RIGHT JOIN preserves open routes without events, while grouped COUNT and ordered GROUP_CONCAT summarize matched event codes with deterministic zero-fill. The source sharding tables, identifiers, predicates, and bug context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "natural-right-join",
+    "derived-table-filters",
+    "grouped-aggregate",
+    "group-concat",
+    "right-null-extension",
+    "coalesce-zero-fill",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Open route 601 has two active shipment events and reports A1|B2. Open route 602 has no active event and is preserved by the right join with zero count and an empty label list. Route 603 is closed and filtered out; inactive event 704 is excluded before the join.",
+  "determinism_notes": "Route IDs, event IDs, route states, event activity, code ordering, aggregate expressions, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE route_directory (route_id INT PRIMARY KEY, route_name VARCHAR(24) NOT NULL, route_state VARCHAR(16) NOT NULL)",
+    "CREATE TABLE shipment_events (event_id INT PRIMARY KEY, route_id INT NOT NULL, event_code VARCHAR(8) NOT NULL, active TINYINT NOT NULL)",
+    "INSERT INTO route_directory VALUES (601, 'north-loop', 'open'), (602, 'south-loop', 'open'), (603, 'retired-loop', 'closed')",
+    "INSERT INTO shipment_events VALUES (701, 601, 'B2', 1), (702, 601, 'A1', 1), (703, 601, 'Z9', 0), (704, 603, 'C3', 1)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT routes.route_id, routes.route_name, COUNT(events.event_id) AS active_events, COALESCE(GROUP_CONCAT(events.event_code ORDER BY events.event_code SEPARATOR '|'), '') AS event_codes FROM (SELECT route_id, event_id, event_code FROM shipment_events WHERE active = 1) AS events NATURAL RIGHT JOIN (SELECT route_id, route_name FROM route_directory WHERE route_state = 'open') AS routes GROUP BY routes.route_id, routes.route_name ORDER BY routes.route_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT route_id, route_name, route_state FROM route_directory ORDER BY route_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT event_id, route_id, active FROM shipment_events ORDER BY event_id",
+      "ordered": true
+    }
+  ]
+}
