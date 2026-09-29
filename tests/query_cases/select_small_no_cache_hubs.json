@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "id": "select_small_no_cache_hubs",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "simultech/Empowered",
+      "commit": "457923833dc46b7f9d71a939f05a4c3c9d3dfe1d",
+      "path": "mysql.sql",
+      "url": "https://github.com/simultech/Empowered/blob/457923833dc46b7f9d71a939f05a4c3c9d3dfe1d/mysql.sql",
+      "sha256": "d7be30090fac8a2764a5954a95e26741894aea9aff990b1fc1ec82b2af9a120a",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "mysql.sql:1683 (SELECT modifier grammar)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "The MySQL SELECT grammar permits SQL_SMALL_RESULT and SQL_NO_CACHE together before a grouped projection.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored hub-activity summary. SQL_SMALL_RESULT and SQL_NO_CACHE accompany a filtered LEFT JOIN, distinct event counting, nullable-unit aggregation, HAVING qualification, and deterministic hub ordering; the source documentation, schema, identifiers, and values are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "sql-small-result",
+    "sql-no-cache",
+    "left-join",
+    "count-distinct",
+    "nullable-aggregate",
+    "having",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Active hub north has three events but two distinct event codes and a NULL unit count, so COUNT(DISTINCT) is 2 and SUM ignores the NULL. Active hub south has one event and qualifies; inactive hub west is filtered out. Both SELECT modifiers must preserve the grouped result.",
+  "determinism_notes": "Hub IDs, event IDs, codes, states, units, grouping keys, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE activity_hubs (hub_id INT PRIMARY KEY, hub_code VARCHAR(16) NOT NULL, hub_state VARCHAR(16) NOT NULL)",
+    "CREATE TABLE hub_events (event_id INT PRIMARY KEY, hub_id INT NOT NULL, event_code VARCHAR(24) NOT NULL, unit_count INT NULL)",
+    "INSERT INTO activity_hubs VALUES (11, 'north', 'active'), (12, 'south', 'active'), (13, 'west', 'inactive')",
+    "INSERT INTO hub_events VALUES (101, 11, 'scan', 4), (102, 11, 'scan', NULL), (103, 11, 'alert', 2), (104, 12, 'scan', 7), (105, 13, 'scan', 99)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT SQL_SMALL_RESULT SQL_NO_CACHE h.hub_code, COUNT(DISTINCT e.event_code) AS distinct_events, COALESCE(SUM(e.unit_count), 0) AS total_units FROM activity_hubs AS h LEFT JOIN hub_events AS e ON e.hub_id = h.hub_id WHERE h.hub_state = 'active' GROUP BY h.hub_id, h.hub_code HAVING COUNT(e.event_id) >= 1 ORDER BY h.hub_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
