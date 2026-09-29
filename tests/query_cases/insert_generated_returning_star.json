@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "id": "insert_generated_returning_star",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "mariadb-corporation/mariadb-qa",
+      "commit": "5f7898e3a89feb85af301091143617716b4705c5",
+      "path": "BUGS/MDEV-39399.sql",
+      "url": "https://github.com/mariadb-corporation/mariadb-qa/blob/5f7898e3a89feb85af301091143617716b4705c5/BUGS/MDEV-39399.sql",
+      "sha256": "6f787d84a69cffd40c01fe48ed05ca0768b1cc3449ffb430299b0db12ead579d",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "BUGS/MDEV-39399.sql:18-21, INSERT ... RETURNING * with generated columns",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "MariaDB can return the complete inserted row, including generated columns, through a wildcard RETURNING projection.",
+      "mysql_mariadb_translation": "Reauthored as a shipment-charge load. INSERT supplies base units and rate, a virtual generated charge is materialized in the returned row through RETURNING *, and a final read verifies the stored base values. The source table, values, trigger, and regression context are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["insert-returning-star", "virtual-generated-column", "generated-expression", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "Two shipment charges are inserted with fixed units and rates; RETURNING * must include the computed charge for each row, and the final read confirms the base rows.",
+  "determinism_notes": "Shipment IDs, numeric inputs, generated expression, and returned/final projections are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE shipment_charges (shipment_id INT PRIMARY KEY, units INT NOT NULL, unit_rate DECIMAL(8,2) NOT NULL, total_charge DECIMAL(10,2) AS (units * unit_rate) VIRTUAL)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO shipment_charges (shipment_id, units, unit_rate) VALUES (1901, 3, 12.50), (1902, 4, 7.25) RETURNING *",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT shipment_id, units, unit_rate, total_charge FROM shipment_charges ORDER BY shipment_id",
+      "ordered": true
+    }
+  ]
+}
