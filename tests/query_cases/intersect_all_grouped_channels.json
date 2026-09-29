@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "intersect_all_grouped_channels",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "EnterpriseDB/mysql_fdw",
+      "commit": "4948d8bfc7145646b94aa154eea39669e85d9d42",
+      "path": "sql/select.sql",
+      "url": "https://github.com/EnterpriseDB/mysql_fdw/blob/4948d8bfc7145646b94aa154eea39669e85d9d42/sql/select.sql",
+      "sha256": "409b3b050ae729c46c7c22b014d3aec0b19c4c6ecd12fd6ca59cf8ddbbabcfe3",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "sql/select.sql:75-81, 103-108",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A SQL compatibility corpus exercises grouped HAVING reports alongside INTERSECT and INTERSECT ALL set operations over filtered relations.",
+      "mysql_mariadb_translation": "Reauthored as a recurring account-channel qualification report. Separate yearly grouped branches retain account IDs whose per-channel totals clear a threshold, and INTERSECT ALL preserves the minimum qualifying-channel multiplicity across years. The foreign-table schema, identifiers, values, and test corpus are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "intersect-all",
+    "grouped-branches",
+    "having-aggregate-threshold",
+    "duplicate-preservation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Account 41 clears the threshold in two channels in both years and must appear twice. Account 42 clears it in two channels in 2024 and one in 2025 and must appear once. Account 43 clears it once in both years; account 44 fails the threshold in 2025 and is excluded.",
+  "determinism_notes": "Account IDs, years, channels, amounts, thresholds, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE account_channel_sales (sale_id INT PRIMARY KEY, account_id INT NOT NULL, sale_year INT NOT NULL, channel_code VARCHAR(16) NOT NULL, amount INT NOT NULL)",
+    "INSERT INTO account_channel_sales VALUES (1001, 41, 2024, 'direct', 120), (1002, 41, 2024, 'partner', 150), (1003, 41, 2025, 'direct', 130), (1004, 41, 2025, 'partner', 140), (1011, 42, 2024, 'direct', 110), (1012, 42, 2024, 'partner', 105), (1013, 42, 2025, 'direct', 160), (1021, 43, 2024, 'direct', 125), (1022, 43, 2025, 'direct', 125), (1031, 44, 2024, 'direct', 200), (1032, 44, 2025, 'direct', 90)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT account_id FROM account_channel_sales WHERE sale_year = 2024 GROUP BY account_id, channel_code HAVING SUM(amount) >= 100 INTERSECT ALL SELECT account_id FROM account_channel_sales WHERE sale_year = 2025 GROUP BY account_id, channel_code HAVING SUM(amount) >= 100 ORDER BY account_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT sale_year, account_id, channel_code, SUM(amount) AS channel_total FROM account_channel_sales GROUP BY sale_year, account_id, channel_code ORDER BY sale_year, account_id, channel_code",
+      "ordered": true
+    }
+  ]
+}
