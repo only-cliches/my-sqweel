@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "recursive_insert_ignore_batches",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "t8y2/dbx",
+      "commit": "3db93307d0f48d40141a029c450aa9d4a275a70a",
+      "path": "deploy/demo/seed/sql/mysql/init.sql",
+      "url": "https://github.com/t8y2/dbx/blob/3db93307d0f48d40141a029c450aa9d4a275a70a/deploy/demo/seed/sql/mysql/init.sql",
+      "sha256": "d4a03e9d4bd4812c5c8ccee882fc0353585fea1d9b93c3d636fea1f26e677382",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "deploy/demo/seed/sql/mysql/init.sql:54-59",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL seed script uses a recursive CTE to generate a numeric sequence and feeds that sequence into an INSERT ... SELECT statement.",
+      "mysql_mariadb_translation": "Reauthored as an idempotent batch registry load. INSERT IGNORE consumes a recursive batch-number sequence, preserves an existing conflicting batch, and adds missing batches; the independently authored table, labels, values, and operational purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "recursive-cte",
+    "recursive-insert-select",
+    "insert-ignore",
+    "duplicate-key-skip",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Batch 1 already exists with its original label and must survive the INSERT IGNORE duplicate-key path; batches 2 through 4 are generated and inserted. The final read verifies both preserved and new rows.",
+  "determinism_notes": "The recursive bound, batch IDs, labels, and ordered final read are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE batch_registry (batch_no INT PRIMARY KEY, batch_label VARCHAR(32) NOT NULL)",
+    "INSERT INTO batch_registry VALUES (1, 'legacy-batch')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT IGNORE INTO batch_registry (batch_no, batch_label) WITH RECURSIVE sequence_numbers (batch_no) AS (SELECT 1 UNION ALL SELECT batch_no + 1 FROM sequence_numbers WHERE batch_no < 4) SELECT batch_no, CONCAT('generated-', batch_no) FROM sequence_numbers ORDER BY batch_no",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT batch_no, batch_label FROM batch_registry ORDER BY batch_no",
+      "ordered": true
+    }
+  ]
+}
