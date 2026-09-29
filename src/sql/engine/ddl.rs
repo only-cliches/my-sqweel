@@ -847,6 +847,9 @@ pub(super) fn column_hint_from_def(col: &sqlparser::ast::ColumnDef) -> ColumnHin
                 Some(sqlparser::ast::GeneratedExpressionMode::Stored)
             );
         }
+        if let Some(comment) = column_comment_from_text(&opt.option.to_string()) {
+            hint.comment = Some(comment);
+        }
     }
 
     hint
@@ -887,6 +890,9 @@ fn apply_column_options(hint: &mut ColumnHint, options: &[sqlparser::ast::Column
                 }
             }
             _ => {}
+        }
+        if let Some(comment) = column_comment_from_text(&option.to_string()) {
+            hint.comment = Some(comment);
         }
     }
 }
@@ -934,6 +940,9 @@ pub(super) fn table_schema_from_create(
         };
 
         for opt in col.options {
+            if let Some(comment) = column_comment_from_text(&opt.option.to_string()) {
+                column_hint.comment = Some(comment);
+            }
             let text = opt.option.to_string().to_uppercase();
             if text.contains("NOT NULL") {
                 column_hint.nullable = Some(false);
@@ -1208,6 +1217,27 @@ pub(super) fn normalized_sql_tokens(sql: &str) -> Vec<String> {
         .collect()
 }
 
+fn column_comment_from_text(text: &str) -> Option<String> {
+    let upper = text.to_ascii_uppercase();
+    let comment_at = upper.find("COMMENT")?;
+    let tail = text[comment_at + "COMMENT".len()..].trim_start();
+    let quote = tail.chars().next()?;
+    if quote != '\'' && quote != '"' {
+        return None;
+    }
+    let mut escaped = false;
+    for (offset, character) in tail.char_indices().skip(1) {
+        if escaped {
+            escaped = false;
+        } else if character == '\\' {
+            escaped = true;
+        } else if character == quote {
+            return unquote_sql_string(&tail[..=offset]);
+        }
+    }
+    None
+}
+
 pub(super) fn remove_column_metadata(schema: &mut TableSchemaHint, col: &str) {
     schema.columns.remove(col);
     schema.column_order.retain(|column| column != col);
@@ -1293,6 +1323,9 @@ pub(super) fn update_column_type_from_tokens(
     }
     if upper.iter().any(|token| token == "AUTO_INCREMENT") {
         hint.auto_increment = true;
+    }
+    if let Some(comment) = column_comment_from_text(&tokens.join(" ")) {
+        hint.comment = Some(comment);
     }
 }
 

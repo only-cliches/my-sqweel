@@ -7,6 +7,8 @@ pub struct ColumnHint {
     pub sql_type: Option<String>,
     pub nullable: Option<bool>,
     pub default: Option<String>,
+    #[serde(default)]
+    pub comment: Option<String>,
     pub primary_key: bool,
     pub auto_increment: bool,
     #[serde(default)]

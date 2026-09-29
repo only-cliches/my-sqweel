@@ -681,6 +681,8 @@ impl RawEngine {
                     .collect::<Vec<_>>();
                 finished.columns =
                     virtual_select_result_with_empty_schema(&select, vec![], &columns)?.columns;
+            }
+            if !result_metadata.is_empty() {
                 finished.column_metadata = finished
                     .columns
                     .iter()
@@ -4825,10 +4827,14 @@ impl RawEngine {
                         String::new()
                     }),
                 );
+                row.insert(
+                    "column_comment".to_string(),
+                    Value::String(hint.comment.clone().unwrap_or_default()),
+                );
                 rows.push(row);
             }
         }
-        virtual_select_result_with_empty_schema(
+        let mut result = virtual_select_result_with_empty_schema(
             select,
             rows,
             &[
@@ -4845,8 +4851,37 @@ impl RawEngine {
                 "generation_expression",
                 "column_key",
                 "extra",
+                "column_comment",
             ],
-        )
+        )?;
+        result.column_metadata = [
+            "table_schema",
+            "table_name",
+            "column_name",
+            "ordinal_position",
+            "is_nullable",
+            "column_default",
+            "column_type",
+            "data_type",
+            "character_set_name",
+            "collation_name",
+            "generation_expression",
+            "column_key",
+            "extra",
+            "column_comment",
+        ]
+        .into_iter()
+        .map(|column| {
+            let mut metadata = ColumnMetadata::from_value(column, None);
+            metadata.column_type = match column {
+                "ordinal_position" => MysqlColumnType::BigInt,
+                "column_default" | "column_type" => MysqlColumnType::Blob,
+                _ => MysqlColumnType::VarChar,
+            };
+            metadata
+        })
+        .collect();
+        Ok(result)
     }
 
     pub(super) fn select_information_schema_table_constraints(
@@ -5976,7 +6011,10 @@ impl RawEngine {
                             "Privileges".to_string(),
                             Value::String("select,insert,update,references".to_string()),
                         );
-                        row.insert("Comment".to_string(), Value::String(String::new()));
+                        row.insert(
+                            "Comment".to_string(),
+                            Value::String(hint.comment.clone().unwrap_or_default()),
+                        );
                         Some(row)
                     })
                     .collect()

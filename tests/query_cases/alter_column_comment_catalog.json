@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "id": "alter_column_comment_catalog",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "lilishop/lilishop",
+      "commit": "4e6d563a4f0fa53880dd1420ce0904fc6e29f9e9",
+      "path": "DB/version4.2to4.2.2.sql",
+      "url": "https://github.com/lilishop/lilishop/blob/4e6d563a4f0fa53880dd1420ce0904fc6e29f9e9/DB/version4.2to4.2.2.sql",
+      "sha256": "4b955e584258cbabf93b91c24f4d14ad2e30cc2594f53f4e7db4f48c5b7cfaa3",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "DB/version4.2to4.2.2.sql:20-24, ALTER TABLE ADD COLUMN statements with COMMENT",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL migration adds typed columns with defaults and human-readable COMMENT metadata in ALTER TABLE statements.",
+      "mysql_mariadb_translation": "Reauthored as a shipment-note catalog migration. Two new columns use different types, nullability, defaults, and comments, and information_schema.columns verifies their declared metadata after the ALTER operations. The source tables, names, values, comments, and commerce migration context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "alter-table",
+    "add-column",
+    "column-comment",
+    "column-default",
+    "information-schema-columns",
+    "schema-metadata",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The existing note table receives a nullable text handoff column with a NULL default and a non-null integer retry budget with default 2. The final metadata read must expose both comments, defaults, nullability, and ordinal positions.",
+  "determinism_notes": "Column names, types, defaults, comments, ALTER order, and metadata ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE shipment_notes (note_id INT PRIMARY KEY, note_code VARCHAR(16) NOT NULL)",
+    "INSERT INTO shipment_notes VALUES (501, 'dock-a')"
+  ],
+  "steps": [
+    {
+      "sql": "ALTER TABLE shipment_notes ADD COLUMN handoff_note VARCHAR(64) DEFAULT NULL COMMENT 'dock handoff note'",
+      "ordered": false
+    },
+    {
+      "sql": "ALTER TABLE shipment_notes ADD COLUMN retry_budget INT NOT NULL DEFAULT 2 COMMENT 'remaining retries'",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT column_name, ordinal_position, is_nullable, column_default, column_type, column_comment FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'shipment_notes' ORDER BY ordinal_position",
+      "ordered": true
+    }
+  ]
+}
