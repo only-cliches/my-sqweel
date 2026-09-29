@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "id": "insert_ignore_select_join_archive_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "dml/insert/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/dml/insert/mysql.sql",
+      "sha256": "0160718d9ccf135c9938eaf3879a37c672cd171e68065046c953d55e95a33425",
+      "source_dialect": "mysql"
+    },
+    "inspiration": {
+      "source_location": "dml/insert/mysql.sql:26-31",
+      "source_dialect": "mysql",
+      "observed_pattern": "MySQL INSERT IGNORE suppresses duplicate-key errors, and INSERT ... SELECT materializes rows selected from another relation.",
+      "mysql_mariadb_translation": "Reduced to one joined channel, one repeated source projection, and one pre-existing destination key while retaining INSERT IGNORE, INSERT ... SELECT, CASE priority calculation, and the ordered archive read."
+    },
+    "independently_authored": true,
+    "focused_variant_of": "insert_ignore_select_join_archive"
+  },
+  "features": [
+    "insert-ignore",
+    "insert-select",
+    "joined-source",
+    "unique-key-suppression",
+    "focused-variant"
+  ],
+  "fixture_notes": "Source code A appears twice with identical projected values and is archived once; existing code B remains unchanged after the conflicting source row.",
+  "determinism_notes": "Destination keys, source IDs, channel states, source states, labels, priorities, duplicate projections, filter, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE catalog_archive_min (archive_id INT AUTO_INCREMENT PRIMARY KEY, entry_code VARCHAR(16) NOT NULL, entry_label VARCHAR(32) NOT NULL, priority INT NOT NULL, UNIQUE KEY uq_catalog_archive_min_code (entry_code))",
+    "CREATE TABLE catalog_source_min (source_id INT PRIMARY KEY, channel_id INT NOT NULL, entry_code VARCHAR(16) NOT NULL, entry_label VARCHAR(32) NOT NULL, source_state VARCHAR(16) NOT NULL, priority INT NOT NULL)",
+    "CREATE TABLE catalog_channels_min (channel_id INT PRIMARY KEY, channel_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO catalog_archive_min (archive_id, entry_code, entry_label, priority) VALUES (990, 'B', 'old-bravo', 88)",
+    "INSERT INTO catalog_channels_min VALUES (1, 'preferred')",
+    "INSERT INTO catalog_source_min VALUES (11, 1, 'A', 'alpha', 'ready', 5), (12, 1, 'A', 'alpha', 'ready', 5), (13, 1, 'B', 'bravo', 'ready', 7)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT IGNORE INTO catalog_archive_min (entry_code, entry_label, priority) SELECT s.entry_code, s.entry_label, CASE WHEN c.channel_state = 'preferred' THEN s.priority + 10 ELSE s.priority END FROM catalog_source_min AS s JOIN catalog_channels_min AS c ON c.channel_id = s.channel_id WHERE s.source_state = 'ready' ORDER BY s.source_id",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT entry_code, entry_label, priority FROM catalog_archive_min ORDER BY entry_code",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT entry_code, entry_label, priority FROM catalog_archive_min ORDER BY entry_code",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT source_id, entry_code, source_state FROM catalog_source_min ORDER BY source_id",
+      "ordered": true
+    }
+  ]
+}

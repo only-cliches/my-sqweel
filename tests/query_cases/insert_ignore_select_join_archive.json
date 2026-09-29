@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "id": "insert_ignore_select_join_archive",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "dml/insert/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/dml/insert/mysql.sql",
+      "sha256": "0160718d9ccf135c9938eaf3879a37c672cd171e68065046c953d55e95a33425",
+      "source_dialect": "mysql"
+    },
+    "inspiration": {
+      "source_location": "dml/insert/mysql.sql:26-31",
+      "source_dialect": "mysql",
+      "observed_pattern": "MySQL INSERT IGNORE suppresses duplicate-key errors, and INSERT ... SELECT materializes rows selected from another relation.",
+      "mysql_mariadb_translation": "Reauthored as a catalog archive load. A joined source selection computes a channel-sensitive priority, INSERT IGNORE skips an existing destination key and repeated identical source projections, and an ordered final read verifies retained rows. The source schema, names, values, and application context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "insert-ignore",
+    "insert-select",
+    "joined-source",
+    "case-expression",
+    "unique-key-suppression",
+    "deterministic-final-state"
+  ],
+  "fixture_notes": "Source code A appears twice with identical projected values and is archived once; existing code B is preserved by INSERT IGNORE; ready code C is inserted with its standard-channel priority; held code D is filtered out.",
+  "determinism_notes": "Destination keys, source IDs, channel states, source states, labels, priorities, duplicate projections, filter, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE catalog_archive (archive_id INT AUTO_INCREMENT PRIMARY KEY, entry_code VARCHAR(16) NOT NULL, entry_label VARCHAR(32) NOT NULL, priority INT NOT NULL, UNIQUE KEY uq_catalog_archive_code (entry_code))",
+    "CREATE TABLE catalog_source (source_id INT PRIMARY KEY, channel_id INT NOT NULL, entry_code VARCHAR(16) NOT NULL, entry_label VARCHAR(32) NOT NULL, source_state VARCHAR(16) NOT NULL, priority INT NOT NULL)",
+    "CREATE TABLE catalog_channels (channel_id INT PRIMARY KEY, channel_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO catalog_archive (archive_id, entry_code, entry_label, priority) VALUES (900, 'B', 'old-bravo', 99)",
+    "INSERT INTO catalog_channels VALUES (1, 'preferred'), (2, 'standard')",
+    "INSERT INTO catalog_source VALUES (1, 1, 'A', 'alpha', 'ready', 5), (2, 1, 'A', 'alpha', 'ready', 5), (3, 2, 'B', 'bravo', 'ready', 7), (4, 2, 'C', 'charlie', 'ready', 4), (5, 1, 'D', 'delta', 'held', 10)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT IGNORE INTO catalog_archive (entry_code, entry_label, priority) SELECT s.entry_code, s.entry_label, CASE WHEN c.channel_state = 'preferred' THEN s.priority + 10 ELSE s.priority END FROM catalog_source AS s JOIN catalog_channels AS c ON c.channel_id = s.channel_id WHERE s.source_state = 'ready' ORDER BY s.source_id",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT entry_code, entry_label, priority FROM catalog_archive ORDER BY entry_code",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT entry_code, entry_label, priority FROM catalog_archive ORDER BY entry_code",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT source_id, entry_code, source_state FROM catalog_source ORDER BY source_id",
+      "ordered": true
+    }
+  ]
+}
