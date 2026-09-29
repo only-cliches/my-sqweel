@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "named_window_grouped_rollup",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "repository": "clapdb/pg_regress_input",
+      "commit": "e9722c2377b0a491256f9f8001777745735ee537",
+      "path": "sql/window.sql",
+      "url": "https://github.com/clapdb/pg_regress_input/blob/e9722c2377b0a491256f9f8001777745735ee537/sql/window.sql",
+      "sha256": "ce8ac2bbad671985d989101319832cb9fc9a9d791bd8ad26898690616b09bf2e",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/window.sql:108-109",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped query applies a named window to a nested aggregate, using SUM(SUM(value)) OVER a shared window to expose a total across grouped rows.",
+      "mysql_mariadb_translation": "Reauthored as a team score summary. Fixed match scores are grouped by team, SUM(score) computes each team total, and SUM(SUM(score)) OVER all_scores reuses a named empty window to expose the global score total on every grouped row. The source tables, identifiers, and values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "named-window-clause",
+    "grouped-aggregate",
+    "nested-aggregate-window",
+    "window-reuse",
+    "global-group-total",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Team 10 totals 13 points and team 20 totals 10 points; every grouped row must expose the global total of 23 through the nested aggregate window.",
+  "determinism_notes": "Team IDs, match IDs, score values, grouping, named empty-window definition, and final ordering are fixed; the report is read-only with no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE team_match_scores (match_id INT PRIMARY KEY, team_id INT NOT NULL, score INT NOT NULL)",
+    "INSERT INTO team_match_scores VALUES (1001, 10, 8), (1002, 10, 5), (2001, 20, 6), (2002, 20, 4)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT team_id, SUM(score) AS team_total, SUM(SUM(score)) OVER all_scores AS global_total FROM team_match_scores GROUP BY team_id WINDOW all_scores AS () ORDER BY team_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
