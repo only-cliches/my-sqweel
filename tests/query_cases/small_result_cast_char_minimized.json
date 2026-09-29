@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "id": "small_result_cast_char_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "small_result_join_max_lookup",
+    "source": {
+      "kind": "github",
+      "repository": "AldonahZero/SQLeekArtifact",
+      "commit": "7bf15b0ebd7501478c61ec1a54b4e7731e5faef8",
+      "path": "sqleek_pipeline/stage2_setup/output/seeds/mysql/memory/llm_rank01_00.sql",
+      "url": "https://github.com/AldonahZero/SQLeekArtifact/blob/7bf15b0ebd7501478c61ec1a54b4e7731e5faef8/sqleek_pipeline/stage2_setup/output/seeds/mysql/memory/llm_rank01_00.sql",
+      "sha256": "8755049842034a3b2e2cb17c561687321154cec8ba6c1f1fe95b6dd99178aeee",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "llm_rank01_00.sql:32",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A CAST expression to CHAR is projected from a MySQL SELECT that also uses SQL_SMALL_RESULT.",
+      "mysql_mariadb_translation": "Reduced to one fixed string literal and one SQL_SMALL_RESULT projection so the result metadata for CAST(... AS CHAR) is isolated from joins, subqueries, filtering, and pagination."
+    },
+    "independently_authored": true,
+    "minimized_from": "small_result_join_max_lookup"
+  },
+  "features": [
+    "sql-small-result",
+    "cast-char",
+    "result-metadata",
+    "minimized-regression"
+  ],
+  "fixture_notes": "The single projected cast value must retain MariaDB's variable-string result metadata while preserving the literal bytes.",
+  "determinism_notes": "One fixed literal and one projection produce one deterministic row; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT SQL_SMALL_RESULT CAST('alpha-kit' AS CHAR(32)) AS label_text",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}

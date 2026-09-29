@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "id": "small_result_join_max_lookup",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "AldonahZero/SQLeekArtifact",
+      "commit": "7bf15b0ebd7501478c61ec1a54b4e7731e5faef8",
+      "path": "sqleek_pipeline/stage2_setup/output/seeds/mysql/memory/llm_rank01_00.sql",
+      "url": "https://github.com/AldonahZero/SQLeekArtifact/blob/7bf15b0ebd7501478c61ec1a54b4e7731e5faef8/sqleek_pipeline/stage2_setup/output/seeds/mysql/memory/llm_rank01_00.sql",
+      "sha256": "8755049842034a3b2e2cb17c561687321154cec8ba6c1f1fe95b6dd99178aeee",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "llm_rank01_00.sql:32",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL prepared query combines SQL_SMALL_RESULT, an inner join, an OR range-or-pattern filter, a grouped MAX lookup in an IN subquery, CAST projection, and ordered LIMIT pagination.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored product-score page. Priority or label eligibility selects products, an inner score relation is restricted to each product's maximum score through a grouped IN subquery, CAST exposes a bounded label string, and stable label/score/metric ordering makes the page deterministic. Prepared statements, source tables, identifiers, values, and index churn are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "sql-small-result",
+    "inner-join",
+    "or-range-like-filter",
+    "grouped-max-in-subquery",
+    "cast-projection",
+    "ordered-limit"
+  ],
+  "fixture_notes": "Products 101 and 103 qualify by priority, product 102 qualifies by the pro% label, and product 104 is excluded. The grouped MAX subquery keeps only each qualifying product's highest score; product 103 has a tied maximum, so the explicit metric ID tie-breaker makes LIMIT 3 deterministic.",
+  "determinism_notes": "Product priorities, labels, scores, metric IDs, filter literals, and all ordering keys are fixed; no clocks, randomness, sleeps, prepared statements, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE catalog_products (product_id INT PRIMARY KEY, product_label VARCHAR(32) NOT NULL, priority INT NOT NULL)",
+    "CREATE TABLE product_scores (metric_id INT PRIMARY KEY, product_id INT NOT NULL, score INT NOT NULL, score_note VARCHAR(32) NOT NULL)",
+    "INSERT INTO catalog_products VALUES (101, 'alpha-kit', 3), (102, 'pro-bundle', 9), (103, 'beta-kit', 4), (104, 'standard-kit', 9)",
+    "INSERT INTO product_scores VALUES (1001, 101, 8, 'latest'), (1002, 101, 5, 'prior'), (1003, 102, 9, 'latest'), (1004, 103, 7, 'latest-a'), (1005, 103, 7, 'latest-b'), (1006, 103, 2, 'prior'), (1007, 104, 10, 'latest')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT SQL_SMALL_RESULT p.product_id, m.score, CAST(p.product_label AS CHAR(32)) AS label_text FROM catalog_products AS p INNER JOIN product_scores AS m ON m.product_id = p.product_id WHERE (p.priority BETWEEN 2 AND 4 OR p.product_label LIKE 'pro%') AND m.score IN (SELECT MAX(score) FROM product_scores GROUP BY product_id) ORDER BY p.product_label ASC, m.score DESC, m.metric_id ASC LIMIT 3",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT p.product_id, p.product_label, m.metric_id, m.score FROM catalog_products AS p INNER JOIN product_scores AS m ON m.product_id = p.product_id ORDER BY p.product_id, m.metric_id",
+      "ordered": true
+    }
+  ]
+}

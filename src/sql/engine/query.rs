@@ -1643,8 +1643,13 @@ impl RawEngine {
             }
 
             Expr::Cast { data_type, .. } => {
+                let mut cast_type = cast_data_type_name(data_type);
+                let upper = cast_type.to_ascii_uppercase();
+                if upper == "CHAR" || upper.starts_with("CHAR(") {
+                    cast_type.replace_range(..4, "VARCHAR");
+                }
                 let hint = ColumnHint {
-                    sql_type: Some(cast_data_type_name(data_type)),
+                    sql_type: Some(cast_type),
                     ..ColumnHint::default()
                 };
                 metadata = ColumnMetadata::from_declared(output_name, "", &hint);
