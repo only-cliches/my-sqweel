@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "id": "low_priority_select_upsert_returning_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "repository": "mariadb-corporation/mariadb-qa",
+      "commit": "55cbc29215042cd5d26b1b3892f1837e1c1b00fa",
+      "path": "BUGS/MDEV-36354.sql",
+      "url": "https://github.com/mariadb-corporation/mariadb-qa/blob/55cbc29215042cd5d26b1b3892f1837e1c1b00fa/BUGS/MDEV-36354.sql",
+      "sha256": "1ae10c4179d6ad13f1eeb45a3c440bc29cbd47e020c3cafbab07d9016df3a3f3",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from BUGS/MDEV-36354.sql: LOW_PRIORITY IGNORE duplicate update RETURNING",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A low-priority ignored upsert returns the conflicting row after applying a duplicate-key assignment.",
+      "mysql_mariadb_translation": "Reduced to one existing receipt, one feed row, and one INSERT LOW_PRIORITY IGNORE ... SELECT duplicate update with RETURNING; the source's assignment syntax, fuzz expressions, and unrelated setup are removed while the combined modifier, source-load, merge, and returned-row contract remains."
+    },
+    "independently_authored": true,
+    "minimized_from": "low_priority_select_upsert_returning"
+  },
+  "features": [
+    "insert-low-priority",
+    "insert-ignore",
+    "insert-select",
+    "duplicate-key-update",
+    "returning",
+    "minimized-regression"
+  ],
+  "fixture_notes": "Receipt 991 starts at quantity 5 and the single ready feed row adds 2 through the duplicate-key path; RETURNING must expose the merged quantity 7.",
+  "determinism_notes": "One fixed receipt and one fixed feed row produce one returned row and one ordered final row; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE receipt_merge_min (receipt_id INT PRIMARY KEY, item_code VARCHAR(16) NOT NULL UNIQUE, quantity INT NOT NULL)",
+    "CREATE TABLE receipt_feed_min (feed_id INT PRIMARY KEY, receipt_id INT NOT NULL, item_code VARCHAR(16) NOT NULL, quantity INT NOT NULL, feed_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO receipt_merge_min VALUES (991, 'bolt-Z', 5)",
+    "INSERT INTO receipt_feed_min VALUES (21, 991, 'bolt-Z', 2, 'ready')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT LOW_PRIORITY IGNORE INTO receipt_merge_min (receipt_id, item_code, quantity) SELECT receipt_id, item_code, quantity FROM receipt_feed_min WHERE feed_state = 'ready' ON DUPLICATE KEY UPDATE quantity = receipt_merge_min.quantity + VALUES(quantity) RETURNING receipt_id, item_code, quantity",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT receipt_id, item_code, quantity FROM receipt_merge_min ORDER BY receipt_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}

@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "id": "low_priority_select_upsert_returning",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "repository": "mariadb-corporation/mariadb-qa",
+      "commit": "55cbc29215042cd5d26b1b3892f1837e1c1b00fa",
+      "path": "BUGS/MDEV-36354.sql",
+      "url": "https://github.com/mariadb-corporation/mariadb-qa/blob/55cbc29215042cd5d26b1b3892f1837e1c1b00fa/BUGS/MDEV-36354.sql",
+      "sha256": "1ae10c4179d6ad13f1eeb45a3c440bc29cbd47e020c3cafbab07d9016df3a3f3",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "BUGS/MDEV-36354.sql:5, modifier and RETURNING combination",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB INSERT combines LOW_PRIORITY and IGNORE modifiers with an assignment-style duplicate-key update and a RETURNING projection.",
+      "mysql_mariadb_translation": "Reauthored as an independent receipt-feed merge. A LOW_PRIORITY IGNORE INSERT ... SELECT loads ready feed rows, updates an existing receipt through a duplicate-key arithmetic merge, inserts a new receipt, and returns both resulting rows; the source fuzz expressions, table, values, and bug context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "insert-low-priority",
+    "insert-ignore",
+    "insert-select",
+    "duplicate-key-update",
+    "returning",
+    "arithmetic-merge",
+    "deterministic-final-state"
+  ],
+  "fixture_notes": "Receipt 901 starts at quantity 4 and receives a ready feed increment of 3, while receipt 902 is inserted from the same ordered feed. The RETURNING rows expose both the duplicate-update and new-row paths; the held feed row is excluded.",
+  "determinism_notes": "Feed IDs, receipt keys, quantities, states, and final ordering are fixed; the source SELECT is ordered by feed ID, and no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE receipt_merge (receipt_id INT PRIMARY KEY, item_code VARCHAR(16) NOT NULL UNIQUE, quantity INT NOT NULL, receipt_state VARCHAR(16) NOT NULL)",
+    "CREATE TABLE receipt_feed (feed_id INT PRIMARY KEY, receipt_id INT NOT NULL, item_code VARCHAR(16) NOT NULL, quantity INT NOT NULL, receipt_state VARCHAR(16) NOT NULL, feed_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO receipt_merge VALUES (901, 'bolt-A', 4, 'stored')",
+    "INSERT INTO receipt_feed VALUES (11, 901, 'bolt-A', 3, 'received', 'ready'), (12, 902, 'nut-B', 7, 'received', 'ready'), (13, 903, 'washer-C', 5, 'received', 'held')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT LOW_PRIORITY IGNORE INTO receipt_merge (receipt_id, item_code, quantity, receipt_state) SELECT receipt_id, item_code, quantity, receipt_state FROM receipt_feed WHERE feed_state = 'ready' ORDER BY feed_id ON DUPLICATE KEY UPDATE quantity = receipt_merge.quantity + VALUES(quantity), receipt_state = VALUES(receipt_state) RETURNING receipt_id, item_code, quantity, receipt_state",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT receipt_id, item_code, quantity, receipt_state FROM receipt_merge ORDER BY receipt_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
