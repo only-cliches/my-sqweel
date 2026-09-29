@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "alter_add_check_sensor_catalog_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "alter_add_check_sensor_catalog",
+    "source": {
+      "kind": "github",
+      "repository": "antlr/grammars-v4",
+      "commit": "e199816b3f1a7a49ea1ad84fb6b87c382ea36a33",
+      "path": "sql/mysql/Oracle/examples/ddl_alter.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/e199816b3f1a7a49ea1ad84fb6b87c382ea36a33/sql/mysql/Oracle/examples/ddl_alter.sql",
+      "sha256": "b3b2acaaf93b0527bd3091308e3b1ed103199857f4e048ab6c3a35102bf5b630",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from sql/mysql/Oracle/examples/ddl_alter.sql:27-29",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "The smallest failing ALTER TABLE path adds a named CHECK constraint to an existing table and then renders the altered definition.",
+      "mysql_mariadb_translation": "Reduced to one independently authored integer column, one valid row, one named nonnegative CHECK addition, and SHOW CREATE TABLE so the post-DDL constraint rendering is isolated from labels, multiple columns, and boundary rows."
+    },
+    "independently_authored": true,
+    "minimized_from": "alter_add_check_sensor_catalog"
+  },
+  "features": ["alter-add-check", "named-check-constraint", "show-create-table", "minimized-regression"],
+  "fixture_notes": "The single stored zero remains valid after the named CHECK is added; SHOW CREATE TABLE must expose the constraint instead of returning a missing-column error.",
+  "determinism_notes": "The table, column, constraint, row, and metadata read are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE check_probe (probe_id INT PRIMARY KEY, probe_value INT NOT NULL)",
+    "INSERT INTO check_probe (probe_id, probe_value) VALUES (1301, 0)"
+  ],
+  "steps": [
+    {
+      "sql": "ALTER TABLE check_probe ADD CONSTRAINT check_probe_nonnegative CHECK (probe_value >= 0)",
+      "ordered": false
+    },
+    {
+      "sql": "SHOW CREATE TABLE check_probe",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}

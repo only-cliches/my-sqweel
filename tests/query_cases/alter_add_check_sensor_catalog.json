@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "alter_add_check_sensor_catalog",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "antlr/grammars-v4",
+      "commit": "e199816b3f1a7a49ea1ad84fb6b87c382ea36a33",
+      "path": "sql/mysql/Oracle/examples/ddl_alter.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/e199816b3f1a7a49ea1ad84fb6b87c382ea36a33/sql/mysql/Oracle/examples/ddl_alter.sql",
+      "sha256": "b3b2acaaf93b0527bd3091308e3b1ed103199857f4e048ab6c3a35102bf5b630",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/mysql/Oracle/examples/ddl_alter.sql:27-29",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "An ALTER TABLE migration adds named and unnamed CHECK constraints to an existing table after its initial definition.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored sensor catalog migration. A range constraint is added after initial rows exist, SHOW CREATE TABLE exposes the altered definition, and an ordered read verifies the pre-existing boundary values remain intact; the source schema, names, values, and grammar-example context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["alter-add-check", "named-check-constraint", "show-create-table", "post-ddl-read", "boundary-values", "deterministic-order"],
+  "fixture_notes": "Sensor 1201 starts at the lower valid boundary and sensor 1202 is above it; the ALTER adds a named nonnegative constraint without changing either stored row.",
+  "determinism_notes": "Sensor IDs, reading values, constraint name, DDL order, SHOW CREATE output, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE sensor_catalog (sensor_id INT PRIMARY KEY, sensor_label VARCHAR(24) NOT NULL, reading_value INT NOT NULL)",
+    "INSERT INTO sensor_catalog (sensor_id, sensor_label, reading_value) VALUES (1201, 'inlet', 0), (1202, 'outlet', 18)"
+  ],
+  "steps": [
+    {
+      "sql": "ALTER TABLE sensor_catalog ADD CONSTRAINT sensor_reading_nonnegative CHECK (reading_value >= 0)",
+      "ordered": false
+    },
+    {
+      "sql": "SHOW CREATE TABLE sensor_catalog",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT sensor_id, sensor_label, reading_value FROM sensor_catalog ORDER BY sensor_id",
+      "ordered": true
+    }
+  ]
+}

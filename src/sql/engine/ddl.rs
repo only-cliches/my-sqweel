@@ -723,6 +723,7 @@ fn alter_operation_reports_rows_affected(op: &sqlparser::ast::AlterTableOperatio
         op,
         sqlparser::ast::AlterTableOperation::AddConstraint(
             sqlparser::ast::TableConstraint::ForeignKey { .. }
+                | sqlparser::ast::TableConstraint::Check { .. }
         )
     )
 }
@@ -1148,6 +1149,36 @@ pub(super) fn apply_alter_operation_fallback(
     } else if upper.starts_with("MODIFY COLUMN ") {
         if let Some(col) = tokens.get(2) {
             update_column_type_from_tokens(schema, col, &tokens, 3);
+        }
+        true
+    } else if upper.starts_with("ADD CHECK ")
+        || (upper.starts_with("ADD CONSTRAINT") && upper.contains(" CHECK "))
+    {
+        let check_at = if upper.starts_with("ADD CHECK") {
+            "ADD ".len()
+        } else {
+            upper
+                .rfind(" CHECK")
+                .map(|index| index + 1)
+                .unwrap_or_default()
+        };
+        let expression = text[check_at + "CHECK".len()..]
+            .trim()
+            .trim_end_matches(';')
+            .to_string();
+        if !expression.is_empty() {
+            let name = if upper.starts_with("ADD CONSTRAINT") {
+                tokens
+                    .get(2)
+                    .filter(|token| !token.eq_ignore_ascii_case("CHECK"))
+                    .cloned()
+                    .unwrap_or_else(|| format!("{}_check", schema.table))
+            } else {
+                format!("{}_check", schema.table)
+            };
+            schema
+                .check_constraints
+                .push(CheckConstraintHint { name, expression });
         }
         true
     } else if upper.contains("FOREIGN KEY")
@@ -1767,6 +1798,13 @@ pub(super) fn render_create_table(schema: &TableSchemaHint) -> String {
                 .join(", ")
         ));
     }
+    for check in &schema.check_constraints {
+        parts.push(format!(
+            "  CONSTRAINT `{}` CHECK {}",
+            check.name,
+            render_check_expression(&check.expression, schema)
+        ));
+    }
     for unique in &schema.unique {
         let index = schema
             .indexes
@@ -1788,6 +1826,7 @@ pub(super) fn render_create_table(schema: &TableSchemaHint) -> String {
             render_index_columns(&index.columns, Some(&index.prefix_lengths))
         ));
     }
+
     for foreign_key in &schema.foreign_keys {
         let mut line = format!(
             "  CONSTRAINT `{}` FOREIGN KEY ({}) REFERENCES `{}` ({})",
@@ -1822,6 +1861,53 @@ pub(super) fn render_create_table(schema: &TableSchemaHint) -> String {
         schema.table,
         parts.join(",\n")
     )
+}
+fn render_check_expression(expression: &str, schema: &TableSchemaHint) -> String {
+    let mut rendered = String::with_capacity(expression.len());
+    let mut quote = None;
+    let chars = expression.chars().collect::<Vec<_>>();
+    let mut index = 0;
+    while index < chars.len() {
+        let character = chars[index];
+        if let Some(delimiter) = quote {
+            rendered.push(character);
+            if character == delimiter {
+                quote = None;
+            } else if character == '\\' && index + 1 < chars.len() {
+                index += 1;
+                rendered.push(chars[index]);
+            }
+            index += 1;
+            continue;
+        }
+        if matches!(character, '\'' | '"' | '`') {
+            quote = Some(character);
+            rendered.push(character);
+            index += 1;
+            continue;
+        }
+        if character.is_ascii_alphabetic() || character == '_' || character == '$' {
+            let start = index;
+            index += 1;
+            while index < chars.len()
+                && (chars[index].is_ascii_alphanumeric() || matches!(chars[index], '_' | '$'))
+            {
+                index += 1;
+            }
+            let identifier = chars[start..index].iter().collect::<String>();
+            if schema.columns.contains_key(&identifier) {
+                rendered.push('`');
+                rendered.push_str(&identifier);
+                rendered.push('`');
+            } else {
+                rendered.push_str(&identifier);
+            }
+            continue;
+        }
+        rendered.push(character);
+        index += 1;
+    }
+    rendered
 }
 
 fn render_index_columns(columns: &[String], prefix_lengths: Option<&Vec<Option<u32>>>) -> String {
