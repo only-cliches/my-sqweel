@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "id": "grouping_rollup_join_revenue",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "JiveGroup/JiveDBApp",
+      "commit": "8bc3a21d721115ebf262dfae3c45a580494b5ace",
+      "path": "db/seeds/mysql/queries.sql",
+      "url": "https://github.com/JiveGroup/JiveDBApp/blob/8bc3a21d721115ebf262dfae3c45a580494b5ace/db/seeds/mysql/queries.sql",
+      "sha256": "42387d26d3b503ce4b1fb0957502778e50ed80cb9d43e43c48058175362e920b",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "db/seeds/mysql/queries.sql:239-249",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A multi-join revenue report groups by two dimensions with WITH ROLLUP and uses GROUPING() inside CASE expressions to label detail, subtotal, and grand-total rows.",
+      "mysql_mariadb_translation": "Reauthored as a catalog revenue matrix. Orders join line items, products, and categories; COUNT(DISTINCT) counts orders, ROUND computes revenue, and MariaDB-compatible NULL checks in CASE label category and status rollup levels because the grouped dimensions are NOT NULL. The source schema, identifiers, values, and application context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "rollup-null-labels",
+    "with-rollup",
+    "multi-table-join",
+    "count-distinct",
+    "rounded-expression",
+    "case-labels",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Two categories and two order states create detail rows, category subtotals, and one grand total. Order 9001 has two line items so COUNT(DISTINCT order_id) differs from line count; revenue uses quantity times unit price.",
+  "determinism_notes": "Order IDs, line IDs, category names, status values, quantities, prices, grouping dimensions, rollup labels, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE revenue_orders (order_id INT PRIMARY KEY, order_status VARCHAR(16) NOT NULL)",
+    "CREATE TABLE revenue_lines (line_id INT PRIMARY KEY, order_id INT NOT NULL, product_id INT NOT NULL, quantity INT NOT NULL, unit_price DECIMAL(10,2) NOT NULL)",
+    "CREATE TABLE revenue_products (product_id INT PRIMARY KEY, category_id INT NOT NULL, product_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE revenue_categories (category_id INT PRIMARY KEY, category_name VARCHAR(32) NOT NULL)",
+    "INSERT INTO revenue_orders VALUES (9001, 'paid'), (9002, 'pending'), (9003, 'paid')",
+    "INSERT INTO revenue_lines VALUES (1, 9001, 101, 2, 12.50), (2, 9001, 102, 1, 5.00), (3, 9002, 103, 3, 8.00), (4, 9003, 104, 1, 20.00)",
+    "INSERT INTO revenue_products VALUES (101, 1, 'notebook'), (102, 1, 'marker'), (103, 2, 'mug'), (104, 2, 'folder')",
+    "INSERT INTO revenue_categories VALUES (1, 'stationery'), (2, 'deskware')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT CASE WHEN c.category_name IS NULL THEN '(all categories)' ELSE c.category_name END AS category_label, CASE WHEN o.order_status IS NULL THEN '(all statuses)' ELSE o.order_status END AS status_label, COUNT(DISTINCT o.order_id) AS order_count, ROUND(SUM(rl.quantity * rl.unit_price), 2) AS revenue_total FROM revenue_orders AS o JOIN revenue_lines AS rl ON rl.order_id = o.order_id JOIN revenue_products AS p ON p.product_id = rl.product_id JOIN revenue_categories AS c ON c.category_id = p.category_id GROUP BY c.category_name, o.order_status WITH ROLLUP",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT CASE WHEN c.category_name IS NULL THEN '(all categories)' ELSE c.category_name END AS category_label, CASE WHEN o.order_status IS NULL THEN '(all statuses)' ELSE o.order_status END AS status_label, COUNT(DISTINCT o.order_id) AS order_count, ROUND(SUM(rl.quantity * rl.unit_price), 2) AS revenue_total FROM revenue_orders AS o JOIN revenue_lines AS rl ON rl.order_id = o.order_id JOIN revenue_products AS p ON p.product_id = rl.product_id JOIN revenue_categories AS c ON c.category_id = p.category_id GROUP BY c.category_name, o.order_status WITH ROLLUP",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT order_id, order_status FROM revenue_orders ORDER BY order_id",
+      "ordered": true
+    }
+  ]
+}
