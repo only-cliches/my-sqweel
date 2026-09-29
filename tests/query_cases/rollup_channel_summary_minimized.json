@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "rollup_channel_summary_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "AgentKazy/mysql-course",
+      "commit": "20b7c2d2d1f300037554c8136a084f8498c222e6",
+      "path": "267. WITH ROLLUP.sql",
+      "url": "https://github.com/AgentKazy/mysql-course/blob/20b7c2d2d1f300037554c8136a084f8498c222e6/267.%20WITH%20ROLLUP.sql",
+      "sha256": "4d78733f71a49c38a8c9cf06a4644423f663fa9804f04333a605673e6dadf789",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "267. WITH ROLLUP.sql: final grouped review query",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped aggregate uses WITH ROLLUP to emit a detail row, a dimension subtotal, and a grand total.",
+      "mysql_mariadb_translation": "Reduced to two independently authored regional channel rows while retaining the MariaDB rollup hierarchy, NULL subtotal markers, derived outer query, and deterministic ordering."
+    },
+    "independently_authored": true,
+    "minimized_from": "rollup_channel_summary"
+  },
+  "features": ["with-rollup", "grouped-aggregate", "subtotal-rows", "grand-total-row", "null-rollup-markers", "derived-table", "minimized-regression", "deterministic-order"],
+  "fixture_notes": "One north web row and one south store row produce two detail rows, two regional subtotals, and one grand total.",
+  "determinism_notes": "Region and channel labels, quantities, rollup hierarchy, and outer ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE channel_sales (sale_id INT PRIMARY KEY, region_code VARCHAR(16) NOT NULL, channel_code VARCHAR(16) NOT NULL, unit_count INT NOT NULL)",
+    "INSERT INTO channel_sales VALUES (991, 'north', 'web', 4), (992, 'south', 'store', 2)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT region_code, channel_code, total_units FROM (SELECT region_code, channel_code, SUM(unit_count) AS total_units FROM channel_sales GROUP BY region_code, channel_code WITH ROLLUP) AS rollup_summary ORDER BY region_code IS NULL, region_code, channel_code IS NULL, channel_code",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}

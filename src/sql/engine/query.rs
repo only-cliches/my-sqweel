@@ -2975,13 +2975,15 @@ impl RawEngine {
                 };
                 let mut metadata =
                     self.expression_metadata(inner, inner_expr, inner_name, first_row);
+                if eval::has_rollup_group_by(inner) {
+                    metadata.nullable = true;
+                }
                 metadata.nullable |= self.set_operation_column_nullable(
                     &subquery.body,
                     &alias.columns,
                     column,
                     first_row,
                 );
-                metadata.table = alias.name.value.clone();
                 return Some(metadata);
             }
         }

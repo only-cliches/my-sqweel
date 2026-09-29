@@ -4901,31 +4901,49 @@ impl EmptyStringFallback for String {
 
 fn rewrite_group_by_with_rollup(sql: &str) -> String {
     let upper = sql.to_ascii_uppercase();
-    let mut cursor = 0;
-    let mut pending_group = None;
+    let bytes = upper.as_bytes();
+    let is_keyword_at = |index: usize, keyword: &[u8]| {
+        index + keyword.len() <= bytes.len()
+            && bytes[index..index + keyword.len()].eq_ignore_ascii_case(keyword)
+            && (index == 0
+                || !(bytes[index - 1].is_ascii_alphanumeric() || bytes[index - 1] == b'_'))
+            && (index + keyword.len() == bytes.len()
+                || !(bytes[index + keyword.len()].is_ascii_alphanumeric()
+                    || bytes[index + keyword.len()] == b'_'))
+    };
+    let mut pending_groups = vec![None];
     let mut replacements = Vec::new();
-    while cursor < upper.len() {
-        let group =
-            find_top_level_keyword(&upper[cursor..], "GROUP BY").map(|offset| cursor + offset);
-        let rollup =
-            find_top_level_keyword(&upper[cursor..], "WITH ROLLUP").map(|offset| cursor + offset);
-        match (group, rollup) {
-            (Some(group), Some(rollup)) if group < rollup => {
-                pending_group = Some(group);
-                cursor = group + "GROUP BY".len();
-            }
-            (Some(_), Some(rollup)) | (None, Some(rollup)) => {
-                if let Some(group) = pending_group.take() {
-                    replacements.push((group, rollup));
+    let mut quote = None;
+    let mut index = 0usize;
+    while index < bytes.len() {
+        let character = bytes[index] as char;
+        match quote {
+            Some(current) if character == current => quote = None,
+            Some(_) => {}
+            None => match character {
+                '\'' | '"' | '`' => quote = Some(character),
+                '(' => pending_groups.push(None),
+                ')' => {
+                    if pending_groups.len() > 1 {
+                        pending_groups.pop();
+                    }
                 }
-                cursor = rollup + "WITH ROLLUP".len();
-            }
-            (Some(group), None) => {
-                pending_group = Some(group);
-                cursor = group + "GROUP BY".len();
-            }
-            (None, None) => break,
+                _ if is_keyword_at(index, b"GROUP BY") => {
+                    if let Some(group) = pending_groups.last_mut() {
+                        *group = Some(index);
+                    }
+                    index += "GROUP BY".len() - 1;
+                }
+                _ if is_keyword_at(index, b"WITH ROLLUP") => {
+                    if let Some(group) = pending_groups.last_mut().and_then(Option::take) {
+                        replacements.push((group, index));
+                    }
+                    index += "WITH ROLLUP".len() - 1;
+                }
+                _ => {}
+            },
         }
+        index += 1;
     }
     let mut rewritten = sql.to_string();
     for (group, rollup) in replacements.into_iter().rev() {

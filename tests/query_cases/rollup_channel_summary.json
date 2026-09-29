@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "id": "rollup_channel_summary",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "AgentKazy/mysql-course",
+      "commit": "20b7c2d2d1f300037554c8136a084f8498c222e6",
+      "path": "267. WITH ROLLUP.sql",
+      "url": "https://github.com/AgentKazy/mysql-course/blob/20b7c2d2d1f300037554c8136a084f8498c222e6/267.%20WITH%20ROLLUP.sql",
+      "sha256": "4d78733f71a49c38a8c9cf06a4644423f663fa9804f04333a605673e6dadf789",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "267. WITH ROLLUP.sql: final grouped review query",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL grouped aggregate uses WITH ROLLUP to emit detail rows, dimension subtotals, and a grand total with NULL markers for rolled-up dimensions.",
+      "mysql_mariadb_translation": "Reauthored as a channel-volume report. Two-dimensional regional sales are aggregated with WITH ROLLUP, then a derived outer query orders detail rows before regional subtotals and the grand total; source tables, labels, values, and review context are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["with-rollup", "grouped-aggregate", "subtotal-rows", "grand-total-row", "null-rollup-markers", "derived-table", "deterministic-order"],
+  "fixture_notes": "North has web and store activity, while south has web and store activity. The rollup produces four detail rows, one subtotal per region, and one grand total; the outer ordering makes detail/subtotal/grand-total hierarchy explicit.",
+  "determinism_notes": "Region and channel labels, quantities, rollup hierarchy, and outer ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE channel_sales (sale_id INT PRIMARY KEY, region_code VARCHAR(16) NOT NULL, channel_code VARCHAR(16) NOT NULL, unit_count INT NOT NULL)",
+    "INSERT INTO channel_sales VALUES (901, 'north', 'store', 3), (902, 'north', 'web', 4), (903, 'south', 'store', 2), (904, 'south', 'web', 5)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT region_code, channel_code, total_units FROM (SELECT region_code, channel_code, SUM(unit_count) AS total_units FROM channel_sales GROUP BY region_code, channel_code WITH ROLLUP) AS rollup_summary ORDER BY region_code IS NULL, region_code, channel_code IS NULL, channel_code",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
