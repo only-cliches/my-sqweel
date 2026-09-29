@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "id": "alter_unique_index_if_not_exists_accounts",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "lirantal/daloradius",
+      "commit": "0314ef0ddbb7474843a00f36e0fc4b7a6363c98b",
+      "path": "contrib/db/migrations/2026-09-operator-ldap.sql",
+      "url": "https://github.com/lirantal/daloradius/blob/0314ef0ddbb7474843a00f36e0fc4b7a6363c98b/contrib/db/migrations/2026-09-operator-ldap.sql",
+      "sha256": "cf2db99a1e4cfe82f317061656205df5a4aa648845ccd3d5b4402a74007fea2a",
+      "source_dialect": "mariadb"
+    },
+    "inspiration": {
+      "source_location": "contrib/db/migrations/2026-09-operator-ldap.sql:12-24",
+      "source_dialect": "mariadb",
+      "observed_pattern": "A MariaDB migration adds nullable identity columns and then creates a named unique index conditionally so existing installations can be upgraded without duplicate-index failures.",
+      "mysql_mariadb_translation": "Reauthored as an independent account-directory migration. A nullable external reference receives a conditional unique index, repeated index creation is idempotent, two NULL references remain legal under unique-index semantics, and information_schema plus ordered reads verify the resulting metadata and rows. The source schema, columns, values, and LDAP application context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "alter-table-add-unique-index-if-not-exists",
+    "nullable-unique-semantics",
+    "idempotent-ddl",
+    "information-schema",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Account 901 has an external reference, while accounts 902 and 903 retain NULL references. The conditional unique index must be created and safely reapplied; the two NULL values remain valid and all account rows remain unchanged.",
+  "determinism_notes": "Account IDs, references, index metadata, and ordering are fixed; metadata is ordered by index name and sequence, account rows by primary key, and no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE account_directory (account_id INT PRIMARY KEY, account_label VARCHAR(32) NOT NULL, external_ref VARCHAR(48) NULL, account_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO account_directory (account_id, account_label, external_ref, account_state) VALUES (901, 'north-ops', 'ext-north-901', 'active'), (902, 'south-ops', NULL, 'active'), (903, 'archive-ops', NULL, 'suspended')"
+  ],
+  "steps": [
+    {
+      "sql": "ALTER TABLE account_directory ADD UNIQUE INDEX IF NOT EXISTS account_external_ref_uq (external_ref)",
+      "ordered": true
+    },
+    {
+      "sql": "ALTER TABLE account_directory ADD UNIQUE INDEX IF NOT EXISTS account_external_ref_uq (external_ref)",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT table_name, index_name, non_unique, seq_in_index, column_name FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = 'account_directory' AND index_name = 'account_external_ref_uq' ORDER BY index_name, seq_in_index",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT account_id, account_label, external_ref, account_state FROM account_directory ORDER BY account_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
