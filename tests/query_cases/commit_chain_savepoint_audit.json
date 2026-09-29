@@ -1,0 +1,87 @@
+{
+  "version": 1,
+  "id": "commit_chain_savepoint_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "j-developer-days/java_small_utils",
+      "commit": "6bc72a6af4b4b5a9dadc1a01036d24e88fc0a1b0",
+      "path": "java_utils/useful_utils/db-performance/src/test/resources/transactions_with_savepoint.sql",
+      "url": "https://github.com/j-developer-days/java_small_utils/blob/6bc72a6af4b4b5a9dadc1a01036d24e88fc0a1b0/java_utils/useful_utils/db-performance/src/test/resources/transactions_with_savepoint.sql",
+      "sha256": "a5e15397c6cdaa5ac711d9081d67a568e704457a56b3f6b9bdfb823bfef17da7",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "transactions_with_savepoint.sql:1-19, first COMMIT AND CHAIN scenario",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A transaction commits its initial work with COMMIT AND CHAIN, continues in a new transaction, then uses a savepoint to roll back one later insert while retaining a subsequent insert before the final commit.",
+      "mysql_mariadb_translation": "Reauthored as a release-event ledger. The initial seeded event is deleted and committed with COMMIT AND CHAIN, the chained transaction records one event, rolls back a provisional event to a savepoint, records a replacement event, and commits the final state. The source table, names, values, and teaching scenario are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "transaction",
+    "commit-and-chain",
+    "savepoint",
+    "rollback-to-savepoint",
+    "intermediate-state",
+    "commit",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Event 700 is removed and committed before the chained transaction begins, so the intermediate read after COMMIT AND CHAIN must be empty. Event 701 survives the chained transaction; provisional event 702 is undone by the savepoint rollback; replacement event 703 survives the final commit.",
+  "determinism_notes": "Event IDs, labels, transaction boundaries, savepoint name, and final ordering are fixed; one connection executes the statements sequentially with no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE release_events (event_id INT PRIMARY KEY, event_code VARCHAR(24) NOT NULL, event_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO release_events VALUES (700, 'seed-release', 'archived')"
+  ],
+  "steps": [
+    {
+      "sql": "START TRANSACTION",
+      "ordered": false
+    },
+    {
+      "sql": "DELETE FROM release_events WHERE event_id = 700",
+      "ordered": false
+    },
+    {
+      "sql": "COMMIT AND CHAIN",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT event_id, event_code, event_state FROM release_events ORDER BY event_id",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO release_events VALUES (701, 'published-release', 'published')",
+      "ordered": false
+    },
+    {
+      "sql": "SAVEPOINT after_published",
+      "ordered": false
+    },
+    {
+      "sql": "INSERT INTO release_events VALUES (702, 'provisional-release', 'draft')",
+      "ordered": false
+    },
+    {
+      "sql": "ROLLBACK TO SAVEPOINT after_published",
+      "ordered": false
+    },
+    {
+      "sql": "INSERT INTO release_events VALUES (703, 'replacement-release', 'published')",
+      "ordered": false
+    },
+    {
+      "sql": "COMMIT",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT event_id, event_code, event_state FROM release_events ORDER BY event_id",
+      "ordered": true
+    }
+  ]
+}
