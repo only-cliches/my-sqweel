@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "id": "recursive_json_slot_manifest",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "TabularisDB/tabularis",
+      "commit": "ff4c5e462179e053a8687c5851bd53ecf2811fc8",
+      "path": "demo/init/mysql/03-json-demo.sql",
+      "url": "https://github.com/TabularisDB/tabularis/blob/ff4c5e462179e053a8687c5851bd53ecf2811fc8/demo/init/mysql/03-json-demo.sql",
+      "sha256": "3801b4221140a1e9ad1599aee76c8cc95fbfb8daa3df067042aec3a733875878",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "demo/init/mysql/03-json-demo.sql:61-77",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A recursive CTE generates a bounded sequence and a JSON_ARRAYAGG of JSON_OBJECT rows materializes the sequence as one structured JSON value.",
+      "mysql_mariadb_translation": "Reauthored as a slot-manifest report. Each fixed manifest request expands to its requested slot count, JSON_ARRAYAGG serializes ordered JSON_OBJECT records, and COUNT exposes the generated cardinality; the source schema, labels, payload values, and performance-demo context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["recursive-cte", "json-arrayagg", "json-object", "derived-sequence", "aggregate-local-ordering", "deterministic-order"],
+  "fixture_notes": "Manifest 41 expands three slots and manifest 42 expands one slot; each JSON object carries the generated slot number, a derived code, and a parity flag.",
+  "determinism_notes": "Manifest IDs, slot bounds, JSON keys, generated labels, aggregate ordering, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE manifest_requests (manifest_id INT PRIMARY KEY, slot_limit INT NOT NULL)",
+    "INSERT INTO manifest_requests VALUES (41, 3), (42, 1)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH RECURSIVE generated_slots (manifest_id, slot_no, slot_limit) AS (SELECT manifest_id, 1, slot_limit FROM manifest_requests UNION ALL SELECT manifest_id, slot_no + 1, slot_limit FROM generated_slots WHERE slot_no < slot_limit) SELECT manifest_id, JSON_ARRAYAGG(JSON_OBJECT('slot', slot_no, 'code', CONCAT('unit-', slot_no), 'enabled', slot_no % 2 = 0) ORDER BY slot_no) AS slot_manifest, COUNT(*) AS slot_count FROM generated_slots GROUP BY manifest_id ORDER BY manifest_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
