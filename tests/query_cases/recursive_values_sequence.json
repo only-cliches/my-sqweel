@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "id": "recursive_values_sequence",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "clapdb/pg_regress_input",
+      "commit": "e9722c2377b0a491256f9f8001777745735ee537",
+      "path": "sql/with.sql",
+      "url": "https://github.com/clapdb/pg_regress_input/blob/e9722c2377b0a491256f9f8001777745735ee537/sql/with.sql",
+      "sha256": "8d7e2527d0b9d202c92f8b62406ed95ceeffa30c9f1e02ce7f9025e5deea63a3",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/with.sql:17-25",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A recursive CTE uses a VALUES row constructor as its anchor, extends rows with UNION ALL, and consumes the sequence in an aggregate query.",
+      "mysql_mariadb_translation": "Reauthored as a deterministic checkpoint sequence. A VALUES anchor starts at checkpoint 3, recursive arithmetic emits checkpoints through 6, and the ordered projection exposes each generated value and square. PostgreSQL-specific fixtures, random functions, and source identifiers are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["recursive-cte", "values-anchor", "union-all", "recursive-arithmetic", "deterministic-order"],
+  "fixture_notes": "The sequence starts at checkpoint 3 and ends at 6; each recursive row increments by one and exposes a deterministic square.",
+  "determinism_notes": "The anchor, recursion bound, arithmetic expression, and ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "WITH RECURSIVE checkpoints(checkpoint_no) AS (VALUES (3) UNION ALL SELECT checkpoint_no + 1 FROM checkpoints WHERE checkpoint_no < 6) SELECT checkpoint_no, checkpoint_no * checkpoint_no AS checkpoint_square FROM checkpoints ORDER BY checkpoint_no",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
