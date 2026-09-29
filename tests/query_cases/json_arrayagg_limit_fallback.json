@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "json_arrayagg_limit_fallback",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "MerueMq-Dev/sql_practice",
+      "commit": "bcf5d9a42c730f4750a3f9115f95db6de9889609",
+      "path": "Dwarf-Fortress_14.sql",
+      "url": "https://github.com/MerueMq-Dev/sql_practice/blob/bcf5d9a42c730f4750a3f9115f95db6de9889609/Dwarf-Fortress_14.sql",
+      "sha256": "93d0539281cad338c18e7261e4af29d1a009412406e9ec7d5db9a53e2ec11cc2",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Dwarf-Fortress_14.sql:106-114",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped MySQL report wraps an ordered, bounded JSON_ARRAYAGG in COALESCE(JSON_ARRAYAGG(...), JSON_ARRAY()) to provide an empty-array fallback.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored workspace task summary. A correlated subquery serializes the two highest-priority task labels per workspace, while a workspace with no tasks receives JSON_ARRAY() instead of SQL NULL; the source schema, identifiers, values, and game-report context are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "json-arrayagg",
+    "aggregate-ordering",
+    "aggregate-limit",
+    "coalesce-json-array-fallback",
+    "correlated-subquery",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Workspace 41 has three tasks ranked 90, 80, and 70, so only the first two labels are returned. Workspace 42 has no tasks and must receive an empty JSON array through COALESCE.",
+  "determinism_notes": "Workspace IDs, task IDs, labels, priorities, aggregate ordering, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE task_workspaces (workspace_id INT PRIMARY KEY, workspace_code VARCHAR(24) NOT NULL)",
+    "CREATE TABLE workspace_tasks (task_id INT PRIMARY KEY, workspace_id INT NOT NULL, task_label VARCHAR(32) NOT NULL, priority INT NOT NULL)",
+    "INSERT INTO task_workspaces VALUES (41, 'alpha'), (42, 'empty')",
+    "INSERT INTO workspace_tasks VALUES (4101, 41, 'review', 90), (4102, 41, 'approve', 80), (4103, 41, 'archive', 70)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT w.workspace_id, w.workspace_code, COALESCE((SELECT JSON_ARRAYAGG(t.task_label ORDER BY t.priority DESC, t.task_id ASC LIMIT 2) FROM workspace_tasks AS t WHERE t.workspace_id = w.workspace_id), JSON_ARRAY()) AS top_tasks FROM task_workspaces AS w ORDER BY w.workspace_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
