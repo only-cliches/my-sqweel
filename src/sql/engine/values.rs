@@ -132,6 +132,7 @@ pub(super) fn eval_insert_update_value(
             expr,
             pattern,
             negated,
+            escape_char,
             ..
         } => {
             let case_sensitive = matches!(
@@ -143,11 +144,13 @@ pub(super) fn eval_insert_update_value(
             );
             let target = eval_insert_update_value(expr, existing, incoming)?;
             let pattern = eval_insert_update_value(pattern, existing, incoming)?;
+            let escape = escape_char.clone().map(Value::String);
             Ok(eval_like_values_with_case(
                 target,
                 pattern,
                 *negated,
                 case_sensitive,
+                escape,
             ))
         }
         Expr::RLike {

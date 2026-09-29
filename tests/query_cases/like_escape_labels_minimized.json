@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "id": "like_escape_labels_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "like_escape_labels",
+    "source": {
+      "kind": "github",
+      "repository": "AmirNBA9/SQLAssistant",
+      "commit": "03ef2bd105c4e45af6271487c580cd1496d14517",
+      "path": "Query/01. Select.sql",
+      "url": "https://github.com/AmirNBA9/SQLAssistant/blob/03ef2bd105c4e45af6271487c580cd1496d14517/Query/01.%20Select.sql",
+      "sha256": "cb618bc4650e02d12b4fbc57fe7211b1088200756fca78f68d02b8e576e111ff",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from Query/01. Select.sql:531",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "The smallest semantic probe uses a custom ESCAPE character to make an underscore literal in a LIKE pattern.",
+      "mysql_mariadb_translation": "Reduced to scalar LIKE projections over fixed string literals, removing table setup, ordering, and the companion NOT LIKE query while retaining the custom escape semantics."
+    },
+    "independently_authored": true
+  },
+  "features": ["like-escape", "literal-wildcard", "minimized-regression"],
+  "fixture_notes": "The hash escape makes the underscore literal, so the first projection matches the underscore label and the second rejects a hyphen label.",
+  "determinism_notes": "Only fixed string literals and a fixed escape character are used; there are no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT 'zone_alpha_01' LIKE 'zone#_%' ESCAPE '#' AS underscore_match, 'zone-alpha-03' LIKE 'zone#_%' ESCAPE '#' AS hyphen_match",
+      "ordered": true
+    }
+  ]
+}

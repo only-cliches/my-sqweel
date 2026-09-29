@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "id": "like_escape_labels",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "AmirNBA9/SQLAssistant",
+      "commit": "03ef2bd105c4e45af6271487c580cd1496d14517",
+      "path": "Query/01. Select.sql",
+      "url": "https://github.com/AmirNBA9/SQLAssistant/blob/03ef2bd105c4e45af6271487c580cd1496d14517/Query/01.%20Select.sql",
+      "sha256": "cb618bc4650e02d12b4fbc57fe7211b1088200756fca78f68d02b8e576e111ff",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Query/01. Select.sql:531",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A LIKE predicate declares a non-default ESCAPE character so a wildcard-looking underscore is matched literally inside a product-name pattern.",
+      "mysql_mariadb_translation": "Reauthored as a label-index audit. A hash escape makes the underscore literal while the trailing percent remains a wildcard; a second NOT LIKE predicate uses the same escape to exclude labels with a literal marker. The source product schema, names, and values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["like-escape", "literal-wildcard", "not-like", "deterministic-order"],
+  "fixture_notes": "The hash escape makes the underscore in 'zone#_%' literal while the final percent remains a wildcard. Labels with a literal underscore match; labels with a hyphen or a different prefix do not.",
+  "determinism_notes": "Label IDs, fixed text, escape characters, predicates, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE label_index (label_id INT PRIMARY KEY, label_text VARCHAR(32) NOT NULL)",
+    "INSERT INTO label_index VALUES (1, 'zone_alpha_01'), (2, 'zone_alpha_02'), (3, 'zone-alpha-03'), (4, 'zone_alpha_backup'), (5, 'zone_beta_01')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT label_id, label_text FROM label_index WHERE label_text LIKE 'zone#_%' ESCAPE '#' ORDER BY label_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT label_id, label_text FROM label_index WHERE label_text NOT LIKE 'zone#_%' ESCAPE '#' ORDER BY label_id",
+      "ordered": true
+    }
+  ]
+}

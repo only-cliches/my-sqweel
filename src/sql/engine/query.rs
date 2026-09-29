@@ -4274,6 +4274,7 @@ impl RawEngine {
                 expr,
                 pattern,
                 negated,
+                escape_char,
                 ..
             } => {
                 let case_sensitive = matches!(
@@ -4285,11 +4286,13 @@ impl RawEngine {
                 );
                 let target = self.eval_expr_ctx(expr, data, last_insert_id)?;
                 let pattern = self.eval_expr_ctx(pattern, data, last_insert_id)?;
+                let escape = escape_char.clone().map(Value::String);
                 Ok(eval_like_values_with_case(
                     target,
                     pattern,
                     *negated,
                     case_sensitive,
+                    escape,
                 ))
             }
             Expr::RLike {

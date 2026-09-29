@@ -74,9 +74,7 @@ impl Visitor for SupportValidator {
             Expr::UnaryOp { op, .. } if !supported_unary_operator(op) => {
                 unsupported(format!("unary operator `{op}`"))
             }
-            Expr::Like {
-                any, escape_char, ..
-            } if *any || escape_char.is_some() => unsupported("LIKE ANY/custom ESCAPE"),
+            Expr::Like { any, .. } if *any => unsupported("LIKE ANY"),
             Expr::Function(function)
                 if function.filter.is_some()
                     || function.null_treatment.is_some()

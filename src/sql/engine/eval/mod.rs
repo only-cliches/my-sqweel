@@ -2891,33 +2891,25 @@ pub(super) fn eval_like_values_with_case(
     pattern: Value,
     negated: bool,
     case_sensitive: bool,
+    escape: Option<Value>,
 ) -> Value {
     if target == Value::Null || pattern == Value::Null {
         return Value::Null;
     }
-    let hit = if case_sensitive {
-        like_match_case_sensitive(
-            &json_scalar_to_string(&target),
-            &json_scalar_to_string(&pattern),
-        )
-    } else {
-        like_match(
-            &json_scalar_to_string(&target),
-            &json_scalar_to_string(&pattern),
-        )
-    };
+    let escape = escape
+        .as_ref()
+        .and_then(|value| json_scalar_to_string(value).chars().next())
+        .unwrap_or('\\');
+    let hit = like_match_impl(
+        &json_scalar_to_string(&target),
+        &json_scalar_to_string(&pattern),
+        case_sensitive,
+        escape,
+    );
     Value::Bool(if negated { !hit } else { hit })
 }
 
-pub(super) fn like_match_case_sensitive(target: &str, pattern: &str) -> bool {
-    like_match_impl(target, pattern, true)
-}
-
-pub(super) fn like_match(target: &str, pattern: &str) -> bool {
-    like_match_impl(target, pattern, false)
-}
-
-fn like_match_impl(target: &str, pattern: &str, case_sensitive: bool) -> bool {
+fn like_match_impl(target: &str, pattern: &str, case_sensitive: bool, escape: char) -> bool {
     #[derive(Clone, Copy)]
     enum LikeToken {
         AnyMany,
@@ -2931,7 +2923,9 @@ fn like_match_impl(target: &str, pattern: &str, case_sensitive: bool) -> bool {
         match ch {
             '%' => tokens.push(LikeToken::AnyMany),
             '_' => tokens.push(LikeToken::AnyOne),
-            '\\' => tokens.push(LikeToken::Literal(chars.next().unwrap_or('\\'))),
+            literal if literal == escape => {
+                tokens.push(LikeToken::Literal(chars.next().unwrap_or(escape)))
+            }
             literal => tokens.push(LikeToken::Literal(literal)),
         }
     }
@@ -3179,6 +3173,7 @@ pub(super) fn eval_expr(
             expr,
             pattern,
             negated,
+            escape_char,
             ..
         } => {
             let case_sensitive = matches!(
@@ -3190,11 +3185,13 @@ pub(super) fn eval_expr(
             );
             let target = eval_expr(expr, data, last_insert_id)?;
             let pattern = eval_expr(pattern, data, last_insert_id)?;
+            let escape = escape_char.clone().map(Value::String);
             Ok(eval_like_values_with_case(
                 target,
                 pattern,
                 *negated,
                 case_sensitive,
+                escape,
             ))
         }
         Expr::RLike {
