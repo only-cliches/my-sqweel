@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "delete_quick_ignore_returning",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "repository": "antlr/grammars-v4",
+      "commit": "e199816b3f1a7a49ea1ad84fb6b87c382ea36a33",
+      "path": "sql/mariadb/examples/fast/dml_delete.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/e199816b3f1a7a49ea1ad84fb6b87c382ea36a33/sql/mariadb/examples/fast/dml_delete.sql",
+      "sha256": "62329095424f65c4213801a8cc24b7525a679590e941b67624790f4efe462ee8",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/mariadb/examples/fast/dml_delete.sql:5",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "MariaDB DELETE syntax combines QUICK and IGNORE modifiers on a filtered table deletion.",
+      "mysql_mariadb_translation": "Reauthored as an independent MyISAM alert purge. DELETE QUICK IGNORE selects the highest-urgency expired alerts through deterministic ORDER BY and LIMIT, returns the deleted rows, and leaves active and lower-priority alerts for a final-state read; the source table, expressions, identifiers, and values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "delete-quick",
+    "delete-ignore",
+    "ordered-delete",
+    "delete-limit",
+    "returning",
+    "myisam-table",
+    "deterministic-final-state"
+  ],
+  "fixture_notes": "Expired alerts 601, 602, and 603 have urgency 90, 80, and 70. QUICK IGNORE with LIMIT 2 must return and remove the two highest-urgency expired alerts; active alert 701 and lower-priority expired alert 603 remain.",
+  "determinism_notes": "Alert IDs and urgency values are fixed, ORDER BY urgency DESC plus alert ID ASC determines the bounded deletion, and final rows are ordered by alert ID. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE quick_alert_queue (alert_id INT PRIMARY KEY, alert_label VARCHAR(32) NOT NULL, alert_state VARCHAR(16) NOT NULL, urgency INT NOT NULL) ENGINE=MyISAM",
+    "INSERT INTO quick_alert_queue VALUES (601, 'cache-alert', 'expired', 90), (602, 'index-alert', 'expired', 80), (603, 'log-alert', 'expired', 70), (701, 'active-alert', 'active', 99)"
+  ],
+  "steps": [
+    {
+      "sql": "DELETE QUICK IGNORE FROM quick_alert_queue WHERE alert_state = 'expired' ORDER BY urgency DESC, alert_id ASC LIMIT 2 RETURNING alert_id, alert_label, alert_state, urgency",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT alert_id, alert_label, alert_state, urgency FROM quick_alert_queue ORDER BY alert_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}

@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "delete_quick_ignore_returning_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "repository": "antlr/grammars-v4",
+      "commit": "e199816b3f1a7a49ea1ad84fb6b87c382ea36a33",
+      "path": "sql/mariadb/examples/fast/dml_delete.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/e199816b3f1a7a49ea1ad84fb6b87c382ea36a33/sql/mariadb/examples/fast/dml_delete.sql",
+      "sha256": "62329095424f65c4213801a8cc24b7525a679590e941b67624790f4efe462ee8",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from sql/mariadb/examples/fast/dml_delete.sql:5",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB DELETE QUICK IGNORE statement removes matching rows with the table-level modifiers accepted before FROM.",
+      "mysql_mariadb_translation": "Reduced to one expired MyISAM alert and one bounded DELETE QUICK IGNORE ... RETURNING statement; ordering, multiple rows, and unrelated alert state are removed while the modifier and returned-row contract remains."
+    },
+    "independently_authored": true,
+    "minimized_from": "delete_quick_ignore_returning"
+  },
+  "features": [
+    "delete-quick",
+    "delete-ignore",
+    "returning",
+    "minimized-regression"
+  ],
+  "fixture_notes": "The single expired alert must be returned and deleted by DELETE QUICK IGNORE, leaving an empty final queue.",
+  "determinism_notes": "One fixed MyISAM row and one returned result make the modifier behavior deterministic; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE quick_alert_queue_min (alert_id INT PRIMARY KEY, alert_label VARCHAR(32) NOT NULL, alert_state VARCHAR(16) NOT NULL) ENGINE=MyISAM",
+    "INSERT INTO quick_alert_queue_min VALUES (801, 'single-alert', 'expired')"
+  ],
+  "steps": [
+    {
+      "sql": "DELETE QUICK IGNORE FROM quick_alert_queue_min WHERE alert_state = 'expired' RETURNING alert_id, alert_label, alert_state",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT alert_id, alert_label, alert_state FROM quick_alert_queue_min ORDER BY alert_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
