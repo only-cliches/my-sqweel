@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "id": "capability_mask_make_set",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "repository": "TrinityCore/TrinityCore",
+      "commit": "7fd1b8105496b1e0001b26bb367e576f581588c4",
+      "path": "sql/old/7/world/19061_2019_07_15/2018_09_15_00_world.sql",
+      "url": "https://github.com/TrinityCore/TrinityCore/blob/7fd1b8105496b1e0001b26bb367e576f581588c4/sql/old/7/world/19061_2019_07_15/2018_09_15_00_world.sql",
+      "sha256": "550727ccb5fa6086cc04d2960028e41a299fabe0e2783703b7b48cafd4b50156",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/old/7/world/19061_2019_07_15/2018_09_15_00_world.sql:6-12",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL migration adds a textual column, updates it from an integer bitmask with MAKE_SET, and removes the old mask column.",
+      "mysql_mariadb_translation": "Reauthored as a capability-label migration. An independently authored table receives a nullable summary column, UPDATE computes comma-delimited labels from fixed bitmasks with MAKE_SET, and the final projection checks zero, sparse, high, and NULL masks without copying the source schema, labels, or migration data."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "make-set",
+    "bitmask-label-expansion",
+    "update-expression",
+    "null-propagation",
+    "empty-mask-behavior",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Target 410 has mask 0 and must produce an empty string; target 411 has mask 5 and must produce read,admin; target 412 has mask 18 and must produce write,export; target 413 has mask 31 and must produce all five labels; target 414 has a NULL mask and must remain NULL.",
+  "determinism_notes": "Target IDs, masks, label arguments, and final ordering are fixed; the migration runs serially with no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE deployment_capabilities (target_id INT PRIMARY KEY, target_name VARCHAR(32) NOT NULL, capability_mask INT NULL, capability_summary VARCHAR(128) NULL)",
+    "INSERT INTO deployment_capabilities VALUES (410, 'zero-mask', 0, NULL), (411, 'sparse-read-admin', 5, NULL), (412, 'sparse-write-export', 18, NULL), (413, 'all-capabilities', 31, NULL), (414, 'unknown-mask', NULL, NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE deployment_capabilities SET capability_summary = MAKE_SET(capability_mask, 'read', 'write', 'admin', 'audit', 'export')",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT target_id, target_name, capability_mask, capability_summary FROM deployment_capabilities ORDER BY target_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT target_id, capability_summary FROM deployment_capabilities WHERE capability_mask IS NULL OR capability_mask IN (0, 5, 18, 31) ORDER BY target_id",
+      "ordered": true
+    }
+  ]
+}
