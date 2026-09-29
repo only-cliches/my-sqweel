@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "id": "straight_join_group_concat_audit_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "antlr/grammars-v4",
+      "commit": "e199816b3f1a7a49ea1ad84fb6b87c382ea36a33",
+      "path": "sql/mysql/Oracle/examples/dml_select.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/e199816b3f1a7a49ea1ad84fb6b87c382ea36a33/sql/mysql/Oracle/examples/dml_select.sql",
+      "sha256": "e64c03f67dddb82c3c8131aa3ac0899bedc3ae60d51661d2850218511767fb3a",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/mysql/Oracle/examples/dml_select.sql:120 and 217 (STRAIGHT_JOIN and GROUP_CONCAT examples)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A scalar grouped probe combines STRAIGHT_JOIN with ordered GROUP_CONCAT over matching child rows.",
+      "mysql_mariadb_translation": "Reduced to one independently authored active route and two ready events. The focused query isolates STRAIGHT_JOIN parsing, grouped COUNT, and ordered GROUP_CONCAT without the source corpus schema or extra filter branches."
+    },
+    "independently_authored": true,
+    "focused_variant_of": "straight_join_group_concat_audit"
+  },
+  "features": [
+    "straight-join",
+    "grouped-read",
+    "group-concat",
+    "ordered-aggregate",
+    "focused-variant"
+  ],
+  "fixture_notes": "One active route owns two ready events. The result must count both events and serialize their fixed labels in event-ID order.",
+  "determinism_notes": "Route IDs, event IDs, labels, aggregate ordering, separator, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE audit_routes_min (route_id INT PRIMARY KEY, route_code VARCHAR(24) NOT NULL, route_state VARCHAR(16) NOT NULL)",
+    "CREATE TABLE route_events_min (event_id INT PRIMARY KEY, route_id INT NOT NULL, event_label VARCHAR(32) NOT NULL, event_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO audit_routes_min VALUES (401, 'probe', 'active')",
+    "INSERT INTO route_events_min VALUES (8101, 401, 'first', 'ready'), (8102, 401, 'second', 'ready')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT r.route_code, COUNT(e.event_id) AS ready_events, GROUP_CONCAT(e.event_label ORDER BY e.event_id ASC SEPARATOR '|') AS event_labels FROM audit_routes_min AS r STRAIGHT_JOIN route_events_min AS e ON e.route_id = r.route_id WHERE r.route_state = 'active' AND e.event_state = 'ready' GROUP BY r.route_id, r.route_code ORDER BY r.route_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT r.route_code, COUNT(e.event_id) AS ready_events, GROUP_CONCAT(e.event_label ORDER BY e.event_id ASC SEPARATOR '|') AS event_labels FROM audit_routes_min AS r STRAIGHT_JOIN route_events_min AS e ON e.route_id = r.route_id WHERE r.route_state = 'active' AND e.event_state = 'ready' GROUP BY r.route_id, r.route_code ORDER BY r.route_id",
+      "ordered": true
+    }
+  ]
+}

@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "id": "straight_join_group_concat_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "antlr/grammars-v4",
+      "commit": "e199816b3f1a7a49ea1ad84fb6b87c382ea36a33",
+      "path": "sql/mysql/Oracle/examples/dml_select.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/e199816b3f1a7a49ea1ad84fb6b87c382ea36a33/sql/mysql/Oracle/examples/dml_select.sql",
+      "sha256": "e64c03f67dddb82c3c8131aa3ac0899bedc3ae60d51661d2850218511767fb3a",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/mysql/Oracle/examples/dml_select.sql:120 and 217 (STRAIGHT_JOIN and GROUP_CONCAT examples)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL query corpus exercises STRAIGHT_JOIN join-order syntax alongside ordered GROUP_CONCAT aggregation for serializing related values.",
+      "mysql_mariadb_translation": "Reauthored as a route-event audit. STRAIGHT_JOIN connects active routes to ready events, GROUP_CONCAT orders event labels by event ID with a fixed separator, and grouped counts expose the matching event cardinality; source table names, rows, and corpus context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "straight-join",
+    "grouped-read",
+    "group-concat",
+    "ordered-aggregate",
+    "filtered-join",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Route 301 has two ready events and one ignored event; route 302 has one ready event; inactive route 303 has a ready event but is filtered by the route predicate. The audit must serialize only ready labels in event-ID order and count matching rows.",
+  "determinism_notes": "Route IDs, event IDs, event labels, states, aggregate ordering, separator, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE audit_routes (route_id INT PRIMARY KEY, route_code VARCHAR(24) NOT NULL, route_state VARCHAR(16) NOT NULL)",
+    "CREATE TABLE route_events (event_id INT PRIMARY KEY, route_id INT NOT NULL, event_label VARCHAR(32) NOT NULL, event_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO audit_routes VALUES (301, 'north', 'active'), (302, 'south', 'active'), (303, 'west', 'inactive')",
+    "INSERT INTO route_events VALUES (7001, 301, 'opened', 'ready'), (7002, 301, 'checked', 'ready'), (7003, 301, 'archived', 'held'), (7101, 302, 'opened', 'ready'), (7201, 303, 'opened', 'ready')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT r.route_code, COUNT(e.event_id) AS ready_events, GROUP_CONCAT(e.event_label ORDER BY e.event_id ASC SEPARATOR '|') AS event_labels FROM audit_routes AS r STRAIGHT_JOIN route_events AS e ON e.route_id = r.route_id WHERE r.route_state = 'active' AND e.event_state = 'ready' GROUP BY r.route_id, r.route_code ORDER BY r.route_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT r.route_code, COUNT(e.event_id) AS ready_events, GROUP_CONCAT(e.event_label ORDER BY e.event_id ASC SEPARATOR '|') AS event_labels FROM audit_routes AS r STRAIGHT_JOIN route_events AS e ON e.route_id = r.route_id WHERE r.route_state = 'active' AND e.event_state = 'ready' GROUP BY r.route_id, r.route_code ORDER BY r.route_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT route_id, route_code, route_state FROM audit_routes ORDER BY route_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT event_id, route_id, event_label, event_state FROM route_events ORDER BY event_id",
+      "ordered": true
+    }
+  ]
+}
