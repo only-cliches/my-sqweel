@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "truncate_staging_refresh",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "sraoss/pg_ivm",
+      "commit": "b3ec178a803bbf9333beb558dc704e41113e4bcf",
+      "path": "sql/pg_ivm.sql",
+      "url": "https://github.com/sraoss/pg_ivm/blob/b3ec178a803bbf9333beb558dc704e41113e4bcf/sql/pg_ivm.sql",
+      "sha256": "56ffaa784c79c14c8940f48a597558379555b96df464e50a52a4436c6a8e6156",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/pg_ivm.sql:50, 55, 102, 120, and 731, TRUNCATE statements used to reset base or materialized-view tables",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A maintenance script truncates a populated relational table before loading a fresh deterministic batch, relying on TRUNCATE to remove all prior rows and reset the auto-increment sequence.",
+      "mysql_mariadb_translation": "Reauthored as a staging-batch refresh. A stale staging table is truncated, two new batch rows are inserted, and the final read verifies that old rows disappeared while the auto-increment identifiers restart at one; extension-specific materialized-view objects, source names, and values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["truncate-table", "auto-increment-reset", "staging-refresh", "deterministic-final-state"],
+  "fixture_notes": "The staging table starts with two stale rows using IDs 41 and 42. TRUNCATE must remove both rows and reset the sequence so the refreshed morning and evening batches receive IDs 1 and 2.",
+  "determinism_notes": "The table schema, stale rows, refreshed rows, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE staging_batches (batch_id INT AUTO_INCREMENT PRIMARY KEY, batch_code VARCHAR(16) NOT NULL UNIQUE, batch_state VARCHAR(16) NOT NULL, item_count INT NOT NULL)",
+    "INSERT INTO staging_batches VALUES (41, 'legacy-a', 'stale', 99), (42, 'legacy-b', 'stale', 88)"
+  ],
+  "steps": [
+    {"sql": "TRUNCATE TABLE staging_batches", "ordered": false},
+    {"sql": "INSERT INTO staging_batches (batch_code, batch_state, item_count) VALUES ('morning', 'ready', 12), ('evening', 'ready', 7)", "ordered": false},
+    {"sql": "SELECT batch_id, batch_code, batch_state, item_count FROM staging_batches ORDER BY batch_id", "ordered": true}
+  ],
+  "checks": [
+    {"sql": "SELECT COUNT(*) AS stale_rows FROM staging_batches WHERE batch_state = 'stale'", "ordered": true}
+  ]
+}
