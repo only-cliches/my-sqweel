@@ -1369,6 +1369,7 @@ impl RawEngine {
         parse_sql = rewrite_group_concat_limits_for_parser(&parse_sql);
         parse_sql = rewrite_json_arrayagg_limits_for_parser(&parse_sql);
         parse_sql = rewrite_create_table_ignore_select_for_parser(&parse_sql);
+        parse_sql = rewrite_create_view_security_for_parser(&parse_sql);
         parse_sql = strip_select_modifiers_anywhere(&parse_sql);
         parse_sql = rewrite_set_statement_for_parser(&parse_sql);
         parse_sql = query::strip_explain_index_hints(&parse_sql);
@@ -4234,6 +4235,23 @@ impl RawEngine {
         if upper.starts_with("CREATE DATABASE") || upper.starts_with("CREATE OR REPLACE DATABASE") {
             return Ok(Some(QueryResult::default()));
         }
+        if upper.starts_with("CREATE SQL SECURITY INVOKER VIEW ")
+            || upper.starts_with("CREATE OR REPLACE SQL SECURITY INVOKER VIEW ")
+        {
+            let replace = upper.starts_with("CREATE OR REPLACE ");
+            let prefix = if replace {
+                "CREATE OR REPLACE SQL SECURITY INVOKER VIEW "
+            } else {
+                "CREATE SQL SECURITY INVOKER VIEW "
+            };
+            let normalized_prefix = if replace {
+                "CREATE OR REPLACE VIEW "
+            } else {
+                "CREATE VIEW "
+            };
+            let normalized = format!("{normalized_prefix}{}", &trimmed[prefix.len()..]);
+            return self.execute_compat_statement(&normalized);
+        }
         if upper.starts_with("CREATE VIEW ") || upper.starts_with("CREATE OR REPLACE VIEW ") {
             let replace = upper.starts_with("CREATE OR REPLACE VIEW ");
             let prefix_len = if replace {
@@ -6787,6 +6805,23 @@ fn cast_warning_inputs(sql: &str) -> Vec<(String, String, bool)> {
         cursor = close + 1;
     }
     inputs
+}
+fn rewrite_create_view_security_for_parser(sql: &str) -> String {
+    let trimmed = sql.trim_start();
+    let upper = trimmed.to_ascii_uppercase();
+    let leading = &sql[..sql.len() - trimmed.len()];
+    for (source, target) in [
+        ("CREATE SQL SECURITY INVOKER VIEW ", "CREATE VIEW "),
+        (
+            "CREATE OR REPLACE SQL SECURITY INVOKER VIEW ",
+            "CREATE OR REPLACE VIEW ",
+        ),
+    ] {
+        if upper.starts_with(source) {
+            return format!("{leading}{target}{}", &trimmed[source.len()..]);
+        }
+    }
+    sql.to_string()
 }
 
 fn rewrite_create_table_ignore_select_for_parser(sql: &str) -> String {

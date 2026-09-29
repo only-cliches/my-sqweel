@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "view_sql_security_invoker",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "repository": "hepabolu/mytap",
+      "commit": "adcc0769d71baf0c59ab3c427c92806a838c8b6a",
+      "path": "mytap-compat-mysql.sql",
+      "url": "https://github.com/hepabolu/mytap/blob/adcc0769d71baf0c59ab3c427c92806a838c8b6a/mytap-compat-mysql.sql",
+      "sha256": "ed8f1014592e53b6873bbe45da4d2e8dedcc12e326c72b66ad86dc3f81b5e776",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "mytap-compat-mysql.sql:2",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A view can declare SQL SECURITY INVOKER between CREATE and VIEW, making the view execute with the invoking account's privileges.",
+      "mysql_mariadb_translation": "Reauthored as a small application view over one fixed table, retaining SQL SECURITY INVOKER and verifying ordered view output. The source schema, object names, and rows are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "view",
+    "sql-security-invoker",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The view must be created with INVOKER security and expose the fixed source row through an ordered read. No multiple accounts or privilege grants are required.",
+  "determinism_notes": "One fixed source row, one fixed view definition, and ordered reads use no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE invoker_view_accounts (account_id INT PRIMARY KEY, account_label VARCHAR(16) NOT NULL)",
+    "INSERT INTO invoker_view_accounts VALUES (1201, 'operator')"
+  ],
+  "steps": [
+    {
+      "sql": "CREATE SQL SECURITY INVOKER VIEW invoker_account_view AS SELECT account_id, account_label FROM invoker_view_accounts",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT account_id, account_label FROM invoker_account_view ORDER BY account_id",
+      "ordered": true
+    }
+  ]
+}
