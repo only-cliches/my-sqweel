@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "cte_delete_returning_cleanup",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Hans-Giebenrath/rpg-server",
+      "commit": "d1ea81a9c1eebdd0b98ad27d671eeed4b4634570",
+      "path": "sql/delete.sql",
+      "url": "https://github.com/Hans-Giebenrath/rpg-server/blob/d1ea81a9c1eebdd0b98ad27d671eeed4b4634570/sql/delete.sql",
+      "sha256": "75a28cad7aac8957f0a7bd83ebf9a25e75f09ad781b4ca405a3ed15019fd135a",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/delete.sql:127-133, data-modifying CTE returning deleted permissions",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A PostgreSQL-compatible cleanup uses a CTE around a DELETE RETURNING operation so deleted identifiers can feed a subsequent relational action.",
+      "mysql_mariadb_translation": "Reauthored as a MariaDB-compatible cleanup report. A nested CTE selects expired cold-queue item identifiers, DELETE removes those items and RETURNING exposes the deleted rows directly, while the final read proves newer, active, and other-queue items remain; routines, temporary tables, source identifiers, and source values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["cte-delete", "delete-returning", "dml-subquery", "filtered-cleanup", "dml-result-rows", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "Item 701 is expired in the cold queue before the cutoff and is deleted and returned. Item 702 is newer, item 703 is active despite an old expiry date, and item 704 is expired in another queue; all remain.",
+  "determinism_notes": "Item IDs, queues, states, expiry dates, cutoff, returned columns, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE cleanup_items (item_id INT PRIMARY KEY, item_label VARCHAR(32) NOT NULL, queue_name VARCHAR(16) NOT NULL, item_state VARCHAR(16) NOT NULL, expires_on DATE NOT NULL)",
+    "INSERT INTO cleanup_items VALUES (701, 'cold-report', 'cold', 'expired', '2024-11-30'), (702, 'cold-index', 'cold', 'expired', '2025-02-01'), (703, 'cold-live', 'cold', 'active', '2024-10-15'), (704, 'hot-report', 'hot', 'expired', '2024-10-01')"
+  ],
+  "steps": [
+    {
+      "sql": "DELETE FROM cleanup_items WHERE item_id IN (WITH eligible_items AS (SELECT item_id FROM cleanup_items WHERE queue_name = 'cold' AND item_state = 'expired' AND expires_on < '2025-01-01') SELECT item_id FROM eligible_items) RETURNING item_id, item_label, item_state",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT item_id, item_label, queue_name, item_state, expires_on FROM cleanup_items ORDER BY item_id",
+      "ordered": true
+    }
+  ]
+}
