@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "statement_setting_grouped_queue",
+  "provenance": {
+    "kind": "github-sql-pattern",
+    "source": {
+      "kind": "github",
+      "repository": "antlr/grammars-v4",
+      "commit": "e199816b3f1a7a49ea1ad84fb6b87c382ea36a33",
+      "path": "sql/mariadb/examples/fast/dml_select.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/e199816b3f1a7a49ea1ad84fb6b87c382ea36a33/sql/mariadb/examples/fast/dml_select.sql",
+      "sha256": "b9128ffb5b50bea79c534bc24a127d9d626fd2d21be8cb0a45deafd8d6c84f79",
+      "source_dialect": "mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/mariadb/examples/fast/dml_select.sql:217-221",
+      "source_dialect": "mariadb",
+      "observed_pattern": "MariaDB wraps a SELECT with SET STATEMENT so a per-statement execution variable applies only to that query.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored queue summary. A max_statement_time wrapper encloses SQL_NO_CACHE, grouped counts and sums, a HAVING threshold, and deterministic ordering; the source table, variable placeholder, identifiers, and values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "set-statement",
+    "per-statement-setting",
+    "sql-no-cache",
+    "grouped-aggregate",
+    "having-threshold",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Ready rows in east total 7 pending items and pass HAVING; ready west totals 2 and is filtered, while a paused east row is excluded. The setting must not change the grouped result.",
+  "determinism_notes": "Queue IDs, states, regions, counts, setting value, grouping, and ordering are fixed; the setting does not depend on elapsed execution time and no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE queue_setting_readings (reading_id INT PRIMARY KEY, region_code VARCHAR(16) NOT NULL, queue_state VARCHAR(16) NOT NULL, pending_count INT NOT NULL)",
+    "INSERT INTO queue_setting_readings VALUES (2101, 'east', 'ready', 3), (2102, 'east', 'ready', 4), (2103, 'east', 'paused', 9), (2201, 'west', 'ready', 2), (2301, 'north', 'ready', 5)"
+  ],
+  "steps": [
+    {
+      "sql": "SET STATEMENT max_statement_time = 60 FOR SELECT SQL_NO_CACHE region_code, COUNT(*) AS ready_rows, SUM(pending_count) AS pending_total FROM queue_setting_readings WHERE queue_state = 'ready' GROUP BY region_code HAVING SUM(pending_count) >= 3 ORDER BY region_code",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
