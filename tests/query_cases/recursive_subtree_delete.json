@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "recursive_subtree_delete",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "3dcitydb/3dcitydb",
+      "commit": "3abe78f02fa0b1c3fedfd661649e606f24d27367",
+      "path": "postgresql/sql-scripts/citydb-pkg/delete.sql",
+      "url": "https://github.com/3dcitydb/3dcitydb/blob/3abe78f02fa0b1c3fedfd661649e606f24d27367/postgresql/sql-scripts/citydb-pkg/delete.sql",
+      "sha256": "7e8ef7cdc1cbd10b888f8213ef7a00e72cacaf3956c9d5d16ea5dddcdacc0b9c",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "postgresql/sql-scripts/citydb-pkg/delete.sql:269-291, recursive child_refs CTE",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A recursive CTE starts from selected parent identifiers, follows parent_id links to collect all descendants, and supplies the complete identifier set to a subsequent deletion operation.",
+      "mysql_mariadb_translation": "Reauthored as a folder-subtree cleanup. A recursive descendant set rooted at one folder feeds MariaDB's nested CTE-selected DELETE ... RETURNING, removing the selected folder and every descendant while preserving its sibling and an unrelated tree; PostgreSQL arrays, routines, schemas, and source identifiers are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["recursive-cte", "delete-subquery", "delete-returning", "hierarchical-cleanup", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "Folder 20 is the selected subtree root and folder 30 is its child; both are deleted and returned. Folder 40 is a sibling under root 10, and folder 50 belongs to another root, so both remain.",
+  "determinism_notes": "Folder IDs, parent links, labels, statuses, and the selected root are fixed. The returned deletion rows are compared unordered; the final hierarchy read is ordered by folder ID with no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE folder_nodes (folder_id INT PRIMARY KEY, parent_id INT NULL, folder_label VARCHAR(32) NOT NULL, folder_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO folder_nodes VALUES (10, NULL, 'workspace', 'active'), (20, 10, 'reports', 'archived'), (30, 20, 'weekly', 'archived'), (40, 10, 'inbox', 'active'), (50, NULL, 'external', 'active')"
+  ],
+  "steps": [
+    {"sql": "DELETE FROM folder_nodes WHERE folder_id IN (WITH RECURSIVE descendants (folder_id) AS (SELECT folder_id FROM folder_nodes WHERE folder_id = 20 UNION ALL SELECT child.folder_id FROM folder_nodes AS child INNER JOIN descendants AS parent ON child.parent_id = parent.folder_id) SELECT folder_id FROM descendants) RETURNING folder_id, parent_id, folder_label, folder_state", "ordered": false}
+  ],
+  "checks": [
+    {"sql": "SELECT folder_id, parent_id, folder_label, folder_state FROM folder_nodes ORDER BY folder_id", "ordered": true}
+  ]
+}
