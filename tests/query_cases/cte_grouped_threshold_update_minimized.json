@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "cte_grouped_threshold_update_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "dml/update/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/dml/update/mysql.sql",
+      "sha256": "0160718d9ccf135c9938eaf3879a37c672cd171e68065046c953d55e95a33425",
+      "source_dialect": "mysql"
+    },
+    "inspiration": {
+      "source_location": "dml/update/mysql.sql:56-60",
+      "source_dialect": "mysql",
+      "observed_pattern": "A grouped CTE filters entities with HAVING SUM(...) and an UPDATE JOIN consumes the qualifying entity IDs to apply a status mutation.",
+      "mysql_mariadb_translation": "Reduced to two accounts and settled invoices so one grouped derived-table result drives one MariaDB-compatible UPDATE JOIN mutation while the boundary account remains unchanged. The focused schema and values are newly authored."
+    },
+    "independently_authored": true,
+    "focused_variant_of": "cte_grouped_threshold_update"
+  },
+  "features": [
+    "derived-grouped-update",
+    "grouped-having",
+    "update-join",
+    "focused-variant"
+  ],
+  "fixture_notes": "Account 201 exceeds the threshold and changes state; account 202 equals the threshold and remains standard.",
+  "determinism_notes": "Account IDs, invoice IDs, states, amounts, derived-table grouping, HAVING threshold, assignments, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE membership_accounts_min (account_id INT PRIMARY KEY, account_label VARCHAR(32) NOT NULL, account_state VARCHAR(16) NOT NULL, status_note VARCHAR(32) NOT NULL)",
+    "CREATE TABLE membership_invoices_min (invoice_id INT PRIMARY KEY, account_id INT NOT NULL, invoice_state VARCHAR(16) NOT NULL, amount_cents INT NOT NULL)",
+    "INSERT INTO membership_accounts_min VALUES (201, 'ash', 'standard', 'unchanged'), (202, 'elm', 'standard', 'unchanged')",
+    "INSERT INTO membership_invoices_min VALUES (2011, 201, 'settled', 7500), (2012, 201, 'settled', 3501), (2021, 202, 'settled', 10000)"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE membership_accounts_min AS a JOIN (SELECT account_id FROM membership_invoices_min WHERE invoice_state = 'settled' GROUP BY account_id HAVING SUM(amount_cents) > 10000) AS q ON q.account_id = a.account_id SET a.account_state = 'priority', a.status_note = 'spend-threshold'",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT account_id, account_label, account_state, status_note FROM membership_accounts_min ORDER BY account_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT account_id, account_label, account_state, status_note FROM membership_accounts_min ORDER BY account_id",
+      "ordered": true
+    }
+  ]
+}
