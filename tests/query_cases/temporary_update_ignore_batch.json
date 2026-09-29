@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "id": "temporary_update_ignore_batch",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "PROFESSOR-DJ/DBMS_Backend",
+      "commit": "24c903dfcb81d61838d5a4f74b30448e72272309",
+      "path": "scripts/merge_duplicate_authors_mysql.sql",
+      "url": "https://github.com/PROFESSOR-DJ/DBMS_Backend/blob/24c903dfcb81d61838d5a4f74b30448e72272309/scripts/merge_duplicate_authors_mysql.sql",
+      "sha256": "cf947a7f3b3aa17eb7c0d1eae9cc01fea5c07bd37c27a15a63993a5ecb110cc9",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "scripts/merge_duplicate_authors_mysql.sql:7-24",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A maintenance batch materializes a bounded temporary candidate set, uses UPDATE IGNORE with a joined target to tolerate unique-key conflicts, reads ROW_COUNT, and removes the temporary batch.",
+      "mysql_mariadb_translation": "Reauthored as an independent task-owner reconciliation. A bounded ready-move batch is materialized with a temporary CTAS, UPDATE IGNORE applies free owner changes while skipping one unique-owner conflict, ROW_COUNT exposes the applied count, and the temporary batch is dropped before final-state checks. The source author merge schema, names, values, and cleanup workflow are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "temporary-table-ctas",
+    "bounded-staging",
+    "update-ignore",
+    "update-inner-join",
+    "unique-key-conflict",
+    "row-count",
+    "drop-temporary-table",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Task 1001 can move from owner alpha to free owner delta and must update. Task 1002 requests owner gamma, which is already held by task 1003, so UPDATE IGNORE must skip that conflicting row. The staged batch selects both ready requests in priority order, ROW_COUNT reports the two matched queued tasks even though only one owner changes, and the source requests remain unchanged.",
+  "determinism_notes": "Task IDs, owner codes, readiness flags, priorities, staged LIMIT, update predicates, and final ordering are fixed; there are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE task_owner_state (task_id INT PRIMARY KEY, owner_code VARCHAR(16) NOT NULL UNIQUE, task_state VARCHAR(16) NOT NULL)",
+    "CREATE TABLE owner_move_requests (request_id INT PRIMARY KEY, task_id INT NOT NULL, requested_owner VARCHAR(16) NOT NULL, request_state VARCHAR(16) NOT NULL, priority INT NOT NULL)",
+    "INSERT INTO task_owner_state VALUES (1001, 'alpha', 'queued'), (1002, 'beta', 'queued'), (1003, 'gamma', 'reserved')",
+    "INSERT INTO owner_move_requests VALUES (1, 1001, 'delta', 'ready', 10), (2, 1002, 'gamma', 'ready', 20), (3, 1003, 'omega', 'held', 5)"
+  ],
+  "steps": [
+    {
+      "sql": "CREATE TEMPORARY TABLE owner_move_batch AS SELECT task_id, requested_owner FROM owner_move_requests WHERE request_state = 'ready' ORDER BY priority ASC, request_id ASC LIMIT 2",
+      "ordered": true
+    },
+    {
+      "sql": "UPDATE IGNORE task_owner_state AS s INNER JOIN owner_move_batch AS b ON b.task_id = s.task_id SET s.owner_code = b.requested_owner WHERE s.task_state = 'queued'",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT ROW_COUNT() AS moved_tasks",
+      "ordered": true
+    },
+    {
+      "sql": "DROP TEMPORARY TABLE owner_move_batch",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT task_id, owner_code, task_state FROM task_owner_state ORDER BY task_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT request_id, task_id, requested_owner, request_state, priority FROM owner_move_requests ORDER BY request_id",
+      "ordered": true
+    }
+  ]
+}
