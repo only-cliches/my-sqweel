@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "variance_stddev_grouped_quality",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "databricks/Spark-The-Definitive-Guide",
+      "commit": "4ba5601eb9b9aed1d01ab79775e3af228216ff6f",
+      "path": "code/Structured_APIs-Chapter_7_Aggregations.sql",
+      "url": "https://github.com/databricks/Spark-The-Definitive-Guide/blob/4ba5601eb9b9aed1d01ab79775e3af228216ff6f/code/Structured_APIs-Chapter_7_Aggregations.sql",
+      "sha256": "a0e0448ddfb496494beb41d4458d37ee015eec5f3c71f77132843ab860319633",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "code/Structured_APIs-Chapter_7_Aggregations.sql:36-37",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A public analytical SQL example projects population and sample variance alongside population and sample standard deviation for one numeric measure.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored batch-quality report. Fixed measurements are grouped by batch and project AVG, VAR_POP, VAR_SAMP, STDDEV_POP, and STDDEV_SAMP together; a NULL reading verifies aggregate omission, while a singleton batch distinguishes zero population spread from NULL sample spread. The source dataframe, identifiers, and Spark teaching context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "grouped-statistics",
+    "avg",
+    "var-pop-aggregate",
+    "var-samp-aggregate",
+    "stddev-pop-aggregate",
+    "stddev-samp-aggregate",
+    "null-aggregate-input",
+    "singleton-statistics",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Batch 501 has measurements 10.00, 14.00, and NULL, so AVG is 12.00, VAR_POP is 4.00, VAR_SAMP is 8.00, STDDEV_POP is 2.00, and STDDEV_SAMP is approximately 2.8284. Batch 502 has one non-NULL measurement, so population variance and standard deviation are zero while sample variance and standard deviation are NULL.",
+  "determinism_notes": "Batch IDs and measurement IDs are fixed; the grouped report is ordered by the unique batch ID, and all aggregate inputs are stable. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE quality_measurements (measurement_id INT PRIMARY KEY, batch_id INT NOT NULL, measured_value DECIMAL(10,2) NULL)",
+    "INSERT INTO quality_measurements VALUES (50101, 501, 10.00), (50102, 501, 14.00), (50103, 501, NULL), (50201, 502, 7.00)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT batch_id, AVG(measured_value) AS mean_value, VAR_POP(measured_value) AS population_variance, VAR_SAMP(measured_value) AS sample_variance, STDDEV_POP(measured_value) AS population_spread, STDDEV_SAMP(measured_value) AS sample_spread FROM quality_measurements GROUP BY batch_id ORDER BY batch_id",
+      "ordered": true
+    }
+  ]
+}
