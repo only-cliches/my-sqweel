@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "bitmask_update_ignore_join",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/4777.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/4777.sql",
+      "sha256": "018d15c407d16a320b27d781aa8e3aed9fdb11a3f83f56fc7e2ff9b0f64be114",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/docker/fuzz_root/mysql_initlib/4777.sql:49",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A multi-table UPDATE IGNORE joins a target to a mask lookup, filters the joined rows with a bitwise AND flag and an arithmetic threshold, then increments one target column while resetting another.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored route-throttle refresh. A comma-joined UPDATE IGNORE increments eligible route counters only when a joined capability mask contains bit 4096 and the increment remains below the route ceiling; the same statement resets the throttle marker, while unmatched, masked-out, and thresholded rows remain unchanged. The source tables, columns, values, and fuzzing context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["update-ignore", "multi-table-update", "comma-joined-update", "bitwise-and-predicate", "arithmetic-threshold", "multi-column-assignment", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "Route 701 has capability bit 4096 and increments from 4 to 5 while resetting its marker; route 702 has the bit but its next counter reaches the ceiling and remains unchanged; route 703 lacks the bit; route 704 has no mask row. UPDATE IGNORE must apply only the eligible joined target.",
+  "determinism_notes": "Route IDs, capability masks, counters, ceilings, assignments, and final ordering are fixed; there are no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE route_counters (route_id INT PRIMARY KEY, route_label VARCHAR(24) NOT NULL, current_count INT NOT NULL, ceiling_count INT NOT NULL, throttle_marker INT NOT NULL)",
+    "CREATE TABLE route_capabilities (route_id INT PRIMARY KEY, capability_mask INT NOT NULL)",
+    "INSERT INTO route_counters VALUES (701, 'north', 4, 9, 7), (702, 'south', 8, 9, 6), (703, 'west', 2, 8, 5), (704, 'orphan', 1, 8, 4)",
+    "INSERT INTO route_capabilities VALUES (701, 4096), (702, 12288), (703, 2048)"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE IGNORE route_counters AS c, route_capabilities AS p SET c.current_count = c.current_count + 1, c.throttle_marker = 0 WHERE p.route_id = c.route_id AND (p.capability_mask & 4096) > 0 AND (c.current_count + 1) < c.ceiling_count",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT route_id, route_label, current_count, ceiling_count, throttle_marker FROM route_counters ORDER BY route_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT COUNT(*) AS refreshed_routes, SUM(current_count = 5 AND throttle_marker = 0) AS eligible_refreshes FROM route_counters",
+      "ordered": true
+    }
+  ]
+}
