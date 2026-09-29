@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "update_left_to_right_assignment",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "dml/update/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/dml/update/mysql.sql",
+      "sha256": "f40182a788c3dbafb6c8370b27c5b72875d03db8211947fbe016b76209110e16",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "dml/update/mysql.sql:32-38",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL UPDATE evaluates SET assignments from left to right, so a later assignment that reads a column sees the value produced by an earlier assignment in the same SET list.",
+      "mysql_mariadb_translation": "Reauthored as a counter audit. One fixed task advances its completed count and copies that newly assigned count into an audit column in the same UPDATE statement; an ordered read makes the sequential-assignment result observable. The source table, identifiers, values, and tutorial context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["update", "left-to-right-set-evaluation", "dependent-assignments", "deterministic-final-state"],
+  "fixture_notes": "The task starts at completed_count 4 and audit_count 0. The single UPDATE must set completed_count to 5 and audit_count to 5, proving the second assignment reads the first assignment's new value.",
+  "determinism_notes": "One fixed row, one arithmetic increment, and one ordered final read are used; no clocks, randomness, sleeps, or concurrent connections are involved.",
+  "setup": [
+    "CREATE TABLE task_progress (task_id INT PRIMARY KEY, completed_count INT NOT NULL, audit_count INT NOT NULL, task_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO task_progress VALUES (901, 4, 0, 'active')"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE task_progress SET completed_count = completed_count + 1, audit_count = completed_count, task_state = 'complete' WHERE task_id = 901",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT task_id, completed_count, audit_count, task_state FROM task_progress ORDER BY task_id",
+      "ordered": true
+    }
+  ]
+}
