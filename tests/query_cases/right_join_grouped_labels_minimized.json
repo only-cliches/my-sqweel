@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "id": "right_join_grouped_labels_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "galaxy-s10/billd-desk-server",
+      "commit": "c73983e543341c08ce9e4fb7c52446be50b6c6a2",
+      "path": "src/sql/visitorLog.sql.ts",
+      "url": "https://github.com/galaxy-s10/billd-desk-server/blob/c73983e543341c08ce9e4fb7c52446be50b6c6a2/src/sql/visitorLog.sql.ts",
+      "sha256": "0dd105ef9870221da3fd83aacbf2a8c5ada31073a112b7d27a37dc866f3824c1",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "src/sql/visitorLog.sql.ts:12-33 (daily visitor aggregation)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped RIGHT JOIN preserves a row from the right relation while an ordered GROUP_CONCAT consumes nullable left-side values.",
+      "mysql_mariadb_translation": "Reduced to one matching and one right-only agent. The focused query isolates RIGHT JOIN null extension, COUNT of a nullable joined key, and COALESCE around ordered GROUP_CONCAT without the source schema or application context."
+    },
+    "independently_authored": true,
+    "focused_variant_of": "right_join_grouped_labels"
+  },
+  "features": [
+    "right-join",
+    "grouped-read",
+    "group-concat",
+    "null-extended-row",
+    "focused-variant"
+  ],
+  "fixture_notes": "Agent 21 has one fixed session and agent 22 has none. The grouped RIGHT JOIN must return both agents, count only the matching session, and render <none> for the right-only row.",
+  "determinism_notes": "Agent IDs, session IDs, labels, aggregate ordering, separator, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE session_agents_min (agent_id INT PRIMARY KEY, agent_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE agent_sessions_min (session_id INT PRIMARY KEY, agent_id INT NOT NULL, session_label VARCHAR(32) NOT NULL)",
+    "INSERT INTO session_agents_min VALUES (21, 'Probe-A'), (22, 'Probe-B')",
+    "INSERT INTO agent_sessions_min VALUES (2101, 21, 'single')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT a.agent_id, a.agent_name, COUNT(s.session_id) AS session_count, COALESCE(GROUP_CONCAT(s.session_label ORDER BY s.session_id ASC SEPARATOR '|'), '<none>') AS session_labels FROM agent_sessions_min AS s RIGHT JOIN session_agents_min AS a ON a.agent_id = s.agent_id GROUP BY a.agent_id, a.agent_name ORDER BY a.agent_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT a.agent_id, a.agent_name, COUNT(s.session_id) AS session_count, COALESCE(GROUP_CONCAT(s.session_label ORDER BY s.session_id ASC SEPARATOR '|'), '<none>') AS session_labels FROM agent_sessions_min AS s RIGHT JOIN session_agents_min AS a ON a.agent_id = s.agent_id GROUP BY a.agent_id, a.agent_name ORDER BY a.agent_id",
+      "ordered": true
+    }
+  ]
+}

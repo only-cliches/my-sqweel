@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "id": "right_join_grouped_labels",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "galaxy-s10/billd-desk-server",
+      "commit": "c73983e543341c08ce9e4fb7c52446be50b6c6a2",
+      "path": "src/sql/visitorLog.sql.ts",
+      "url": "https://github.com/galaxy-s10/billd-desk-server/blob/c73983e543341c08ce9e4fb7c52446be50b6c6a2/src/sql/visitorLog.sql.ts",
+      "sha256": "0dd105ef9870221da3fd83aacbf2a8c5ada31073a112b7d27a37dc866f3824c1",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "src/sql/visitorLog.sql.ts:12-33 (daily visitor aggregation)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped visitor report uses RIGHT JOIN to preserve a complete time-bucket relation and GROUP_CONCAT to serialize distinct related identifiers and labels from the nullable joined side.",
+      "mysql_mariadb_translation": "Reauthored as an agent-session coverage report. RIGHT JOIN preserves agents without sessions, GROUP_CONCAT orders matching session labels with a fixed separator, and COALESCE renders an explicit empty marker for the preserved row; application tables, templating, time buckets, names, and values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "right-join",
+    "grouped-read",
+    "group-concat",
+    "ordered-aggregate",
+    "null-extended-row",
+    "coalesce",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Agent 11 has two sessions whose labels must be serialized in session order, agent 12 has one session, and agent 13 has none and must remain visible through the RIGHT JOIN with the explicit <none> marker. The unmatched session row is excluded because agents are the preserved side.",
+  "determinism_notes": "Agent IDs, session IDs, labels, aggregate ordering, separator, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE session_agents (agent_id INT PRIMARY KEY, agent_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE agent_sessions (session_id INT PRIMARY KEY, agent_id INT NOT NULL, session_label VARCHAR(32) NOT NULL)",
+    "INSERT INTO session_agents VALUES (11, 'Aster'), (12, 'Beryl'), (13, 'Cinder')",
+    "INSERT INTO agent_sessions VALUES (1101, 11, 'morning'), (1102, 11, 'evening'), (1201, 12, 'overnight'), (1999, 99, 'orphaned')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT a.agent_id, a.agent_name, COUNT(s.session_id) AS session_count, COALESCE(GROUP_CONCAT(s.session_label ORDER BY s.session_id ASC SEPARATOR '|'), '<none>') AS session_labels FROM agent_sessions AS s RIGHT JOIN session_agents AS a ON a.agent_id = s.agent_id GROUP BY a.agent_id, a.agent_name ORDER BY a.agent_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT a.agent_id, a.agent_name, COUNT(s.session_id) AS session_count, COALESCE(GROUP_CONCAT(s.session_label ORDER BY s.session_id ASC SEPARATOR '|'), '<none>') AS session_labels FROM agent_sessions AS s RIGHT JOIN session_agents AS a ON a.agent_id = s.agent_id GROUP BY a.agent_id, a.agent_name ORDER BY a.agent_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT session_id, agent_id, session_label FROM agent_sessions ORDER BY session_id",
+      "ordered": true
+    }
+  ]
+}
