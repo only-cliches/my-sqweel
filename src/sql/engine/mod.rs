@@ -1496,6 +1496,7 @@ impl RawEngine {
             parse_sql = strip_alter_auto_increment(&parse_sql);
             parse_sql = strip_alter_order_by_clause(&parse_sql);
             parse_sql = strip_alter_execution_options(&parse_sql);
+            parse_sql = strip_alter_key_toggles_for_parser(&parse_sql);
             if let Some(table) = bare_alter_table_name(&parse_sql) {
                 parse_sql = format!("ALTER TABLE {table} RENAME TO {table}");
             }
@@ -5295,6 +5296,42 @@ fn bare_alter_table_name(sql: &str) -> Option<&str> {
     }
     let table = words.next()?;
     words.next().is_none().then_some(table)
+}
+fn strip_alter_key_toggles_for_parser(sql: &str) -> String {
+    let trimmed = sql.trim().trim_end_matches(';').trim();
+    let upper = trimmed.to_ascii_uppercase();
+    if !upper.starts_with("ALTER TABLE ") {
+        return sql.to_string();
+    }
+    let remainder = &trimmed["ALTER TABLE ".len()..];
+    let Some(table_end) = remainder.find(char::is_whitespace) else {
+        return sql.to_string();
+    };
+    let table = remainder[..table_end].trim();
+    let operations = eval::split_sql_args(remainder[table_end..].trim());
+    if !operations.iter().any(|operation| {
+        matches!(
+            operation.trim().to_ascii_uppercase().as_str(),
+            "DISABLE KEYS" | "ENABLE KEYS"
+        )
+    }) {
+        return sql.to_string();
+    }
+    let retained = operations
+        .into_iter()
+        .filter(|operation| {
+            !matches!(
+                operation.trim().to_ascii_uppercase().as_str(),
+                "DISABLE KEYS" | "ENABLE KEYS"
+            )
+        })
+        .map(|operation| operation.trim().to_string())
+        .collect::<Vec<_>>();
+    if retained.is_empty() {
+        format!("ALTER TABLE {table}")
+    } else {
+        format!("ALTER TABLE {table} {}", retained.join(", "))
+    }
 }
 
 fn strip_create_table_tablespace(sql: &str) -> String {

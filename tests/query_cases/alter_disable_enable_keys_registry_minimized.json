@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "alter_disable_enable_keys_registry_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "alter_disable_enable_keys_registry",
+    "source": {
+      "kind": "github",
+      "repository": "awolfly9/IPProxyTool",
+      "commit": "4e4e3aadd30a75f74393b54e8077568b6a58a813",
+      "path": "db.sql",
+      "url": "https://github.com/awolfly9/IPProxyTool/blob/4e4e3aadd30a75f74393b54e8077568b6a58a813/db.sql",
+      "sha256": "94f599b90915394bc4c5475747265dfaa129c6b76704f04792941b1a43c6e290",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "db.sql:46-47, ALTER TABLE ... DISABLE KEYS / ENABLE KEYS",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL table load accepts ALTER TABLE DISABLE KEYS as a no-op-compatible key-maintenance directive before rows are read.",
+      "mysql_mariadb_translation": "Reduced from the independently authored registry batch to one MyISAM row and one DISABLE KEYS statement, isolating parser compatibility from the subsequent insert, re-enable directive, unique index, and second final read."
+    },
+    "independently_authored": true
+  },
+  "features": ["alter-table", "disable-keys", "myisam-table", "minimized-regression", "deterministic-order"],
+  "fixture_notes": "The single seeded registry row must remain unchanged after DISABLE KEYS.",
+  "determinism_notes": "The row identity, storage engine, and ordered read are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE key_toggle_probe (record_id INT PRIMARY KEY, registry_code VARCHAR(24) NOT NULL, UNIQUE KEY uq_registry_code (registry_code)) ENGINE=MyISAM",
+    "INSERT INTO key_toggle_probe VALUES (901, 'seed-alpha')"
+  ],
+  "steps": [
+    {
+      "sql": "ALTER TABLE key_toggle_probe DISABLE KEYS",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT record_id, registry_code FROM key_toggle_probe ORDER BY record_id",
+      "ordered": true
+    }
+  ]
+}

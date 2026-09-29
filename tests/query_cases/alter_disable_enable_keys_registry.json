@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "alter_disable_enable_keys_registry",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "awolfly9/IPProxyTool",
+      "commit": "4e4e3aadd30a75f74393b54e8077568b6a58a813",
+      "path": "db.sql",
+      "url": "https://github.com/awolfly9/IPProxyTool/blob/4e4e3aadd30a75f74393b54e8077568b6a58a813/db.sql",
+      "sha256": "94f599b90915394bc4c5475747265dfaa129c6b76704f04792941b1a43c6e290",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "db.sql:46-47, ALTER TABLE ... DISABLE KEYS / ENABLE KEYS around table loading",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL dump brackets a bulk table load with ALTER TABLE DISABLE KEYS and ENABLE KEYS so secondary-key maintenance is deferred during insertion.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored MyISAM registry load. A seeded registry disables its secondary keys, receives two deterministic batch rows, re-enables the keys, and is read in primary-key order; the source dump schema, identifiers, and values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["alter-table", "disable-keys", "enable-keys", "myisam-table", "bulk-insert", "unique-index", "data-preservation", "deterministic-order"],
+  "fixture_notes": "Registry row 501 is preserved, rows 502 and 503 are inserted while keys are disabled, and ENABLE KEYS must leave the unique registry code index usable for the final ordered read.",
+  "determinism_notes": "Record IDs, registry codes, states, batch order, storage engine, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE key_batch_registry (record_id INT PRIMARY KEY, registry_code VARCHAR(24) NOT NULL, record_state VARCHAR(16) NOT NULL, UNIQUE KEY uq_registry_code (registry_code)) ENGINE=MyISAM",
+    "INSERT INTO key_batch_registry VALUES (501, 'seed-alpha', 'active')"
+  ],
+  "steps": [
+    {
+      "sql": "ALTER TABLE key_batch_registry DISABLE KEYS",
+      "ordered": false
+    },
+    {
+      "sql": "INSERT INTO key_batch_registry VALUES (502, 'batch-beta', 'queued'), (503, 'batch-gamma', 'queued')",
+      "ordered": false
+    },
+    {
+      "sql": "ALTER TABLE key_batch_registry ENABLE KEYS",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT record_id, registry_code, record_state FROM key_batch_registry ORDER BY record_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT registry_code, record_id FROM key_batch_registry ORDER BY registry_code",
+      "ordered": true
+    }
+  ]
+}
