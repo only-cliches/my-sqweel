@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "id": "shared_lock_nowait_inventory",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "antlr/grammars-v4",
+      "commit": "e199816b3f1a7a49ea1ad84fb6b87c382ea36a33",
+      "path": "sql/mariadb/examples/fast/dml_select.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/e199816b3f1a7a49ea1ad84fb6b87c382ea36a33/sql/mariadb/examples/fast/dml_select.sql",
+      "sha256": "b9128ffb5b50bea79c534bc24a127d9d626fd2d21be8cb0a45deafd8d6c84f79",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/mariadb/examples/fast/dml_select.sql: common constructions block, SELECT ... LOCK IN SHARE MODE NOWAIT",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB SELECT requests a shared row lock with LOCK IN SHARE MODE and NOWAIT so a lock conflict does not wait.",
+      "mysql_mariadb_translation": "Reauthored as an independent inventory availability read. A transaction selects ready stock in deterministic order with LOCK IN SHARE MODE NOWAIT, then rolls back without changing the fixed inventory state; the source grammar tables, names, and values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["lock-in-share-mode", "nowait", "transactional-read", "deterministic-order"],
+  "fixture_notes": "Ready lots 701 and 702 are returned in lot order while a held lot is filtered out. NOWAIT must succeed because no competing connection exists, and rollback must preserve all inventory rows.",
+  "determinism_notes": "Lot IDs, states, quantities, ordering, and transaction steps are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE inventory_lots (lot_id INT PRIMARY KEY, sku VARCHAR(16) NOT NULL, lot_state VARCHAR(16) NOT NULL, quantity INT NOT NULL)",
+    "INSERT INTO inventory_lots VALUES (701, 'cable-a', 'ready', 12), (702, 'cable-b', 'ready', 8), (703, 'cable-c', 'held', 5)"
+  ],
+  "steps": [
+    {
+      "sql": "START TRANSACTION",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT lot_id, sku, quantity FROM inventory_lots WHERE lot_state = 'ready' ORDER BY lot_id LOCK IN SHARE MODE NOWAIT",
+      "ordered": true
+    },
+    {
+      "sql": "ROLLBACK",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT lot_id, sku, lot_state, quantity FROM inventory_lots ORDER BY lot_id",
+      "ordered": true
+    }
+  ]
+}
