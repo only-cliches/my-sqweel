@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "id": "alter_online_unique_index_catalog",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "HeyPuter/puter",
+      "commit": "f60d94ef3fed0dd23bd9f787cfa87749eec87bb4",
+      "path": "src/backend/clients/database/migrations/mysql/mysql_mig_21.sql",
+      "url": "https://github.com/HeyPuter/puter/blob/f60d94ef3fed0dd23bd9f787cfa87749eec87bb4/src/backend/clients/database/migrations/mysql/mysql_mig_21.sql",
+      "sha256": "4d57d7e5c8364887ca960efc56fd608af31c386d8b03f9a10bfce85a5a4c15bc",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "src/backend/clients/database/migrations/mysql/mysql_mig_21.sql:83-92",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL migration adds a unique index with ALGORITHM=INPLACE and LOCK=NONE after checking index metadata, keeping the online DDL operation idempotent.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored endpoint catalog. A unique nullable key is added with explicit online DDL options, a second NULL key verifies normal unique-index NULL semantics, and information-schema metadata plus ordered rows verify the resulting catalog; generated-column logic, migration guards, identifiers, and application values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["add-unique-index", "algorithm-inplace", "lock-none", "nullable-unique", "information-schema-metadata", "dml-after-ddl", "deterministic-order"],
+  "fixture_notes": "Endpoint keys alpha and beta are unique, endpoint 903 starts NULL, and endpoint 904 adds a second NULL after the unique index is created; the two NULL keys must remain valid while duplicate non-NULL keys are prevented by the cataloged index.",
+  "determinism_notes": "Endpoint IDs, key values, DDL options, index name, metadata projection, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE service_endpoints (endpoint_id INT PRIMARY KEY, endpoint_key VARCHAR(24) NULL, endpoint_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO service_endpoints (endpoint_id, endpoint_key, endpoint_state) VALUES (901, 'alpha', 'active'), (902, 'beta', 'active'), (903, NULL, 'standby')"
+  ],
+  "steps": [
+    {
+      "sql": "ALTER TABLE service_endpoints ADD UNIQUE KEY uq_endpoint_key (endpoint_key), ALGORITHM=INPLACE, LOCK=NONE",
+      "ordered": false
+    },
+    {
+      "sql": "INSERT INTO service_endpoints (endpoint_id, endpoint_key, endpoint_state) VALUES (904, NULL, 'standby')",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT index_name, non_unique, seq_in_index, column_name FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = 'service_endpoints' AND index_name = 'uq_endpoint_key' ORDER BY seq_in_index",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT endpoint_id, endpoint_key, endpoint_state FROM service_endpoints ORDER BY endpoint_id",
+      "ordered": true
+    }
+  ]
+}
