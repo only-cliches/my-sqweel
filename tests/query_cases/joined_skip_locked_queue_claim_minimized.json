@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "id": "joined_skip_locked_queue_claim_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "joined_skip_locked_queue_claim",
+    "source": {
+      "repository": "geldata/gel",
+      "commit": "85191063b4db8b87caf26499de40f8a9d90c8146",
+      "path": "edb_stat_statements/sql/select.sql",
+      "url": "https://github.com/geldata/gel/blob/85191063b4db8b87caf26499de40f8a9d90c8146/edb_stat_statements/sql/select.sql",
+      "sha256": "9fe5fb905f67df234cf73612c9745535bb92ad445e8d28453ceb1e92826dfd8e",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "edb_stat_statements/sql/select.sql:73-86",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A joined SELECT ends with FOR UPDATE SKIP LOCKED while returning columns from both joined relations.",
+      "mysql_mariadb_translation": "Reduced to one ready job and one online worker, retaining the joined relation, bounded locking read, FOR UPDATE, and SKIP LOCKED clauses while removing mutation and unrelated queue rows."
+    },
+    "independently_authored": true,
+    "minimized_from": "joined_skip_locked_queue_claim"
+  },
+  "features": [
+    "joined-for-update",
+    "skip-locked",
+    "minimized-regression"
+  ],
+  "fixture_notes": "The single ready job joins one online worker and must be returned by the bounded locking read.",
+  "determinism_notes": "One fixed job, one fixed worker, and an explicit primary-key order avoid clocks, randomness, sleeps, and concurrent schedules.",
+  "setup": [
+    "CREATE TABLE mini_dispatch_workers (worker_id INT PRIMARY KEY, worker_label VARCHAR(32) NOT NULL, worker_state VARCHAR(16) NOT NULL)",
+    "CREATE TABLE mini_dispatch_jobs (job_id INT PRIMARY KEY, worker_id INT NOT NULL, job_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO mini_dispatch_workers VALUES (11, 'worker-a', 'online')",
+    "INSERT INTO mini_dispatch_jobs VALUES (201, 11, 'ready')"
+  ],
+  "steps": [
+    {
+      "sql": "START TRANSACTION",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT j.job_id, w.worker_label FROM mini_dispatch_jobs AS j INNER JOIN mini_dispatch_workers AS w ON w.worker_id = j.worker_id WHERE j.job_state = 'ready' AND w.worker_state = 'online' ORDER BY j.job_id LIMIT 1 FOR UPDATE SKIP LOCKED",
+      "ordered": true
+    },
+    {
+      "sql": "ROLLBACK",
+      "ordered": false
+    }
+  ],
+  "checks": []
+}

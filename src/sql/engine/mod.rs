@@ -18,8 +18,8 @@ use serde_json::{Map, Number, Value, json};
 use sqlparser::ast::{
     Assignment, BinaryOperator, DateTimeField, Expr, Fetch, FunctionArg, FunctionArgExpr,
     FunctionArgumentClause, FunctionArguments, GroupByExpr, Ident, Join, JoinConstraint,
-    JoinOperator, NonBlock, ObjectName, Offset, OnInsert, OrderByExpr, Query, Select, SelectItem,
-    SetExpr, Statement, TableConstraint, TableFactor, TableWithJoins, TransactionAccessMode,
+    JoinOperator, ObjectName, Offset, OnInsert, OrderByExpr, Query, Select, SelectItem, SetExpr,
+    Statement, TableConstraint, TableFactor, TableWithJoins, TransactionAccessMode,
     TransactionMode, Value as SqlValue,
 };
 

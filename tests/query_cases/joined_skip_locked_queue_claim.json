@@ -1,0 +1,67 @@
+{
+  "version": 1,
+  "id": "joined_skip_locked_queue_claim",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "repository": "geldata/gel",
+      "commit": "85191063b4db8b87caf26499de40f8a9d90c8146",
+      "path": "edb_stat_statements/sql/select.sql",
+      "url": "https://github.com/geldata/gel/blob/85191063b4db8b87caf26499de40f8a9d90c8146/edb_stat_statements/sql/select.sql",
+      "sha256": "9fe5fb905f67df234cf73612c9745535bb92ad445e8d28453ceb1e92826dfd8e",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "edb_stat_statements/sql/select.sql:73-86",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A joined SELECT locks the matching rows from related relations with FOR UPDATE, including a bounded SKIP LOCKED form for concurrent work selection.",
+      "mysql_mariadb_translation": "Reauthored as a dispatch claim that joins ready jobs to online workers before applying deterministic priority ordering, LIMIT 1, FOR UPDATE, and SKIP LOCKED. PostgreSQL-only lock-target variants, extension setup, source tables, identifiers, and values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "joined-for-update",
+    "skip-locked",
+    "limit-one-claim",
+    "joined-eligibility-filter",
+    "priority-ordering",
+    "transaction-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Job 202 has the highest priority but its worker is offline and is excluded by the join. Job 201 is the first eligible claim and is marked claimed; job 203 remains ready with the online worker, while the worker table is unchanged.",
+  "determinism_notes": "Job IDs, worker states, priorities, schedule timestamps, and ordering tie-breakers are fixed; one connection executes the transaction sequentially with no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE dispatch_workers (worker_id INT PRIMARY KEY, worker_label VARCHAR(32) NOT NULL, worker_state VARCHAR(16) NOT NULL)",
+    "CREATE TABLE dispatch_jobs (job_id INT PRIMARY KEY, worker_id INT NOT NULL, job_label VARCHAR(32) NOT NULL, priority INT NOT NULL, scheduled_at DATETIME NOT NULL, job_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO dispatch_workers VALUES (11, 'worker-a', 'online'), (12, 'worker-b', 'offline')",
+    "INSERT INTO dispatch_jobs VALUES (201, 11, 'nightly-index', 2, '2026-08-01 08:00:00', 'ready'), (202, 12, 'urgent-rebuild', 1, '2026-08-01 07:00:00', 'ready'), (203, 11, 'routine-export', 3, '2026-08-01 09:00:00', 'ready')"
+  ],
+  "steps": [
+    {
+      "sql": "START TRANSACTION",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT j.job_id, j.job_label, j.priority, w.worker_label FROM dispatch_jobs AS j INNER JOIN dispatch_workers AS w ON w.worker_id = j.worker_id WHERE j.job_state = 'ready' AND w.worker_state = 'online' ORDER BY j.priority ASC, j.scheduled_at ASC, j.job_id ASC LIMIT 1 FOR UPDATE SKIP LOCKED",
+      "ordered": true
+    },
+    {
+      "sql": "UPDATE dispatch_jobs SET job_state = 'claimed' WHERE job_id = 201",
+      "ordered": false
+    },
+    {
+      "sql": "COMMIT",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT job_id, worker_id, job_label, priority, job_state FROM dispatch_jobs ORDER BY job_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT worker_id, worker_label, worker_state FROM dispatch_workers ORDER BY worker_id",
+      "ordered": true
+    }
+  ]
+}
