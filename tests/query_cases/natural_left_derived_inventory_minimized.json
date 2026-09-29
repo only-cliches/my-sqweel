@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "natural_left_derived_inventory_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "natural_left_derived_inventory",
+    "source": {
+      "repository": "antlr/grammars-v4",
+      "commit": "e199816b3f1a7a49ea1ad84fb6b87c382ea36a33",
+      "path": "sql/postgresql/examples/join.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/e199816b3f1a7a49ea1ad84fb6b87c382ea36a33/sql/postgresql/examples/join.sql",
+      "sha256": "621ca3207a04ebe87142fff02a22e18730c63ece25b9a660a085a929c13e4892",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "Minimized from natural_left_derived_inventory",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A derived NATURAL LEFT JOIN must emit a NULL right-side value for a left row with no shared-column match.",
+      "mysql_mariadb_translation": "Reduced to two independently authored rows and one projected right-side value, retaining derived relations, implicit shared-column matching, and the NULL-extended unmatched row."
+    },
+    "independently_authored": true,
+    "minimized_from": "natural_left_derived_inventory"
+  },
+  "features": [
+    "natural-left-join",
+    "derived-tables",
+    "null-extension",
+    "minimized-regression"
+  ],
+  "fixture_notes": "Left row 701 matches right row 701 on both shared columns and returns amount 8; left row 702 has a same-ID right row with a different zone and must return NULL amount.",
+  "determinism_notes": "Two fixed rows and explicit ID ordering isolate derived NATURAL LEFT JOIN null extension without clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE mini_left_stock (stock_id INT PRIMARY KEY, zone_code VARCHAR(8) NOT NULL)",
+    "CREATE TABLE mini_right_counts (stock_id INT PRIMARY KEY, zone_code VARCHAR(8) NOT NULL, amount INT NOT NULL)",
+    "INSERT INTO mini_left_stock VALUES (701, 'NORTH'), (702, 'SOUTH')",
+    "INSERT INTO mini_right_counts VALUES (701, 'NORTH', 8), (702, 'EAST', 11)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT left_stock.stock_id, left_stock.zone_code, right_counts.amount FROM (SELECT stock_id, zone_code FROM mini_left_stock) AS left_stock NATURAL LEFT JOIN (SELECT stock_id, zone_code, amount FROM mini_right_counts) AS right_counts ORDER BY left_stock.stock_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}

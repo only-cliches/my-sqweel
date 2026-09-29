@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "natural_left_derived_inventory",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "repository": "antlr/grammars-v4",
+      "commit": "e199816b3f1a7a49ea1ad84fb6b87c382ea36a33",
+      "path": "sql/postgresql/examples/join.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/e199816b3f1a7a49ea1ad84fb6b87c382ea36a33/sql/postgresql/examples/join.sql",
+      "sha256": "621ca3207a04ebe87142fff02a22e18730c63ece25b9a660a085a929c13e4892",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "sql/postgresql/examples/join.sql:264-267",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A NATURAL LEFT JOIN combines two derived relations, inferring equality from their shared columns while preserving unmatched rows from the left relation.",
+      "mysql_mariadb_translation": "Reauthored as a warehouse-bin inventory report. Two independently authored derived tables share bin_id and zone_code; NATURAL LEFT JOIN matches only rows agreeing on both names, while a missing or zone-mismatched stock row produces NULL right-side values. The source tables, aliases, columns, and test data are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "natural-left-join",
+    "derived-tables",
+    "implicit-multi-column-match",
+    "null-extension",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Bin 601 matches stock on both bin_id and zone_code and returns assigned_count 4. Bin 602 has a same-ID stock row with a different zone and must remain NULL-extended; bin 603 has no stock row and must also remain NULL-extended.",
+  "determinism_notes": "Bin IDs, zone codes, capacities, assignment counts, and ordering are fixed; both derived relations are read-only and the query uses no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE warehouse_bin_catalog (bin_id INT PRIMARY KEY, zone_code VARCHAR(8) NOT NULL, capacity_units INT NOT NULL)",
+    "CREATE TABLE warehouse_bin_assignments (bin_id INT PRIMARY KEY, zone_code VARCHAR(8) NOT NULL, assigned_units INT NOT NULL)",
+    "INSERT INTO warehouse_bin_catalog VALUES (601, 'NORTH', 40), (602, 'SOUTH', 55), (603, 'WEST', 70)",
+    "INSERT INTO warehouse_bin_assignments VALUES (601, 'NORTH', 4), (602, 'EAST', 7), (604, 'EAST', 9)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT catalog.bin_id, catalog.zone_code, catalog.capacity_units, assignments.assigned_units FROM (SELECT bin_id, zone_code, capacity_units FROM warehouse_bin_catalog WHERE capacity_units > 0) AS catalog NATURAL LEFT JOIN (SELECT bin_id, zone_code, assigned_units FROM warehouse_bin_assignments) AS assignments ORDER BY catalog.bin_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT bin_id, zone_code, assigned_units FROM warehouse_bin_catalog NATURAL LEFT JOIN warehouse_bin_assignments ORDER BY bin_id",
+      "ordered": true
+    }
+  ]
+}

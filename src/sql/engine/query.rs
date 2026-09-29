@@ -2984,6 +2984,7 @@ impl RawEngine {
                     column,
                     first_row,
                 );
+                metadata.table = alias.name.value.clone();
                 return Some(metadata);
             }
         }
