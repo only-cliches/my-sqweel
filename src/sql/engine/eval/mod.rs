@@ -1491,6 +1491,24 @@ fn parse_group_concat_call(args: Vec<String>) -> AggregateCall {
 
 fn parse_json_arrayagg_call(args: Vec<String>) -> AggregateCall {
     let mut body = args.join(", ");
+    let (mut limit, mut offset) =
+        if let Some((left, right)) = split_top_level_keyword(&body, "LIMIT") {
+            let left = left.to_string();
+            let right = right.to_string();
+            body = left.trim_end().to_string();
+            let mut values = right.split_whitespace();
+            let limit = values.next().and_then(|value| value.parse::<usize>().ok());
+            let offset = match (values.next(), values.next()) {
+                (None, None) => None,
+                (Some(keyword), Some(value)) if keyword.eq_ignore_ascii_case("OFFSET") => {
+                    value.parse::<usize>().ok()
+                }
+                _ => None,
+            };
+            (limit, offset)
+        } else {
+            (None, None)
+        };
     let order_by = if let Some((left, right)) = split_top_level_keyword(&body, "ORDER BY") {
         let left = left.to_string();
         let order_by = parse_order_by_clause(right);
@@ -1500,6 +1518,32 @@ fn parse_json_arrayagg_call(args: Vec<String>) -> AggregateCall {
         Vec::new()
     };
     let mut args = split_sql_args(&body);
+    let marker_prefix = "__MYQWEEL_JSON_ARRAYAGG_LIMIT_";
+    let marker_limit = args.iter().enumerate().find_map(|(index, arg)| {
+        let trimmed = arg
+            .trim()
+            .trim_start_matches(['`', '\'', '"'])
+            .to_ascii_uppercase();
+        let value = trimmed.strip_prefix(marker_prefix)?;
+        let value = value
+            .split_whitespace()
+            .next()?
+            .trim_end_matches(['`', '\'', '"']);
+        let mut parts = value.split('_');
+        let limit = parts.next()?.parse::<usize>().ok()?;
+        let offset = parts.next().and_then(|value| value.parse::<usize>().ok());
+        if parts.next().is_some() {
+            return None;
+        }
+        Some((index, limit, offset))
+    });
+    if let Some((index, marker_limit, marker_offset)) = marker_limit {
+        args.remove(index);
+        limit.get_or_insert(marker_limit);
+        if let Some(marker_offset) = marker_offset {
+            offset.get_or_insert(marker_offset);
+        }
+    }
     let mut distinct = false;
     if let Some(first) = args.first_mut() {
         let trimmed = first.trim();
@@ -1514,8 +1558,8 @@ fn parse_json_arrayagg_call(args: Vec<String>) -> AggregateCall {
         distinct,
         order_by,
         separator: ",".to_string(),
-        limit: None,
-        offset: None,
+        limit,
+        offset,
     }
 }
 

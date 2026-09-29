@@ -66,16 +66,14 @@ pub(crate) const JSON_AGGREGATE_TEXT_SENTINEL: &str = "\0my_sqweel_json_agg_text
 pub(crate) const JSON_MUTATION_TEXT_SENTINEL: &str = "\0my_sqweel_json_mutation:";
 pub(crate) const JSON_EXTRACT_TEXT_SENTINEL: &str = "\0my_sqweel_json_extract:";
 
-fn rewrite_group_concat_limits_for_parser(sql: &str) -> String {
-    const FUNCTION: &str = "GROUP_CONCAT";
-    const MARKER: &str = "__MYQWEEL_GROUP_CONCAT_LIMIT_";
+fn rewrite_aggregate_limits_for_parser(sql: &str, function: &str, marker_prefix: &str) -> String {
     let upper = sql.to_ascii_uppercase();
     let mut search = 0;
     let mut rewritten = String::with_capacity(sql.len());
 
-    while let Some(relative) = upper[search..].find(FUNCTION) {
+    while let Some(relative) = upper[search..].find(function) {
         let start = search + relative;
-        let open = start + FUNCTION.len();
+        let open = start + function.len();
         if (start > 0
             && (sql.as_bytes()[start - 1].is_ascii_alphanumeric()
                 || sql.as_bytes()[start - 1] == b'_'))
@@ -128,7 +126,7 @@ fn rewrite_group_concat_limits_for_parser(sql: &str) -> String {
             .iter()
             .filter_map(|keyword| top_level_keyword_position(before_limit, keyword))
             .min();
-        let marker = format!("'{MARKER}{marker_text}'");
+        let marker = format!("'{marker_prefix}{marker_text}'");
         let rewritten_body = if let Some(position) = clause_position {
             format!(
                 "{}, {} {}",
@@ -146,6 +144,14 @@ fn rewrite_group_concat_limits_for_parser(sql: &str) -> String {
     }
     rewritten.push_str(&sql[search..]);
     rewritten
+}
+
+fn rewrite_group_concat_limits_for_parser(sql: &str) -> String {
+    rewrite_aggregate_limits_for_parser(sql, "GROUP_CONCAT", "__MYQWEEL_GROUP_CONCAT_LIMIT_")
+}
+
+fn rewrite_json_arrayagg_limits_for_parser(sql: &str) -> String {
+    rewrite_aggregate_limits_for_parser(sql, "JSON_ARRAYAGG", "__MYQWEEL_JSON_ARRAYAGG_LIMIT_")
 }
 
 fn matching_parenthesis(sql: &str, open: usize) -> Option<usize> {
@@ -1361,6 +1367,7 @@ impl RawEngine {
             .replace(" ZEROFILL", "")
             .replace(" zerofill", "");
         parse_sql = rewrite_group_concat_limits_for_parser(&parse_sql);
+        parse_sql = rewrite_json_arrayagg_limits_for_parser(&parse_sql);
         parse_sql = rewrite_create_table_ignore_select_for_parser(&parse_sql);
         parse_sql = strip_select_modifiers_anywhere(&parse_sql);
         parse_sql = rewrite_set_statement_for_parser(&parse_sql);

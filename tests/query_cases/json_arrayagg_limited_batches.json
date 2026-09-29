@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "json_arrayagg_limited_batches",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "mariadb-corporation/mariadb-qa",
+      "commit": "5f7898e3a89feb85af301091143617716b4705c5",
+      "path": "BUGS/MDEV-22640.sql",
+      "url": "https://github.com/mariadb-corporation/mariadb-qa/blob/5f7898e3a89feb85af301091143617716b4705c5/BUGS/MDEV-22640.sql",
+      "sha256": "8bf91f985af3550eb3d147777358e11a9791f08119a7b8398e0c370395ed349b",
+      "source_dialect": "mariadb"
+    },
+    "inspiration": {
+      "source_location": "BUGS/MDEV-22640.sql:4,10",
+      "source_dialect": "mariadb",
+      "observed_pattern": "MariaDB JSON_ARRAYAGG accepts an aggregate-local LIMIT so only a bounded number of values are serialized from the input relation.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored batch manifest report. Each batch serializes its two highest-priority item labels with JSON_ARRAYAGG ORDER BY and LIMIT while COUNT records the full batch size; the source tables, storage engine, identifiers, and regression setup are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "json-arrayagg",
+    "aggregate-ordering",
+    "aggregate-limit",
+    "grouped-report",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Batch 21 has three items ranked 90, 80, and 70, so only the first two labels are serialized while item_count remains 3. Batch 22 has two items and both are serialized. Priority and item ID provide stable aggregate ordering.",
+  "determinism_notes": "Batch IDs, item IDs, labels, priorities, aggregate ordering, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE batch_items (item_id INT PRIMARY KEY, batch_id INT NOT NULL, item_label VARCHAR(32) NOT NULL, priority INT NOT NULL)",
+    "INSERT INTO batch_items VALUES (2101, 21, 'inspect', 90), (2102, 21, 'seal', 80), (2103, 21, 'archive', 70), (2201, 22, 'stage', 60), (2202, 22, 'dispatch', 50)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT batch_id, JSON_ARRAYAGG(item_label ORDER BY priority DESC, item_id ASC LIMIT 2) AS top_items, COUNT(*) AS item_count FROM batch_items GROUP BY batch_id ORDER BY batch_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}

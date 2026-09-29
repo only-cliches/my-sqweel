@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "json_arrayagg_limited_batches_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "json_arrayagg_limited_batches",
+    "source": {
+      "kind": "github",
+      "repository": "mariadb-corporation/mariadb-qa",
+      "commit": "5f7898e3a89feb85af301091143617716b4705c5",
+      "path": "BUGS/MDEV-22640.sql",
+      "url": "https://github.com/mariadb-corporation/mariadb-qa/blob/5f7898e3a89feb85af301091143617716b4705c5/BUGS/MDEV-22640.sql",
+      "sha256": "8bf91f985af3550eb3d147777358e11a9791f08119a7b8398e0c370395ed349b",
+      "source_dialect": "mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from BUGS/MDEV-22640.sql:4,10",
+      "source_dialect": "mariadb",
+      "observed_pattern": "JSON_ARRAYAGG must apply its aggregate-local LIMIT after deterministic input ordering rather than serializing every grouped row.",
+      "mysql_mariadb_translation": "Reduced to one independently authored batch with three ranked labels and one JSON_ARRAYAGG ORDER BY LIMIT projection; unrelated batches and the full-count companion column are removed while the bounded-array contract remains."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "json-arrayagg",
+    "aggregate-ordering",
+    "aggregate-limit",
+    "minimized-regression"
+  ],
+  "fixture_notes": "The three labels rank 9, 8, and 7, but LIMIT 2 must return only the first two labels in descending priority order.",
+  "determinism_notes": "Label IDs, priorities, aggregate ordering, and the single result group are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE mini_batch_items (item_id INT PRIMARY KEY, batch_id INT NOT NULL, item_label VARCHAR(32) NOT NULL, priority INT NOT NULL)",
+    "INSERT INTO mini_batch_items VALUES (3101, 31, 'first', 9), (3102, 31, 'second', 8), (3103, 31, 'third', 7)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT batch_id, JSON_ARRAYAGG(item_label ORDER BY priority DESC LIMIT 2) AS top_items FROM mini_batch_items GROUP BY batch_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
