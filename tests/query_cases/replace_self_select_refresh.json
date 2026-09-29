@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "replace_self_select_refresh",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "antlr/grammars-v4",
+      "commit": "e199816b3f1a7a49ea1ad84fb6b87c382ea36a33",
+      "path": "sql/mysql/Oracle/examples/dml_replace.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/e199816b3f1a7a49ea1ad84fb6b87c382ea36a33/sql/mysql/Oracle/examples/dml_replace.sql",
+      "sha256": "2f4683b6674d81f31fee8709e5d05eae062e2c83f5ee11f02503a7279b6dfcdb",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/mysql/Oracle/examples/dml_replace.sql:11",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL REPLACE INTO statement reads from the same target table with SELECT, exercising self-referential replacement rather than loading a separate source table.",
+      "mysql_mariadb_translation": "Reauthored as a badge refresh. Active badge rows are read from the target table itself, their labels and scores are transformed, and REPLACE INTO writes the transformed rows back by primary key while an inactive row remains unchanged. The source schema, identifiers, values, and example SQL are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["replace-into", "self-referential-insert-select", "filtered-source", "computed-replacement", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "Badges 101 and 102 are active and must be replaced with refreshed labels and scores from a self-read; badge 103 is inactive and must remain unchanged.",
+  "determinism_notes": "Badge IDs, states, labels, scores, filtering, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE member_badges (badge_id INT PRIMARY KEY, badge_label VARCHAR(32) NOT NULL, badge_state VARCHAR(16) NOT NULL, score INT NOT NULL)",
+    "INSERT INTO member_badges VALUES (101, 'bronze', 'active', 40), (102, 'silver', 'active', 70), (103, 'legacy', 'inactive', 90)"
+  ],
+  "steps": [
+    {
+      "sql": "REPLACE INTO member_badges (badge_id, badge_label, badge_state, score) SELECT badge_id, CONCAT(badge_label, '-refreshed'), badge_state, score + 10 FROM member_badges WHERE badge_state = 'active'",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT badge_id, badge_label, badge_state, score FROM member_badges ORDER BY badge_id",
+      "ordered": true
+    }
+  ]
+}
