@@ -1785,10 +1785,16 @@ impl RawEngine {
         let after_upper = after.to_ascii_uppercase();
         let (operator, operator_len, all) = if after_upper.starts_with("UNION ALL") {
             ("UNION", "UNION ALL".len(), true)
+        } else if after_upper.starts_with("UNION DISTINCT") {
+            ("UNION", "UNION DISTINCT".len(), false)
         } else if after_upper.starts_with("INTERSECT ALL") {
             ("INTERSECT", "INTERSECT ALL".len(), true)
+        } else if after_upper.starts_with("INTERSECT DISTINCT") {
+            ("INTERSECT", "INTERSECT DISTINCT".len(), false)
         } else if after_upper.starts_with("EXCEPT ALL") {
             ("EXCEPT", "EXCEPT ALL".len(), true)
+        } else if after_upper.starts_with("EXCEPT DISTINCT") {
+            ("EXCEPT", "EXCEPT DISTINCT".len(), false)
         } else if after_upper.starts_with("UNION") {
             ("UNION", "UNION".len(), false)
         } else if after_upper.starts_with("INTERSECT") {
@@ -2708,7 +2714,7 @@ impl RawEngine {
                 ..QueryResult::default()
             }));
         }
-        if upper.starts_with("(SELECT ") {
+        if trimmed.starts_with('(') {
             if let Some(result) = self.execute_parenthesized_union_compat(trimmed)? {
                 return Ok(Some(result));
             }

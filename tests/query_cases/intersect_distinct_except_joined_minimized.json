@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "intersect_distinct_except_joined_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "intersect_distinct_except_joined",
+    "source": {
+      "kind": "github",
+      "repository": "heetc27/LeetCode_DSA_Practice",
+      "commit": "e55b55bcf69800b33da6b847d2190dc3051a829f",
+      "path": "1536-customers-who-bought-products-a-and-b-but-not-c/1536-customers-who-bought-products-a-and-b-but-not-c.sql",
+      "url": "https://github.com/heetc27/LeetCode_DSA_Practice/blob/e55b55bcf69800b33da6b847d2190dc3051a829f/1536-customers-who-bought-products-a-and-b-but-not-c/1536-customers-who-bought-products-a-and-b-but-not-c.sql",
+      "sha256": "7f49fb0cfd6233143733b82892ba547f6a291527d5242e41411ff14c782eceb6",
+      "source_dialect": "mysql"
+    },
+    "inspiration": {
+      "source_location": "1536-customers-who-bought-products-a-and-b-but-not-c.sql:2-13",
+      "source_dialect": "mysql",
+      "observed_pattern": "An explicit INTERSECT DISTINCT combines two filtered relations.",
+      "mysql_mariadb_translation": "Reduced to one independently authored integer table and two duplicate-bearing branches that select the same ID through different labels; the explicit INTERSECT DISTINCT must remove the duplicate result. Joins, EXCEPT, names, and source values are removed."
+    },
+    "independently_authored": true,
+    "minimized_from": "intersect_distinct_except_joined"
+  },
+  "features": ["intersect-distinct", "duplicate-elimination", "minimized-regression"],
+  "fixture_notes": "The two branches both select item 501, so explicit INTERSECT DISTINCT must return one row rather than two.",
+  "determinism_notes": "Fixed IDs, labels, branch predicates, and final ordering; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE mini_intersect_items (item_id INT PRIMARY KEY, item_label VARCHAR(16) NOT NULL)",
+    "INSERT INTO mini_intersect_items VALUES (501, 'alpha'), (502, 'beta')"
+  ],
+  "steps": [
+    {
+      "sql": "(SELECT item_id FROM mini_intersect_items WHERE item_label = 'alpha') INTERSECT DISTINCT (SELECT item_id FROM mini_intersect_items WHERE item_id = 501) ORDER BY item_id",
+      "ordered": true
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "intersect_distinct_except_joined",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "heetc27/LeetCode_DSA_Practice",
+      "commit": "e55b55bcf69800b33da6b847d2190dc3051a829f",
+      "path": "1536-customers-who-bought-products-a-and-b-but-not-c/1536-customers-who-bought-products-a-and-b-but-not-c.sql",
+      "url": "https://github.com/heetc27/LeetCode_DSA_Practice/blob/e55b55bcf69800b33da6b847d2190dc3051a829f/1536-customers-who-bought-products-a-and-b-but-not-c/1536-customers-who-bought-products-a-and-b-but-not-c.sql",
+      "sha256": "7f49fb0cfd6233143733b82892ba547f6a291527d5242e41411ff14c782eceb6",
+      "source_dialect": "mysql"
+    },
+    "inspiration": {
+      "source_location": "1536-customers-who-bought-products-a-and-b-but-not-c.sql:2-13",
+      "source_dialect": "mysql",
+      "observed_pattern": "A customer-order query intersects two joined product cohorts with explicit INTERSECT DISTINCT, then subtracts a third joined cohort with EXCEPT.",
+      "mysql_mariadb_translation": "Reauthored as a deterministic device-capability audit. Joined device and capability rows identify devices carrying both required capabilities, EXCEPT removes devices carrying a prohibited capability, and an explicit final device ordering stabilizes the set result; source tables, product names, and application context are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["intersect-distinct", "except", "joined-set-branches", "duplicate-elimination", "deterministic-order"],
+  "fixture_notes": "Devices 401 and 402 have both required capabilities; device 402 also has the prohibited capability and is removed by EXCEPT. Device 403 lacks the second required capability, and duplicate capability rows must not duplicate the INTERSECT result.",
+  "determinism_notes": "Device IDs, capability names, joins, branch predicates, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE audit_devices (device_id INT PRIMARY KEY, device_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE device_capabilities (device_id INT NOT NULL, capability_name VARCHAR(32) NOT NULL)",
+    "INSERT INTO audit_devices VALUES (401, 'alpha-node'), (402, 'beta-node'), (403, 'gamma-node'), (404, 'delta-node')",
+    "INSERT INTO device_capabilities VALUES (401, 'encrypted'), (401, 'replicated'), (401, 'replicated'), (402, 'encrypted'), (402, 'replicated'), (402, 'legacy-protocol'), (403, 'encrypted'), (404, 'replicated')"
+  ],
+  "steps": [
+    {
+      "sql": "((SELECT d.device_id, d.device_name FROM audit_devices AS d INNER JOIN device_capabilities AS c ON c.device_id = d.device_id WHERE c.capability_name = 'encrypted') INTERSECT DISTINCT (SELECT d.device_id, d.device_name FROM audit_devices AS d INNER JOIN device_capabilities AS c ON c.device_id = d.device_id WHERE c.capability_name = 'replicated')) EXCEPT (SELECT d.device_id, d.device_name FROM audit_devices AS d INNER JOIN device_capabilities AS c ON c.device_id = d.device_id WHERE c.capability_name = 'legacy-protocol') ORDER BY device_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT d.device_id, d.device_name, c.capability_name FROM audit_devices AS d LEFT JOIN device_capabilities AS c ON c.device_id = d.device_id ORDER BY d.device_id, c.capability_name",
+      "ordered": true
+    }
+  ]
+}
