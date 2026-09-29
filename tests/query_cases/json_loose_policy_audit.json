@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "json_loose_policy_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "cristiscu/json-in-databases",
+      "commit": "b32b098625ca58214312a90d73f27b340d81a772",
+      "path": "sections/19-json-in-mariadb/02-json-format.sql",
+      "url": "https://github.com/cristiscu/json-in-databases/blob/b32b098625ca58214312a90d73f27b340d81a772/sections/19-json-in-mariadb/02-json-format.sql",
+      "sha256": "70bd7f5688ace200acd19b7e039c3c9e2dc02b76e27c8e3f6e06256f0a86225d",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sections/19-json-in-mariadb/02-json-format.sql: JSON_LOOSE alongside JSON_PRETTY, JSON_DETAILED, and JSON_COMPACT",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB JSON-formatting query applies JSON_LOOSE to stored JSON documents to add readable spacing while preserving the document structure, alongside compact and detailed renderings.",
+      "mysql_mariadb_translation": "Reauthored as a policy-format audit. JSON_LOOSE renders two independently authored policy documents, JSON_SET composes a reviewed flag before loose formatting, and a SQL NULL document verifies NULL propagation. The source table, JSON values, and teaching-query context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "json-loose",
+    "json-column",
+    "json-set-composition",
+    "whitespace-normalization",
+    "null-propagation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Policy 901 contains a nested route and two flags, policy 902 contains a route with an empty flag list, and policy 903 is SQL NULL. JSON_LOOSE must add spaces after JSON separators, while JSON_SET plus JSON_LOOSE must preserve the original members and append reviewed=true.",
+  "determinism_notes": "Policy IDs and JSON documents are fixed and ordered by the primary key; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE policy_documents (policy_id INT PRIMARY KEY, policy_label VARCHAR(24) NOT NULL, policy JSON NULL)",
+    "INSERT INTO policy_documents VALUES (901, 'handoff', '{\"route\":{\"zone\":\"north\",\"priority\":2},\"flags\":[\"sealed\",\"audited\"]}'), (902, 'fallback', '{\"route\":{\"zone\":\"south\"},\"flags\":[]}'), (903, 'missing', NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT policy_id, policy_label, JSON_LOOSE(policy) AS loose_policy, JSON_LOOSE(JSON_SET(policy, '$.reviewed', TRUE)) AS reviewed_policy FROM policy_documents ORDER BY policy_id",
+      "ordered": true
+    }
+  ]
+}

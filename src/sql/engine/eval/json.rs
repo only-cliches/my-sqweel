@@ -70,6 +70,45 @@ pub(super) fn eval_json_compact(
     }
     Ok(Value::String(json_compact_text(&value)?))
 }
+pub(super) fn eval_json_loose(
+    arg: Option<&String>,
+    data: &Map<String, Value>,
+    last_insert_id: u64,
+) -> Result<Value> {
+    let Some(arg) = arg else {
+        return Ok(Value::Null);
+    };
+    let value = eval_json_document(arg, data, last_insert_id)?;
+    if value == Value::Null {
+        return Ok(Value::Null);
+    }
+    Ok(Value::String(json_loose_text(&value)?))
+}
+
+pub(crate) fn json_loose_text(value: &Value) -> Result<String> {
+    match public_json_value(value) {
+        Value::Null => Ok("null".to_string()),
+        Value::Bool(value) => Ok(value.to_string()),
+        Value::Number(value) => Ok(value.to_string()),
+        Value::String(value) => Ok(serde_json::to_string(&value)?),
+        Value::Array(values) => values
+            .iter()
+            .map(json_loose_text)
+            .collect::<Result<Vec<_>>>()
+            .map(|values| format!("[{}]", values.join(", "))),
+        Value::Object(values) => values
+            .iter()
+            .map(|(key, value)| {
+                Ok(format!(
+                    "{}: {}",
+                    serde_json::to_string(key)?,
+                    json_loose_text(value)?
+                ))
+            })
+            .collect::<Result<Vec<_>>>()
+            .map(|values| format!("{{{}}}", values.join(", "))),
+    }
+}
 
 pub(super) fn json_text_value(value: Value) -> Result<Value> {
     if matches!(&value, Value::String(value) if is_json_null(value)) {

@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "json_loose_policy_audit_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "json_loose_policy_audit",
+    "source": {
+      "kind": "github",
+      "repository": "cristiscu/json-in-databases",
+      "commit": "b32b098625ca58214312a90d73f27b340d81a772",
+      "path": "sections/19-json-in-mariadb/02-json-format.sql",
+      "url": "https://github.com/cristiscu/json-in-databases/blob/b32b098625ca58214312a90d73f27b340d81a772/sections/19-json-in-mariadb/02-json-format.sql",
+      "sha256": "70bd7f5688ace200acd19b7e039c3c9e2dc02b76e27c8e3f6e06256f0a86225d",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from json_loose_policy_audit",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A single JSON document is rendered through JSON_LOOSE, exposing MariaDB's spaced JSON text and result metadata.",
+      "mysql_mariadb_translation": "Reduced to one independently authored JSON column and one JSON_LOOSE projection, removing policy mutation, multiple rows, and NULL handling while retaining the formatting contract."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "json-loose",
+    "json-column",
+    "minimized-regression",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The fixed nested document must be rendered with spaces after object and array separators by JSON_LOOSE.",
+  "determinism_notes": "One fixed primary-key row and one ordered projection are used; no clocks, randomness, sleeps, or concurrent schedules are present.",
+  "setup": [
+    "CREATE TABLE loose_probe (probe_id INT PRIMARY KEY, document_value JSON NOT NULL)",
+    "INSERT INTO loose_probe VALUES (9901, '{\"route\":{\"zone\":\"north\",\"priority\":2},\"flags\":[\"sealed\",\"audited\"]}')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT probe_id, JSON_LOOSE(document_value) AS loose_document FROM loose_probe ORDER BY probe_id",
+      "ordered": true
+    }
+  ]
+}

@@ -366,6 +366,11 @@ pub(crate) const MARIADB_FUNCTION_SCOPE: &[FunctionScopeEntry] = &[
         rationale: "deterministic evaluator or query-engine support",
     },
     FunctionScopeEntry {
+        name: "JSON_LOOSE",
+        status: "implemented",
+        rationale: "deterministic evaluator or query-engine support",
+    },
+    FunctionScopeEntry {
         name: "JSON_CONTAINS",
         status: "implemented",
         rationale: "deterministic evaluator or query-engine support",
