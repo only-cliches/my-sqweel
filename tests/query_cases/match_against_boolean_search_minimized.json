@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "match_against_boolean_search_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "mariadb-corporation/mariadb-qa",
+      "commit": "5f7898e3a89feb85af301091143617716b4705c5",
+      "path": "BUGS/MDEV-24513.sql",
+      "url": "https://github.com/mariadb-corporation/mariadb-qa/blob/5f7898e3a89feb85af301091143617716b4705c5/BUGS/MDEV-24513.sql",
+      "sha256": "3555938c933c5183dc7250afb102df85f46afdd1952235303c2c970e8e604084",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "BUGS/MDEV-24513.sql:1-3",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A FULLTEXT-indexed column feeds a MATCH ... AGAINST predicate in a filtered query.",
+      "mysql_mariadb_translation": "Reduced from match_against_boolean_search to two independently authored cards: one required-token match and one excluded-token rejection, retaining the FULLTEXT index and BOOLEAN MODE predicate while removing the third non-matching row and final table-state check."
+    },
+    "independently_authored": true,
+    "minimized_from": "match_against_boolean_search"
+  },
+  "features": ["fulltext-index", "match-against", "boolean-mode", "minimized-regression", "deterministic-order"],
+  "fixture_notes": "Card 201 matches the required token; card 202 is rejected because it also contains the excluded token.",
+  "determinism_notes": "Card IDs, text, search operators, and ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE knowledge_cards_min (card_id INT PRIMARY KEY, body TEXT NOT NULL, FULLTEXT KEY ft_knowledge_body_min (body))",
+    "INSERT INTO knowledge_cards_min VALUES (201, 'Distributed caches reduce latency'), (202, 'Distributed queues use a legacy relay')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT card_id FROM knowledge_cards_min WHERE MATCH(body) AGAINST ('+distributed -legacy' IN BOOLEAN MODE) ORDER BY card_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT card_id, body FROM knowledge_cards_min ORDER BY card_id",
+      "ordered": true
+    }
+  ]
+}

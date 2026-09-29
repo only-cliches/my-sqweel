@@ -178,6 +178,7 @@ impl Visitor for SupportValidator {
             | Expr::Subquery(_)
             | Expr::Tuple(_)
             | Expr::Interval(_) => ControlFlow::Continue(()),
+            Expr::MatchAgainst { .. } => ControlFlow::Continue(()),
             _ => unsupported(format!("expression `{expr}`")),
         }
     }

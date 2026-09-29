@@ -13,6 +13,38 @@ fn merge_set_column_type(left: MysqlColumnType, right: MysqlColumnType) -> Mysql
         _ => left,
     }
 }
+fn boolean_fulltext_match(haystack: &str, query: &str) -> bool {
+    let tokens = haystack
+        .split(|character: char| !character.is_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .map(|token| token.to_ascii_lowercase())
+        .collect::<HashSet<_>>();
+    let mut has_positive = false;
+    for raw_term in query.split_whitespace() {
+        let (required, excluded, term) = match raw_term.as_bytes().first() {
+            Some(b'+') => (true, false, &raw_term[1..]),
+            Some(b'-') => (false, true, &raw_term[1..]),
+            _ => (false, false, raw_term),
+        };
+        let term = term.trim_matches(|character: char| !character.is_alphanumeric());
+        if term.is_empty() {
+            continue;
+        }
+        let present = tokens.contains(&term.to_ascii_lowercase());
+        if excluded && present {
+            return false;
+        }
+        if required {
+            has_positive = true;
+            if !present {
+                return false;
+            }
+        } else if !excluded {
+            has_positive = true;
+        }
+    }
+    has_positive
+}
 
 impl RawEngine {
     pub(super) fn select_query(&self, mut query: Query) -> Result<QueryResult> {
@@ -4158,6 +4190,38 @@ impl RawEngine {
                     .collect();
                 eval_quantified_values(left, compare_op, candidates, true)
             }
+            Expr::MatchAgainst {
+                columns,
+                match_value,
+                opt_search_modifier,
+            } => {
+                let Some(sqlparser::ast::SearchModifier::InBooleanMode) =
+                    opt_search_modifier.as_ref()
+                else {
+                    return Err(anyhow!("full-text MATCH supports only IN BOOLEAN MODE"));
+                };
+                let search = match match_value {
+                    SqlValue::SingleQuotedString(value) | SqlValue::DoubleQuotedString(value) => {
+                        value.clone()
+                    }
+                    _ => match_value
+                        .to_string()
+                        .trim_matches(['\'', '"'])
+                        .to_string(),
+                };
+                let haystack = columns
+                    .iter()
+                    .filter_map(|column| {
+                        data.iter()
+                            .find(|(name, _)| name.eq_ignore_ascii_case(&column.value))
+                            .map(|(_, value)| json_scalar_to_string(value))
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                Ok(Value::Number(Number::from(
+                    boolean_fulltext_match(&haystack, &search) as u8,
+                )))
+            }
             Expr::Collate { expr, collation } => {
                 let value = self.eval_expr_ctx(expr, data, last_insert_id)?;
                 Ok(eval::apply_collation(value, &collation.to_string()))
@@ -8291,6 +8355,10 @@ fn collect_expr_columns(expr: &Expr, columns: &mut HashSet<String>) {
                     if let Some(column) = parts.last() {
                         self.columns.insert(column.value.clone());
                     }
+                }
+                Expr::MatchAgainst { columns, .. } => {
+                    self.columns
+                        .extend(columns.iter().map(|column| column.value.clone()));
                 }
                 _ => {}
             }
