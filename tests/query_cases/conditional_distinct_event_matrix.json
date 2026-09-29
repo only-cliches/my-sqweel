@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "id": "conditional_distinct_event_matrix",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "cncf/devstats",
+      "commit": "540956463586395d982f1fc7685085c9e028a57b",
+      "path": "util_sql/monthly_data.sql",
+      "url": "https://github.com/cncf/devstats/blob/540956463586395d982f1fc7685085c9e028a57b/util_sql/monthly_data.sql",
+      "sha256": "e512185582c91fccb28264b345fc8e88a29129efc05f889afecf4f232d511b5a",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "util_sql/monthly_data.sql:14-33",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A grouped event report computes many distinct actor and event counts under different FILTER predicates in one projection, separating broad activity from event-specific contributor and event totals.",
+      "mysql_mariadb_translation": "Reauthored as a project event matrix. Fixed projects are left joined to events, PostgreSQL COUNT(DISTINCT ...) FILTER predicates become COUNT(DISTINCT CASE WHEN ... THEN ... END), and several actor- and event-level categories are computed together while an eventless project remains visible. The source dates, schema, names, event corpus, and dashboard context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["conditional-distinct", "multiple-conditional-distincts", "left-join", "grouped-report", "null-preserving-aggregate", "deterministic-order"],
+  "fixture_notes": "Project 11 has repeated actors across push, issue, review, and comment events; project 22 has one issue; project 33 has no events and must remain with zero conditional counts.",
+  "determinism_notes": "Project IDs, event IDs, actor IDs, event kinds, CASE predicates, grouping, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE project_catalog (project_id INT PRIMARY KEY, project_code VARCHAR(16) NOT NULL)",
+    "CREATE TABLE project_events (event_id INT PRIMARY KEY, project_id INT NOT NULL, actor_id INT NOT NULL, event_kind VARCHAR(16) NOT NULL)",
+    "INSERT INTO project_catalog VALUES (11, 'atlas'), (22, 'beacon'), (33, 'cinder')",
+    "INSERT INTO project_events VALUES (1101, 11, 501, 'push'), (1102, 11, 501, 'comment'), (1103, 11, 502, 'issue'), (1104, 11, 503, 'review'), (1105, 11, 503, 'comment'), (2201, 22, 601, 'issue')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT p.project_id, p.project_code, COUNT(DISTINCT CASE WHEN e.event_kind IN ('issue', 'push', 'review') THEN e.actor_id END) AS active_contributors, COUNT(DISTINCT CASE WHEN e.event_kind = 'push' THEN e.actor_id END) AS pushers, COUNT(DISTINCT CASE WHEN e.event_kind = 'review' THEN e.actor_id END) AS reviewers, COUNT(DISTINCT CASE WHEN e.event_kind = 'issue' THEN e.event_id END) AS issue_events, COUNT(DISTINCT CASE WHEN e.event_kind IN ('comment', 'review') THEN e.event_id END) AS discussion_events FROM project_catalog AS p LEFT JOIN project_events AS e ON e.project_id = p.project_id GROUP BY p.project_id, p.project_code ORDER BY p.project_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
