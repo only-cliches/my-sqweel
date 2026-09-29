@@ -4839,6 +4839,12 @@ impl RawEngine {
                     "extra".to_string(),
                     Value::String(if hint.auto_increment {
                         "auto_increment".to_string()
+                    } else if hint.generated.is_some() {
+                        if hint.generated_stored {
+                            "STORED GENERATED".to_string()
+                        } else {
+                            "VIRTUAL GENERATED".to_string()
+                        }
                     } else {
                         String::new()
                     }),

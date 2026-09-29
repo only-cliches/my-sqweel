@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "alter_algorithm_instant_generated",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "HeyPuter/puter",
+      "commit": "8e31d9149a85ef62b5b0f7a0c33e368391ab4ec4",
+      "path": "src/backend/clients/database/migrations/mysql/mysql_mig_21.sql",
+      "url": "https://github.com/HeyPuter/puter/blob/8e31d9149a85ef62b5b0f7a0c33e368391ab4ec4/src/backend/clients/database/migrations/mysql/mysql_mig_21.sql",
+      "sha256": "cd9cb5de4579cb713f422ffc3df656bb11a8121f427c592ec22f543d13f31007",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "src/backend/clients/database/migrations/mysql/mysql_mig_21.sql:69-80",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "An ALTER TABLE adds a virtual generated column and explicitly requests ALGORITHM=INSTANT so the schema change remains metadata-only.",
+      "mysql_mariadb_translation": "Reauthored as a contact-directory migration. A virtual generated ownership key is added with ALGORITHM=INSTANT from email and confirmation fields, and ordered data plus information-schema checks expose both computed values and column metadata. The source procedure, table, identifiers, and account workflow are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["alter-table", "algorithm-instant", "virtual-generated-column", "case-expression", "metadata-verification", "deterministic-order"],
+  "fixture_notes": "Confirmed contacts receive a lower-cased ownership key, while an unconfirmed contact receives NULL. The ALTER must preserve existing rows and expose the generated column as VIRTUAL.",
+  "determinism_notes": "Email values, confirmation flags, generated expression, metadata projection, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE contact_directory (contact_id INT PRIMARY KEY, email VARCHAR(64) NULL, email_confirmed TINYINT NOT NULL, clean_email VARCHAR(64) NULL)",
+    "INSERT INTO contact_directory VALUES (1001, 'Alex.Example@Mail.test', 1, NULL), (1002, 'placeholder@Mail.test', 0, NULL), (1003, 'Casey@Mail.test', 1, 'casey@canonical.test')"
+  ],
+  "steps": [
+    {
+      "sql": "ALTER TABLE contact_directory ADD COLUMN owned_key VARCHAR(64) GENERATED ALWAYS AS (CASE WHEN email IS NOT NULL AND email_confirmed = 1 THEN COALESCE(clean_email, LOWER(email)) ELSE NULL END) VIRTUAL, ALGORITHM=INSTANT",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT contact_id, email, email_confirmed, owned_key FROM contact_directory ORDER BY contact_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT COLUMN_NAME, EXTRA, IS_NULLABLE FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'contact_directory' AND column_name = 'owned_key' ORDER BY ORDINAL_POSITION",
+      "ordered": true
+    }
+  ]
+}

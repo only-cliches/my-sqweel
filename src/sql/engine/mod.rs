@@ -2313,6 +2313,9 @@ impl RawEngine {
         let upper = trimmed.to_ascii_uppercase();
         if upper.starts_with("ALTER TABLE") {
             let normalized = strip_alter_execution_options(trimmed);
+            if let Some(result) = self.execute_alter_add_generated_column_compat(&normalized)? {
+                return Ok(Some(result));
+            }
             if normalized != trimmed {
                 let normalized_upper = normalized.to_ascii_uppercase();
                 let normalized_tail = normalized_upper
@@ -2328,9 +2331,6 @@ impl RawEngine {
         }
 
         if let Some(result) = self.execute_alter_add_column_if_not_exists_compat(trimmed)? {
-            return Ok(Some(result));
-        }
-        if let Some(result) = self.execute_alter_add_generated_column_compat(trimmed)? {
             return Ok(Some(result));
         }
 
@@ -5375,7 +5375,15 @@ fn strip_alter_order_by_clause(sql: &str) -> String {
 
 fn strip_alter_execution_options(sql: &str) -> String {
     let mut result = sql.to_string();
-    for option in ["DEFAULT", "COPY", "INPLACE", "NONE", "SHARED", "EXCLUSIVE"] {
+    for option in [
+        "DEFAULT",
+        "COPY",
+        "INSTANT",
+        "INPLACE",
+        "NONE",
+        "SHARED",
+        "EXCLUSIVE",
+    ] {
         for spacing in ["= ", " = ", "="] {
             result = result.replace(&format!(", ALGORITHM{spacing}{option}"), "");
             result = result.replace(&format!(", LOCK{spacing}{option}"), "");

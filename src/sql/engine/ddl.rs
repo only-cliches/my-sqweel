@@ -817,11 +817,15 @@ pub(super) fn column_hint_from_def(col: &sqlparser::ast::ColumnDef) -> ColumnHin
         sql_type: Some(col.data_type.to_string()),
         ..ColumnHint::default()
     };
+    let mut explicit_not_null = false;
 
     for opt in &col.options {
+        let generated_option =
+            matches!(&opt.option, sqlparser::ast::ColumnOption::Generated { .. });
         let text = opt.option.to_string().to_uppercase();
-        if text.contains("NOT NULL") {
+        if text.contains("NOT NULL") && !generated_option {
             hint.nullable = Some(false);
+            explicit_not_null = true;
         }
         if text == "NULL" {
             hint.nullable = Some(true);
@@ -850,6 +854,12 @@ pub(super) fn column_hint_from_def(col: &sqlparser::ast::ColumnDef) -> ColumnHin
         if let Some(comment) = column_comment_from_text(&opt.option.to_string()) {
             hint.comment = Some(comment);
         }
+    }
+
+    // MySQL/MariaDB generated columns are nullable unless explicitly declared
+    // NOT NULL; sqlparser may otherwise infer a non-nullable generated column.
+    if hint.generated.is_some() && !explicit_not_null && !hint.primary_key {
+        hint.nullable = Some(true);
     }
 
     hint
