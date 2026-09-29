@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "id": "percent_rank_median_cte",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "scenarios/window-analytics/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/scenarios/window-analytics/mysql.sql",
+      "sha256": "cfe5bd07baa23d84ab54915477310fee678124ea795371c0f5dc4de108ffdd18",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "scenarios/window-analytics/mysql.sql:109-120",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A ranked CTE uses partitioned PERCENT_RANK values as a portable approximation for a department median, then filters the percentile band and aggregates the surviving salaries.",
+      "mysql_mariadb_translation": "Reauthored as an independent compensation audit. Fixed pay rows are ranked within newly authored divisions, the narrow 0.49-to-0.51 percentile band selects the central rank for odd-sized divisions, and AVG produces the reported median salary. An even-sized division intentionally has no row in the approximation band and is absent from the grouped result; source schema, identifiers, values, and tutorial context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["cte", "partitioned-percent-rank", "median-approximation", "percentile-band-filter", "grouped-aggregate", "deterministic-order"],
+  "fixture_notes": "Division 10 has five salaries and yields 600, division 20 has three salaries and yields 450, and division 30 has four salaries so no PERCENT_RANK value falls in the narrow median band. The even-sized division therefore has no grouped output row.",
+  "determinism_notes": "Division, employee, salary, partition ordering, percentile bounds, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE compensation_divisions (division_id INT PRIMARY KEY, division_label VARCHAR(24) NOT NULL)",
+    "CREATE TABLE compensation_pay (employee_id INT PRIMARY KEY, division_id INT NOT NULL, salary INT NOT NULL)",
+    "INSERT INTO compensation_divisions VALUES (10, 'operations'), (20, 'support'), (30, 'research')",
+    "INSERT INTO compensation_pay VALUES (1001, 10, 400), (1002, 10, 500), (1003, 10, 600), (1004, 10, 700), (1005, 10, 800), (2001, 20, 300), (2002, 20, 450), (2003, 20, 600), (3001, 30, 250), (3002, 30, 350), (3003, 30, 450), (3004, 30, 550)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH ranked_pay AS (SELECT division_id, salary, PERCENT_RANK() OVER (PARTITION BY division_id ORDER BY salary) AS percentile_rank FROM compensation_pay) SELECT division_id, AVG(salary) AS median_salary FROM ranked_pay WHERE percentile_rank BETWEEN 0.49 AND 0.51 GROUP BY division_id ORDER BY division_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
