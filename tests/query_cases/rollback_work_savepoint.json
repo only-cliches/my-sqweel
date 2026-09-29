@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "rollback_work_savepoint",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/2201.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/2201.sql",
+      "sha256": "6711dd1dde1856a115a8de6aea02dd6fc15e179896351053708df7868d3d7e38",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/docker/fuzz_root/mysql_initlib/2201.sql:88-91",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A transaction creates a savepoint and uses the MySQL ROLLBACK WORK TO SAVEPOINT spelling to discard later changes while retaining earlier work.",
+      "mysql_mariadb_translation": "Reauthored as a release-check ledger. An earlier status update survives a named savepoint rollback, a provisional update is discarded with ROLLBACK WORK TO SAVEPOINT, a replacement update is committed, and the final ordered ledger exposes the retained state; the source fuzz rows and identifiers are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["transaction", "savepoint", "rollback-work-to-savepoint", "partial-rollback", "commit-final-state", "deterministic-order"],
+  "fixture_notes": "Entries 7301 and 7302 start as queued. The first entry is marked reviewing before the savepoint and must survive; its provisional rejected state is undone, then the replacement approved state is committed. Entry 7303 is unchanged.",
+  "determinism_notes": "Entry IDs, statuses, savepoint name, mutation order, and final primary-key ordering are fixed; one connection executes the transaction sequentially with no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE release_check_ledger (entry_id INT PRIMARY KEY, entry_code VARCHAR(24) NOT NULL, entry_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO release_check_ledger VALUES (7301, 'north-check', 'queued'), (7302, 'central-check', 'queued'), (7303, 'south-check', 'held')"
+  ],
+  "steps": [
+    {"sql": "START TRANSACTION", "ordered": false},
+    {"sql": "UPDATE release_check_ledger SET entry_state = 'reviewing' WHERE entry_id = 7301", "ordered": false},
+    {"sql": "SAVEPOINT before_decision", "ordered": false},
+    {"sql": "UPDATE release_check_ledger SET entry_state = 'rejected' WHERE entry_id = 7301", "ordered": false},
+    {"sql": "ROLLBACK WORK TO SAVEPOINT before_decision", "ordered": false},
+    {"sql": "UPDATE release_check_ledger SET entry_state = 'approved' WHERE entry_id = 7301", "ordered": false},
+    {"sql": "COMMIT", "ordered": false}
+  ],
+  "checks": [
+    {"sql": "SELECT entry_id, entry_code, entry_state FROM release_check_ledger ORDER BY entry_id", "ordered": true}
+  ]
+}
