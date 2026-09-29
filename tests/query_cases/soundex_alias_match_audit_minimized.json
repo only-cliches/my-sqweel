@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "id": "soundex_alias_match_audit_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "soundex_alias_match_audit",
+    "source": {
+      "kind": "github",
+      "repository": "anilsolanki2645/MySQL-Tutorial",
+      "commit": "205393ee3b9db1041777e8667161f62e656c6558",
+      "path": "MySQL-String-Function.sql",
+      "url": "https://github.com/anilsolanki2645/MySQL-Tutorial/blob/205393ee3b9db1041777e8667161f62e656c6558/MySQL-String-Function.sql",
+      "sha256": "4889fbabcd6e16b646c2568cd6d959bce8de65d338fe8dad0042a81d4d428d25",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from SOUNDEX in MySQL-String-Function.sql: SOUNDEX section [33]",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A scalar SOUNDEX call returns a phonetic key for one fixed name.",
+      "mysql_mariadb_translation": "Reduced to one independently authored scalar comparison of Smith and Smythe, removing table state and classification branches while retaining the SOUNDEX result and equality contract."
+    },
+    "independently_authored": true,
+    "minimized_from": "soundex_alias_match_audit"
+  },
+  "features": [
+    "soundex",
+    "phonetic-comparison",
+    "minimized-regression"
+  ],
+  "fixture_notes": "The fixed Smith/Smythe pair must produce the same SOUNDEX key and a true phonetic-match flag.",
+  "determinism_notes": "The scalar names are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT SOUNDEX('Smith') AS candidate_key, SOUNDEX('Smythe') AS reference_key, SOUNDEX('Smith') = SOUNDEX('Smythe') AS phonetic_match",
+      "ordered": true
+    }
+  ]
+}

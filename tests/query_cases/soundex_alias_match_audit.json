@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "soundex_alias_match_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "anilsolanki2645/MySQL-Tutorial",
+      "commit": "205393ee3b9db1041777e8667161f62e656c6558",
+      "path": "MySQL-String-Function.sql",
+      "url": "https://github.com/anilsolanki2645/MySQL-Tutorial/blob/205393ee3b9db1041777e8667161f62e656c6558/MySQL-String-Function.sql",
+      "sha256": "4889fbabcd6e16b646c2568cd6d959bce8de65d338fe8dad0042a81d4d428d25",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL-String-Function.sql: SOUNDEX section [33]",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL string-function example applies SOUNDEX to names to produce four-character phonetic keys.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored alias-review audit. Candidate and reference names exercise matching phonetic keys, different keys, and SQL NULL propagation; CASE classifies the comparison while the table, names, and reporting context are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "soundex",
+    "phonetic-comparison",
+    "case-classification",
+    "null-propagation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Alias 1201 compares Smith with Smythe, 1202 compares Robert with Rupert, and 1203 compares Ashcraft with Ashcroft; all three pairs share MariaDB phonetic keys. Alias 1204 has a NULL reference, and alias 1205 has a NULL candidate, so the classification must preserve the missing state instead of reporting a phonetic match.",
+  "determinism_notes": "Alias IDs and names are fixed and ordered by the primary key; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE alias_reviews (review_id INT PRIMARY KEY, candidate_name VARCHAR(40) NULL, reference_name VARCHAR(40) NULL)",
+    "INSERT INTO alias_reviews VALUES (1201, 'Smith', 'Smythe'), (1202, 'Robert', 'Rupert'), (1203, 'Ashcraft', 'Ashcroft'), (1204, 'Green', NULL), (1205, NULL, 'Greene')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT review_id, candidate_name, reference_name, SOUNDEX(candidate_name) AS candidate_key, SOUNDEX(reference_name) AS reference_key, CASE WHEN candidate_name IS NULL OR reference_name IS NULL THEN 'missing' WHEN SOUNDEX(candidate_name) = SOUNDEX(reference_name) THEN 'phonetic-match' ELSE 'different' END AS review_state FROM alias_reviews ORDER BY review_id",
+      "ordered": true
+    }
+  ]
+}
