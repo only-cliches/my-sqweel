@@ -2153,7 +2153,9 @@ impl RawEngine {
         let upper = trimmed.to_ascii_uppercase();
         if !upper.starts_with("ALTER TABLE ")
             || !(upper.contains("DROP KEY IF EXISTS")
-                || upper.contains("ADD UNIQUE KEY IF NOT EXISTS"))
+                || upper.contains("ADD INDEX IF NOT EXISTS")
+                || upper.contains("ADD UNIQUE KEY IF NOT EXISTS")
+                || upper.contains("ADD UNIQUE INDEX IF NOT EXISTS"))
         {
             return Ok(None);
         }
@@ -2164,11 +2166,18 @@ impl RawEngine {
         };
         let table = remainder[..table_end].trim();
         let operations = eval::split_sql_args(remainder[table_end..].trim());
+        let add_markers = [
+            "ADD UNIQUE KEY IF NOT EXISTS ",
+            "ADD UNIQUE INDEX IF NOT EXISTS ",
+            "ADD INDEX IF NOT EXISTS ",
+        ];
         if operations.is_empty()
             || operations.iter().any(|operation| {
                 let operation_upper = operation.trim().to_ascii_uppercase();
                 !(operation_upper.starts_with("DROP KEY IF EXISTS ")
-                    || operation_upper.starts_with("ADD UNIQUE KEY IF NOT EXISTS "))
+                    || add_markers
+                        .iter()
+                        .any(|marker| operation_upper.starts_with(marker)))
             })
         {
             return Ok(None);
@@ -2202,7 +2211,11 @@ impl RawEngine {
                     self.rebuild_indexes(table_name);
                 }
             } else {
-                let definition = operation["ADD UNIQUE KEY IF NOT EXISTS ".len()..].trim();
+                let marker = add_markers
+                    .iter()
+                    .find(|marker| operation_upper.starts_with(**marker))
+                    .expect("validated conditional index operation");
+                let definition = operation[marker.len()..].trim();
                 let key = definition
                     .split_whitespace()
                     .next()
@@ -2215,7 +2228,12 @@ impl RawEngine {
                         .any(|index| index.name.eq_ignore_ascii_case(key))
                 });
                 if !exists {
-                    let normalized = format!("ALTER TABLE {table} ADD UNIQUE INDEX {definition}");
+                    let add_kind = if marker.starts_with("ADD UNIQUE") {
+                        "ADD UNIQUE INDEX"
+                    } else {
+                        "ADD INDEX"
+                    };
+                    let normalized = format!("ALTER TABLE {table} {add_kind} {definition}");
                     self.execute_sql_internal(&normalized, &normalized, true, false)?;
                 }
             }

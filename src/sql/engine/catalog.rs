@@ -736,7 +736,10 @@ fn rewrite_conditional_key_syntax(sql: &str) -> Option<String> {
     let trimmed = sql.trim();
     let upper = trimmed.to_ascii_uppercase();
     if !upper.starts_with("ALTER TABLE ")
-        || !(upper.contains("DROP KEY IF EXISTS") || upper.contains("ADD UNIQUE KEY IF NOT EXISTS"))
+        || !(upper.contains("DROP KEY IF EXISTS")
+            || upper.contains("ADD INDEX IF NOT EXISTS")
+            || upper.contains("ADD UNIQUE KEY IF NOT EXISTS")
+            || upper.contains("ADD UNIQUE INDEX IF NOT EXISTS"))
     {
         return None;
     }
@@ -745,6 +748,8 @@ fn rewrite_conditional_key_syntax(sql: &str) -> Option<String> {
     for (needle, replacement) in [
         ("DROP KEY IF EXISTS", "DROP INDEX"),
         ("ADD UNIQUE KEY IF NOT EXISTS", "ADD UNIQUE INDEX"),
+        ("ADD UNIQUE INDEX IF NOT EXISTS", "ADD UNIQUE INDEX"),
+        ("ADD INDEX IF NOT EXISTS", "ADD INDEX"),
     ] {
         loop {
             let upper = rewritten.to_ascii_uppercase();
@@ -761,11 +766,13 @@ fn rewrite_conditional_key_syntax(sql: &str) -> Option<String> {
     let remainder = &rewritten["ALTER TABLE ".len()..];
     let table_end = remainder.find(char::is_whitespace)?;
     let table = remainder[..table_end].trim();
-    if let Some(add_at) = upper.find("ADD UNIQUE INDEX ") {
-        let definition = rewritten[add_at + "ADD UNIQUE INDEX ".len()..].trim();
-        let candidate = format!("ALTER TABLE {table} ADD UNIQUE INDEX {definition}");
-        if crate::sql::parse(&candidate).is_ok() {
-            return Some(candidate);
+    for marker in ["ADD UNIQUE INDEX ", "ADD INDEX "] {
+        if let Some(add_at) = upper.find(marker) {
+            let definition = rewritten[add_at + marker.len()..].trim();
+            let candidate = format!("ALTER TABLE {table} {marker}{definition}");
+            if crate::sql::parse(&candidate).is_ok() {
+                return Some(candidate);
+            }
         }
     }
     if let Some(drop_at) = upper.find("DROP INDEX ") {

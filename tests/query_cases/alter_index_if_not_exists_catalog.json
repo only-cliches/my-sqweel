@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "id": "alter_index_if_not_exists_catalog",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "7Cav/api",
+      "commit": "bd0e59896f103dc34109ed9c05456e8c3b8931b0",
+      "path": "testdb/indexes.sql",
+      "url": "https://github.com/7Cav/api/blob/bd0e59896f103dc34109ed9c05456e8c3b8931b0/testdb/indexes.sql",
+      "sha256": "d4875709b29a5f59b8c5bbab61dccab55c589a30f15973ee00db0fb6ce5f8041",
+      "source_dialect": "mariadb"
+    },
+    "inspiration": {
+      "source_location": "testdb/indexes.sql:40-43",
+      "source_dialect": "mariadb",
+      "observed_pattern": "A MariaDB maintenance script adds named secondary indexes with ALTER TABLE ... ADD INDEX IF NOT EXISTS so the same index restoration can be safely reapplied after schema changes.",
+      "mysql_mariadb_translation": "Reauthored as an independent shipment-catalog migration. Two related tables receive a composite lookup index and a single-column state index through MariaDB's conditional ALTER syntax; repeating each ALTER is a no-op, and information_schema plus ordered reads verify index definitions and preserved rows. The source tables, names, values, operational context, and performance claims are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "alter-table-add-index-if-not-exists",
+    "composite-index",
+    "idempotent-ddl",
+    "information-schema",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Shipment rows and scan rows begin without secondary indexes. The first ALTER statements add a composite shipment lookup index and a scan-state index; the repeated ALTER statements must preserve both index definitions and all rows without duplicate-index errors.",
+  "determinism_notes": "Index names, columns, rows, and metadata projections are fixed; metadata is ordered by table, index name, and sequence, final rows by primary key, and no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE shipment_catalog (shipment_id INT PRIMARY KEY, account_id INT NOT NULL, shipment_state VARCHAR(16) NOT NULL, shipped_on DATE NOT NULL, destination_code VARCHAR(12) NOT NULL)",
+    "CREATE TABLE shipment_scans (scan_id INT PRIMARY KEY, shipment_id INT NOT NULL, scan_state VARCHAR(16) NOT NULL, scan_code VARCHAR(16) NOT NULL)",
+    "INSERT INTO shipment_catalog (shipment_id, account_id, shipment_state, shipped_on, destination_code) VALUES (801, 41, 'in_transit', '2026-09-01', 'NORTH'), (802, 42, 'delivered', '2026-09-02', 'SOUTH'), (803, 41, 'queued', '2026-09-03', 'NORTH')",
+    "INSERT INTO shipment_scans (scan_id, shipment_id, scan_state, scan_code) VALUES (9001, 801, 'loaded', 'LD'), (9002, 802, 'received', 'RC'), (9003, 803, 'created', 'CR')"
+  ],
+  "steps": [
+    {
+      "sql": "ALTER TABLE shipment_catalog ADD INDEX IF NOT EXISTS shipment_account_date_idx (account_id, shipped_on)",
+      "ordered": true
+    },
+    {
+      "sql": "ALTER TABLE shipment_scans ADD INDEX IF NOT EXISTS scan_state_shipment_idx (scan_state, shipment_id)",
+      "ordered": true
+    },
+    {
+      "sql": "ALTER TABLE shipment_catalog ADD INDEX IF NOT EXISTS shipment_account_date_idx (account_id, shipped_on)",
+      "ordered": true
+    },
+    {
+      "sql": "ALTER TABLE shipment_scans ADD INDEX IF NOT EXISTS scan_state_shipment_idx (scan_state, shipment_id)",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT table_name, index_name, seq_in_index, column_name FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name IN ('shipment_catalog', 'shipment_scans') AND index_name IN ('shipment_account_date_idx', 'scan_state_shipment_idx') ORDER BY table_name, index_name, seq_in_index",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT shipment_id, account_id, shipment_state, shipped_on, destination_code FROM shipment_catalog ORDER BY shipment_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT scan_id, shipment_id, scan_state, scan_code FROM shipment_scans ORDER BY scan_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
