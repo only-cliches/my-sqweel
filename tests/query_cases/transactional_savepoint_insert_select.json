@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "transactional_savepoint_insert_select",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "savioti/postgres_sql_studies",
+      "commit": "c1f167b6d70d0b2af729f10f398aef33c820341c",
+      "path": "src/advanced/savepoint.sql",
+      "url": "https://github.com/savioti/postgres_sql_studies/blob/c1f167b6d70d0b2af729f10f398aef33c820341c/src/advanced/savepoint.sql",
+      "sha256": "12bbeb36f1cb869f42fd89e8feeeaaee66ac3b40582b57082106008775ceed33",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "src/advanced/savepoint.sql: transaction INSERT, SAVEPOINT, UPDATE, ROLLBACK TO SAVEPOINT, COMMIT sequence",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A transaction inserts a row, establishes a savepoint, performs a later update, rolls back to the savepoint so the insert survives while the update is undone, and commits the remaining state.",
+      "mysql_mariadb_translation": "Reauthored as a work-intake transaction. A ready feed row is inserted through INSERT ... SELECT ... RETURNING, a savepoint protects the loaded state, two updates are intentionally rolled back, and a final update after the rollback is committed; the source schema, identifiers, values, and teaching example are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["transaction", "insert-select", "returning", "savepoint", "rollback-to-savepoint", "commit", "intermediate-state", "deterministic-final-state"],
+  "fixture_notes": "Work item 11 starts at quantity four. Ready feed item beta is inserted as item 12 and returned. Updates to alpha and beta after the savepoint are visible before rollback but both are undone; beta is then marked verified after the rollback and the transaction commits. Paused feed item gamma is never selected.",
+  "determinism_notes": "The auto-increment sequence, feed ordering, quantities, statuses, savepoint name, and final ordering are fixed. One connection executes statements sequentially with no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE work_items (item_id INT AUTO_INCREMENT PRIMARY KEY, item_code VARCHAR(16) NOT NULL UNIQUE, item_state VARCHAR(16) NOT NULL, quantity INT NOT NULL)",
+    "CREATE TABLE intake_feed (feed_id INT PRIMARY KEY, item_code VARCHAR(16) NOT NULL, feed_state VARCHAR(16) NOT NULL, quantity INT NOT NULL)",
+    "INSERT INTO work_items VALUES (11, 'alpha', 'queued', 4)",
+    "INSERT INTO intake_feed VALUES (201, 'beta', 'ready', 6), (202, 'gamma', 'paused', 9)"
+  ],
+  "steps": [
+    {"sql": "START TRANSACTION", "ordered": false},
+    {"sql": "INSERT INTO work_items (item_code, item_state, quantity) SELECT item_code, 'queued', quantity FROM intake_feed WHERE feed_state = 'ready' ORDER BY feed_id LIMIT 1 RETURNING item_id, item_code, item_state, quantity", "ordered": true},
+    {"sql": "SAVEPOINT after_load", "ordered": false},
+    {"sql": "UPDATE work_items SET quantity = quantity + 100 WHERE item_code = 'alpha'", "ordered": false},
+    {"sql": "UPDATE work_items SET item_state = 'reviewing' WHERE item_code = 'beta'", "ordered": false},
+    {"sql": "SELECT item_id, item_code, item_state, quantity FROM work_items ORDER BY item_id", "ordered": true},
+    {"sql": "ROLLBACK TO SAVEPOINT after_load", "ordered": false},
+    {"sql": "SELECT item_id, item_code, item_state, quantity FROM work_items ORDER BY item_id", "ordered": true},
+    {"sql": "UPDATE work_items SET item_state = 'verified' WHERE item_code = 'beta'", "ordered": false},
+    {"sql": "RELEASE SAVEPOINT after_load", "ordered": false},
+    {"sql": "COMMIT", "ordered": false}
+  ],
+  "checks": [
+    {"sql": "SELECT item_id, item_code, item_state, quantity FROM work_items ORDER BY item_id", "ordered": true},
+    {"sql": "SELECT feed_id, item_code, feed_state, quantity FROM intake_feed ORDER BY feed_id", "ordered": true}
+  ]
+}
