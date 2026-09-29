@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "empty_column_insert_returning",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "iauu/GambaBot",
+      "commit": "6871849a3fe1fb66ed145851245ef3a387b37bd0",
+      "path": "server/sql/user_create.sql",
+      "url": "https://github.com/iauu/GambaBot/blob/6871849a3fe1fb66ed145851245ef3a387b37bd0/server/sql/user_create.sql",
+      "sha256": "7518bdfdfcb5f8a5ca68d9af4cd5190a4e965bdd94f847a9f17b27e735d37f90",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "server/sql/user_create.sql:2-4",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "An INSERT with an empty column list and empty VALUES tuple lets defaults and auto-increment supply a new row, while RETURNING exposes the generated identifier immediately.",
+      "mysql_mariadb_translation": "Reauthored as an access-pass allocator. Two INSERT INTO ... () VALUES () RETURNING statements rely on an auto-increment key and fixed defaults, and ordered final-state verification proves each generated row's identity and default status. The source tables, identifiers, workflow, and follow-up application statements are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["empty-column-insert", "default-values", "auto-increment", "returning", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "Both empty-column inserts must allocate consecutive pass IDs and return the declared default state and label; no explicit values are supplied in either INSERT.",
+  "determinism_notes": "The table starts empty, the auto-increment sequence begins at one, defaults are fixed literals, and all returned/final rows are ordered by pass ID without clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE access_passes (pass_id INT AUTO_INCREMENT PRIMARY KEY, pass_state VARCHAR(16) NOT NULL DEFAULT 'pending', pass_label VARCHAR(32) NOT NULL DEFAULT 'unassigned')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO access_passes () VALUES () RETURNING pass_id, pass_state, pass_label",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO access_passes () VALUES () RETURNING pass_id, pass_state, pass_label",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT pass_id, pass_state, pass_label FROM access_passes ORDER BY pass_id",
+      "ordered": true
+    }
+  ]
+}
