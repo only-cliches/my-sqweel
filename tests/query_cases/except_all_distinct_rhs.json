@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "id": "except_all_distinct_rhs",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "tursodatabase/turso",
+      "commit": "36da5b2e435cb07bba3bed2c7e7eef236b6b2e64",
+      "path": "postgres/conformance/upstream/union.sql",
+      "url": "https://github.com/tursodatabase/turso/blob/36da5b2e435cb07bba3bed2c7e7eef236b6b2e64/postgres/conformance/upstream/union.sql",
+      "sha256": "449bddc1a9917a4acc74a6e96a6372607f9ac96e7eae0996a60947dc83bf376b",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "postgres/conformance/upstream/union.sql:103-111",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "EXCEPT ALL subtracts duplicate multiplicity from a left relation while a DISTINCT right operand first collapses its own repeated values.",
+      "mysql_mariadb_translation": "Reauthored as an independent entitlement reconciliation. Requested entitlement rows intentionally repeat codes, while the blocked relation repeats some codes too; EXCEPT ALL against SELECT DISTINCT removes one occurrence per distinct blocked code and preserves remaining request multiplicity. The source tables, identifiers, values, and conformance data are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["except-all", "distinct-right-operand", "multiset-difference", "duplicate-preservation", "set-operations", "deterministic-order"],
+  "fixture_notes": "Requested code alpha appears twice, beta once, and gamma once. The blocked relation repeats alpha and gamma; DISTINCT on the right collapses those repeats, so one alpha, beta, and no gamma remain after EXCEPT ALL.",
+  "determinism_notes": "Request and block IDs and labels are fixed, and the set result is explicitly ordered by entitlement code. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE requested_entitlements (request_id INT PRIMARY KEY, entitlement_code VARCHAR(24) NOT NULL)",
+    "CREATE TABLE blocked_entitlements (block_id INT PRIMARY KEY, entitlement_code VARCHAR(24) NOT NULL)",
+    "INSERT INTO requested_entitlements VALUES (101, 'alpha'), (102, 'alpha'), (103, 'beta'), (104, 'gamma')",
+    "INSERT INTO blocked_entitlements VALUES (201, 'alpha'), (202, 'alpha'), (203, 'gamma'), (204, 'gamma')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT entitlement_code FROM requested_entitlements EXCEPT ALL SELECT DISTINCT entitlement_code FROM blocked_entitlements ORDER BY entitlement_code",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
