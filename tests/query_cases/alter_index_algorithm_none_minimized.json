@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "id": "alter_index_algorithm_none_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "LiveHelperChat/livehelperchat",
+      "commit": "3cc7a3cf74626bd6e473c82ea64f4df18555666b",
+      "path": "lhc_web/doc/update_db/update_298.sql",
+      "url": "https://github.com/LiveHelperChat/livehelperchat/blob/3cc7a3cf74626bd6e473c82ea64f4df18555666b/lhc_web/doc/update_db/update_298.sql",
+      "sha256": "64f13b5711f884c926d64ba6497aeddde1117863e668bb31dedb19255a71b02c",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from ALTER TABLE ... ADD ..., ALGORITHM=INPLACE, LOCK=NONE in lhc_web/doc/update_db/update_298.sql",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "ALTER TABLE adds one column while explicitly selecting the INPLACE algorithm and no table lock.",
+      "mysql_mariadb_translation": "Reduced to one independently authored sensor row and one non-null defaulted column. The algorithm and lock clauses remain while the secondary index, second row, and metadata inspection are removed to isolate ALTER TABLE option parsing."
+    },
+    "independently_authored": true,
+    "minimized_from": "alter_index_algorithm_none"
+  },
+  "features": ["alter-table-add-column", "algorithm-inplace", "lock-none", "minimized-regression"],
+  "fixture_notes": "One sensor row receives the new label column's declared default; the minimized query isolates the ALTER TABLE option clauses.",
+  "determinism_notes": "The sensor ID, default, and ordered read are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE sensor_label_probe (sensor_id INT PRIMARY KEY, sensor_code VARCHAR(16) NOT NULL)",
+    "INSERT INTO sensor_label_probe VALUES (901, 'probe-1')"
+  ],
+  "steps": [
+    {
+      "sql": "ALTER TABLE sensor_label_probe ADD COLUMN label_class VARCHAR(16) NOT NULL DEFAULT 'unclassified', ALGORITHM=INPLACE, LOCK=NONE",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT sensor_id, sensor_code, label_class FROM sensor_label_probe ORDER BY sensor_id",
+      "ordered": true
+    }
+  ]
+}

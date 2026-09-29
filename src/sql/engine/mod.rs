@@ -1296,7 +1296,6 @@ impl RawEngine {
         if !upper.starts_with("SELECT ") {
             return false;
         }
-
         const REWRITE_MARKERS: &[&str] = &[
             " ALL",
             " DISTINCT DISTINCT",
@@ -2201,6 +2200,14 @@ impl RawEngine {
             return Ok(Some(QueryResult::default()));
         }
         let upper = trimmed.to_ascii_uppercase();
+        if upper.starts_with("ALTER TABLE") {
+            let normalized = strip_alter_execution_options(trimmed);
+            if normalized != trimmed {
+                let mut results =
+                    self.execute_sql_internal(&normalized, &normalized, true, false)?;
+                return Ok(Some(results.drain(..).next().unwrap_or_default()));
+            }
+        }
         if let Some(result) = self.execute_alter_add_column_if_not_exists_compat(trimmed)? {
             return Ok(Some(result));
         }

@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "id": "alter_index_algorithm_none",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "LiveHelperChat/livehelperchat",
+      "commit": "3cc7a3cf74626bd6e473c82ea64f4df18555666b",
+      "path": "lhc_web/doc/update_db/update_298.sql",
+      "url": "https://github.com/LiveHelperChat/livehelperchat/blob/3cc7a3cf74626bd6e473c82ea64f4df18555666b/lhc_web/doc/update_db/update_298.sql",
+      "sha256": "64f13b5711f884c926d64ba6497aeddde1117863e668bb31dedb19255a71b02c",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "lhc_web/doc/update_db/update_298.sql: ALTER TABLE ... ADD ..., ALGORITHM=INPLACE, LOCK=NONE",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL migration adds a column and explicitly requests the INPLACE algorithm with no table lock.",
+      "mysql_mariadb_translation": "Reauthored as an independent sensor-label migration. ALTER TABLE adds a non-null label column while explicitly selecting ALGORITHM=INPLACE and LOCK=NONE; an ordered read verifies existing rows and the declared default. The source table, column names, defaults, and application context are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["alter-table-add-column", "algorithm-inplace", "lock-none", "deterministic-order"],
+  "fixture_notes": "Two fixed sensor rows receive the new label column's declared default. The migration must preserve existing values and row order.",
+  "determinism_notes": "Sensor IDs, labels, default, and ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE sensor_labels (sensor_id INT PRIMARY KEY, sensor_code VARCHAR(16) NOT NULL, sensor_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO sensor_labels VALUES (501, 'north-1', 'ready'), (502, 'south-1', 'held')"
+  ],
+  "steps": [
+    {
+      "sql": "ALTER TABLE sensor_labels ADD COLUMN label_class VARCHAR(16) NOT NULL DEFAULT 'unclassified', ALGORITHM=INPLACE, LOCK=NONE",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT sensor_id, sensor_code, sensor_state, label_class FROM sensor_labels ORDER BY sensor_id",
+      "ordered": true
+    }
+  ]
+}
