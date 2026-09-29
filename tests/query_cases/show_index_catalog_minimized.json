@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "show_index_catalog_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "show_index_catalog",
+    "source": {
+      "kind": "github",
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/534.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/534.sql",
+      "sha256": "78727326fc9eed4638dbcb0f25330db42816e026a6da6926113b5ead27aed718",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/docker/fuzz_root/mysql_initlib/534.sql:5 (SHOW INDEX metadata statement)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "SHOW INDEX exposes one table's primary and secondary index metadata as a protocol result.",
+      "mysql_mariadb_translation": "Reduced to one independently authored row, one primary key, and one composite secondary index. The minimized query isolates SHOW INDEX ordering, cardinality, null fields, and result metadata from the catalog report's extra rows and final information_schema check."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "show-index",
+    "minimized-regression"
+  ],
+  "fixture_notes": "One fixed row gives both indexes cardinality 1 while preserving a composite secondary key and nullable SHOW INDEX metadata fields.",
+  "determinism_notes": "The DDL, one row, and metadata statement are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE mini_index_catalog (entry_id INT PRIMARY KEY, region_code VARCHAR(8) NOT NULL, priority INT NOT NULL, KEY idx_region_priority (region_code, priority))",
+    "INSERT INTO mini_index_catalog VALUES (41, 'west', 2)"
+  ],
+  "steps": [
+    {
+      "sql": "SHOW INDEX FROM mini_index_catalog",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT index_name, non_unique, seq_in_index, column_name FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = 'mini_index_catalog' ORDER BY index_name, seq_in_index",
+      "ordered": true
+    }
+  ]
+}

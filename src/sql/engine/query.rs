@@ -6123,7 +6123,10 @@ impl RawEngine {
         .collect::<Vec<_>>();
         let mut rows = Vec::new();
         if let Some(schema) = self.schemas.get(table) {
-            for index in &schema.indexes {
+            let table_rows = self.rows.get(table);
+            let mut indexes = schema.indexes.iter().collect::<Vec<_>>();
+            indexes.sort_by(|left, right| left.name.cmp(&right.name));
+            for index in indexes {
                 for (idx, column) in index.columns.iter().enumerate() {
                     let mut row = Map::new();
                     row.insert("Table".to_string(), Value::String(schema.table.clone()));
@@ -6138,7 +6141,29 @@ impl RawEngine {
                     );
                     row.insert("Column_name".to_string(), Value::String(column.clone()));
                     row.insert("Collation".to_string(), Value::String("A".to_string()));
-                    row.insert("Cardinality".to_string(), Value::Null);
+                    let cardinality = table_rows
+                        .as_ref()
+                        .map(|rows| {
+                            rows.values()
+                                .map(|stored| {
+                                    let prefix = index
+                                        .columns
+                                        .iter()
+                                        .take(idx + 1)
+                                        .map(|name| {
+                                            stored.data.get(name).cloned().unwrap_or(Value::Null)
+                                        })
+                                        .collect::<Vec<_>>();
+                                    serde_json::to_string(&prefix).unwrap_or_default()
+                                })
+                                .collect::<BTreeSet<_>>()
+                                .len() as u64
+                        })
+                        .unwrap_or(0);
+                    row.insert(
+                        "Cardinality".to_string(),
+                        Value::Number(Number::from(cardinality)),
+                    );
                     row.insert(
                         "Sub_part".to_string(),
                         index
@@ -6182,7 +6207,92 @@ impl RawEngine {
             rows_affected: 0,
             last_insert_id: 0,
             columns,
-            column_metadata: vec![],
+            column_metadata: vec![
+                ColumnMetadata {
+                    name: "Table".to_string(),
+                    column_type: MysqlColumnType::VarChar,
+                    nullable: true,
+                    ..Default::default()
+                },
+                ColumnMetadata {
+                    name: "Non_unique".to_string(),
+                    column_type: MysqlColumnType::BigInt,
+                    nullable: true,
+                    ..Default::default()
+                },
+                ColumnMetadata {
+                    name: "Key_name".to_string(),
+                    column_type: MysqlColumnType::VarChar,
+                    nullable: true,
+                    ..Default::default()
+                },
+                ColumnMetadata {
+                    name: "Seq_in_index".to_string(),
+                    column_type: MysqlColumnType::BigInt,
+                    nullable: true,
+                    ..Default::default()
+                },
+                ColumnMetadata {
+                    name: "Column_name".to_string(),
+                    column_type: MysqlColumnType::VarChar,
+                    nullable: true,
+                    ..Default::default()
+                },
+                ColumnMetadata {
+                    name: "Collation".to_string(),
+                    column_type: MysqlColumnType::VarChar,
+                    nullable: true,
+                    ..Default::default()
+                },
+                ColumnMetadata {
+                    name: "Cardinality".to_string(),
+                    column_type: MysqlColumnType::BigInt,
+                    nullable: true,
+                    ..Default::default()
+                },
+                ColumnMetadata {
+                    name: "Sub_part".to_string(),
+                    column_type: MysqlColumnType::BigInt,
+                    nullable: true,
+                    ..Default::default()
+                },
+                ColumnMetadata {
+                    name: "Packed".to_string(),
+                    column_type: MysqlColumnType::VarChar,
+                    nullable: true,
+                    ..Default::default()
+                },
+                ColumnMetadata {
+                    name: "Null".to_string(),
+                    column_type: MysqlColumnType::VarChar,
+                    nullable: true,
+                    ..Default::default()
+                },
+                ColumnMetadata {
+                    name: "Index_type".to_string(),
+                    column_type: MysqlColumnType::VarChar,
+                    nullable: true,
+                    ..Default::default()
+                },
+                ColumnMetadata {
+                    name: "Comment".to_string(),
+                    column_type: MysqlColumnType::VarChar,
+                    nullable: true,
+                    ..Default::default()
+                },
+                ColumnMetadata {
+                    name: "Index_comment".to_string(),
+                    column_type: MysqlColumnType::VarChar,
+                    nullable: true,
+                    ..Default::default()
+                },
+                ColumnMetadata {
+                    name: "Ignored".to_string(),
+                    column_type: MysqlColumnType::VarChar,
+                    nullable: true,
+                    ..Default::default()
+                },
+            ],
             rows,
             warnings: vec![],
         }

@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "id": "show_index_catalog",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/534.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/534.sql",
+      "sha256": "78727326fc9eed4638dbcb0f25330db42816e026a6da6926113b5ead27aed718",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/docker/fuzz_root/mysql_initlib/534.sql:5,77 (SHOW INDEX/SHOW KEYS metadata statements)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL metadata probe uses SHOW INDEX/SHOW KEYS to inspect index definitions after table setup.",
+      "mysql_mariadb_translation": "Reauthored as an independent catalog-index inspection. SHOW INDEX FROM reports a primary key and a named composite secondary index with deterministic key sequence and column metadata; the source tables, names, and setup are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "show-index",
+    "schema-metadata",
+    "composite-index",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The catalog table has one primary key and one named composite index. SHOW INDEX output is ordered by key name and sequence so index type, uniqueness, and indexed column order are observable without depending on estimated cardinality.",
+  "determinism_notes": "The DDL, index names, columns, and metadata projection are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE index_catalog (entry_id INT PRIMARY KEY, region_code VARCHAR(8) NOT NULL, priority INT NOT NULL, KEY idx_region_priority (region_code, priority))",
+    "INSERT INTO index_catalog VALUES (41, 'west', 2), (42, 'east', 1), (43, 'north', 4)"
+  ],
+  "steps": [
+    {
+      "sql": "SHOW INDEX FROM index_catalog",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT index_name, non_unique, seq_in_index, column_name FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = 'index_catalog' ORDER BY index_name, seq_in_index",
+      "ordered": true
+    }
+  ]
+}
