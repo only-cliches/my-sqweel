@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "id": "alter_fulltext_index_if_not_exists_notes_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "BT-Rajan/SupportLM",
+      "commit": "06e6eed90a451238870feb5069819d4a973264e9",
+      "path": "migrations/015_hybrid_search.sql",
+      "url": "https://github.com/BT-Rajan/SupportLM/blob/06e6eed90a451238870feb5069819d4a973264e9/migrations/015_hybrid_search.sql",
+      "sha256": "e3aa7ba973f263b0ebb1824fe852dfb0201759f85ca341b8c080165740af8743",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "migrations/015_hybrid_search.sql:19-20",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB ALTER TABLE adds a named FULLTEXT index with IF NOT EXISTS so the migration can be reapplied without a duplicate-index failure.",
+      "mysql_mariadb_translation": "Reduced to one independently authored InnoDB notes table, one conditional FULLTEXT index declaration, one repeated declaration, and an information_schema metadata read; search execution is removed so the minimized case isolates conditional FULLTEXT DDL."
+    },
+    "independently_authored": true,
+    "minimized_from": "alter_fulltext_index_if_not_exists_notes"
+  },
+  "features": [
+    "alter-table-add-fulltext-index-if-not-exists",
+    "fulltext-index",
+    "idempotent-ddl",
+    "information-schema",
+    "deterministic-order",
+    "minimized-regression"
+  ],
+  "fixture_notes": "The notes table starts without a secondary index. The first conditional ALTER must add the FULLTEXT index, the repeated declaration must be a no-op, and the metadata read must expose both indexed columns.",
+  "determinism_notes": "The table definition, index name, indexed columns, and metadata ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE incident_notes_min (note_id INT PRIMARY KEY, note_title VARCHAR(96) NOT NULL, note_detail TEXT NOT NULL) ENGINE=InnoDB",
+    "INSERT INTO incident_notes_min (note_id, note_title, note_detail) VALUES (1101, 'Relay outage', 'The northern relay lost power.'), (1102, 'Battery audit', 'The backup battery passed inspection.')"
+  ],
+  "steps": [
+    {
+      "sql": "ALTER TABLE incident_notes_min ADD FULLTEXT INDEX IF NOT EXISTS incident_notes_search_idx (note_title, note_detail)",
+      "ordered": true
+    },
+    {
+      "sql": "ALTER TABLE incident_notes_min ADD FULLTEXT INDEX IF NOT EXISTS incident_notes_search_idx (note_title, note_detail)",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT table_name, index_name, seq_in_index, column_name FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = 'incident_notes_min' AND index_name = 'incident_notes_search_idx' ORDER BY seq_in_index",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}

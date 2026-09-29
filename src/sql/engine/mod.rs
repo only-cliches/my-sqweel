@@ -2153,6 +2153,7 @@ impl RawEngine {
         let upper = trimmed.to_ascii_uppercase();
         if !upper.starts_with("ALTER TABLE ")
             || !(upper.contains("DROP KEY IF EXISTS")
+                || upper.contains("ADD FULLTEXT INDEX IF NOT EXISTS")
                 || upper.contains("ADD INDEX IF NOT EXISTS")
                 || upper.contains("ADD UNIQUE KEY IF NOT EXISTS")
                 || upper.contains("ADD UNIQUE INDEX IF NOT EXISTS"))
@@ -2169,6 +2170,7 @@ impl RawEngine {
         let add_markers = [
             "ADD UNIQUE KEY IF NOT EXISTS ",
             "ADD UNIQUE INDEX IF NOT EXISTS ",
+            "ADD FULLTEXT INDEX IF NOT EXISTS ",
             "ADD INDEX IF NOT EXISTS ",
         ];
         if operations.is_empty()

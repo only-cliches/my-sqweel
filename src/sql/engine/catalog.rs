@@ -737,6 +737,7 @@ fn rewrite_conditional_key_syntax(sql: &str) -> Option<String> {
     let upper = trimmed.to_ascii_uppercase();
     if !upper.starts_with("ALTER TABLE ")
         || !(upper.contains("DROP KEY IF EXISTS")
+            || upper.contains("ADD FULLTEXT INDEX IF NOT EXISTS")
             || upper.contains("ADD INDEX IF NOT EXISTS")
             || upper.contains("ADD UNIQUE KEY IF NOT EXISTS")
             || upper.contains("ADD UNIQUE INDEX IF NOT EXISTS"))
@@ -749,6 +750,7 @@ fn rewrite_conditional_key_syntax(sql: &str) -> Option<String> {
         ("DROP KEY IF EXISTS", "DROP INDEX"),
         ("ADD UNIQUE KEY IF NOT EXISTS", "ADD UNIQUE INDEX"),
         ("ADD UNIQUE INDEX IF NOT EXISTS", "ADD UNIQUE INDEX"),
+        ("ADD FULLTEXT INDEX IF NOT EXISTS", "ADD INDEX"),
         ("ADD INDEX IF NOT EXISTS", "ADD INDEX"),
     ] {
         loop {
