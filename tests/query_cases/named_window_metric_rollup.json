@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "id": "named_window_metric_rollup",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "antlr/grammars-v4",
+      "commit": "e199816b3f1a7a49ea1ad84fb6b87c382ea36a33",
+      "path": "sql/mysql/Oracle/examples/dml_select.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/e199816b3f1a7a49ea1ad84fb6b87c382ea36a33/sql/mysql/Oracle/examples/dml_select.sql",
+      "sha256": "e64c03f67dddb82c3c8131aa3ac0899bedc3ae60d51661d2850218511767fb3a",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/mysql/Oracle/examples/dml_select.sql:213-220",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A SELECT defines named window specifications after its FROM clause and reuses each name across multiple window-function projections.",
+      "mysql_mariadb_translation": "Reauthored as a metric-history report. One named window accumulates values in row order while a second named window exposes each group's peak through FIRST_VALUE; the source table, columns, values, and grammar-test context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["named-window-clause", "window-reuse", "partitioned-aggregate", "lag", "first-value", "explicit-frame", "deterministic-order"],
+  "fixture_notes": "Groups 31 and 32 contain fixed metric histories; the running window accumulates by row ID, LAG exposes the prior metric, and the peak window returns the group's highest metric with a row-ID tie-breaker.",
+  "determinism_notes": "Group IDs, row IDs, metrics, window orderings, explicit frames, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE metric_history (row_id INT PRIMARY KEY, group_id INT NOT NULL, metric_value INT NOT NULL)",
+    "INSERT INTO metric_history VALUES (3101, 31, 7), (3102, 31, 11), (3103, 31, 11), (3201, 32, 5), (3202, 32, 9)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT row_id, group_id, metric_value, SUM(metric_value) OVER running AS running_total, LAG(metric_value) OVER running AS previous_metric, FIRST_VALUE(metric_value) OVER peak AS peak_metric FROM metric_history WINDOW running AS (PARTITION BY group_id ORDER BY row_id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW), peak AS (PARTITION BY group_id ORDER BY metric_value DESC, row_id ASC ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY group_id, row_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
