@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "id": "is_free_lock_lifecycle",
+  "provenance": {
+    "kind": "github-sql-pattern",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "advanced/locking/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/advanced/locking/mysql.sql",
+      "sha256": "d38081ce5b0cbe95d127982e1dd1cef61ea01250b29e6dfa64d3d9b3a7505a3d",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "advanced/locking/mysql.sql:118-119",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL locking example checks whether a named advisory lock is free with IS_FREE_LOCK(name).",
+      "mysql_mariadb_translation": "Reauthored as an independently authored connection-state lifecycle probe. The same fixed lock is observed while free, after GET_LOCK acquisition, and after RELEASE_LOCK, adding explicit lifecycle transitions without copying the source name or surrounding documentation."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "is-free-lock",
+    "get-lock",
+    "release-lock",
+    "advisory-lock-state",
+    "connection-state"
+  ],
+  "fixture_notes": "IS_FREE_LOCK must return 1 before acquisition, 0 while this connection owns the lock, and 1 after release; each transition is serialized on one fresh connection.",
+  "determinism_notes": "The lock name, zero timeout, and step order are fixed; the lock is released before the case ends and no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT IS_FREE_LOCK('my_sqweel_coverage_status') AS initially_free",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT GET_LOCK('my_sqweel_coverage_status', 0) AS acquired",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT IS_FREE_LOCK('my_sqweel_coverage_status') AS while_held",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT RELEASE_LOCK('my_sqweel_coverage_status') AS released",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT IS_FREE_LOCK('my_sqweel_coverage_status') AS finally_free",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}

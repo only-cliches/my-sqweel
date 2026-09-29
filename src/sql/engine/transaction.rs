@@ -816,7 +816,7 @@ impl EngineSession {
             return Ok(None);
         };
         let name = function.name.to_string().to_ascii_uppercase();
-        if name != "GET_LOCK" && name != "RELEASE_LOCK" {
+        if name != "GET_LOCK" && name != "RELEASE_LOCK" && name != "IS_FREE_LOCK" {
             return Ok(None);
         }
         // Advisory locks are connection operations; reject compound SQL shapes
@@ -849,7 +849,9 @@ impl EngineSession {
             ));
         }
         let mut locks = self.shared.advisory_locks.lock();
-        let value = if name == "RELEASE_LOCK" {
+        let value = if name == "IS_FREE_LOCK" {
+            json!(if locks.contains_key(&key) { 0 } else { 1 })
+        } else if name == "RELEASE_LOCK" {
             match locks.get_mut(&key) {
                 None => Value::Null,
                 Some((owner, _)) if *owner != self.session_id => json!(0),

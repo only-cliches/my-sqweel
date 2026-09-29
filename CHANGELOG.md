@@ -3,6 +3,7 @@
 All notable changes to MySqweel will be documented in this file.
 
 ## 0.5.0 Unreleased
+- Added GitHub-attributed MariaDB advisory-lock coverage based on [wenshao/sql-dialects](https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/advanced/locking/mysql.sql#L118-L119) at commit `acc6698bf87709c16156862d295b2a4bb290cec1` (source SHA-256 `d38081ce5b0cbe95d127982e1dd1cef61ea01250b29e6dfa64d3d9b3a7505a3d`): independently authored `is_free_lock_lifecycle` and minimized `is_free_lock_lifecycle_minimized` cover `IS_FREE_LOCK` before, during, and after a `GET_LOCK`/`RELEASE_LOCK` lifecycle. MariaDB 10.11.7 baselines were byte-identical twice (`214e855ab6d4e9291a34a6e99f3f50b31315e6aa00baf5a0588cc1519e11754a`; minimized `9bc4e8873f8dad577da1a8f942fcd39ec93ddca6db0ed85f4bed73e341bb2639`). Differential comparison initially exposed MySqweel error 1235 for `IS_FREE_LOCK`; connection-local lock-state handling, integer metadata, and the function scope manifest now match MariaDB. The minimized case reproduced the pre-fix mismatch and both cases matched across three fresh post-fix repetitions. `cargo fmt --all --check`, `cargo check --examples --locked`, and `cargo clippy --all-targets --all-features` passed; Clippy retained the repository's existing warnings.
 
 ### Development environment
 

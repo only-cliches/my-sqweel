@@ -1743,7 +1743,9 @@ impl RawEngine {
                         metadata.unsigned = true;
                         MysqlColumnType::BigInt
                     }
-                    "GET_LOCK" | "RELEASE_LOCK" | "COERCIBILITY" => MysqlColumnType::Integer,
+                    "GET_LOCK" | "RELEASE_LOCK" | "IS_FREE_LOCK" | "COERCIBILITY" => {
+                        MysqlColumnType::Integer
+                    }
                     "COLLATION" => MysqlColumnType::VarChar,
                     "IF" => {
                         let branch_metadata = [

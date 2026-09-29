@@ -1147,8 +1147,8 @@ pub(crate) const MARIADB_FUNCTION_SCOPE: &[FunctionScopeEntry] = &[
     },
     FunctionScopeEntry {
         name: "IS_FREE_LOCK",
-        status: "out-of-scope",
-        rationale: "server state, lock, replication, or filesystem behavior is outside query evaluation",
+        status: "implemented",
+        rationale: "connection-local advisory-lock state support",
     },
     FunctionScopeEntry {
         name: "IS_USED_LOCK",

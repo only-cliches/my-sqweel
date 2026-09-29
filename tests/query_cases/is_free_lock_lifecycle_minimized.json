@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "id": "is_free_lock_lifecycle_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "is_free_lock_lifecycle",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "advanced/locking/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/advanced/locking/mysql.sql",
+      "sha256": "d38081ce5b0cbe95d127982e1dd1cef61ea01250b29e6dfa64d3d9b3a7505a3d",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from is_free_lock_lifecycle",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A scalar MySQL locking probe checks whether a named advisory lock is free with IS_FREE_LOCK(name).",
+      "mysql_mariadb_translation": "Reduced to one fixed zero-contention IS_FREE_LOCK projection so function recognition, connection-state access, and integer result metadata are isolated from GET_LOCK, RELEASE_LOCK, and lifecycle setup."
+    },
+    "independently_authored": true,
+    "minimized_from": "is_free_lock_lifecycle"
+  },
+  "features": [
+    "is-free-lock",
+    "minimized-regression",
+    "connection-state"
+  ],
+  "fixture_notes": "A fresh connection has no held lock with this name, so MariaDB returns integer 1.",
+  "determinism_notes": "The lock name is fixed and the query has no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT IS_FREE_LOCK('my_sqweel_coverage_min') AS is_free",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
