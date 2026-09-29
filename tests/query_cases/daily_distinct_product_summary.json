@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "daily_distinct_product_summary",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "fishercoder1534/Leetcode",
+      "commit": "f92331bc32ef0ed9a6a27f4cb086df917f3c98d2",
+      "path": "database/_1484.sql",
+      "url": "https://github.com/fishercoder1534/Leetcode/blob/f92331bc32ef0ed9a6a27f4cb086df917f3c98d2/database/_1484.sql",
+      "sha256": "2cf2e8b491f0918b2dbe2291ca20c09d64c7ec29b3e3691308460d6490787f66",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "database/_1484.sql:2-6",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped date report counts distinct products and concatenates the same distinct product labels in deterministic lexical order with a custom separator.",
+      "mysql_mariadb_translation": "Reauthored as a daily catalog activity summary. Fixed activity rows include duplicate product observations across days; COUNT(DISTINCT) reports unique products while GROUP_CONCAT(DISTINCT ... ORDER BY ... SEPARATOR) emits their ordered labels. The source table, identifiers, values, and application context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["grouped-date", "count-distinct", "group-concat-distinct", "ordered-aggregate", "custom-separator", "deterministic-order"],
+  "fixture_notes": "Each activity day counts unique product codes even when a product appears more than once; the concatenated list removes duplicates and orders labels alphabetically.",
+  "determinism_notes": "Activity IDs, dates, product codes, grouping, aggregate ordering, and final date ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE catalog_activity (activity_id INT PRIMARY KEY, activity_day DATE NOT NULL, product_code VARCHAR(16) NOT NULL)",
+    "INSERT INTO catalog_activity VALUES (601, '2026-07-01', 'PINE'), (602, '2026-07-01', 'MAPLE'), (603, '2026-07-01', 'PINE'), (604, '2026-07-02', 'CEDAR'), (605, '2026-07-02', 'CEDAR'), (606, '2026-07-02', 'BIRCH')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT activity_day, COUNT(DISTINCT product_code) AS unique_products, GROUP_CONCAT(DISTINCT product_code ORDER BY product_code ASC SEPARATOR '|') AS product_list FROM catalog_activity GROUP BY activity_day ORDER BY activity_day ASC",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT activity_day, product_code, COUNT(*) AS observations FROM catalog_activity GROUP BY activity_day, product_code ORDER BY activity_day, product_code",
+      "ordered": true
+    }
+  ]
+}
