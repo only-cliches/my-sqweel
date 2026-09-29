@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "id": "json_objectagg_rollup_summary",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "functions/aggregate/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/functions/aggregate/mysql.sql",
+      "sha256": "0160718d9ccf135c9938eaf3879a37c672cd171e68065046c953d55e95a33425",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "functions/aggregate/mysql.sql:30-32 and 138-139",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "The MySQL aggregate reference documents hierarchical GROUP BY ... WITH ROLLUP totals and JSON_OBJECTAGG key/value aggregation as adjacent aggregate capabilities.",
+      "mysql_mariadb_translation": "Reauthored as a regional revenue manifest. One grouped query emits per-region JSON_OBJECTAGG maps and a final rollup row containing the all-region map and total revenue; unique prefixed keys avoid duplicate-key ambiguity on the super-aggregate row. The source tables, names, values, and documentation examples are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "json-objectagg",
+    "with-rollup",
+    "grouped-read",
+    "coalesced-rollup-keys",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Regions north and south contain distinct item codes. Per-region rows map region:item keys to revenue, while the NULL region rollup maps ALL:item keys and totals every row. The explicit key prefix prevents duplicate JSON object keys across rollup levels.",
+  "determinism_notes": "Sale IDs, regions, item codes, revenue values, JSON keys, grouping, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE regional_revenue (sale_id INT PRIMARY KEY, region_code VARCHAR(16) NOT NULL, item_code VARCHAR(16) NOT NULL, revenue INT NOT NULL)",
+    "INSERT INTO regional_revenue VALUES (1, 'north', 'desk', 120), (2, 'north', 'lamp', 80), (3, 'south', 'desk', 90), (4, 'south', 'chair', 110)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT region_code, JSON_OBJECTAGG(CONCAT(COALESCE(region_code, 'ALL'), ':', item_code), revenue) AS revenue_map, SUM(revenue) AS region_total FROM regional_revenue GROUP BY region_code WITH ROLLUP",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT region_code, JSON_OBJECTAGG(CONCAT(COALESCE(region_code, 'ALL'), ':', item_code), revenue) AS revenue_map, SUM(revenue) AS region_total FROM regional_revenue GROUP BY region_code WITH ROLLUP",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT sale_id, region_code, item_code, revenue FROM regional_revenue ORDER BY sale_id",
+      "ordered": true
+    }
+  ]
+}

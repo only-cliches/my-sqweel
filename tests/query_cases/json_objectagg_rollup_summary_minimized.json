@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "id": "json_objectagg_rollup_summary_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "functions/aggregate/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/functions/aggregate/mysql.sql",
+      "sha256": "0160718d9ccf135c9938eaf3879a37c672cd171e68065046c953d55e95a33425",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "functions/aggregate/mysql.sql:30-32 and 138-139",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "The MySQL aggregate reference documents hierarchical GROUP BY ... WITH ROLLUP totals and JSON_OBJECTAGG key/value aggregation as adjacent aggregate capabilities.",
+      "mysql_mariadb_translation": "Reauthored as one regional revenue manifest. Two rows produce one regional JSON_OBJECTAGG map and a rollup map with an ALL prefix plus the grand total; the source tables, names, values, and documentation examples are not copied."
+    },
+    "independently_authored": true,
+    "focused_variant_of": "json_objectagg_rollup_summary"
+  },
+  "features": [
+    "json-objectagg",
+    "with-rollup",
+    "grouped-read",
+    "coalesced-rollup-keys",
+    "focused-variant"
+  ],
+  "fixture_notes": "Region west has two distinct item codes. The grouped row maps west:item keys, and the NULL region rollup maps ALL:item keys without duplicate-key ambiguity.",
+  "determinism_notes": "Sale IDs, region, item codes, revenue values, JSON keys, grouping, and result ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE regional_revenue_min (sale_id INT PRIMARY KEY, region_code VARCHAR(16) NOT NULL, item_code VARCHAR(16) NOT NULL, revenue INT NOT NULL)",
+    "INSERT INTO regional_revenue_min VALUES (11, 'west', 'book', 40), (12, 'west', 'pen', 15)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT region_code, JSON_OBJECTAGG(CONCAT(COALESCE(region_code, 'ALL'), ':', item_code), revenue) AS revenue_map, SUM(revenue) AS region_total FROM regional_revenue_min GROUP BY region_code WITH ROLLUP",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT region_code, JSON_OBJECTAGG(CONCAT(COALESCE(region_code, 'ALL'), ':', item_code), revenue) AS revenue_map, SUM(revenue) AS region_total FROM regional_revenue_min GROUP BY region_code WITH ROLLUP",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT sale_id, region_code, item_code, revenue FROM regional_revenue_min ORDER BY sale_id",
+      "ordered": true
+    }
+  ]
+}
