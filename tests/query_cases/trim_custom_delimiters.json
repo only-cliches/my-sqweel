@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "trim_custom_delimiters",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "antlr/grammars-v4",
+      "commit": "e199816b3f1a7a49ea1ad84fb6b87c382ea36a33",
+      "path": "sql/mysql/Oracle/examples/bitrix_queries_cut.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/e199816b3f1a7a49ea1ad84fb6b87c382ea36a33/sql/mysql/Oracle/examples/bitrix_queries_cut.sql",
+      "sha256": "4326d91dc634dc7f38b4d853cdd975e7d72ccb364c3e7331544b79793cd29180",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/mysql/Oracle/examples/bitrix_queries_cut.sql:124-127",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL projection normalizes hyphen-delimited identifiers with TRIM(BOTH '-' FROM ...) after concatenating component values.",
+      "mysql_mariadb_translation": "Reauthored as a route-label audit. Fixed labels contain delimiter padding and are normalized with TRIM(BOTH '-' FROM ...); a second projection uses TRIM(LEADING '#' FROM ...) to verify directional trimming. The source tables, identifiers, and application values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["trim-custom-character", "trim-both", "trim-leading", "deterministic-order"],
+  "fixture_notes": "Hyphen and hash padding are deliberate. TRIM(BOTH '-' FROM ...) removes repeated hyphens from both ends, while TRIM(LEADING '#' FROM ...) removes only the leading hash run and preserves the trailing run.",
+  "determinism_notes": "Route IDs, fixed labels, trim characters, trim directions, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE route_labels (route_id INT PRIMARY KEY, route_code VARCHAR(32) NOT NULL, route_tag VARCHAR(32) NOT NULL)",
+    "INSERT INTO route_labels VALUES (11, '--north-7--', '###alpha##'), (22, '-south-8-', '##beta#'), (33, 'east-9', 'gamma')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT route_id, TRIM(BOTH '-' FROM route_code) AS normalized_code, TRIM(LEADING '#' FROM route_tag) AS leading_trimmed_tag FROM route_labels ORDER BY route_id",
+      "ordered": true
+    }
+  ]
+}
