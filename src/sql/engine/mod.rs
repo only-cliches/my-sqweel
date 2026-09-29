@@ -4225,6 +4225,7 @@ impl RawEngine {
             || upper.starts_with("FLUSH STATUS")
             || upper.starts_with("FLUSH TABLES")
             || upper.starts_with("UNLOCK TABLES")
+            || upper.starts_with("LOCK TABLES")
             || upper.starts_with("LOCK TABLE ")
         {
             return Ok(Some(QueryResult::default()));

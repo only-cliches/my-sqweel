@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "lock_tables_audit_refresh_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "lock_tables_audit_refresh",
+    "source": {
+      "kind": "github",
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/2790.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/2790.sql",
+      "sha256": "7d3ae75518cda4d2b7459a30bbc5e015175e33dda2cec0e0cfc67a8a4e1923eb",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from MySQL/docker/fuzz_root/mysql_initlib/2790.sql:4, 14, 20",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "LOCK TABLES and UNLOCK TABLES bracket a session's read or write activity.",
+      "mysql_mariadb_translation": "Reduced to one independently authored table and a single WRITE lock. The lock, deterministic read, unlock, and final state read isolate generic LOCK TABLES acceptance from joins, multiple lock modes, and mutations."
+    },
+    "independently_authored": true
+  },
+  "features": ["lock-tables", "unlock-tables", "minimized-regression", "deterministic-order"],
+  "fixture_notes": "The one-row table is selected while held by a WRITE table lock, then selected again after UNLOCK TABLES. The minimized case isolates generic LOCK TABLES handling.",
+  "determinism_notes": "The table name, row ID, lock mode, and final ordering are fixed; no concurrent connections, waits, or timing-sensitive behavior are used.",
+  "setup": [
+    "CREATE TABLE lock_probe (probe_id INT PRIMARY KEY, probe_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO lock_probe VALUES (1, 'ready')"
+  ],
+  "steps": [
+    {
+      "sql": "LOCK TABLES lock_probe WRITE",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT probe_id, probe_state FROM lock_probe ORDER BY probe_id",
+      "ordered": true
+    },
+    {
+      "sql": "UNLOCK TABLES",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT probe_id, probe_state FROM lock_probe ORDER BY probe_id",
+      "ordered": true
+    }
+  ]
+}

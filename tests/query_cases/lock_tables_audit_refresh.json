@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "lock_tables_audit_refresh",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/2790.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/2790.sql",
+      "sha256": "7d3ae75518cda4d2b7459a30bbc5e015175e33dda2cec0e0cfc67a8a4e1923eb",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/docker/fuzz_root/mysql_initlib/2790.sql:1-20",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL compatibility sequence locks several tables with different READ and WRITE modes, performs DML, and releases the table locks with UNLOCK TABLES.",
+      "mysql_mariadb_translation": "Reauthored as a two-table audit refresh. One table is locked for writes and the audit table for reads while a joined audit row is selected and a queue status is updated; UNLOCK TABLES precedes the final ordered verification. The source tables, values, and destructive probes are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["lock-tables", "read-write-lock-modes", "unlock-tables", "joined-read", "deterministic-order"],
+  "fixture_notes": "The queue table is locked WRITE and the audit table READ for a joined read plus one queue update. UNLOCK TABLES is required before the final state read, which verifies the mutation survived the lock lifecycle.",
+  "determinism_notes": "Queue IDs, audit IDs, state values, lock modes, and final ordering are fixed; no concurrent connections, waits, or timing-sensitive behavior are used.",
+  "setup": [
+    "CREATE TABLE audit_queue (queue_id INT PRIMARY KEY, queue_state VARCHAR(16) NOT NULL)",
+    "CREATE TABLE audit_events (event_id INT PRIMARY KEY, queue_id INT NOT NULL, event_label VARCHAR(24) NOT NULL)",
+    "INSERT INTO audit_queue VALUES (11, 'pending'), (22, 'ready')",
+    "INSERT INTO audit_events VALUES (101, 11, 'dispatch'), (102, 22, 'archive')"
+  ],
+  "steps": [
+    {
+      "sql": "LOCK TABLES audit_queue AS q WRITE, audit_events AS e READ",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT q.queue_id, q.queue_state, e.event_label FROM audit_queue AS q INNER JOIN audit_events AS e ON e.queue_id = q.queue_id WHERE q.queue_id = 11 ORDER BY q.queue_id",
+      "ordered": true
+    },
+    {
+      "sql": "UPDATE audit_queue AS q SET q.queue_state = 'dispatched' WHERE q.queue_id = 11",
+      "ordered": false
+    },
+    {
+      "sql": "UNLOCK TABLES",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT queue_id, queue_state FROM audit_queue ORDER BY queue_id",
+      "ordered": true
+    }
+  ]
+}
