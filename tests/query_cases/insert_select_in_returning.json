@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "insert_select_in_returning",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "mariadb-corporation/mariadb-qa",
+      "commit": "5f7898e3a89feb85af301091143617716b4705c5",
+      "path": "BUGS/MDEV-1653.sql",
+      "url": "https://github.com/mariadb-corporation/mariadb-qa/blob/5f7898e3a89feb85af301091143617716b4705c5/BUGS/MDEV-1653.sql",
+      "sha256": "0b1b70b17f7f515ad59902d359c81445255b279e24eb440a0e20d70214454c98",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "BUGS/MDEV-1653.sql:90-93, INSERT ... SELECT with IN subquery and RETURNING",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "MariaDB can insert rows selected by an INSERT ... SELECT whose eligibility comes from an IN subquery, then expose the inserted rows through RETURNING.",
+      "mysql_mariadb_translation": "Reauthored as a task-archive load. Only feed tasks listed in a separate ready-approval relation are copied into the archive, and RETURNING exposes the inserted identifiers and labels; the source tables, values, and regression context are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["insert-select", "in-subquery", "returning", "filtered-insert", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "Feed tasks 1601 and 1603 have ready approvals and are inserted and returned; task 1602 has no ready approval and is excluded. Existing archive sentinel 1699 remains.",
+  "determinism_notes": "Task IDs, approval states, returned columns, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE task_feed (task_id INT PRIMARY KEY, task_label VARCHAR(24) NOT NULL, task_state VARCHAR(16) NOT NULL)",
+    "CREATE TABLE ready_approvals (task_id INT PRIMARY KEY, approval_state VARCHAR(16) NOT NULL)",
+    "CREATE TABLE task_archive (task_id INT PRIMARY KEY, task_label VARCHAR(24) NOT NULL)",
+    "INSERT INTO task_feed VALUES (1601, 'alpha', 'queued'), (1602, 'beta', 'queued'), (1603, 'gamma', 'queued')",
+    "INSERT INTO ready_approvals VALUES (1601, 'ready'), (1602, 'held'), (1603, 'ready')",
+    "INSERT INTO task_archive VALUES (1699, 'legacy')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO task_archive (task_id, task_label) SELECT task_id, task_label FROM task_feed WHERE task_id IN (SELECT task_id FROM ready_approvals WHERE approval_state = 'ready') RETURNING task_id, task_label",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT task_id, task_label FROM task_archive ORDER BY task_id",
+      "ordered": true
+    }
+  ]
+}
