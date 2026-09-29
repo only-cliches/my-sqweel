@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "id": "rollup_group_concat_summary",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "mariadb-corporation/mariadb-qa",
+      "commit": "07ee123e1f894c7ac9eaf7af3086ab235d6a00dd",
+      "path": "BUGS/MDEV-33162.sql",
+      "url": "https://github.com/mariadb-corporation/mariadb-qa/blob/07ee123e1f894c7ac9eaf7af3086ab235d6a00dd/BUGS/MDEV-33162.sql",
+      "sha256": "a14162c1991f3677211936efcc07660158b94d0ae8dde7d5df6b2ffd561f1c2c",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "BUGS/MDEV-33162.sql:2, prepared GROUP_CONCAT query with WITH ROLLUP",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB grouped query combines ordered GROUP_CONCAT aggregation with WITH ROLLUP so detail groups and a grand total each expose an ordered concatenation.",
+      "mysql_mariadb_translation": "Reauthored as a regional shipment summary. Ordered route labels are concatenated per region alongside package totals, WITH ROLLUP adds a grand total, and a derived outer query orders detail rows before the total; prepared statements, engine-specific setup, source names, and source values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["group-concat", "ordered-aggregate", "with-rollup", "grouped-aggregate", "grand-total-row", "derived-table", "deterministic-order"],
+  "fixture_notes": "North routes alpha and beta and south routes gamma and delta. The rollup produces one ordered route list per region plus an all-region route list and package total.",
+  "determinism_notes": "Region names, route labels, package counts, separator, rollup hierarchy, and outer ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE regional_shipments (shipment_id INT PRIMARY KEY, region_code VARCHAR(16) NOT NULL, route_code VARCHAR(16) NOT NULL, package_count INT NOT NULL)",
+    "INSERT INTO regional_shipments VALUES (1001, 'north', 'beta', 2), (1002, 'north', 'alpha', 3), (1003, 'south', 'delta', 1), (1004, 'south', 'gamma', 4)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT region_code, route_list, total_packages FROM (SELECT region_code, GROUP_CONCAT(route_code ORDER BY route_code SEPARATOR '|') AS route_list, SUM(package_count) AS total_packages FROM regional_shipments GROUP BY region_code WITH ROLLUP) AS rollup_summary ORDER BY region_code IS NULL, region_code",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}

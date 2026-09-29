@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "rollup_group_concat_summary_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "mariadb-corporation/mariadb-qa",
+      "commit": "07ee123e1f894c7ac9eaf7af3086ab235d6a00dd",
+      "path": "BUGS/MDEV-33162.sql",
+      "url": "https://github.com/mariadb-corporation/mariadb-qa/blob/07ee123e1f894c7ac9eaf7af3086ab235d6a00dd/BUGS/MDEV-33162.sql",
+      "sha256": "a14162c1991f3677211936efcc07660158b94d0ae8dde7d5df6b2ffd561f1c2c",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "BUGS/MDEV-33162.sql:2, prepared GROUP_CONCAT query with WITH ROLLUP",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "Ordered GROUP_CONCAT and WITH ROLLUP combine grouped detail and grand-total aggregation.",
+      "mysql_mariadb_translation": "Reduced to two independently authored regional route rows while retaining ordered concatenation, the rollup grand total, derived-table ordering, and aggregate metadata."
+    },
+    "independently_authored": true,
+    "minimized_from": "rollup_group_concat_summary"
+  },
+  "features": ["group-concat", "ordered-aggregate", "with-rollup", "grouped-aggregate", "grand-total-row", "derived-table", "minimized-regression", "deterministic-order"],
+  "fixture_notes": "North has route beta and south has route alpha. The result contains two region route lists and one all-region list.",
+  "determinism_notes": "Region names, route labels, package counts, separator, rollup hierarchy, and outer ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE regional_shipments (shipment_id INT PRIMARY KEY, region_code VARCHAR(16) NOT NULL, route_code VARCHAR(16) NOT NULL, package_count INT NOT NULL)",
+    "INSERT INTO regional_shipments VALUES (1101, 'north', 'beta', 2), (1102, 'south', 'alpha', 3)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT region_code, route_list, total_packages FROM (SELECT region_code, GROUP_CONCAT(route_code ORDER BY route_code SEPARATOR '|') AS route_list, SUM(package_count) AS total_packages FROM regional_shipments GROUP BY region_code WITH ROLLUP) AS rollup_summary ORDER BY region_code IS NULL, region_code",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
