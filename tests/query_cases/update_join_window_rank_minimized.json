@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "update_join_window_rank_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "ChurchCRM/CRM",
+      "commit": "2a7a7713e434311486b7b718a3c42111a47e997b",
+      "path": "src/mysql/upgrade/6.7.0.sql",
+      "url": "https://github.com/ChurchCRM/CRM/blob/2a7a7713e434311486b7b718a3c42111a47e997b/src/mysql/upgrade/6.7.0.sql",
+      "sha256": "8745a1cbd9c9580ff1869be300af597711033ccf28c06172cf41fdcab536e335",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "src/mysql/upgrade/6.7.0.sql:9-14",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A target table is updated by joining it to a derived relation that assigns ROW_NUMBER values over the target rows.",
+      "mysql_mariadb_translation": "Reduced to two independently authored queued rows with distinct priorities. The derived ROW_NUMBER relation and self-join update remain while labels, completed-state filtering, and the larger queue are removed."
+    },
+    "independently_authored": true,
+    "minimized_from": "update_join_window_rank"
+  },
+  "features": ["update-join", "derived-table", "row-number", "self-referential-update", "minimized-regression"],
+  "fixture_notes": "Item 401 has the higher priority and must receive rank 1; item 402 receives rank 2 through the joined windowed relation.",
+  "determinism_notes": "The two fixed priorities and IDs provide a unique window order, and the final read is ordered by the primary key. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE dispatch_items_min (item_id INT PRIMARY KEY, priority INT NOT NULL, display_rank INT NOT NULL)",
+    "INSERT INTO dispatch_items_min VALUES (401, 80, 9), (402, 30, 9)"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE dispatch_items_min AS item INNER JOIN (SELECT item_id, ROW_NUMBER() OVER (ORDER BY priority DESC, item_id ASC) AS new_rank FROM dispatch_items_min) AS ranked ON item.item_id = ranked.item_id SET item.display_rank = ranked.new_rank",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT item_id, priority, display_rank FROM dispatch_items_min ORDER BY item_id",
+      "ordered": true
+    }
+  ]
+}
