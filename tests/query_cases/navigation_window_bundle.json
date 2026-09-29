@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "id": "navigation_window_bundle",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "vinsidious/sqlriver",
+      "commit": "2f886fbfcd8f8a4d19de43ae8dee1013a3f29405",
+      "path": "website/examples/mysql.sql",
+      "url": "https://github.com/vinsidious/sqlriver/blob/2f886fbfcd8f8a4d19de43ae8dee1013a3f29405/website/examples/mysql.sql",
+      "sha256": "9593cf448acee53c24b0efa44b663b9475db396f6b223188829087a2d178cbf8",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "website/examples/mysql.sql:115",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "One partitioned product projection combines LAG and LEAD price navigation with FIRST_VALUE and LAST_VALUE name selection over an explicit full frame.",
+      "mysql_mariadb_translation": "Reauthored as an independent catalog comparison. Fixed offerings are partitioned by catalog, ordered by price and offering ID, and expose adjacent prices plus the cheapest and most expensive offering names. The explicit full frame is retained for LAST_VALUE; source tables, identifiers, values, and tutorial data are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["partitioned-navigation-windows", "lag", "lead", "first-value", "last-value", "explicit-full-frame", "deterministic-order"],
+  "fixture_notes": "Catalog 41 has three offerings and catalog 52 has two. Price ties in catalog 41 are broken by offering ID, making adjacent navigation and endpoint names deterministic.",
+  "determinism_notes": "Catalog, offering, price, window ordering, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE catalog_offerings (offering_id INT PRIMARY KEY, catalog_id INT NOT NULL, offering_name VARCHAR(32) NOT NULL, price DECIMAL(8,2) NOT NULL)",
+    "INSERT INTO catalog_offerings VALUES (4101, 41, 'basic-kit', 19.00), (4102, 41, 'pro-kit', 29.00), (4103, 41, 'plus-kit', 29.00), (5201, 52, 'starter-pack', 11.50), (5202, 52, 'complete-pack', 44.00)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT offering_id, catalog_id, offering_name, price, LAG(price, 1) OVER (PARTITION BY catalog_id ORDER BY price, offering_id) AS previous_price, LEAD(price, 1) OVER (PARTITION BY catalog_id ORDER BY price, offering_id) AS next_price, FIRST_VALUE(offering_name) OVER (PARTITION BY catalog_id ORDER BY price, offering_id) AS cheapest_offering, LAST_VALUE(offering_name) OVER (PARTITION BY catalog_id ORDER BY price, offering_id ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS priciest_offering FROM catalog_offerings ORDER BY catalog_id, price, offering_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
