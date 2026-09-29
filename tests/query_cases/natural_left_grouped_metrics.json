@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "natural_left_grouped_metrics",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "phoglenix/ScExtractor",
+      "commit": "16c5f640ee6472c02435cdf761f8784dc23dcfe3",
+      "path": "Useful Queries.sql",
+      "url": "https://github.com/phoglenix/ScExtractor/blob/16c5f640ee6472c02435cdf761f8784dc23dcfe3/Useful%20Queries.sql",
+      "sha256": "837550e6fb98df8c4b9ac4f4d8984cf41dcdd04a77f205712be0147c1c7465d9",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Useful Queries.sql:107",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped report uses several NATURAL LEFT JOINs to attach independently grouped derived counts that share a common identifier, preserving base groups without matching detail rows.",
+      "mysql_mariadb_translation": "Reauthored as a pipeline-run metrics report. Base event rows are grouped after NATURAL LEFT JOINs attach independently grouped error and warning counts by run ID; COALESCE supplies zero for absent categories, and deterministic ordering makes every run observable. The source replay tables, identifiers, race filters, and game-report context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "natural-left-join",
+    "grouped-derived-tables",
+    "multiple-derived-aggregates",
+    "null-extension",
+    "coalesce-zero-fill",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Run 701 has four events including two errors and one warning. Run 702 has two events including one warning and no errors, so the error-derived relation is NULL-extended and COALESCE returns zero. Run 703 has only one success event and both derived relations are NULL-extended.",
+  "determinism_notes": "Event IDs, run IDs, event classes, grouped counts, zero-fill expressions, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE pipeline_events (event_id INT PRIMARY KEY, run_id INT NOT NULL, event_class VARCHAR(16) NOT NULL)",
+    "INSERT INTO pipeline_events VALUES (801, 701, 'success'), (802, 701, 'error'), (803, 701, 'error'), (804, 701, 'warning'), (805, 702, 'success'), (806, 702, 'warning'), (807, 703, 'success')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT e.run_id, COUNT(*) AS event_count, COALESCE(errors.error_count, 0) AS error_count, COALESCE(warnings.warning_count, 0) AS warning_count FROM pipeline_events AS e NATURAL LEFT JOIN (SELECT run_id, COUNT(*) AS error_count FROM pipeline_events WHERE event_class = 'error' GROUP BY run_id) AS errors NATURAL LEFT JOIN (SELECT run_id, COUNT(*) AS warning_count FROM pipeline_events WHERE event_class = 'warning' GROUP BY run_id) AS warnings GROUP BY e.run_id, errors.error_count, warnings.warning_count ORDER BY e.run_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT run_id, COUNT(*) AS event_count FROM pipeline_events GROUP BY run_id ORDER BY run_id",
+      "ordered": true
+    }
+  ]
+}
