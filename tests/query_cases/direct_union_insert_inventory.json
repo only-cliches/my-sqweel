@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "direct_union_insert_inventory",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "phamdinhkhanh/SQLCode",
+      "commit": "4991392046603be5768ec78809e8f68b4e766be0",
+      "path": "backup.sql",
+      "url": "https://github.com/phamdinhkhanh/SQLCode/blob/4991392046603be5768ec78809e8f68b4e766be0/backup.sql",
+      "sha256": "bcfa3e30e4d64e121f1619a79a6f8e2686c2aaa43edb4ce541863dc3d3122910",
+      "source_dialect": "sql-server"
+    },
+    "inspiration": {
+      "source_location": "backup.sql:19-30",
+      "source_dialect": "sql-server",
+      "observed_pattern": "A direct INSERT ... SELECT statement uses UNION ALL branches to append several literal rows in one DML operation.",
+      "mysql_mariadb_translation": "Reauthored as a warehouse receiving load. One INSERT ... SELECT statement combines three independently authored shipment rows with UNION ALL, while the destination primary key and an ordered read make every branch and its string payload observable. SQL Server batch and backup syntax are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["insert-select", "direct-union-all", "multi-row-load", "deterministic-order"],
+  "fixture_notes": "The receiving table starts empty. The three UNION ALL branches must create one row for each shipment, preserving branch-specific warehouse, SKU, and quantity values.",
+  "determinism_notes": "All shipment IDs, warehouse codes, SKU values, quantities, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE receiving_manifest (shipment_id INT PRIMARY KEY, warehouse_code VARCHAR(16) NOT NULL, sku VARCHAR(16) NOT NULL, quantity INT NOT NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO receiving_manifest (shipment_id, warehouse_code, sku, quantity) SELECT 701, 'WH-NORTH', 'SKU-AX4', 12 UNION ALL SELECT 702, 'WH-SOUTH', 'SKU-BQ7', 5 UNION ALL SELECT 703, 'WH-NORTH', 'SKU-CM2', 9",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT shipment_id, warehouse_code, sku, quantity FROM receiving_manifest ORDER BY shipment_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT warehouse_code, COUNT(*) AS shipment_count, SUM(quantity) AS total_quantity FROM receiving_manifest GROUP BY warehouse_code ORDER BY warehouse_code",
+      "ordered": true
+    }
+  ]
+}
