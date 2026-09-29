@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "base_conversion_labels",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "mofa-org/mofa",
+      "commit": "a83bc9720c67b86485eac0666a98766ec07412b5",
+      "path": "scripts/sql/migrations/mysql_init.sql",
+      "url": "https://github.com/mofa-org/mofa/blob/a83bc9720c67b86485eac0666a98766ec07412b5/scripts/sql/migrations/mysql_init.sql",
+      "sha256": "9e068fbf195610c069b5aef94895964507e90ec77b6ab521ef58e03a26a1c32c",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "scripts/sql/migrations/mysql_init.sql:31-37",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL/MariaDB UUID-construction expression uses CONV to render integer values in hexadecimal text and LPAD to preserve fixed-width fragments.",
+      "mysql_mariadb_translation": "Reauthored as an independent numeric-label conversion report. CONV renders fixed decimal identifiers in hexadecimal and base-36 text, while CASE classifies a NULL input; the source routine, bit arithmetic, random values, and UUID construction are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "conv",
+    "base-conversion",
+    "decimal-to-hex",
+    "decimal-to-base36",
+    "null-classification",
+    "case",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Values 7301 and 7302 convert fixed decimal identifiers to hexadecimal and base-36 labels; 7303 is zero, and 7304 is NULL. The NULL state is classified explicitly rather than relying on an implicit conversion result.",
+  "determinism_notes": "Label IDs and decimal values are fixed; output is ordered by the unique label ID with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE numeric_labels (label_id INT PRIMARY KEY, decimal_value BIGINT NULL)",
+    "INSERT INTO numeric_labels VALUES (7301, 255), (7302, 4095), (7303, 0), (7304, NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT label_id, decimal_value, CONV(decimal_value, 10, 16) AS hexadecimal_label, CONV(decimal_value, 10, 36) AS base36_label, CASE WHEN decimal_value IS NULL THEN 'missing' ELSE 'present' END AS value_state FROM numeric_labels ORDER BY label_id",
+      "ordered": true
+    }
+  ]
+}
