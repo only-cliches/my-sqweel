@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "derived_average_event_qualifiers_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "gh0stintheshe11/LeetCode-Solutions",
+      "commit": "7f6f9251125dfb067af9852a19739626580fe9c7",
+      "path": "solutions/active-businesses/MySQL.sql",
+      "url": "https://github.com/gh0stintheshe11/LeetCode-Solutions/blob/7f6f9251125dfb067af9852a19739626580fe9c7/solutions/active-businesses/MySQL.sql",
+      "sha256": "5a9aa3c07fb51e7838c8b621185b64e9c69782d810c8837583e665fd9ffd7fe6",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "solutions/active-businesses/MySQL.sql:1-13",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "An event table joins a grouped derived table of per-type averages, filters observations above their type average, and groups entities with HAVING COUNT(DISTINCT event_type) to require multiple qualifying types.",
+      "mysql_mariadb_translation": "Reduced to two accounts and two activity kinds so one account exceeds both derived averages while the other exceeds neither. The focused report retains the derived aggregate join, grouped distinct HAVING predicate, and account join without copying source rows."
+    },
+    "independently_authored": true,
+    "focused_variant_of": "derived_average_event_qualifiers"
+  },
+  "features": [
+    "derived-aggregate-join",
+    "grouped-having",
+    "count-distinct",
+    "focused-variant"
+  ],
+  "fixture_notes": "Account 201 exceeds both activity-kind averages and qualifies; account 202 is below both. The two qualifying event rows exercise the distinct-kind threshold without extra unrelated groups.",
+  "determinism_notes": "Account IDs, labels, event IDs, activity kinds, counts, derived averages, grouping keys, threshold comparison, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE campaign_accounts_min (account_id INT PRIMARY KEY, account_label VARCHAR(32) NOT NULL)",
+    "CREATE TABLE campaign_events_min (event_id INT PRIMARY KEY, account_id INT NOT NULL, activity_kind VARCHAR(16) NOT NULL, activity_count INT NOT NULL)",
+    "INSERT INTO campaign_accounts_min VALUES (201, 'ember'), (202, 'fjord')",
+    "INSERT INTO campaign_events_min VALUES (11, 201, 'signup', 11), (12, 201, 'purchase', 20), (13, 202, 'signup', 9), (14, 202, 'purchase', 10)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT a.account_id, a.account_label FROM campaign_accounts_min AS a JOIN campaign_events_min AS e ON e.account_id = a.account_id JOIN (SELECT activity_kind, AVG(activity_count) AS average_count FROM campaign_events_min GROUP BY activity_kind) AS thresholds ON thresholds.activity_kind = e.activity_kind WHERE e.activity_count > thresholds.average_count GROUP BY a.account_id, a.account_label HAVING COUNT(DISTINCT e.activity_kind) > 1 ORDER BY a.account_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT a.account_id, a.account_label FROM campaign_accounts_min AS a JOIN campaign_events_min AS e ON e.account_id = a.account_id JOIN (SELECT activity_kind, AVG(activity_count) AS average_count FROM campaign_events_min GROUP BY activity_kind) AS thresholds ON thresholds.activity_kind = e.activity_kind WHERE e.activity_count > thresholds.average_count GROUP BY a.account_id, a.account_label HAVING COUNT(DISTINCT e.activity_kind) > 1 ORDER BY a.account_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT account_id, account_label FROM campaign_accounts_min ORDER BY account_id",
+      "ordered": true
+    }
+  ]
+}

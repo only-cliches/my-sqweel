@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "id": "derived_average_event_qualifiers",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "gh0stintheshe11/LeetCode-Solutions",
+      "commit": "7f6f9251125dfb067af9852a19739626580fe9c7",
+      "path": "solutions/active-businesses/MySQL.sql",
+      "url": "https://github.com/gh0stintheshe11/LeetCode-Solutions/blob/7f6f9251125dfb067af9852a19739626580fe9c7/solutions/active-businesses/MySQL.sql",
+      "sha256": "5a9aa3c07fb51e7838c8b621185b64e9c69782d810c8837583e665fd9ffd7fe6",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "solutions/active-businesses/MySQL.sql:1-13",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "An event table joins a grouped derived table of per-type averages, filters observations above their type average, and groups entities with HAVING COUNT(DISTINCT event_type) to require multiple qualifying types.",
+      "mysql_mariadb_translation": "Reauthored as an account campaign audit. A derived average per activity kind is joined back to event rows and account labels, while grouped HAVING COUNT(DISTINCT activity_kind) retains accounts exceeding the average in more than one kind. The source schema, names, values, and business context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "derived-aggregate-join",
+    "grouped-having",
+    "count-distinct",
+    "multi-table-join",
+    "average-threshold",
+    "deterministic-ordering"
+  ],
+  "fixture_notes": "Account 103 exceeds the independently computed activity-kind averages in both kinds and qualifies; account 102 exceeds only purchase, while accounts 101 and 104 do not qualify. Two purchase rows for account 103 make COUNT(DISTINCT activity_kind) observable.",
+  "determinism_notes": "Account IDs, labels, event IDs, activity kinds, counts, derived averages, grouping keys, threshold comparison, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE campaign_accounts (account_id INT PRIMARY KEY, account_label VARCHAR(32) NOT NULL)",
+    "CREATE TABLE campaign_events (event_id INT PRIMARY KEY, account_id INT NOT NULL, activity_kind VARCHAR(16) NOT NULL, activity_count INT NOT NULL)",
+    "INSERT INTO campaign_accounts VALUES (101, 'atlas'), (102, 'beacon'), (103, 'comet'), (104, 'delta')",
+    "INSERT INTO campaign_events VALUES (1, 101, 'signup', 12), (2, 101, 'purchase', 8), (3, 102, 'signup', 18), (4, 102, 'purchase', 20), (5, 103, 'signup', 15), (6, 103, 'purchase', 22), (7, 103, 'purchase', 24), (8, 104, 'signup', 9), (9, 104, 'purchase', 7)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT a.account_id, a.account_label FROM campaign_accounts AS a JOIN campaign_events AS e ON e.account_id = a.account_id JOIN (SELECT activity_kind, AVG(activity_count) AS average_count FROM campaign_events GROUP BY activity_kind) AS thresholds ON thresholds.activity_kind = e.activity_kind WHERE e.activity_count > thresholds.average_count GROUP BY a.account_id, a.account_label HAVING COUNT(DISTINCT e.activity_kind) > 1 ORDER BY a.account_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT a.account_id, a.account_label FROM campaign_accounts AS a JOIN campaign_events AS e ON e.account_id = a.account_id JOIN (SELECT activity_kind, AVG(activity_count) AS average_count FROM campaign_events GROUP BY activity_kind) AS thresholds ON thresholds.activity_kind = e.activity_kind WHERE e.activity_count > thresholds.average_count GROUP BY a.account_id, a.account_label HAVING COUNT(DISTINCT e.activity_kind) > 1 ORDER BY a.account_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT account_id, account_label FROM campaign_accounts ORDER BY account_id",
+      "ordered": true
+    }
+  ]
+}
