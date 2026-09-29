@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "cte_delete_stale_devices",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "query/cte/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/query/cte/mysql.sql",
+      "sha256": "3d119466a5e2ff93dba4df11c83944f748a451aefc037fe3cfab17feea4fb5f5",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "query/cte/mysql.sql: CTE used for DELETE",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL-compatible cleanup uses a nonrecursive CTE to select qualifying identifiers and deletes target rows whose identifiers belong to that CTE result.",
+      "mysql_mariadb_translation": "Reauthored as a device-retention cleanup. A MariaDB-compatible nested CTE selects retired west-region devices last seen before a fixed cutoff, the DELETE removes only those devices, and the final read proves newer, active, and other-region devices remain; source names, values, and application context are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["cte-delete", "dml-subquery", "filtered-cleanup", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "Device 401 is retired in the west region before the cutoff and is deleted. Device 402 is retired but newer, device 403 is active despite an old timestamp, and device 404 is old and retired but belongs to another region; all remain.",
+  "determinism_notes": "Device IDs, regions, states, timestamps, cutoff, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE device_registry (device_id INT PRIMARY KEY, region_code VARCHAR(16) NOT NULL, device_state VARCHAR(16) NOT NULL, last_seen DATE NOT NULL)",
+    "INSERT INTO device_registry VALUES (401, 'west', 'retired', '2024-11-30'), (402, 'west', 'retired', '2025-02-01'), (403, 'west', 'active', '2024-10-15'), (404, 'east', 'retired', '2024-10-01')"
+  ],
+  "steps": [
+    {
+      "sql": "DELETE FROM device_registry WHERE device_id IN (WITH stale_devices AS (SELECT device_id FROM device_registry WHERE region_code = 'west' AND device_state = 'retired' AND last_seen < '2025-01-01') SELECT device_id FROM stale_devices)",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT device_id, region_code, device_state, last_seen FROM device_registry ORDER BY device_id",
+      "ordered": true
+    }
+  ]
+}
