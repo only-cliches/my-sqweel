@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "json_overlap_join_ranked",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "ZhiQingWu00/special",
+      "commit": "283b45983920f3e09a5bd44177c6b6290555fa7d",
+      "path": "mysql_design.sql",
+      "url": "https://github.com/ZhiQingWu00/special/blob/283b45983920f3e09a5bd44177c6b6290555fa7d/mysql_design.sql",
+      "sha256": "05c35b781a8d6ff0121febee11b48d3b50a12acadb1fcdd345d7ed2a7b861c54",
+      "source_dialect": "mysql"
+    },
+    "inspiration": {
+      "source_location": "mysql_design.sql:206-211",
+      "source_dialect": "mysql",
+      "observed_pattern": "A profile-scoped recommendation query joins information rows when two JSON arrays overlap, then orders by popularity and recency and applies a limit.",
+      "mysql_mariadb_translation": "Reauthored as a deterministic alert recommendation report. A fixed profile row is joined to alert rows whose JSON tag arrays share at least one required tag; popularity and alert ID provide stable ranking, and the public procedure parameters, table names, timestamps, and domain values are replaced."
+    },
+    "independently_authored": true
+  },
+  "features": ["json-overlaps", "json-array-join", "join-filter", "ordered-limit", "deterministic-order"],
+  "fixture_notes": "The selected profile has required tags [urgent,security]. Alerts with either tag qualify, an unrelated alert does not, and an empty tag array does not. Alert 104 ties on popularity with alert 101 and is ordered by alert ID.",
+  "determinism_notes": "All JSON arrays, IDs, popularity values, and the final alert ID tie-breaker are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE alert_profiles (profile_id INT PRIMARY KEY, required_tags JSON NOT NULL)",
+    "CREATE TABLE alert_catalog (alert_id INT PRIMARY KEY, alert_title VARCHAR(64) NOT NULL, alert_tags JSON NOT NULL, popularity INT NOT NULL)",
+    "INSERT INTO alert_profiles (profile_id, required_tags) VALUES (7, '[\"urgent\",\"security\"]')",
+    "INSERT INTO alert_catalog (alert_id, alert_title, alert_tags, popularity) VALUES (101, 'Credential rotation', '[\"security\",\"maintenance\"]', 90), (102, 'Weekly digest', '[\"newsletter\"]', 99), (103, 'Empty tag test', '[]', 120), (104, 'Urgent outage', '[\"urgent\",\"incident\"]', 90), (105, 'Capacity watch', '[\"capacity\"]', 80)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT a.alert_id, a.alert_title, a.popularity FROM alert_catalog AS a JOIN alert_profiles AS p ON JSON_OVERLAPS(a.alert_tags, p.required_tags) WHERE p.profile_id = 7 ORDER BY a.popularity DESC, a.alert_id ASC LIMIT 3",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {"sql": "SELECT profile_id, required_tags FROM alert_profiles ORDER BY profile_id", "ordered": true},
+    {"sql": "SELECT alert_id, alert_title, alert_tags, popularity FROM alert_catalog ORDER BY alert_id", "ordered": true}
+  ]
+}
