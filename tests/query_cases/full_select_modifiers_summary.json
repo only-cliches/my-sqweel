@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "id": "full_select_modifiers_summary",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "actiontech/dble-test-suite",
+      "commit": "19c95415de567f6b32072be7c501ec1db83c4e1f",
+      "path": "behave_dble/sqls/special_global/select/select_global_old.sql",
+      "url": "https://github.com/actiontech/dble-test-suite/blob/19c95415de567f6b32072be7c501ec1db83c4e1f/behave_dble/sqls/special_global/select/select_global_old.sql",
+      "sha256": "685d636e676ea9904b79441643a7c1f3e99b45577e01c22147cab00fa6cad093",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "behave_dble/sqls/special_global/select/select_global_old.sql:129-138",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL SELECT combines the full family of result and execution modifiers with grouped aggregate projections, HAVING qualification, and optional SQL_CALC_FOUND_ROWS bookkeeping.",
+      "mysql_mariadb_translation": "Reauthored as an independent depot-load summary. The full modifier chain precedes grouped route totals, a HAVING threshold qualifies routes, deterministic ordering and LIMIT page the result, and FOUND_ROWS observes the pre-LIMIT match count; source tables, identifiers, values, and benchmark context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "select-all",
+    "high-priority",
+    "straight-join-modifier",
+    "small-result",
+    "big-result",
+    "buffer-result",
+    "sql-cache",
+    "sql-calc-found-rows",
+    "grouped-aggregate",
+    "having",
+    "found-rows",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Depot rows produce three qualifying route groups after HAVING; LIMIT 2 returns the first two routes while FOUND_ROWS reports all three. Every modifier is a result-equivalent MariaDB SELECT hint and must not change grouped values or metadata.",
+  "determinism_notes": "Depot IDs, route codes, units, filters, grouping, ordering, and page size are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE depot_loads (load_id INT PRIMARY KEY, depot_id INT NOT NULL, route_code VARCHAR(12) NOT NULL, units INT NOT NULL, load_state VARCHAR(12) NOT NULL)",
+    "INSERT INTO depot_loads VALUES (701, 11, 'north', 8, 'posted'), (702, 11, 'north', 5, 'posted'), (703, 12, 'south', 7, 'posted'), (704, 13, 'east', 10, 'posted'), (705, 14, 'west', 2, 'posted'), (706, 15, 'held', 99, 'held')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT ALL HIGH_PRIORITY STRAIGHT_JOIN SQL_SMALL_RESULT SQL_BIG_RESULT SQL_BUFFER_RESULT SQL_CACHE SQL_CALC_FOUND_ROWS depot_id, route_code, COUNT(*) AS load_count, SUM(units) AS total_units FROM depot_loads WHERE load_state = 'posted' GROUP BY depot_id, route_code HAVING SUM(units) >= 7 ORDER BY depot_id LIMIT 2",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT FOUND_ROWS() AS total_matching_routes",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT depot_id, route_code, COUNT(*) AS load_count, SUM(units) AS total_units FROM depot_loads WHERE load_state = 'posted' GROUP BY depot_id, route_code HAVING SUM(units) >= 7 ORDER BY depot_id",
+      "ordered": true
+    }
+  ]
+}
