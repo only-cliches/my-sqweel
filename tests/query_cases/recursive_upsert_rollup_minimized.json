@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "id": "recursive_upsert_rollup_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "metabase/metabase",
+      "commit": "df5e090463d5d35156d0dc15d8e3e0d43cad8213",
+      "path": "resources/metabot/prompts/dialects/mysql.md",
+      "url": "https://github.com/metabase/metabase/blob/df5e090463d5d35156d0dc15d8e3e0d43cad8213/resources/metabot/prompts/dialects/mysql.md",
+      "sha256": "cccdf4ca4b6e58c8bd8ac0c4913b416450570fbc96e0d1a3005853c72efd70f3",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "resources/metabot/prompts/dialects/mysql.md:199-207 and 237-246",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "The MySQL dialect reference documents recursive subordinate traversal and INSERT ... ON DUPLICATE KEY UPDATE upsert semantics as reusable query patterns.",
+      "mysql_mariadb_translation": "Reauthored as one two-level hierarchy refresh. A recursive CTE computes one root's descendant count and feeds an upsert that replaces a stale rollup; the reference examples, schema, names, and values are not copied."
+    },
+    "independently_authored": true,
+    "focused_variant_of": "recursive_upsert_rollup"
+  },
+  "features": [
+    "recursive-common-table-expression",
+    "insert-select",
+    "on-duplicate-key-update",
+    "hierarchical-join",
+    "focused-variant"
+  ],
+  "fixture_notes": "Root 70 has one child and a stale rollup. The recursive source must produce descendant_count 1 and max_depth 1, then update the existing row and preserve the hierarchy.",
+  "determinism_notes": "Node IDs, parent links, target primary key, recursive expansion, grouping, upsert assignments, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE refresh_nodes_min (node_id INT PRIMARY KEY, parent_id INT NULL, node_label VARCHAR(32) NOT NULL)",
+    "CREATE TABLE refresh_rollups_min (root_id INT PRIMARY KEY, descendant_count INT NOT NULL, max_depth INT NOT NULL, refresh_tag VARCHAR(32) NOT NULL)",
+    "INSERT INTO refresh_nodes_min VALUES (70, NULL, 'root'), (71, 70, 'child')",
+    "INSERT INTO refresh_rollups_min VALUES (70, 8, 8, 'stale')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH RECURSIVE descendants (root_id, node_id, depth) AS (SELECT node_id AS root_id, node_id AS node_id, 0 AS depth FROM refresh_nodes_min WHERE parent_id IS NULL UNION ALL SELECT descendants.root_id, child.node_id, descendants.depth + 1 FROM descendants JOIN refresh_nodes_min AS child ON child.parent_id = descendants.node_id) SELECT root_id, COUNT(*) - 1 AS descendant_count, MAX(depth) AS max_depth FROM descendants GROUP BY root_id ORDER BY root_id",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO refresh_rollups_min (root_id, descendant_count, max_depth, refresh_tag) WITH RECURSIVE descendants (root_id, node_id, depth) AS (SELECT node_id AS root_id, node_id AS node_id, 0 AS depth FROM refresh_nodes_min WHERE parent_id IS NULL UNION ALL SELECT descendants.root_id, child.node_id, descendants.depth + 1 FROM descendants JOIN refresh_nodes_min AS child ON child.parent_id = descendants.node_id) SELECT root_id, COUNT(*) - 1, MAX(depth), 'recomputed' FROM descendants GROUP BY root_id ON DUPLICATE KEY UPDATE descendant_count = VALUES(descendant_count), max_depth = VALUES(max_depth), refresh_tag = VALUES(refresh_tag)",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT root_id, descendant_count, max_depth, refresh_tag FROM refresh_rollups_min ORDER BY root_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT node_id, parent_id, node_label FROM refresh_nodes_min ORDER BY node_id",
+      "ordered": true
+    }
+  ]
+}
