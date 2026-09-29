@@ -1097,8 +1097,8 @@ pub(crate) const MARIADB_FUNCTION_SCOPE: &[FunctionScopeEntry] = &[
     },
     FunctionScopeEntry {
         name: "COMPRESS",
-        status: "out-of-scope",
-        rationale: "MariaDB catalog entry is not a scalar function supported by the engine evaluator",
+        status: "implemented",
+        rationale: "deterministic zlib payload encoding with MariaDB binary framing",
     },
     FunctionScopeEntry {
         name: "DECODE",
@@ -1232,13 +1232,13 @@ pub(crate) const MARIADB_FUNCTION_SCOPE: &[FunctionScopeEntry] = &[
     },
     FunctionScopeEntry {
         name: "UNCOMPRESS",
-        status: "out-of-scope",
-        rationale: "cryptographic/legacy compatibility is not deterministic in the current engine",
+        status: "implemented",
+        rationale: "deterministic zlib payload decoding with MariaDB binary framing",
     },
     FunctionScopeEntry {
         name: "UNCOMPRESSED_LENGTH",
-        status: "out-of-scope",
-        rationale: "cryptographic/legacy compatibility is not deterministic in the current engine",
+        status: "implemented",
+        rationale: "deterministic MariaDB compressed-payload length extraction",
     },
     FunctionScopeEntry {
         name: "UPDATEXML",

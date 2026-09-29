@@ -4721,6 +4721,9 @@ pub(super) fn eval_function_text(
         }
         "INET_ATON" => eval_inet_aton(args.first(), data, last_insert_id),
         "INET6_ATON" => eval_inet6_aton(args.first(), data, last_insert_id),
+        "COMPRESS" => eval_compress(args.first(), data, last_insert_id),
+        "UNCOMPRESS" => eval_uncompress(args.first(), data, last_insert_id),
+        "UNCOMPRESSED_LENGTH" => eval_uncompressed_length(args.first(), data, last_insert_id),
         "INET6_NTOA" => eval_inet6_ntoa(args.first(), data, last_insert_id),
         "LOWER" | "LCASE" => eval_unary_string(args.first(), data, last_insert_id, |value| {
             value.to_ascii_lowercase()

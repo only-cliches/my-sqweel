@@ -1820,6 +1820,7 @@ dependencies = [
  "chrono",
  "crc32fast",
  "dashmap",
+ "flate2",
  "fs2",
  "futures-util",
  "hashbrown 0.14.5",

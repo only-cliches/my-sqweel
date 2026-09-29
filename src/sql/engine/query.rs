@@ -1851,6 +1851,8 @@ impl RawEngine {
                         metadata.unsigned = true;
                         MysqlColumnType::BigInt
                     }
+                    "COMPRESS" => MysqlColumnType::VarBinary,
+                    "UNCOMPRESS" => MysqlColumnType::LongBlob,
                     "INET6_ATON" | "UNHEX" => MysqlColumnType::VarBinary,
                     "INET6_NTOA" => MysqlColumnType::VarChar,
                     "INET_NTOA" => MysqlColumnType::VarChar,
@@ -2214,8 +2216,7 @@ impl RawEngine {
                     | "LN" | "LOG" | "LOG10" | "LOG2" | "PI" | "POWER" | "POW" | "RADIANS"
                     | "SIN" | "SQRT" | "TAN" => MysqlColumnType::Double,
                     "BIN" | "CHR" | "OCT" | "TO_CHAR" => MysqlColumnType::VarChar,
-                    "LENGTHB" | "WEEK" => MysqlColumnType::Integer,
-                    "TO_SECONDS" => MysqlColumnType::BigInt,
+                    "LENGTHB" | "WEEK" | "UNCOMPRESSED_LENGTH" => MysqlColumnType::Integer,
                     "ADD_MONTHS" => MysqlColumnType::Char,
                     "EXTRACT_YEAR_MONTH" | "FIELD" | "FIND_IN_SET" | "BIT_COUNT" | "INSTR"
                     | "PERIOD_ADD" | "PERIOD_DIFF" | "TO_DAYS" => MysqlColumnType::Integer,

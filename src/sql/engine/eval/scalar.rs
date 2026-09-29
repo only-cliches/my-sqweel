@@ -48,6 +48,80 @@ fn binary_value_length(value: &Value) -> Option<usize> {
     let hex = value.as_str()?.strip_prefix(MYSQL_BINARY_SENTINEL)?;
     (hex.len() % 2 == 0).then_some(hex.len() / 2)
 }
+pub(super) fn eval_compress(
+    value_arg: Option<&String>,
+    data: &Map<String, Value>,
+    last_insert_id: u64,
+) -> Result<Value> {
+    let value = eval_arg(value_arg, data, last_insert_id)?;
+    if value == Value::Null {
+        return Ok(Value::Null);
+    }
+    let bytes =
+        binary_value_bytes(&value).unwrap_or_else(|| json_scalar_to_string(&value).into_bytes());
+    let encoded = (bytes.len() as u32).to_le_bytes().to_vec();
+    let mut encoder = flate2::write::ZlibEncoder::new(encoded, flate2::Compression::default());
+    std::io::Write::write_all(&mut encoder, &bytes)?;
+    let encoded = encoder.finish()?;
+    Ok(Value::String(format!(
+        "{MYSQL_BINARY_SENTINEL}{}",
+        encoded
+            .iter()
+            .map(|byte| format!("{byte:02X}"))
+            .collect::<String>()
+    )))
+}
+
+pub(super) fn eval_uncompress(
+    value_arg: Option<&String>,
+    data: &Map<String, Value>,
+    last_insert_id: u64,
+) -> Result<Value> {
+    let value = eval_arg(value_arg, data, last_insert_id)?;
+    if value == Value::Null {
+        return Ok(Value::Null);
+    }
+    let Some(bytes) = binary_value_bytes(&value) else {
+        return Ok(Value::Null);
+    };
+    if bytes.len() < 4 {
+        return Ok(Value::Null);
+    }
+    let expected = u32::from_le_bytes(bytes[..4].try_into().expect("four-byte prefix")) as usize;
+    let mut decoder = flate2::read::ZlibDecoder::new(&bytes[4..]);
+    let mut decoded = Vec::with_capacity(expected);
+    if std::io::Read::read_to_end(&mut decoder, &mut decoded).is_err() || decoded.len() != expected
+    {
+        return Ok(Value::Null);
+    }
+    Ok(Value::String(format!(
+        "{MYSQL_BINARY_SENTINEL}{}",
+        decoded
+            .iter()
+            .map(|byte| format!("{byte:02X}"))
+            .collect::<String>()
+    )))
+}
+
+pub(super) fn eval_uncompressed_length(
+    value_arg: Option<&String>,
+    data: &Map<String, Value>,
+    last_insert_id: u64,
+) -> Result<Value> {
+    let value = eval_arg(value_arg, data, last_insert_id)?;
+    if value == Value::Null {
+        return Ok(Value::Null);
+    }
+    let Some(bytes) = binary_value_bytes(&value) else {
+        return Ok(Value::Null);
+    };
+    if bytes.len() < 4 {
+        return Ok(Value::Null);
+    }
+    Ok(Value::Number(Number::from(u32::from_le_bytes(
+        bytes[..4].try_into().expect("four-byte prefix"),
+    ))))
+}
 
 pub(super) fn eval_octet_length_value(value: &Value) -> usize {
     binary_value_length(value).unwrap_or_else(|| json_scalar_to_string(value).len())

@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "compressed_payload_roundtrip_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "compressed_payload_roundtrip",
+    "source": {
+      "kind": "github",
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/2308.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/2308.sql",
+      "sha256": "6cba551128e7d5c7b754424850554c63cb80cd739e3807230f88b21485102c80",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from compressed_payload_roundtrip",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A single indexed compressed payload is restored through UNCOMPRESS, exposing both the binary result bytes and MariaDB's long-blob result metadata.",
+      "mysql_mariadb_translation": "Reduced to one independently authored BLOB row and one UNCOMPRESS projection, removing the multi-row audit and NULL branch while retaining the compressed-payload evaluator and metadata contract."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "uncompress",
+    "blob-column",
+    "minimized-regression",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The single payload restores the fixed ASCII text 'dock-7'; the result must be returned as MariaDB LONG_BLOB metadata.",
+  "determinism_notes": "One fixed primary-key row and one ordered projection are used; no clocks, randomness, sleeps, or concurrent schedules are present.",
+  "setup": [
+    "CREATE TABLE compressed_payload_min (payload_id INT PRIMARY KEY, payload BLOB NOT NULL)",
+    "INSERT INTO compressed_payload_min VALUES (7101, COMPRESS('dock-7'))"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT payload_id, UNCOMPRESS(payload) AS restored_payload FROM compressed_payload_min ORDER BY payload_id",
+      "ordered": true
+    }
+  ]
+}

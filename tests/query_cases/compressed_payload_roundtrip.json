@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "compressed_payload_roundtrip",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/2308.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/2308.sql",
+      "sha256": "6cba551128e7d5c7b754424850554c63cb80cd739e3807230f88b21485102c80",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/docker/fuzz_root/mysql_initlib/2308.sql: COMPRESS/UNCOMPRESS round-trip and UNCOMPRESSED_LENGTH checks",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL compatibility script stores COMPRESS output and verifies that UNCOMPRESS restores the original text while UNCOMPRESSED_LENGTH reports the source byte length, including NULL input handling.",
+      "mysql_mariadb_translation": "Reauthored as a payload archive audit. Independently authored rows compress an ASCII manifest, an empty payload, and a SQL NULL; an ordered projection restores non-NULL payloads, reports original byte lengths, and distinguishes missing payloads. The source table, variables, literals, and fuzz-test context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "compress",
+    "uncompress",
+    "uncompressed-length",
+    "blob-column",
+    "null-propagation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Archive 6101 restores a fixed manifest and reports its original byte length; archive 6102 restores an empty payload with length zero; archive 6103 stores SQL NULL and must preserve NULL through both restoration and length functions.",
+  "determinism_notes": "Archive IDs, payload text, and ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used. Only ASCII text is used so byte length is unambiguous.",
+  "setup": [
+    "CREATE TABLE payload_archives (archive_id INT PRIMARY KEY, archive_label VARCHAR(32) NOT NULL, payload BLOB NULL)",
+    "INSERT INTO payload_archives VALUES (6101, 'manifest', COMPRESS('crate:17|seal:blue|count:4')), (6102, 'empty', COMPRESS('')), (6103, 'missing', NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT archive_id, archive_label, UNCOMPRESS(payload) AS restored_payload, UNCOMPRESSED_LENGTH(payload) AS original_bytes, payload IS NULL AS is_missing FROM payload_archives ORDER BY archive_id",
+      "ordered": true
+    }
+  ]
+}
