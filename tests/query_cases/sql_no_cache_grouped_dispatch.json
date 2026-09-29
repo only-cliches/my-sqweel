@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "sql_no_cache_grouped_dispatch",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "datablade-io/daisy",
+      "commit": "b5c9b7b1cc496c1fd45cb5678c273b089d899c63",
+      "path": "benchmark/infinidb/queries.sql",
+      "url": "https://github.com/datablade-io/daisy/blob/b5c9b7b1cc496c1fd45cb5678c273b089d899c63/benchmark/infinidb/queries.sql",
+      "sha256": "b47972fab37443e1e5d4a83b7f88f56f6e8712fc6c111d5bc96c91c2828d0872",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "benchmark/infinidb/queries.sql:1-9",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL analytical read applies SQL_NO_CACHE to scalar and grouped aggregate queries, combining COUNT, SUM, AVG, DISTINCT, filtering, and deterministic grouping.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored dispatch-load summary. Posted shipment rows are grouped by depot, repeated package codes collapse through COUNT(DISTINCT), nullable unit values exercise aggregate NULL handling, and SQL_NO_CACHE accompanies a positive-total HAVING filter; the benchmark schema, identifiers, and data are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["sql-no-cache", "grouped-aggregates", "count-distinct", "sum", "avg", "having", "null-aggregate-input", "deterministic-order"],
+  "fixture_notes": "Depot 41 has two posted rows for one package and one NULL-unit row, so COUNT(DISTINCT) is 1 while SUM ignores NULL. Depot 42 has two distinct packages and a positive total. Depot 43 has only a NULL posted unit and is removed by HAVING; a pending row is filtered before grouping.",
+  "determinism_notes": "Depot IDs, package codes, unit values, states, filters, grouping, and ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE dispatch_loads (load_id INT PRIMARY KEY, depot_id INT NOT NULL, package_code VARCHAR(16) NOT NULL, unit_count INT NULL, load_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO dispatch_loads VALUES (4101, 41, 'PK-A', 6, 'posted'), (4102, 41, 'PK-A', NULL, 'posted'), (4201, 42, 'PK-B', 3, 'posted'), (4202, 42, 'PK-C', 5, 'posted'), (4301, 43, 'PK-D', NULL, 'posted'), (4401, 44, 'PK-E', 99, 'pending')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT SQL_NO_CACHE depot_id, COUNT(DISTINCT package_code) AS distinct_packages, SUM(unit_count) AS total_units, AVG(unit_count) AS average_units FROM dispatch_loads WHERE load_state = 'posted' GROUP BY depot_id HAVING SUM(unit_count) > 0 ORDER BY depot_id",
+      "ordered": true
+    }
+  ]
+}
