@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "id": "set_transaction_repeatable_read",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "advanced/transactions/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/advanced/transactions/mysql.sql",
+      "sha256": "609ee05b4509ed9a042cff1a8162b7dd8d2f92ecfe468fcbb00a4c4b3afdf732",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "advanced/transactions/mysql.sql:84-88",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A transaction example sets an explicit isolation level before inspecting or executing transaction work.",
+      "mysql_mariadb_translation": "Reauthored as a release-window ledger. The session selects REPEATABLE READ before a transaction, commits one deterministic status update, and verifies the persisted ledger state; the source transaction examples, table names, values, and commentary are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["set-transaction-isolation", "repeatable-read", "transaction", "commit-final-state", "deterministic-order"],
+  "fixture_notes": "The isolation setting is applied before the transaction. Ledger entry 8401 changes from queued to published inside the transaction and must remain published after COMMIT; entry 8402 remains held.",
+  "determinism_notes": "Entry IDs, states, isolation mode, update predicate, and final primary-key ordering are fixed; one connection executes statements sequentially with no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE release_window_ledger (entry_id INT PRIMARY KEY, entry_code VARCHAR(24) NOT NULL, entry_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO release_window_ledger VALUES (8401, 'north-window', 'queued'), (8402, 'south-window', 'held')"
+  ],
+  "steps": [
+    {"sql": "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ", "ordered": false},
+    {"sql": "START TRANSACTION", "ordered": false},
+    {"sql": "UPDATE release_window_ledger SET entry_state = 'published' WHERE entry_id = 8401", "ordered": false},
+    {"sql": "COMMIT", "ordered": false}
+  ],
+  "checks": [
+    {"sql": "SELECT entry_id, entry_code, entry_state FROM release_window_ledger ORDER BY entry_id", "ordered": true}
+  ]
+}
