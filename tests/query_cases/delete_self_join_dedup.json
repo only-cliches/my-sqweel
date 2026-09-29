@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "delete_self_join_dedup",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/2790.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/2790.sql",
+      "sha256": "7d3ae75518cda4d2b7459a30bbc5e015175e33dda2cec0e0cfc67a8a4e1923eb",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/docker/fuzz_root/mysql_initlib/2790.sql:15-18",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL multi-table DELETE names a target alias and a USING join list, including the case where the target table is joined to another alias of the same relation.",
+      "mysql_mariadb_translation": "Reauthored as a duplicate-alias cleanup. An aliased target self-joins to the earlier row with the same active alias code, and DELETE removes only the later duplicate while preserving the canonical row, unique aliases, and inactive duplicates. The source tables, identifiers, lock statements, and fuzzing context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["delete-using", "self-join-delete", "duplicate-deduplication", "target-alias", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "Alias 102 is a later active duplicate of alias 101 and must be removed. Alias 201 is unique, alias 202 duplicates an inactive row and must remain, and alias 301 is inactive and preserved.",
+  "determinism_notes": "Alias IDs define canonical-versus-duplicate order, codes and states are fixed, and final rows are ordered by the primary key; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE member_aliases (alias_id INT PRIMARY KEY, alias_code VARCHAR(24) NOT NULL, alias_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO member_aliases VALUES (101, 'north-hub', 'active'), (102, 'north-hub', 'active'), (201, 'south-hub', 'active'), (202, 'legacy-hub', 'inactive'), (301, 'legacy-hub', 'inactive')"
+  ],
+  "steps": [
+    {
+      "sql": "DELETE later_alias FROM member_aliases AS later_alias INNER JOIN member_aliases AS earlier_alias ON later_alias.alias_code = earlier_alias.alias_code AND later_alias.alias_id > earlier_alias.alias_id WHERE later_alias.alias_state = 'active' AND earlier_alias.alias_state = 'active'",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT alias_id, alias_code, alias_state FROM member_aliases ORDER BY alias_id",
+      "ordered": true
+    }
+  ]
+}
