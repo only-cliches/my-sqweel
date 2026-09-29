@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "id": "update_ignore_left_antijoin",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "FDA/fda-hive",
+      "commit": "1fe900eb084ca8d1378bdb998a164f4aefc927cf",
+      "path": "vlib/db/sp_req_lock.sql",
+      "url": "https://github.com/FDA/fda-hive/blob/1fe900eb084ca8d1378bdb998a164f4aefc927cf/vlib/db/sp_req_lock.sql",
+      "sha256": "a7ab9e3bbcdd5af1cfefa6987d892ac3db58d1a60eb148ea49a70af7c3e08308",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "vlib/db/sp_req_lock.sql:53-58",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL/MariaDB UPDATE IGNORE refreshes a target through a LEFT JOIN using a shared key, applies a conditional joined-row predicate, and continues past duplicate-key conflicts.",
+      "mysql_mariadb_translation": "Reauthored as a shipment-state reconciliation. A LEFT JOIN exposes active holds, a joined refresh table supplies replacement codes and states, UPDATE IGNORE skips one unique-code conflict, and held or non-queued shipments remain unchanged; the source lock schema, identifiers, values, and procedure context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "update-ignore",
+    "left-join",
+    "anti-join-null-filter",
+    "joined-update",
+    "unique-conflict",
+    "partial-mutation",
+    "deterministic-final-state"
+  ],
+  "fixture_notes": "Shipment 101 is queued but has an active hold and remains unchanged. Shipment 102 is queued without a hold and updates to its free replacement code and state. Shipment 103 is queued without a hold but its replacement code conflicts with shipment 102, so UPDATE IGNORE preserves the whole conflicting row. Shipment 104 is already completed and is filtered out.",
+  "determinism_notes": "Shipment IDs, replacement codes, hold flags, states, unique constraints, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE shipment_state (shipment_id INT PRIMARY KEY, shipment_code VARCHAR(16) NOT NULL UNIQUE, shipment_state VARCHAR(16) NOT NULL, revision INT NOT NULL)",
+    "CREATE TABLE shipment_refresh (shipment_id INT PRIMARY KEY, replacement_code VARCHAR(16) NOT NULL, replacement_state VARCHAR(16) NOT NULL)",
+    "CREATE TABLE shipment_holds (shipment_id INT PRIMARY KEY, active TINYINT NOT NULL)",
+    "INSERT INTO shipment_state VALUES (101, 'old-101', 'queued', 3), (102, 'old-102', 'queued', 4), (103, 'old-103', 'queued', 5), (104, 'old-104', 'completed', 8)",
+    "INSERT INTO shipment_refresh VALUES (101, 'new-101', 'ready'), (102, 'new-102', 'ready'), (103, 'new-102', 'ready'), (104, 'new-104', 'ready')",
+    "INSERT INTO shipment_holds VALUES (101, 1), (103, 0)"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE IGNORE shipment_state AS s LEFT JOIN shipment_holds AS h ON h.shipment_id = s.shipment_id AND h.active = 1 INNER JOIN shipment_refresh AS r ON r.shipment_id = s.shipment_id SET s.shipment_code = r.replacement_code, s.shipment_state = r.replacement_state, s.revision = s.revision + 1 WHERE s.shipment_state = 'queued' AND h.shipment_id IS NULL",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT shipment_id, shipment_code, shipment_state, revision FROM shipment_state ORDER BY shipment_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT shipment_id, shipment_code, shipment_state, revision FROM shipment_state ORDER BY shipment_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT shipment_id, active FROM shipment_holds ORDER BY shipment_id",
+      "ordered": true
+    }
+  ]
+}
