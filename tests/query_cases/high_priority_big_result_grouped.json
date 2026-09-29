@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "high_priority_big_result_grouped",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "simultech/Empowered",
+      "commit": "457923833dc46b7f9d71a939f05a4c3c9d3dfe1d",
+      "path": "mysql.sql",
+      "url": "https://github.com/simultech/Empowered/blob/457923833dc46b7f9d71a939f05a4c3c9d3dfe1d/mysql.sql",
+      "sha256": "d7be30090fac8a2764a5954a95e26741894aea9aff990b1fc1ec82b2af9a120a",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "mysql.sql:1683, SELECT modifier syntax",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "The MySQL SELECT syntax permits HIGH_PRIORITY and SQL_BIG_RESULT modifiers before grouped projections and HAVING clauses.",
+      "mysql_mariadb_translation": "Reauthored as a warehouse throughput report. HIGH_PRIORITY and SQL_BIG_RESULT precede grouped route totals, a HAVING threshold filters small routes, and deterministic ordering makes the modifier combination observable without relying on scheduling behavior. The source help catalog, identifiers, values, and documentation data are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "high-priority-select",
+    "sql-big-result",
+    "grouped-aggregate",
+    "having-threshold",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Routes 801 and 802 meet the five-unit throughput threshold; route 803 is filtered by HAVING. The two optimizer modifiers must preserve the grouped rows and aggregate metadata.",
+  "determinism_notes": "Route IDs, throughput samples, threshold, aggregate expressions, and ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE route_throughput (sample_id INT PRIMARY KEY, route_id INT NOT NULL, units INT NOT NULL)",
+    "INSERT INTO route_throughput VALUES (901, 801, 4), (902, 801, 3), (903, 802, 5), (904, 802, 2), (905, 803, 4)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT HIGH_PRIORITY SQL_BIG_RESULT route_id, COUNT(*) AS sample_count, SUM(units) AS total_units FROM route_throughput GROUP BY route_id HAVING SUM(units) >= 5 ORDER BY route_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT route_id, COUNT(*) AS sample_count, SUM(units) AS total_units FROM route_throughput GROUP BY route_id ORDER BY route_id",
+      "ordered": true
+    }
+  ]
+}
