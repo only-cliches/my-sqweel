@@ -402,6 +402,13 @@ pub(super) fn coerce_value_for_column(value: Value, hint: &ColumnHint) -> Value 
         return coerced;
     }
 
+    if ascii_contains_ignore_case(sql_type, "decimal")
+        && let Some((_, scale)) = decimal_precision_scale(sql_type)
+        && let Some(rendered) = super::eval::round_decimal_cast(&value, scale)
+    {
+        return Value::String(rendered);
+    }
+
     if ascii_starts_with_ignore_case(sql_type, "date")
         && !ascii_starts_with_ignore_case(sql_type, "datetime")
     {

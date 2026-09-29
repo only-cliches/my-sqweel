@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "self_aggregate_update",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "dml/update/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/dml/update/mysql.sql",
+      "sha256": "e6a13493e1863b0278c167f5e5869d46a383a2e47a2cb9fc0a840a813dbc43e0",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "dml/update/mysql.sql:52",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "An UPDATE assigns every target row from an aggregate over the same table by wrapping the self-referencing aggregate in a derived relation.",
+      "mysql_mariadb_translation": "Reauthored as a score normalization pass. A fixed set of review scores is replaced by the table average through a derived self-aggregate, and a deterministic read verifies that every profile receives the same decimal result; the source users, identifiers, values, and tutorial context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["self-referencing-update", "derived-aggregate", "scalar-subquery", "decimal-average", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "Review profiles start with scores 2.00, 4.00, and 8.00, so the derived aggregate is 4.6667 when stored in the DECIMAL(8,4) target. The update must apply that same average to every profile, including the row that supplied the aggregate, and the final read is ordered by profile ID.",
+  "determinism_notes": "Profile IDs and scores are fixed, AVG has a fixed three-row input, the target scale is explicit, and the final read has a primary-key order; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE review_profiles (profile_id INT PRIMARY KEY, profile_name VARCHAR(24) NOT NULL, review_score DECIMAL(8,4) NOT NULL)",
+    "INSERT INTO review_profiles VALUES (6101, 'north', 2.0000), (6102, 'central', 4.0000), (6103, 'south', 8.0000)"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE review_profiles SET review_score = (SELECT average_score FROM (SELECT AVG(review_score) AS average_score FROM review_profiles) AS score_summary)",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT profile_id, profile_name, review_score FROM review_profiles ORDER BY profile_id",
+      "ordered": true
+    }
+  ]
+}

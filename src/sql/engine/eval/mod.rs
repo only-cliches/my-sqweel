@@ -5648,7 +5648,7 @@ pub(super) fn cast_json_value(value: Value, data_type: &str) -> Result<Value> {
     }
     Ok(value)
 }
-fn round_decimal_cast(value: &Value, scale: usize) -> Option<String> {
+pub(super) fn round_decimal_cast(value: &Value, scale: usize) -> Option<String> {
     let DecimalParts {
         sign,
         mut integer,
