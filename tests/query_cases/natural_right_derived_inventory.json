@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "natural_right_derived_inventory",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "mariadb-corporation/mariadb-qa",
+      "commit": "55cbc29215042cd5d26b1b3892f1837e1c1b00fa",
+      "path": "BUGS/MDEV-26190.sql",
+      "url": "https://github.com/mariadb-corporation/mariadb-qa/blob/55cbc29215042cd5d26b1b3892f1837e1c1b00fa/BUGS/MDEV-26190.sql",
+      "sha256": "dc1c0d27421b3b00cdf585a47de981d05f3849cfb9a35e08cccb29fb40d98198",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "BUGS/MDEV-26190.sql:6",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB regression query applies NATURAL JOIN inside two derived relations and then combines those relations with NATURAL RIGHT JOIN, exercising shared-column propagation and right-side null extension.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored shipment inventory report. Two derived relations naturally match shipment and region keys before a NATURAL RIGHT JOIN retains a shipment present only in the state relation; the schema, rows, labels, and report purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["natural-join", "natural-right-join", "derived-table", "shared-column-propagation", "right-null-extension", "deterministic-order"],
+  "fixture_notes": "Shipment 101 appears in both derived relations and combines its fragile label with ready state; shipment 103 appears only in the right derived relation and must retain its hold state with a NULL label. Shipment 102 exists only in the left derived relation and must not appear in the NATURAL RIGHT JOIN result.",
+  "determinism_notes": "Shipment and region keys, labels, states, and derived projections are fixed. Both result reads are ordered by stable shipment and value columns, with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE inventory_shipments (shipment_id INT PRIMARY KEY, region_code VARCHAR(8) NOT NULL, shipment_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE inventory_labels (shipment_id INT NOT NULL, region_code VARCHAR(8) NOT NULL, label_code VARCHAR(16) NOT NULL, PRIMARY KEY (shipment_id, region_code, label_code))",
+    "CREATE TABLE inventory_states (shipment_id INT NOT NULL, region_code VARCHAR(8) NOT NULL, state_code VARCHAR(16) NOT NULL, PRIMARY KEY (shipment_id, region_code, state_code))",
+    "INSERT INTO inventory_shipments VALUES (101, 'NA', 'atlas'), (102, 'EU', 'borealis'), (103, 'APAC', 'cinder')",
+    "INSERT INTO inventory_labels VALUES (101, 'NA', 'fragile'), (102, 'EU', 'priority')",
+    "INSERT INTO inventory_states VALUES (101, 'NA', 'ready'), (103, 'APAC', 'hold')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT right_side.shipment_id, right_side.region_code, left_side.label_code, right_side.state_code FROM (SELECT shipment_id, region_code, label_code FROM inventory_shipments NATURAL JOIN inventory_labels) AS left_side NATURAL RIGHT JOIN (SELECT shipment_id, region_code, state_code FROM inventory_shipments NATURAL JOIN inventory_states) AS right_side ORDER BY right_side.shipment_id, right_side.region_code, left_side.label_code, right_side.state_code",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT shipment_id, region_code, shipment_name FROM inventory_shipments ORDER BY shipment_id",
+      "ordered": true
+    }
+  ]
+}
