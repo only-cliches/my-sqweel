@@ -1132,7 +1132,9 @@ fn wire_column_type(column_type: MysqlColumnType) -> ColumnType {
         MysqlColumnType::DateTime => ColumnType::MYSQL_TYPE_DATETIME,
         MysqlColumnType::Timestamp => ColumnType::MYSQL_TYPE_TIMESTAMP,
         MysqlColumnType::Year => ColumnType::MYSQL_TYPE_YEAR,
-        MysqlColumnType::Char | MysqlColumnType::Binary => ColumnType::MYSQL_TYPE_STRING,
+        MysqlColumnType::Char | MysqlColumnType::Enum | MysqlColumnType::Binary => {
+            ColumnType::MYSQL_TYPE_STRING
+        }
         MysqlColumnType::VarChar | MysqlColumnType::VarBinary => ColumnType::MYSQL_TYPE_VAR_STRING,
         MysqlColumnType::Text | MysqlColumnType::Blob => ColumnType::MYSQL_TYPE_BLOB,
         MysqlColumnType::MediumBlob => ColumnType::MYSQL_TYPE_MEDIUM_BLOB,

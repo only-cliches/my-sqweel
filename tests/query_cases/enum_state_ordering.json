@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "id": "enum_state_ordering",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "marciuz/vfront",
+      "commit": "5ed843cdd3eb95faf8e8d0e727a7c3d34f2151d",
+      "path": "_install/vfront.mysql.sql",
+      "url": "https://github.com/marciuz/vfront/blob/5ed843cdd3eb95faf8e8d0e727a7c3d34f2151d/_install/vfront.mysql.sql",
+      "sha256": "cb5c8a1f98f0c138f60bfc14d75f086e1bdfa981be4cbd121b9e4b8b35aa311b",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "_install/vfront.mysql.sql:31-46",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL schema uses ENUM columns with fixed labels, nullable and non-null forms, and a default enum value in an operational log table.",
+      "mysql_mariadb_translation": "Reauthored as a workflow queue. Fixed state and lane ENUM columns use an omitted default, explicit enum values, CASE labels, and FIELD ordering in grouped and row-level reads. The source schema, labels, identifiers, timestamps, and application context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["enum-column", "enum-default", "nullable-enum", "field-ordering", "case-classification", "grouped-read", "deterministic-order"],
+  "fixture_notes": "Item 103 exercises the queued default and NULL lane; the other items cover explicit queued, running, and done states. FIELD defines report order independently of storage order.",
+  "determinism_notes": "Item IDs, enum labels, default values, CASE branches, FIELD ordering, grouping, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE workflow_items (item_id INT PRIMARY KEY, item_state ENUM('queued', 'running', 'done') NOT NULL DEFAULT 'queued', lane ENUM('north', 'south') NULL, priority INT NOT NULL)",
+    "INSERT INTO workflow_items (item_id, item_state, lane, priority) VALUES (101, 'queued', 'north', 2), (102, 'running', 'south', 1), (103, DEFAULT, NULL, 3), (104, 'done', 'north', 4)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT item_id, item_state, lane, FIELD(item_state, 'queued', 'running', 'done') AS state_rank, CASE item_state WHEN 'queued' THEN 'waiting' WHEN 'running' THEN 'active' WHEN 'done' THEN 'finished' END AS state_label FROM workflow_items ORDER BY FIELD(item_state, 'queued', 'running', 'done'), item_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT item_state, COUNT(*) AS state_count FROM workflow_items GROUP BY item_state ORDER BY FIELD(item_state, 'queued', 'running', 'done')",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}

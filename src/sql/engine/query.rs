@@ -7983,6 +7983,7 @@ fn column_hint_from_metadata(metadata: &ColumnMetadata) -> ColumnHint {
         MysqlColumnType::Timestamp => "TIMESTAMP",
         MysqlColumnType::Year => "YEAR",
         MysqlColumnType::Char => "CHAR",
+        MysqlColumnType::Enum => "VARCHAR",
         MysqlColumnType::VarChar => "VARCHAR",
         MysqlColumnType::Text => "TEXT",
         MysqlColumnType::Binary => "BINARY",

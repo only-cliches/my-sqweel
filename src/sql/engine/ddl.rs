@@ -690,6 +690,7 @@ fn inferred_sql_type_from_metadata(
         MysqlColumnType::Timestamp => "TIMESTAMP",
         MysqlColumnType::Year => "YEAR",
         MysqlColumnType::Char => "CHAR",
+        MysqlColumnType::Enum => "VARCHAR",
         MysqlColumnType::VarChar => "VARCHAR",
         MysqlColumnType::Text => "TEXT",
         MysqlColumnType::Binary => "BINARY",

@@ -560,6 +560,7 @@ pub enum MysqlColumnType {
     Timestamp,
     Year,
     Char,
+    Enum,
     #[default]
     VarChar,
     Text,
@@ -698,6 +699,8 @@ fn mysql_column_type_from_declared(upper: &str) -> MysqlColumnType {
         MysqlColumnType::Json
     } else if upper.contains("TEXT") {
         MysqlColumnType::Text
+    } else if upper.starts_with("ENUM") {
+        MysqlColumnType::Enum
     } else if upper.starts_with("CHAR") {
         MysqlColumnType::Char
     } else {

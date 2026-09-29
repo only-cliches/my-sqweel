@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "enum_state_ordering_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "enum_state_ordering",
+    "source": {
+      "kind": "github",
+      "repository": "marciuz/vfront",
+      "commit": "5ed843cdd3eb95faf8e8d0e727a7c3d34f2151d",
+      "path": "_install/vfront.mysql.sql",
+      "url": "https://github.com/marciuz/vfront/blob/5ed843cdd3eb95faf8e8d0e727a7c3d34f2151d/_install/vfront.mysql.sql",
+      "sha256": "cb5c8a1f98f0c138f60bfc14d75f086e1bdfa981be4cbd121b9e4b8b35aa311b",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from _install/vfront.mysql.sql:31-46",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A direct projection of an ENUM column must expose the MySQL/MariaDB string-column metadata type rather than generic VARCHAR metadata.",
+      "mysql_mariadb_translation": "Reduced to one non-null ENUM column, one defaulted row, and one ordered projection so the wire metadata distinction is isolated from CASE, FIELD, grouping, and multiple columns."
+    },
+    "independently_authored": true
+  },
+  "features": ["enum-column", "enum-default", "metadata-regression", "deterministic-order", "minimized-regression"],
+  "fixture_notes": "The single row uses the ENUM default and must be returned as queued with MYSQL_TYPE_STRING metadata, matching MariaDB.",
+  "determinism_notes": "The fixed schema, default, row, and primary-key ordering contain no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE enum_probe (probe_id INT PRIMARY KEY, probe_state ENUM('queued', 'running', 'done') NOT NULL DEFAULT 'queued')",
+    "INSERT INTO enum_probe (probe_id) VALUES (7)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT probe_state FROM enum_probe ORDER BY probe_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
