@@ -4808,7 +4808,10 @@ impl RawEngine {
                 row.insert(
                     "character_set_name".to_string(),
                     if character {
-                        json!("utf8mb4")
+                        hint.character_set
+                            .clone()
+                            .map(Value::String)
+                            .unwrap_or_else(|| json!("utf8mb4"))
                     } else {
                         Value::Null
                     },
@@ -4816,7 +4819,10 @@ impl RawEngine {
                 row.insert(
                     "collation_name".to_string(),
                     if character {
-                        json!("utf8mb4_general_ci")
+                        hint.collation
+                            .clone()
+                            .map(Value::String)
+                            .unwrap_or_else(|| json!("utf8mb4_general_ci"))
                     } else {
                         Value::Null
                     },

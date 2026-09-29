@@ -940,10 +940,17 @@ pub(super) fn table_schema_from_create(
         };
 
         for opt in col.options {
-            if let Some(comment) = column_comment_from_text(&opt.option.to_string()) {
+            let option_text = opt.option.to_string();
+            if let Some(comment) = column_comment_from_text(&option_text) {
                 column_hint.comment = Some(comment);
             }
-            let text = opt.option.to_string().to_uppercase();
+            let text = option_text.to_uppercase();
+            if let sqlparser::ast::ColumnOption::CharacterSet(name) = &opt.option {
+                column_hint.character_set = Some(name.to_string().to_ascii_lowercase());
+            }
+            if let Some((_, collation)) = text.split_once("COLLATE ") {
+                column_hint.collation = Some(collation.trim().to_ascii_lowercase());
+            }
             if text.contains("NOT NULL") {
                 column_hint.nullable = Some(false);
             }

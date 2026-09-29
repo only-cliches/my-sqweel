@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "id": "alter_convert_charset_labels_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "percona/percona-xtrabackup",
+      "commit": "8a2dd449000ecdda171a33cdc06f33c3364c4275",
+      "path": "scripts/mysql_system_tables_fix.sql",
+      "url": "https://github.com/percona/percona-xtrabackup/blob/8a2dd449000ecdda171a33cdc06f33c3364c4275/scripts/mysql_system_tables_fix.sql#L89",
+      "sha256": "9ed9837e5f3ffad7bd2c6b2dac46b2b9276d428b77ad5c770823537937de24be",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from scripts/mysql_system_tables_fix.sql:89",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "ALTER TABLE ... CONVERT TO CHARACTER SET changes an existing table's declared character set and collation.",
+      "mysql_mariadb_translation": "Reduced to one independently authored latin1 text column, one fixed row, one charset conversion, and one information_schema metadata read."
+    },
+    "independently_authored": true,
+    "minimized_from": "alter_convert_charset_labels"
+  },
+  "features": ["alter-table", "convert-to-character-set", "explicit-collation", "minimized-regression"],
+  "fixture_notes": "The single text column starts as latin1_swedish_ci and must report utf8mb4_bin after conversion.",
+  "determinism_notes": "One fixed row and one metadata query are ordered by the primary key/ordinal position; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE charset_probe (probe_id INT PRIMARY KEY, probe_text VARCHAR(16) CHARACTER SET latin1 COLLATE latin1_swedish_ci NOT NULL)",
+    "INSERT INTO charset_probe VALUES (7, 'alpha')"
+  ],
+  "steps": [
+    {
+      "sql": "ALTER TABLE charset_probe CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_bin",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT column_name, character_set_name, collation_name FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'charset_probe' AND column_name = 'probe_text' ORDER BY ordinal_position",
+      "ordered": true
+    }
+  ]
+}

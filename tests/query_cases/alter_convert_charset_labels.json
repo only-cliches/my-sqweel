@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "alter_convert_charset_labels",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "percona/percona-xtrabackup",
+      "commit": "8a2dd449000ecdda171a33cdc06f33c3364c4275",
+      "path": "scripts/mysql_system_tables_fix.sql",
+      "url": "https://github.com/percona/percona-xtrabackup/blob/8a2dd449000ecdda171a33cdc06f33c3364c4275/scripts/mysql_system_tables_fix.sql#L89",
+      "sha256": "9ed9837e5f3ffad7bd2c6b2dac46b2b9276d428b77ad5c770823537937de24be",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "scripts/mysql_system_tables_fix.sql:89",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL system-table migration converts an existing table to a named character set and collation with ALTER TABLE ... CONVERT TO CHARACTER SET.",
+      "mysql_mariadb_translation": "Reauthored as an independent label-catalog migration. A latin1 column is converted to utf8mb4 with the binary collation, and ordered data plus information_schema metadata verify preservation and the new character-set definition. The source system tables, identifiers, and migration values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["alter-table", "convert-to-character-set", "explicit-collation", "metadata-verification", "deterministic-order"],
+  "fixture_notes": "The label starts as latin1_swedish_ci and is converted to utf8mb4_bin. ASCII labels keep the data-preservation assertion independent of connection encoding while information_schema exposes the conversion.",
+  "determinism_notes": "IDs, labels, charset, collation, and ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE label_catalog (label_id INT PRIMARY KEY, label_text VARCHAR(32) CHARACTER SET latin1 COLLATE latin1_swedish_ci NOT NULL)",
+    "INSERT INTO label_catalog VALUES (41, 'North Hub'), (42, 'south hub'), (43, 'East Hub')"
+  ],
+  "steps": [
+    {
+      "sql": "ALTER TABLE label_catalog CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_bin",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT label_id, label_text FROM label_catalog ORDER BY label_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT column_name, character_set_name, collation_name FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'label_catalog' AND column_name = 'label_text' ORDER BY ordinal_position",
+      "ordered": true
+    }
+  ]
+}

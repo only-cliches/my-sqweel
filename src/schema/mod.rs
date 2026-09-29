@@ -8,6 +8,10 @@ pub struct ColumnHint {
     pub nullable: Option<bool>,
     pub default: Option<String>,
     #[serde(default)]
+    pub character_set: Option<String>,
+    #[serde(default)]
+    pub collation: Option<String>,
+    #[serde(default)]
     pub comment: Option<String>,
     pub primary_key: bool,
     pub auto_increment: bool,

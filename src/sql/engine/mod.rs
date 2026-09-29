@@ -1020,6 +1020,13 @@ impl RawEngine {
                     out.push(result);
                     continue;
                 }
+                if let Some(result) = self.execute_alter_convert_charset_compat(&raw)? {
+                    self.capture_eval_user_variables();
+                    self.record_found_rows(&raw, &result);
+                    self.store_last_rows_affected(&raw, &result);
+                    out.push(result);
+                    continue;
+                }
                 if let Some(result) = self.execute_compat_statement(&raw)? {
                     self.capture_eval_user_variables();
                     self.record_found_rows(&raw, &result);
@@ -1497,6 +1504,12 @@ impl RawEngine {
             parse_sql = strip_alter_order_by_clause(&parse_sql);
             parse_sql = strip_alter_execution_options(&parse_sql);
             parse_sql = strip_alter_key_toggles_for_parser(&parse_sql);
+            let marker = " CONVERT TO CHARACTER SET ";
+            let remainder = &parse_sql["ALTER TABLE ".len()..];
+            if let Some(convert_at) = remainder.to_ascii_uppercase().find(marker) {
+                let table = remainder[..convert_at].trim();
+                parse_sql = format!("ALTER TABLE {table} RENAME TO {table}");
+            }
             if let Some(table) = bare_alter_table_name(&parse_sql) {
                 parse_sql = format!("ALTER TABLE {table} RENAME TO {table}");
             }
@@ -2202,6 +2215,66 @@ impl RawEngine {
         }
 
         Ok(Some(QueryResult::default()))
+    }
+
+    fn execute_alter_convert_charset_compat(&self, sql: &str) -> Result<Option<QueryResult>> {
+        let trimmed = sql.trim().trim_end_matches(';').trim();
+        let upper = trimmed.to_ascii_uppercase();
+        if !upper.starts_with("ALTER TABLE ") {
+            return Ok(None);
+        }
+        let remainder = trimmed["ALTER TABLE ".len()..].trim_start();
+        let marker = " CONVERT TO CHARACTER SET ";
+        let Some(convert_at) = remainder.to_ascii_uppercase().find(marker) else {
+            return Ok(None);
+        };
+        let table = remainder[..convert_at].trim().trim_matches('`');
+        if table.is_empty() {
+            return Err(anyhow!("incorrect table name"));
+        }
+        let conversion = remainder[convert_at + marker.len()..].trim();
+        let charset = conversion
+            .split_whitespace()
+            .next()
+            .map(|name| name.trim_matches('`').to_ascii_lowercase())
+            .filter(|name| !name.is_empty())
+            .ok_or_else(|| anyhow!("missing character set"))?;
+        let conversion_upper = conversion.to_ascii_uppercase();
+        let collation = conversion_upper
+            .find(" COLLATE ")
+            .and_then(|index| {
+                conversion[index + " COLLATE ".len()..]
+                    .split_whitespace()
+                    .next()
+            })
+            .map(|name| name.trim_matches('`').to_ascii_lowercase())
+            .filter(|name| !name.is_empty())
+            .or_else(|| (charset == "utf8mb4").then(|| "utf8mb4_general_ci".to_string()));
+        let Some(mut schema) = self.schemas.get(table).map(|schema| schema.clone()) else {
+            return Err(anyhow!("unknown table: {table}"));
+        };
+        for column in schema.columns.values_mut() {
+            if column
+                .sql_type
+                .as_deref()
+                .is_some_and(|sql_type| is_character_type(&sql_type.to_ascii_uppercase()))
+            {
+                column.character_set = Some(charset.clone());
+                column.collation = collation.clone();
+            }
+        }
+        schema.updated_at = Some(Utc::now());
+        let rows_affected = self
+            .rows
+            .get(table)
+            .map(|rows| rows.len() as u64)
+            .unwrap_or(0);
+        self.schemas.insert(table.to_string(), schema);
+        self.rebuild_indexes(table);
+        Ok(Some(QueryResult {
+            rows_affected,
+            ..QueryResult::default()
+        }))
     }
 
     fn execute_compat_statement(&self, sql: &str) -> Result<Option<QueryResult>> {
