@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "id": "insert_delayed_values_batch",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "mariadb-corporation/mariadb-qa",
+      "commit": "55cbc29215042cd5d26b1b3892f1837e1c1b00fa",
+      "path": "BUGS/MDEV-26583.sql",
+      "url": "https://github.com/mariadb-corporation/mariadb-qa/blob/55cbc29215042cd5d26b1b3892f1837e1c1b00fa/BUGS/MDEV-26583.sql",
+      "sha256": "8f9a8b6f8d47d5e747cdab369ccc640fc1fc493710214af5f577103eaa0adef7",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "BUGS/MDEV-26583.sql:8,17",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB regression script uses INSERT DELAYED with a multi-row VALUES clause to enqueue several rows through one insert statement.",
+      "mysql_mariadb_translation": "Reauthored as an independent MyISAM telemetry batch. Two INSERT DELAYED statements append fixed samples through multi-row VALUES lists, while a pre-existing sample verifies the final ordered read; the source Spider engine, plugins, identifiers, and regression setup are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "insert-delayed",
+    "multi-row-values",
+    "myisam-table",
+    "deterministic-final-state"
+  ],
+  "fixture_notes": "Telemetry sample 1503 pre-exists. One INSERT DELAYED statement adds samples 1501 and 1502, and a second delayed multi-row VALUES statement adds samples 1504 and 1505; the final read must preserve all five rows in primary-key order.",
+  "determinism_notes": "Sample IDs, payloads, MyISAM storage, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE telemetry_samples (sample_id INT PRIMARY KEY, sensor_code VARCHAR(16) NOT NULL, reading INT NOT NULL) ENGINE=MyISAM",
+    "INSERT INTO telemetry_samples VALUES (1503, 'west', 70)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT DELAYED INTO telemetry_samples (sample_id, sensor_code, reading) VALUES (1501, 'north', 42), (1502, 'south', 55)",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT DELAYED INTO telemetry_samples (sample_id, sensor_code, reading) VALUES (1504, 'east', 61), (1505, 'south', 58)",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT sample_id, sensor_code, reading FROM telemetry_samples ORDER BY sample_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT sample_id, sensor_code, reading FROM telemetry_samples ORDER BY sample_id",
+      "ordered": true
+    }
+  ]
+}
