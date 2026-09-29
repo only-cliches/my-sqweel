@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "buffered_found_rows_dispatch",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/4184.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/4184.sql",
+      "sha256": "07d53528fedebf63e57dee9c99af954f304e60c832ad379f91b7268c911a3d72",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/docker/fuzz_root/mysql_initlib/4184.sql:6-12",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A limited SELECT combines SQL_BUFFER_RESULT with SQL_CALC_FOUND_ROWS, then FOUND_ROWS() observes the pre-LIMIT match count on the same connection.",
+      "mysql_mariadb_translation": "Reauthored as a dispatch inventory page. A buffered, counted ready-item page returns one deterministic row while FOUND_ROWS reports all ready items; a later ordinary limited page changes the session count to the size of that page. The source tables, identifiers, and values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "sql-buffer-result",
+    "sql-calc-found-rows",
+    "found-rows-session-state",
+    "limit-pagination",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Three ready items exist, so the first one-row buffered/counting page must be followed by FOUND_ROWS() = 3. A later ordinary one-row page must replace the session count with 1; the held item is excluded from both counts.",
+  "determinism_notes": "Item IDs, states, labels, page sizes, and ordering are fixed; all reads run on one connection with no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE dispatch_inventory (item_id INT PRIMARY KEY, item_label VARCHAR(32) NOT NULL, item_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO dispatch_inventory VALUES (301, 'north-kit', 'ready'), (302, 'south-kit', 'ready'), (303, 'west-kit', 'held'), (304, 'east-kit', 'ready')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT SQL_BUFFER_RESULT SQL_CALC_FOUND_ROWS item_id, item_label FROM dispatch_inventory WHERE item_state = 'ready' ORDER BY item_id LIMIT 1",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT FOUND_ROWS() AS matching_ready_items",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT item_id, item_label FROM dispatch_inventory WHERE item_state = 'ready' ORDER BY item_id LIMIT 1",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT FOUND_ROWS() AS latest_page_items",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
