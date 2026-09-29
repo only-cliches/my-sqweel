@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "insert_set_upsert_registry",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "shockerli/Notes",
+      "commit": "ab692c415b98da64528d57ba6856add8d78dc3cd",
+      "path": "MySQL_Note.sql",
+      "url": "https://github.com/shockerli/Notes/blob/ab692c415b98da64528d57ba6856add8d78dc3cd/MySQL_Note.sql",
+      "sha256": "ea4fec2cd49faedee8b86a80642b3d053f23adc112367a32ae4e4e0833d10c0a",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL_Note.sql:538-539",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL syntax reference combines SET-style INSERT assignments with ON DUPLICATE KEY UPDATE so a primary or unique-key conflict updates selected non-key columns.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored service-endpoint registry. One SET-style upsert changes the label and increments the revision for an existing unique endpoint, while a second SET-style upsert inserts a new endpoint; the source schema, identifiers, values, and application context are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "insert-set",
+    "on-duplicate-key-update",
+    "values-function",
+    "unique-key-conflict",
+    "multi-step-dml",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Endpoint 501 keeps its primary key while its label is replaced by the incoming SET value and its revision increments from 3 to 4. Endpoint 502 is inserted with revision 1; the final read verifies both paths.",
+  "determinism_notes": "Endpoint IDs, unique codes, labels, revisions, statements, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE endpoint_registry (endpoint_id INT PRIMARY KEY, endpoint_code VARCHAR(24) NOT NULL UNIQUE, endpoint_label VARCHAR(48) NOT NULL, revision INT NOT NULL)",
+    "INSERT INTO endpoint_registry VALUES (501, 'edge-west', 'legacy-west', 3)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO endpoint_registry SET endpoint_id = 501, endpoint_code = 'edge-west', endpoint_label = 'active-west', revision = 4 ON DUPLICATE KEY UPDATE endpoint_label = VALUES(endpoint_label), revision = endpoint_registry.revision + 1",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO endpoint_registry SET endpoint_id = 502, endpoint_code = 'edge-east', endpoint_label = 'active-east', revision = 1 ON DUPLICATE KEY UPDATE endpoint_label = VALUES(endpoint_label), revision = endpoint_registry.revision + 1",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT endpoint_id, endpoint_code, endpoint_label, revision FROM endpoint_registry ORDER BY endpoint_id",
+      "ordered": true
+    }
+  ]
+}
