@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "nullable_window_coalesce_upsert",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "MarkLeith/dbahelper",
+      "commit": "500b9bf3895aeb710703b57058952f6db01f0f56",
+      "path": "views/p_s/statement_analysis.sql",
+      "url": "https://github.com/MarkLeith/dbahelper/blob/500b9bf3895aeb710703b57058952f6db01f0f56/views/p_s/statement_analysis.sql",
+      "sha256": "382f148591ea61256751030ff85c1ef7bdcf67a193d56265d309fbc3506bba5c",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "views/p_s/statement_analysis.sql:65 (normalized_statements_by_server_by_schema upsert example)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A multi-row MySQL VALUES upsert merges nullable lower and upper observations with COALESCE around LEAST and GREATEST, while VALUES(column) supplies the incoming bounds.",
+      "mysql_mariadb_translation": "Reauthored as a deterministic service-window registry. Existing windows preserve nullable bounds through COALESCE(LEAST/GREATEST(...), existing_column), incoming rows refresh a populated window and partially fill no bound, and a new window is inserted; the source schema, identifiers, metrics, and application context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["multi-row-values", "on-duplicate-key-update", "values-in-upsert", "nullable-bound-merge", "coalesce-least-greatest", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "North expands on both sides, south keeps its existing start while its NULL end remains NULL, and west is inserted as a new window. The duplicate assignments must use the existing row when LEAST/GREATEST sees NULL rather than replacing it with an incoming bound.",
+  "determinism_notes": "Window IDs, keys, timestamps, row order, and final ordering are fixed; the fixture uses no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE service_windows (window_id INT PRIMARY KEY, window_key VARCHAR(24) NOT NULL UNIQUE, first_seen DATETIME NULL, last_seen DATETIME NULL, observation_count INT NOT NULL)",
+    "INSERT INTO service_windows VALUES (301, 'north', '2026-04-10 10:00:00', '2026-04-12 18:00:00', 5), (302, 'south', '2026-04-20 09:00:00', NULL, 2)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO service_windows (window_id, window_key, first_seen, last_seen, observation_count) VALUES (301, 'north', '2026-04-09 08:00:00', '2026-04-13 20:00:00', 7), (302, 'south', '2026-04-22 11:00:00', '2026-04-25 15:00:00', 4), (303, 'west', '2026-05-01 07:30:00', '2026-05-01 08:45:00', 1) ON DUPLICATE KEY UPDATE first_seen = COALESCE(LEAST(first_seen, VALUES(first_seen)), first_seen), last_seen = COALESCE(GREATEST(last_seen, VALUES(last_seen)), last_seen), observation_count = VALUES(observation_count)",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT window_id, window_key, first_seen, last_seen, observation_count FROM service_windows ORDER BY window_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT COUNT(*) AS window_count, MIN(first_seen) AS earliest_start, MAX(last_seen) AS latest_end FROM service_windows",
+      "ordered": true
+    }
+  ]
+}
