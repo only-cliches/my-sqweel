@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "id": "replace_latest_staging_rows",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "shutterstock/tungsten-replicator",
+      "commit": "b5d73a0b966a2b04d77da25b3f4c5fe3edfe1f3d",
+      "path": "replicator/samples/scripts/batch/mysql-merge.sql",
+      "url": "https://github.com/shutterstock/tungsten-replicator/blob/b5d73a0b966a2b04d77da25b3f4c5fe3edfe1f3d/replicator/samples/scripts/batch/mysql-merge.sql",
+      "sha256": "0c81fb29194a9c3a9474ac9f17ab6f06cbb85b0c2380369335c35753bd4046a9",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "replicator/samples/scripts/batch/mysql-merge.sql:11-17",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A staged replication merge uses REPLACE INTO ... SELECT and keeps only insert events whose row identifier equals the grouped MAX(row_id) for each primary key.",
+      "mysql_mariadb_translation": "Reauthored as an account snapshot loader. A staging table contains ordered insert and delete events; REPLACE INTO copies only the latest staged insert per account using a grouped MAX event ID, leaving accounts whose latest event is a delete absent from the target. The source replication tables, placeholders, identifiers, and values are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "replace-into",
+    "insert-select",
+    "group-by",
+    "max-aggregate",
+    "staging-table",
+    "subquery",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Account 1401 has two insert events and receives only the newest balance; account 1402 has one insert; account 1403 has an insert followed by a delete, so its latest event is excluded and no target row is created. The target starts with a stale 1401 row to make replacement observable.",
+  "determinism_notes": "Event IDs are strictly ordered per account, operation codes and target columns are fixed, grouped MAX selects one latest event per account, and final rows are ordered by account ID; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE account_snapshot (account_id INT PRIMARY KEY, account_name VARCHAR(32) NOT NULL, balance_cents INT NOT NULL, source_event_id INT NOT NULL)",
+    "CREATE TABLE account_stage (stage_event_id INT PRIMARY KEY, account_id INT NOT NULL, operation_code CHAR(1) NOT NULL, account_name VARCHAR(32) NOT NULL, balance_cents INT NOT NULL)",
+    "INSERT INTO account_snapshot VALUES (1401, 'legacy-nova', 1000, 13990)",
+    "INSERT INTO account_stage VALUES (14011, 1401, 'I', 'nova', 1250), (14012, 1401, 'I', 'nova', 1800), (14021, 1402, 'I', 'orbit', 900), (14031, 1403, 'I', 'terra', 700), (14032, 1403, 'D', 'terra', 700)"
+  ],
+  "steps": [
+    {
+      "sql": "REPLACE INTO account_snapshot (account_id, account_name, balance_cents, source_event_id) SELECT stage_a.account_id, stage_a.account_name, stage_a.balance_cents, stage_a.stage_event_id FROM account_stage AS stage_a WHERE stage_a.operation_code = 'I' AND stage_a.stage_event_id IN (SELECT MAX(stage_b.stage_event_id) FROM account_stage AS stage_b GROUP BY stage_b.account_id)",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT account_id, account_name, balance_cents, source_event_id FROM account_snapshot ORDER BY account_id",
+      "ordered": true
+    }
+  ]
+}
