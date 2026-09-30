@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "id": "recursive_hierarchy_object_map",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "DreamPWJ/jenkins-shared-library",
+      "commit": "c49b5b8fe9ad6b5087927c4ed8471e5190805c90",
+      "path": "_database/sql/snippet.sql",
+      "url": "https://github.com/DreamPWJ/jenkins-shared-library/blob/c49b5b8fe9ad6b5087927c4ed8471e5190805c90/_database/sql/snippet.sql",
+      "sha256": "62a6d0b4aff15668db476840168e4c88252eb3e78f1497cca3457f35ec0b4bff",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "_database/sql/snippet.sql:L4-L5,L23-L38",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "The source demonstrates recursive CTE traversal over parent-child rows and separately demonstrates deterministic JSON_OBJECT aggregation inside GROUP_CONCAT for structured child output.",
+      "mysql_mariadb_translation": "Reauthored as a department hierarchy report. A recursive CTE carries each root ID, depth, and slash-delimited node path through descendants, then a grouped projection emits one JSON_OBJECTAGG node map per traversed node. The source schema, identifiers, JSON fields, and hierarchy values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "recursive-cte",
+    "recursive-hierarchy",
+    "path-accumulation",
+    "json-objectagg",
+    "grouped-report",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Finance is one root with Payroll and Treasury children, and Payroll has a Benefits grandchild. Support is a second root with a single Helpdesk child. Each traversed node must emit exactly one keyed JSON object containing its full path and name, with depth and root identity preserved.",
+  "determinism_notes": "Node IDs, parent links, names, recursion depth, path construction, unique JSON keys, and final root ordering are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE report_units (unit_id INT PRIMARY KEY, parent_id INT NULL, unit_name VARCHAR(32) NOT NULL)",
+    "INSERT INTO report_units VALUES (10, NULL, 'Finance'), (11, 10, 'Payroll'), (12, 10, 'Treasury'), (13, 11, 'Benefits'), (20, NULL, 'Support'), (21, 20, 'Helpdesk')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH RECURSIVE unit_tree (root_id, unit_id, parent_id, unit_name, depth, unit_path) AS (SELECT unit_id, unit_id, parent_id, unit_name, 0, CAST(unit_name AS CHAR(255)) FROM report_units WHERE parent_id IS NULL UNION ALL SELECT parent.root_id, child.unit_id, child.parent_id, child.unit_name, parent.depth + 1, CONCAT(parent.unit_path, '/', child.unit_name) FROM unit_tree AS parent INNER JOIN report_units AS child ON child.parent_id = parent.unit_id) SELECT root_id, unit_id, depth, JSON_OBJECTAGG(unit_path, unit_name) AS node_map FROM unit_tree GROUP BY root_id, unit_id, depth, unit_path ORDER BY root_id, unit_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "WITH RECURSIVE unit_tree (root_id, unit_id, parent_id, unit_name, depth, unit_path) AS (SELECT unit_id, unit_id, parent_id, unit_name, 0, CAST(unit_name AS CHAR(255)) FROM report_units WHERE parent_id IS NULL UNION ALL SELECT parent.root_id, child.unit_id, child.parent_id, child.unit_name, parent.depth + 1, CONCAT(parent.unit_path, '/', child.unit_name) FROM unit_tree AS parent INNER JOIN report_units AS child ON child.parent_id = parent.unit_id) SELECT root_id, unit_id, depth, unit_path FROM unit_tree ORDER BY root_id, unit_path, unit_id",
+      "ordered": true
+    },
+    {
+      "sql": "WITH RECURSIVE unit_tree (root_id, unit_id, parent_id, unit_name, depth, unit_path) AS (SELECT unit_id, unit_id, parent_id, unit_name, 0, CAST(unit_name AS CHAR(255)) FROM report_units WHERE parent_id IS NULL UNION ALL SELECT parent.root_id, child.unit_id, child.parent_id, child.unit_name, parent.depth + 1, CONCAT(parent.unit_path, '/', child.unit_name) FROM unit_tree AS parent INNER JOIN report_units AS child ON child.parent_id = parent.unit_id) SELECT root_id, unit_id, JSON_OBJECTAGG(unit_path, depth) AS depth_map FROM unit_tree GROUP BY root_id, unit_id, unit_path ORDER BY root_id, unit_id",
+      "ordered": true
+    }
+  ]
+}

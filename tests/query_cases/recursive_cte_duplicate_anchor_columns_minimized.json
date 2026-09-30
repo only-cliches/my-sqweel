@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "id": "recursive_cte_duplicate_anchor_columns_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "recursive_hierarchy_object_map",
+    "source": {
+      "kind": "github",
+      "repository": "DreamPWJ/jenkins-shared-library",
+      "commit": "c49b5b8fe9ad6b5087927c4ed8471e5190805c90",
+      "path": "_database/sql/snippet.sql",
+      "url": "https://github.com/DreamPWJ/jenkins-shared-library/blob/c49b5b8fe9ad6b5087927c4ed8471e5190805c90/_database/sql/snippet.sql",
+      "sha256": "62a6d0b4aff15668db476840168e4c88252eb3e78f1497cca3457f35ec0b4bff",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "_database/sql/snippet.sql:L23-L38",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A recursive CTE carries a parent-derived value through UNION ALL while its anchor selects the same source column twice under the CTE column list.",
+      "mysql_mariadb_translation": "Reduced to a three-node hierarchy whose recursive anchor selects one node ID twice without projection aliases, making positional preservation of duplicate result names observable."
+    },
+    "independently_authored": true
+  },
+  "features": ["recursive-cte", "duplicate-anchor-columns", "union-all-recursion", "deterministic-order", "minimized-regression"],
+  "fixture_notes": "The root ID must remain 1 for every descendant even though the anchor selects the root node ID twice and relies on the CTE column list to name the positions.",
+  "determinism_notes": "Three fixed nodes, parent links, CTE column names, and explicit output ordering are used. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE mini_units (unit_id INT PRIMARY KEY, parent_id INT NULL)",
+    "INSERT INTO mini_units VALUES (1, NULL), (2, 1), (3, 2)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH RECURSIVE unit_tree (root_id, unit_id) AS (SELECT unit_id, unit_id FROM mini_units WHERE parent_id IS NULL UNION ALL SELECT parent.root_id, child.unit_id FROM unit_tree AS parent INNER JOIN mini_units AS child ON child.parent_id = parent.unit_id) SELECT root_id, unit_id FROM unit_tree ORDER BY root_id, unit_id",
+      "ordered": true
+    }
+  ]
+}

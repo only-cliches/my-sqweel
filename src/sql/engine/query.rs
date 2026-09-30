@@ -8162,14 +8162,15 @@ fn remap_set_row(
     target_columns: &[String],
 ) -> Result<Map<String, Value>> {
     let source_keys = row_keys_for_columns(source_columns);
+    let target_keys = row_keys_for_columns(target_columns);
     source_columns
         .iter()
         .zip(source_keys.iter())
-        .zip(target_columns)
+        .zip(target_keys)
         .map(|((source, key), target)| {
             row.get(key)
                 .cloned()
-                .map(|value| (target.clone(), value))
+                .map(|value| (target, value))
                 .ok_or_else(|| anyhow!("set operation result is missing column: {source}"))
         })
         .collect()
@@ -8792,6 +8793,7 @@ fn query_from_body_with_with(body: SetExpr, with: Option<sqlparser::ast::With>) 
 }
 
 fn values_query(result: &QueryResult) -> Query {
+    let keys = row_keys_for_columns(&result.columns);
     let rows = result
         .rows
         .iter()
@@ -8800,8 +8802,8 @@ fn values_query(result: &QueryResult) -> Query {
                 .columns
                 .iter()
                 .enumerate()
-                .map(|(index, column)| {
-                    let expr = match row.get(column).unwrap_or(&Value::Null) {
+                .map(|(index, _column)| {
+                    let expr = match row.get(&keys[index]).unwrap_or(&Value::Null) {
                         Value::Null => Expr::Value(SqlValue::Null),
                         Value::Bool(value) => Expr::Value(SqlValue::Boolean(*value)),
                         Value::Number(value) => {
