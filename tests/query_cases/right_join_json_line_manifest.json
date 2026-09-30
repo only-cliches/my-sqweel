@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "id": "right_join_json_line_manifest",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "hstechsoft/jaysan",
+      "commit": "e704aa70ba0c1e4c2590e67c2ce03188f9ebd00f",
+      "path": "php/hari_query.sql",
+      "url": "https://github.com/hstechsoft/jaysan/blob/e704aa70ba0c1e4c2590e67c2ce03188f9ebd00f/php/hari_query.sql",
+      "sha256": "5190fe500f3ce7f624db65e7ad11dd5331242ada8b584c9892ba231fb5338b37",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "php/hari_query.sql:35-37,53-61,72-74 (preserved orders with nested JSON line aggregates)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A multi-stage report uses RIGHT JOIN to preserve parent records without matching detail rows, then builds nested JSON arrays of objects grouped by the preserved parent key.",
+      "mysql_mariadb_translation": "Reauthored as an order-line manifest. RIGHT JOIN preserves orders without lines, a grouped CTE emits an ordered JSON_ARRAYAGG of JSON_OBJECT line records for populated orders, and an explicit empty JSON array represents the preserved no-line order; source tables, fields, and business report are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "right-join",
+    "cte",
+    "grouped-read",
+    "json-arrayagg",
+    "json-object",
+    "ordered-json-arrayagg",
+    "null-extended-row",
+    "json-empty-array",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Order 701 has two lines that must remain in line-id order, order 702 has no lines and must remain visible through the RIGHT JOIN with an empty JSON array, and line 799 is orphaned and excluded because orders are the preserved side.",
+  "determinism_notes": "Order IDs, line IDs, quantities, aggregate ordering, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE manifest_orders (order_id INT PRIMARY KEY, order_label VARCHAR(32) NOT NULL)",
+    "CREATE TABLE manifest_lines (line_id INT PRIMARY KEY, order_id INT NOT NULL, item_code VARCHAR(32) NOT NULL, units INT NOT NULL)",
+    "INSERT INTO manifest_orders VALUES (701, 'Northstar'), (702, 'Solstice'), (703, 'Waypoint')",
+    "INSERT INTO manifest_lines VALUES (70102, 701, 'cable', 4), (70101, 701, 'adapter', 2), (79901, 799, 'orphan', 9), (70301, 703, 'bracket', 6)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH order_manifests AS (SELECT o.order_id, o.order_label, COUNT(l.line_id) AS line_count, CAST(CASE WHEN COUNT(l.line_id) = 0 THEN JSON_ARRAY() ELSE JSON_ARRAYAGG(JSON_OBJECT('line_id', l.line_id, 'item_code', l.item_code, 'units', l.units) ORDER BY l.line_id) END AS CHAR(512)) AS line_manifest FROM manifest_lines AS l RIGHT JOIN manifest_orders AS o ON o.order_id = l.order_id GROUP BY o.order_id, o.order_label) SELECT order_id, order_label, line_count, line_manifest FROM order_manifests ORDER BY order_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "WITH order_manifests AS (SELECT o.order_id, o.order_label, COUNT(l.line_id) AS line_count, CAST(CASE WHEN COUNT(l.line_id) = 0 THEN JSON_ARRAY() ELSE JSON_ARRAYAGG(JSON_OBJECT('line_id', l.line_id, 'item_code', l.item_code, 'units', l.units) ORDER BY l.line_id) END AS CHAR(512)) AS line_manifest FROM manifest_lines AS l RIGHT JOIN manifest_orders AS o ON o.order_id = l.order_id GROUP BY o.order_id, o.order_label) SELECT order_id, order_label, line_count, line_manifest FROM order_manifests ORDER BY order_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT line_id, order_id, item_code, units FROM manifest_lines ORDER BY line_id",
+      "ordered": true
+    }
+  ]
+}
