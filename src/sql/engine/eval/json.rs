@@ -789,18 +789,21 @@ pub(super) fn eval_json_merge(
     last_insert_id: u64,
     patch: bool,
 ) -> Result<Value> {
-    let mut values = Vec::new();
-    for arg in args {
-        let value = eval_json_document(arg, data, last_insert_id)?;
-        if value == Value::Null {
-            return Ok(Value::Null);
-        }
-        values.push(value);
+    let values = args
+        .iter()
+        .map(|arg| eval_json_document(arg, data, last_insert_id))
+        .collect::<Result<Vec<_>>>()?;
+    eval_json_merge_values(&values, patch)
+}
+
+pub(super) fn eval_json_merge_values(values: &[Value], patch: bool) -> Result<Value> {
+    if values.iter().any(|value| *value == Value::Null) {
+        return Ok(Value::Null);
     }
     let Some(mut merged) = values.first().cloned() else {
         return Ok(Value::Null);
     };
-    for value in values.into_iter().skip(1) {
+    for value in values.iter().skip(1).cloned() {
         merged = if patch {
             json_merge_patch_value(merged, value)
         } else {

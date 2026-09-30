@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "id": "json_merge_upsert_preferences",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "dimasbaguspm/manhes",
+      "commit": "ecbd911fe4b4be4b275664340ed15993840c42c2",
+      "path": "internal/infrastructure/persistence/queries/dictionary.sql",
+      "url": "https://github.com/dimasbaguspm/manhes/blob/ecbd911fe4b4be4b275664340ed15993840c42c2/internal/infrastructure/persistence/queries/dictionary.sql",
+      "sha256": "f790679a8c1c93a36f978c55482974397aa23df2a2c95d9c261a9357c42906c0",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "internal/infrastructure/persistence/queries/dictionary.sql:4-12 (JSON_MERGE_PATCH duplicate-key refresh and conditional VALUES fallback)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A dictionary upsert merges incoming JSON into an existing document while conditionally replacing scalar columns only when incoming values are non-empty.",
+      "mysql_mariadb_translation": "Reauthored as an account-preference refresh. JSON_MERGE_PATCH applies an incoming preference patch on duplicate, a non-empty incoming display name replaces the existing name, an empty name preserves it, and a new account follows the insert path; source identifiers, fields, and values are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "duplicate-key-update",
+    "json-merge-patch",
+    "values-in-upsert",
+    "conditional-upsert",
+    "nested-json-merge",
+    "revision-counter",
+    "json-dml",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The existing north account receives a dark-theme and SMS-alert patch while retaining its locale and display name because the incoming name is empty; the new south account is inserted with its full preference document and revision one.",
+  "determinism_notes": "Account keys, JSON documents, conditional values, revision arithmetic, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE account_preferences (account_key VARCHAR(32) PRIMARY KEY, display_name VARCHAR(32) NOT NULL, preferences JSON NOT NULL, revision INT NOT NULL)",
+    "INSERT INTO account_preferences VALUES ('acct-north', 'North Account', JSON_OBJECT('theme', 'light', 'locale', 'en', 'alerts', JSON_OBJECT('email', TRUE, 'sms', FALSE)), 2)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO account_preferences (account_key, display_name, preferences, revision) VALUES ('acct-north', '', JSON_OBJECT('theme', 'dark', 'alerts', JSON_OBJECT('sms', TRUE)), 1) ON DUPLICATE KEY UPDATE display_name = CASE WHEN VALUES(display_name) <> '' THEN VALUES(display_name) ELSE display_name END, preferences = JSON_MERGE_PATCH(preferences, VALUES(preferences)), revision = revision + 1",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO account_preferences (account_key, display_name, preferences, revision) VALUES ('acct-south', 'South Account', JSON_OBJECT('theme', 'contrast', 'locale', 'fr', 'alerts', JSON_OBJECT('email', FALSE, 'sms', TRUE)), 1) ON DUPLICATE KEY UPDATE display_name = CASE WHEN VALUES(display_name) <> '' THEN VALUES(display_name) ELSE display_name END, preferences = JSON_MERGE_PATCH(preferences, VALUES(preferences)), revision = revision + 1",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT account_key, display_name, JSON_UNQUOTE(JSON_EXTRACT(preferences, '$.theme')) AS theme, JSON_UNQUOTE(JSON_EXTRACT(preferences, '$.locale')) AS locale, JSON_UNQUOTE(JSON_EXTRACT(preferences, '$.alerts.email')) AS email_alert, JSON_UNQUOTE(JSON_EXTRACT(preferences, '$.alerts.sms')) AS sms_alert, revision FROM account_preferences ORDER BY account_key",
+      "ordered": true
+    }
+  ]
+}

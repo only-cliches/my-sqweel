@@ -193,7 +193,12 @@ pub(super) fn eval_insert_update_value(
                 .last()
                 .map(|identifier| identifier.value.to_ascii_uppercase())
                 .unwrap_or_default();
-            if is_json_mutation_name(name.as_str()) || name == "JSON_EXTRACT" {
+            if is_json_mutation_name(name.as_str())
+                || matches!(
+                    name.as_str(),
+                    "JSON_EXTRACT" | "JSON_MERGE_PATCH" | "JSON_MERGE" | "JSON_MERGE_PRESERVE"
+                )
+            {
                 let FunctionArguments::List(arguments) = &function.args else {
                     return Ok(Value::Null);
                 };
@@ -217,7 +222,12 @@ pub(super) fn eval_insert_update_value(
                 else {
                     unreachable!("JSON function name was checked before evaluation");
                 };
-                if is_json_mutation_name(name.as_str()) {
+                if is_json_mutation_name(name.as_str())
+                    || matches!(
+                        name.as_str(),
+                        "JSON_MERGE_PATCH" | "JSON_MERGE" | "JSON_MERGE_PRESERVE"
+                    )
+                {
                     return preserve_json_mutation_text(value);
                 }
                 return Ok(value);

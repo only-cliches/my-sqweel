@@ -79,16 +79,23 @@ pub(super) fn eval_insert_update_json_function(
     if name == "JSON_EXTRACT" {
         return Ok(Some(eval_json_extract_values(values)?));
     }
-    let mutation = match name {
-        "JSON_SET" => JsonMutation::Set,
-        "JSON_INSERT" => JsonMutation::Insert,
-        "JSON_REPLACE" => JsonMutation::Replace,
-        "JSON_ARRAY_APPEND" => JsonMutation::ArrayAppend,
-        "JSON_ARRAY_INSERT" => JsonMutation::ArrayInsert,
-        "JSON_REMOVE" => JsonMutation::Remove,
-        _ => return Ok(None),
+    let patch = match name {
+        "JSON_MERGE_PATCH" => true,
+        "JSON_MERGE" | "JSON_MERGE_PRESERVE" => false,
+        _ => {
+            let mutation = match name {
+                "JSON_SET" => JsonMutation::Set,
+                "JSON_INSERT" => JsonMutation::Insert,
+                "JSON_REPLACE" => JsonMutation::Replace,
+                "JSON_ARRAY_APPEND" => JsonMutation::ArrayAppend,
+                "JSON_ARRAY_INSERT" => JsonMutation::ArrayInsert,
+                "JSON_REMOVE" => JsonMutation::Remove,
+                _ => return Ok(None),
+            };
+            return Ok(Some(eval_json_mutation_values(values, mutation)?));
+        }
     };
-    Ok(Some(eval_json_mutation_values(values, mutation)?))
+    Ok(Some(eval_json_merge_values(values, patch)?))
 }
 
 pub(super) fn eval_extreme_values(

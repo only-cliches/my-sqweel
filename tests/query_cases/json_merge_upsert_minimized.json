@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "json_merge_upsert_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "dimasbaguspm/manhes",
+      "commit": "ecbd911fe4b4be4b275664340ed15993840c42c2",
+      "path": "internal/infrastructure/persistence/queries/dictionary.sql",
+      "url": "https://github.com/dimasbaguspm/manhes/blob/ecbd911fe4b4be4b275664340ed15993840c42c2/internal/infrastructure/persistence/queries/dictionary.sql",
+      "sha256": "f790679a8c1c93a36f978c55482974397aa23df2a2c95d9c261a9357c42906c0",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "internal/infrastructure/persistence/queries/dictionary.sql:4-12 (JSON_MERGE_PATCH in duplicate-key assignment)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A duplicate-key assignment merges an incoming JSON document into the existing document with JSON_MERGE_PATCH.",
+      "mysql_mariadb_translation": "Minimized to one existing profile, one duplicate JSON merge, and one scalar JSON read so nested VALUES(preferences) resolution inside JSON_MERGE_PATCH is the only observable behavior."
+    },
+    "independently_authored": true,
+    "minimized_from": "json_merge_upsert_preferences"
+  },
+  "features": [
+    "duplicate-key-update",
+    "json-merge-patch",
+    "values-in-upsert",
+    "json-dml"
+  ],
+  "fixture_notes": "The existing profile's theme changes from light to dark while its locale remains present after the incoming patch is merged.",
+  "determinism_notes": "The profile key, JSON documents, merge expression, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE json_merge_probe (profile_key VARCHAR(32) PRIMARY KEY, preferences JSON NOT NULL)",
+    "INSERT INTO json_merge_probe VALUES ('profile-probe', JSON_OBJECT('theme', 'light', 'locale', 'en'))"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO json_merge_probe (profile_key, preferences) VALUES ('profile-probe', JSON_OBJECT('theme', 'dark')) ON DUPLICATE KEY UPDATE preferences = JSON_MERGE_PATCH(preferences, VALUES(preferences))",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT profile_key, JSON_UNQUOTE(JSON_EXTRACT(preferences, '$.theme')) AS theme, JSON_UNQUOTE(JSON_EXTRACT(preferences, '$.locale')) AS locale FROM json_merge_probe ORDER BY profile_key",
+      "ordered": true
+    }
+  ]
+}
