@@ -1156,11 +1156,6 @@ pub(crate) const MARIADB_FUNCTION_SCOPE: &[FunctionScopeEntry] = &[
         rationale: "server state, lock, replication, or filesystem behavior is outside query evaluation",
     },
     FunctionScopeEntry {
-        name: "JSON_LOOSE",
-        status: "out-of-scope",
-        rationale: "specialized document/compatibility semantics are not implemented in the current engine",
-    },
-    FunctionScopeEntry {
         name: "LOAD_FILE",
         status: "out-of-scope",
         rationale: "server state, lock, replication, or filesystem behavior is outside query evaluation",
