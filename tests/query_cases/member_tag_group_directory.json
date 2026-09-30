@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "id": "member_tag_group_directory",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "sqlpage/SQLPage",
+      "commit": "8a0c488a9098eda3b1e347ea709f3abed38ea7af",
+      "path": "examples/mysql json handling/index.sql",
+      "url": "https://github.com/sqlpage/SQLPage/blob/8a0c488a9098eda3b1e347ea709f3abed38ea7af/examples/mysql%20json%20handling/index.sql",
+      "sha256": "16f67337a9ec37ca41add1775c89f262a6048aa1e6d65197814c772991da3280",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "examples/mysql json handling/index.sql:L11-L18,L29-L35",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "The source uses JSON_ARRAYAGG(JSON_OBJECT(...)) to prepare selectable group options and GROUP_CONCAT over joined memberships to render each user's group labels.",
+      "mysql_mariadb_translation": "Reauthored as a member directory report. Separate grouped CTEs build ordered tag JSON arrays and ordered group-label strings, then a left-joined projection combines both aggregate result shapes while preserving members without a group membership. The source application schema, identifiers, JSON fields, and values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "cte",
+    "json-arrayagg",
+    "json-object",
+    "ordered-json-arrayagg",
+    "group-concat",
+    "ordered-group-concat",
+    "left-join",
+    "grouped-report",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Member 101 belongs to two groups and has two tags, member 102 has one group and one tag, and member 103 has a tag but no group membership. The report must preserve all members, order both aggregate shapes, and expose an empty group-label string for the unmatched member.",
+  "determinism_notes": "Member IDs, names, group links, tag labels, JSON object fields, aggregate ordering, and final member ordering are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE directory_members (member_id INT PRIMARY KEY, member_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE directory_groups (group_id INT PRIMARY KEY, group_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE directory_memberships (member_id INT NOT NULL, group_id INT NOT NULL, PRIMARY KEY (member_id, group_id))",
+    "CREATE TABLE directory_tags (member_id INT NOT NULL, tag_name VARCHAR(32) NOT NULL, PRIMARY KEY (member_id, tag_name))",
+    "INSERT INTO directory_members VALUES (101, 'Ari'), (102, 'Bea'), (103, 'Cy')",
+    "INSERT INTO directory_groups VALUES (7, 'Editors'), (8, 'Reviewers'), (9, 'Owners')",
+    "INSERT INTO directory_memberships VALUES (101, 8), (101, 7), (102, 9)",
+    "INSERT INTO directory_tags VALUES (101, 'backend'), (101, 'api'), (102, 'docs'), (103, 'security')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH tag_rollup AS (SELECT member_id, JSON_ARRAYAGG(JSON_OBJECT('label', tag_name, 'value', tag_name) ORDER BY tag_name) AS tags FROM directory_tags GROUP BY member_id), group_rollup AS (SELECT m.member_id, GROUP_CONCAT(g.group_name ORDER BY g.group_name SEPARATOR ', ') AS group_names FROM directory_memberships AS m INNER JOIN directory_groups AS g ON g.group_id = m.group_id GROUP BY m.member_id) SELECT d.member_id, d.member_name, t.tags, CAST(COALESCE(r.group_names, '') AS CHAR(64)) AS group_names FROM directory_members AS d LEFT JOIN tag_rollup AS t ON t.member_id = d.member_id LEFT JOIN group_rollup AS r ON r.member_id = d.member_id ORDER BY d.member_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "WITH tag_rollup AS (SELECT member_id, JSON_ARRAYAGG(JSON_OBJECT('label', tag_name, 'value', tag_name) ORDER BY tag_name) AS tags FROM directory_tags GROUP BY member_id), group_rollup AS (SELECT m.member_id, GROUP_CONCAT(g.group_name ORDER BY g.group_name SEPARATOR ', ') AS group_names FROM directory_memberships AS m INNER JOIN directory_groups AS g ON g.group_id = m.group_id GROUP BY m.member_id) SELECT d.member_id, t.tags, CAST(COALESCE(r.group_names, '') AS CHAR(64)) AS group_names FROM directory_members AS d LEFT JOIN tag_rollup AS t ON t.member_id = d.member_id LEFT JOIN group_rollup AS r ON r.member_id = d.member_id ORDER BY d.member_id",
+      "ordered": true
+    }
+  ]
+}
