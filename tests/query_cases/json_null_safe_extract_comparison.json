@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "json_null_safe_extract_comparison",
+  "provenance": {
+    "inspiration": {
+      "source_location": "mariadb-corporation/mariadb-qa@6108102f371b6d48590e8e53dfad3803a730c4: BUGS/MDEV-35352.sql lines 1-4",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A JSON column is compared with JSON_EXTRACT output using MariaDB's NULL-safe equality operator.",
+      "mysql_mariadb_translation": "The fixture independently compares extracted status values with expected JSON values across equal, unequal, missing-path, and SQL-NULL rows."
+    }
+  },
+  "features": [
+    "json-extract",
+    "null-safe-equality",
+    "json-null-propagation",
+    "deterministic-select"
+  ],
+  "fixture_notes": "Rows distinguish matching JSON scalars, a mismatched scalar, a missing path, and a SQL-NULL document.",
+  "determinism_notes": "Fixed case IDs provide deterministic output ordering; no clocks, randomness, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE json_null_safe_cases (case_id INT PRIMARY KEY, payload JSON NULL, expected JSON NULL)",
+    "INSERT INTO json_null_safe_cases VALUES (1, '{\"status\":\"ready\"}', '\"ready\"'), (2, '{\"status\":\"queued\"}', '\"ready\"'), (3, '{\"other\":1}', NULL), (4, NULL, NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT case_id, JSON_EXTRACT(payload, '$.status') <=> expected AS matches FROM json_null_safe_cases ORDER BY case_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
