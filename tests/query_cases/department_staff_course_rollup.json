@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "id": "department_staff_course_rollup",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "princeKris/mysqlProgram",
+      "commit": "c84b0678843999ce9545ded6dd6a18ed76730163",
+      "path": "06_grouping_aggregation/05_group_concat_json.sql",
+      "url": "https://github.com/princeKris/mysqlProgram/blob/c84b0678843999ce9545ded6dd6a18ed76730163/06_grouping_aggregation/05_group_concat_json.sql",
+      "sha256": "7fe4c6a0add8faafb9e6b6d22325c2b0d8cf9c74ac5ec757acdc57960b0c88ae",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "06_grouping_aggregation/05_group_concat_json.sql:4-22",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL teaching example uses ordered GROUP_CONCAT for grouped labels and JSON_OBJECTAGG for key/value aggregation as complementary reporting projections.",
+      "mysql_mariadb_translation": "Reauthored as one department rollup that computes staff labels and course-hour JSON maps in separate grouped CTEs before joining them, preventing cross-product duplication while combining both aggregate result shapes."
+    },
+    "independently_authored": true
+  },
+  "features": ["cte", "group-concat", "ordered-group-concat", "json-objectagg", "grouped-report", "left-join", "deterministic-order"],
+  "fixture_notes": "Departments 7 and 8 each have multiple staff and uniquely keyed courses. Separate aggregate CTEs ensure staff names are not duplicated by course rows; each department emits one string and one JSON object.",
+  "determinism_notes": "Department IDs, staff names, course keys, course hours, ordered string aggregation, unique JSON keys, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE report_departments (department_id INT PRIMARY KEY, department_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE report_staff (staff_id INT PRIMARY KEY, department_id INT NOT NULL, staff_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE report_courses (course_id INT PRIMARY KEY, department_id INT NOT NULL, course_code VARCHAR(16) NOT NULL, course_hours INT NOT NULL)",
+    "INSERT INTO report_departments VALUES (7, 'operations'), (8, 'research')",
+    "INSERT INTO report_staff VALUES (701, 7, 'Ari'), (702, 7, 'Bea'), (801, 8, 'Kai'), (802, 8, 'Mina')",
+    "INSERT INTO report_courses VALUES (7001, 7, 'OPS-101', 12), (7002, 7, 'OPS-202', 18), (8001, 8, 'RES-101', 20), (8002, 8, 'RES-303', 24)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH staff_rollup AS (SELECT department_id, GROUP_CONCAT(staff_name ORDER BY staff_name SEPARATOR ', ') AS staff_names FROM report_staff GROUP BY department_id), course_rollup AS (SELECT department_id, JSON_OBJECTAGG(course_code, course_hours) AS course_hours FROM report_courses GROUP BY department_id) SELECT d.department_id, d.department_name, s.staff_names, c.course_hours FROM report_departments AS d LEFT JOIN staff_rollup AS s ON s.department_id = d.department_id LEFT JOIN course_rollup AS c ON c.department_id = d.department_id ORDER BY d.department_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT department_id, staff_name FROM report_staff ORDER BY department_id, staff_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT department_id, course_code, course_hours FROM report_courses ORDER BY department_id, course_id",
+      "ordered": true
+    }
+  ]
+}
