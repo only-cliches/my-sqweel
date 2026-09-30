@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "id": "contact_network_recommendations",
+  "provenance": {
+    "kind": "github_sql_pattern",
+    "source_url": "https://github.com/sarthakmandal237/SQL-AdventureWorks-Database/blob/9f3fc33a429b70bbdbd634422e5d4e5b260c256a/Week3.sql",
+    "source_commit": "9f3fc33a429b70bbdbd634422e5d4e5b260c256a",
+    "source_location": "Week3.sql:21-45",
+    "source_sha256": "e121f27996268c83a3019e0f356d20bc9176e0f347af437883e954234d8015b9",
+    "source_dialect": "mysql-mariadb",
+    "observed_pattern": "Two common table expressions derive direct links and then use a self-join plus a correlated NOT EXISTS predicate to find indirect links that are not already direct.",
+    "mysql_mariadb_translation": "Retain the standard CTE, self-join, inequality, and correlated NOT EXISTS semantics while replacing the source's generic social-network tables with an independently authored contact-edge fixture."
+  },
+  "features": ["cte", "self-join", "correlated-not-exists", "anti-join", "deterministic-ordering"],
+  "fixture_notes": "The contact graph includes one indirect link already present directly, two valid recommendations for each of two contacts, and terminal contacts with no recommendations.",
+  "determinism_notes": "The result has a composite key and explicit ordering by contact and recommendation IDs.",
+  "setup": [
+    "CREATE TABLE contact_edges (contact_id INT NOT NULL, linked_contact_id INT NOT NULL, PRIMARY KEY (contact_id, linked_contact_id))",
+    "INSERT INTO contact_edges VALUES (10, 20), (10, 30), (10, 40), (20, 40), (20, 60), (30, 50), (40, 70), (60, 80)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH direct_links AS (SELECT contact_id, linked_contact_id FROM contact_edges), recommendations AS (SELECT first_link.contact_id, second_link.linked_contact_id AS recommended_id FROM direct_links first_link JOIN direct_links second_link ON first_link.linked_contact_id = second_link.contact_id WHERE first_link.contact_id <> second_link.linked_contact_id AND NOT EXISTS (SELECT 1 FROM direct_links already_linked WHERE already_linked.contact_id = first_link.contact_id AND already_linked.linked_contact_id = second_link.linked_contact_id)) SELECT contact_id, recommended_id FROM recommendations ORDER BY contact_id, recommended_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT contact_id, linked_contact_id FROM contact_edges ORDER BY contact_id, linked_contact_id",
+      "ordered": true
+    }
+  ]
+}
