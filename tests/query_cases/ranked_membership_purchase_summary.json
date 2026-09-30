@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "ranked_membership_purchase_summary",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Sankriti09/30-DAYS-SQL-QUESTION-SERIES",
+      "commit": "21d59fe9b805c83e0e87a71f184dc9cbe3b90cf6",
+      "path": "DAY 13/Query.sql",
+      "url": "https://github.com/Sankriti09/30-DAYS-SQL-QUESTION-SERIES/blob/21d59fe9b805c83e0e87a71f184dc9cbe3b90cf6/DAY%2013/Query.sql",
+      "sha256": "bad51863b2e7ea6c7411fad5a694c724ab6846931f8aabde7a69d7c7e4c4e191",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "DAY 13/Query.sql:4-25",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A joined pre-membership purchase CTE assigns DENSE_RANK by descending purchase date, then the outer grouped query keeps the latest rank and concatenates all tied product labels.",
+      "mysql_mariadb_translation": "Reauthored as a membership purchase summary with independently named tables, explicit tie ordering inside GROUP_CONCAT, an excluded post-membership purchase, and customers without qualifying purchases omitted. The source rank typo is corrected to the CTE alias used by the outer filter."
+    },
+    "independently_authored": true
+  },
+  "features": ["cte", "inner-join", "dense-rank-window", "cte-filter", "group-concat", "ordered-group-concat", "grouped-aggregate", "deterministic-order"],
+  "fixture_notes": "Customer 41 has two purchases tied on the latest pre-membership date and both labels must survive; customer 42 has one qualifying purchase; customer 43 only has a post-membership purchase and is excluded.",
+  "determinism_notes": "Customer IDs, membership dates, purchase dates, item IDs, rank ordering, concatenation ordering, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE membership_accounts (customer_id INT PRIMARY KEY, member_since DATE NOT NULL)",
+    "CREATE TABLE purchase_items (purchase_id INT PRIMARY KEY, customer_id INT NOT NULL, purchase_date DATE NOT NULL, item_label VARCHAR(32) NOT NULL)",
+    "INSERT INTO membership_accounts VALUES (41, '2025-04-10'), (42, '2025-05-20'), (43, '2025-06-01')",
+    "INSERT INTO purchase_items VALUES (4101, 41, '2025-04-01', 'tea'), (4102, 41, '2025-04-05', 'bread'), (4103, 41, '2025-04-05', 'jam'), (4201, 42, '2025-05-01', 'coffee'), (4301, 43, '2025-06-03', 'sugar')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH ranked_purchases AS (SELECT p.customer_id, p.purchase_id, p.purchase_date, p.item_label, DENSE_RANK() OVER (PARTITION BY p.customer_id ORDER BY p.purchase_date DESC) AS purchase_rank FROM purchase_items AS p INNER JOIN membership_accounts AS m ON m.customer_id = p.customer_id WHERE p.purchase_date < m.member_since) SELECT customer_id, GROUP_CONCAT(item_label ORDER BY purchase_date DESC, purchase_id SEPARATOR '|') AS latest_items FROM ranked_purchases WHERE purchase_rank = 1 GROUP BY customer_id ORDER BY customer_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT purchase_id, customer_id, purchase_date, item_label FROM purchase_items ORDER BY purchase_id",
+      "ordered": true
+    }
+  ]
+}
