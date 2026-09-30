@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "lag_sessionized_topic_summary",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "doocs/leetcode",
+      "commit": "9377c61562a4097e96d48eed152b07dc411c1d17",
+      "path": "solution/3600-3699/3617.Find Students with Study Spiral Pattern/Solution.sql",
+      "url": "https://github.com/doocs/leetcode/blob/9377c61562a4097e96d48eed152b07dc411c1d17/solution/3600-3699/3617.Find%20Students%20with%20Study%20Spiral%20Pattern/Solution.sql",
+      "sha256": "29d42f36e95402d1116475b3a50c44b97ed00713b20ef35b67a009f67d2cb416",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Solution.sql:2-53",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A series of CTEs ranks rows per entity, uses LAG and a cumulative SUM to split date gaps into groups, then aggregates each group and filters qualifying sequences.",
+      "mysql_mariadb_translation": "Reauthored as a learner topic-session report. LAG detects gaps longer than two days, a cumulative SUM assigns session groups, and grouped results report topic order and study hours for groups with at least three sessions. Pattern-cycle string matching and source identifiers are omitted."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "lag-window",
+    "cumulative-sum-window",
+    "group-concat",
+    "grouped-aggregate",
+    "date-difference",
+    "case-aggregate",
+    "group-by",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Learner 41 has a three-session contiguous algebra block and a separate one-session review block; learner 42 has a two-session block that does not qualify. Only qualifying groups are returned.",
+  "determinism_notes": "Learner IDs, dates, topics, gaps, thresholds, and ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE learning_sessions (session_id INT PRIMARY KEY, learner_id INT NOT NULL, session_date DATE NOT NULL, topic VARCHAR(32) NOT NULL, hours_studied INT NOT NULL)",
+    "INSERT INTO learning_sessions VALUES (401, 41, '2026-05-01', 'algebra', 2), (402, 41, '2026-05-02', 'geometry', 3), (403, 41, '2026-05-04', 'calculus', 2), (404, 41, '2026-05-10', 'review', 1), (405, 42, '2026-05-01', 'reading', 2), (406, 42, '2026-05-03', 'writing', 2)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH ordered_sessions AS (SELECT learner_id, session_date, topic, hours_studied, LAG(session_date) OVER (PARTITION BY learner_id ORDER BY session_date, session_id) AS previous_date FROM learning_sessions), grouped_sessions AS (SELECT learner_id, session_date, topic, hours_studied, SUM(CASE WHEN previous_date IS NULL OR DATEDIFF(session_date, previous_date) > 2 THEN 1 ELSE 0 END) OVER (PARTITION BY learner_id ORDER BY session_date, topic ROWS UNBOUNDED PRECEDING) AS session_group FROM ordered_sessions), summaries AS (SELECT learner_id, session_group, COUNT(*) AS session_count, GROUP_CONCAT(topic ORDER BY session_date SEPARATOR '>') AS topic_sequence, SUM(hours_studied) AS total_hours FROM grouped_sessions GROUP BY learner_id, session_group) SELECT learner_id, session_group, session_count, topic_sequence, total_hours FROM summaries WHERE session_count >= 3 ORDER BY learner_id, session_group",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
