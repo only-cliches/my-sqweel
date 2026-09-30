@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "ranked_union_left_join_matches",
+  "provenance": {
+    "inspiration": {
+      "source_location": "R1ch1k/marketplace-mispricing@665ee51c85399dc949ae360ef6ef079ecceb27c3: sql/join.sql lines 104-148",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "Multiple staged match sources are combined with UNION ALL, ranked per lookup key so the earliest stage wins, and then left-joined to a larger result while preserving unmatched rows.",
+      "mysql_mariadb_translation": "The fixture independently models product-code resolution from exact and alias candidate tables, uses ROW_NUMBER to choose the deterministic highest-priority match, and LEFT JOINs the chosen result to every catalog item without copying source schema or application context."
+    }
+  },
+  "features": [
+    "cte",
+    "union-all",
+    "ranked-union-match",
+    "row-number-window",
+    "left-join",
+    "null-preservation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Exact candidates outrank aliases for item 1; item 2 has only an alias candidate; item 3 remains NULL-extended because it has no candidate.",
+  "determinism_notes": "Fixed item IDs, candidate stages, and supplier codes define both ranking and final order; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE catalog_items (item_id INT PRIMARY KEY, item_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE exact_item_matches (item_id INT NOT NULL, supplier_code VARCHAR(16) NOT NULL)",
+    "CREATE TABLE alias_item_matches (item_id INT NOT NULL, supplier_code VARCHAR(16) NOT NULL)",
+    "INSERT INTO catalog_items VALUES (1, 'red mug'), (2, 'blue bowl'), (3, 'green plate')",
+    "INSERT INTO exact_item_matches VALUES (1, 'EX-RED')",
+    "INSERT INTO alias_item_matches VALUES (1, 'AL-RED'), (2, 'AL-BLUE')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH ranked_matches AS (SELECT item_id, supplier_code, match_stage, ROW_NUMBER() OVER (PARTITION BY item_id ORDER BY match_stage, supplier_code) AS match_rank FROM (SELECT item_id, supplier_code, 1 AS match_stage FROM exact_item_matches UNION ALL SELECT item_id, supplier_code, 2 AS match_stage FROM alias_item_matches) AS candidates) SELECT i.item_id, i.item_name, r.supplier_code, r.match_stage FROM catalog_items AS i LEFT JOIN ranked_matches AS r ON r.item_id = i.item_id AND r.match_rank = 1 ORDER BY i.item_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
