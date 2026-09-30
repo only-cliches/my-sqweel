@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "id": "json_objectagg_empty_nested_key",
+  "provenance": {
+    "inspiration": {
+      "source_location": "mariadb-corporation/mariadb-qa@6108102f371b6d48590e8e53dfad3803a730c4: BUGS/MDEV-40546.sql lines 1-3",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped JSON_OBJECTAGG casts numeric keys to text and stores a JSON_OBJECT with an empty-string member as each value.",
+      "mysql_mariadb_translation": "The fixture independently aggregates newly authored sensor readings by device, using decimal reading codes as object keys and nested JSON objects with an empty label member."
+    }
+  },
+  "features": [
+    "json-objectagg",
+    "nested-json-object",
+    "empty-json-key",
+    "decimal-key-cast",
+    "grouped-aggregate"
+  ],
+  "fixture_notes": "Each device contributes readings with decimal codes; nested objects preserve the empty label key and measured value.",
+  "determinism_notes": "Device IDs are fixed primary keys and output is ordered by device ID.",
+  "setup": [
+    "CREATE TABLE device_readings (reading_id INT PRIMARY KEY, device_id INT NOT NULL, reading_code DECIMAL(4,1) NOT NULL, reading_value SMALLINT NOT NULL)",
+    "INSERT INTO device_readings VALUES (101, 7, 1.5, 42), (102, 7, 2.5, 84), (201, 9, 1.5, 21)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT device_id, JSON_OBJECTAGG(CAST(reading_code AS CHAR), JSON_OBJECT('', reading_value)) AS readings FROM device_readings GROUP BY device_id ORDER BY device_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT reading_id, device_id FROM device_readings ORDER BY reading_id",
+      "ordered": true
+    }
+  ]
+}
