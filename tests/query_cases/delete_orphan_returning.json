@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "id": "delete_orphan_returning",
+  "provenance": {
+    "kind": "github_sql_pattern",
+    "source_url": "https://github.com/Dicklesworthstone/sqlmodel_rust/blob/0db1b4c21edf6b58c4819d65c7e3e762e1b94abe/crates/sqlmodel-e2e/golden/sqlite/delete_with_subquery_returning.sql",
+    "source_commit": "0db1b4c21edf6b58c4819d65c7e3e762e1b94abe",
+    "source_location": "crates/sqlmodel-e2e/golden/sqlite/delete_with_subquery_returning.sql:1-4",
+    "source_sha256": "5e42e9bca844d07086d5c3b189472c3676b5add7c34687c6edfbd771affa4cf9",
+    "source_dialect": "sqlite",
+    "observed_pattern": "A DELETE statement filters rows using a subquery-backed NOT IN predicate and returns columns from each deleted row.",
+    "mysql_mariadb_translation": "Translate the portable subquery predicate to MariaDB DELETE ... RETURNING using independently authored archive-index and archive-entry tables, with one orphan row returned and the remaining rows verified afterward."
+  },
+  "features": ["delete", "delete-returning", "delete-in-subquery", "not-in-subquery", "dml-final-state", "deterministic-ordering"],
+  "fixture_notes": "Two archive entries have indexed archive IDs and one orphan entry has an absent index; only the orphan is deleted and returned.",
+  "determinism_notes": "Primary-key predicates and final-state ordering are fixed. The delete selects one orphan row, so the RETURNING result is deterministic.",
+  "setup": [
+    "CREATE TABLE archive_index (archive_id INT PRIMARY KEY, archive_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE archive_entries (entry_id INT PRIMARY KEY, archive_id INT NOT NULL, entry_label VARCHAR(32) NOT NULL, bytes_used INT NOT NULL)",
+    "INSERT INTO archive_index VALUES (10, 'alpha'), (11, 'beta')",
+    "INSERT INTO archive_entries VALUES (100, 10, 'alpha-manifest', 120), (101, 99, 'orphan-manifest', 45), (102, 11, 'beta-manifest', 210)"
+  ],
+  "steps": [
+    {
+      "sql": "DELETE FROM archive_entries WHERE archive_id NOT IN (SELECT archive_id FROM archive_index) RETURNING entry_id, archive_id, entry_label, bytes_used",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT entry_id, archive_id, entry_label, bytes_used FROM archive_entries ORDER BY entry_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT entry_id, archive_id, entry_label, bytes_used FROM archive_entries ORDER BY entry_id",
+      "ordered": true
+    }
+  ]
+}
