@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "product_rolling_revenue",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "prachiraghav/Python-Project",
+      "commit": "a3b150107014a457d3023b0a86df005796fd3fa0",
+      "path": "SQL/Rolling AVG.sql",
+      "url": "https://github.com/prachiraghav/Python-Project/blob/a3b150107014a457d3023b0a86df005796fd3fa0/SQL/Rolling%20AVG.sql",
+      "sha256": "89511c225eb2824f9e15938d1ba13c8dd05d8ab86b1d227f14ec0814000f747f",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "SQL/Rolling AVG.sql:3-27",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "Daily sales are aggregated into product-month rows, a numeric YEAR_MONTH extraction supplies chronological ordering, and a three-row partitioned window computes a rounded rolling average.",
+      "mysql_mariadb_translation": "Reauthored as an independently designed product ledger with multiple observations per month, a product with a missing month, explicit month ordering, and deterministic two-decimal rolling revenue averages."
+    },
+    "independently_authored": true
+  },
+  "features": ["cte", "date-format", "date-format-bucketing", "extract-year-month", "grouped-sum", "partitioned-window", "moving-average", "window-frame", "decimal-arithmetic", "deterministic-order"],
+  "fixture_notes": "Product 11 has three consecutive months with multiple daily observations; product 22 starts later and demonstrates partition-local rolling state without cross-product leakage.",
+  "determinism_notes": "Product IDs, dates, prices, quantities, chronological ordering, frame width, and rounding are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE product_sales (sale_id INT PRIMARY KEY, product_id INT NOT NULL, sale_date DATE NOT NULL, price_per_unit DECIMAL(10,2) NOT NULL, quantity INT NOT NULL)",
+    "INSERT INTO product_sales VALUES (1, 11, '2025-01-03', 10.00, 2), (2, 11, '2025-01-18', 12.00, 1), (3, 11, '2025-02-04', 11.00, 3), (4, 11, '2025-03-12', 14.00, 2), (5, 22, '2025-02-08', 20.00, 1), (6, 22, '2025-04-06', 16.00, 2), (7, 22, '2025-04-19', 18.00, 1)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH revenue_per_month AS (SELECT product_id, DATE_FORMAT(sale_date, '%Y-%m') AS sale_month, EXTRACT(YEAR_MONTH FROM sale_date) AS month_key, SUM(price_per_unit * quantity) AS revenue FROM product_sales GROUP BY product_id, DATE_FORMAT(sale_date, '%Y-%m'), EXTRACT(YEAR_MONTH FROM sale_date)), rolling_revenue AS (SELECT product_id, sale_month, revenue, ROUND(AVG(revenue) OVER (PARTITION BY product_id ORDER BY month_key ROWS BETWEEN 2 PRECEDING AND CURRENT ROW), 2) AS rolling_three_month_average FROM revenue_per_month) SELECT product_id, sale_month, revenue, rolling_three_month_average FROM rolling_revenue ORDER BY product_id, sale_month",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT sale_id, product_id, sale_date, price_per_unit, quantity FROM product_sales ORDER BY sale_id",
+      "ordered": true
+    }
+  ]
+}
