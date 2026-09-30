@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "id": "regex_role_consolidation",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "jhellingman/tei2html",
+      "commit": "c3f3c9767bb24b0e77a19c52a18a52209a96c6e7",
+      "path": "databases/queries.sql",
+      "url": "https://github.com/jhellingman/tei2html/blob/c3f3c9767bb24b0e77a19c52a18a52209a96c6e7/databases/queries.sql",
+      "sha256": "26ec933ab98666b68387f67476a2057dc63199f7125c36c08aabcbed60dfdc51",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "databases/queries.sql:82-88",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "Rows sharing an external identifier are consolidated with REGEXP_SUBSTR extraction, minimum representative values, occurrence counts, and a distinct GROUP_CONCAT of role labels.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored contributor-role catalog with agent references, duplicate role observations, missing-reference filtering, and deterministic distinct role ordering."
+    },
+    "independently_authored": true
+  },
+  "features": ["regexp-substr", "group-concat-distinct", "ordered-group-concat", "minimum-aggregate", "grouped-count", "deterministic-ordering"],
+  "fixture_notes": "Two contributor references consolidate into groups; one has duplicate editor observations and the other has two distinct roles. A contributor without a numeric reference is excluded.",
+  "determinism_notes": "Contributor IDs and external references are fixed; grouping, ordered distinct role concatenation, and final representative ordering are explicit. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE contributor_roles (contributor_id INT PRIMARY KEY, contributor_name VARCHAR(32) NOT NULL, external_ref VARCHAR(32) NULL, role_label VARCHAR(16) NOT NULL)",
+    "INSERT INTO contributor_roles VALUES (1, 'Aster', 'agent:501', 'editor'), (2, 'Aster', 'agent:501', 'editor'), (3, 'Aster', 'agent:501', 'reviewer'), (4, 'Beryl', 'agent:777', 'translator'), (5, 'Beryl', 'agent:777', 'editor'), (6, 'Unlinked', NULL, 'editor'), (7, 'Malformed', 'agent:none', 'reviewer')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT MIN(contributor_id) AS representative_id, MIN(contributor_name) AS representative_name, REGEXP_SUBSTR(external_ref, '[0-9]+') AS external_id, COUNT(*) AS occurrence_count, GROUP_CONCAT(DISTINCT role_label ORDER BY role_label SEPARATOR '|') AS roles FROM contributor_roles WHERE external_ref IS NOT NULL AND external_ref <> '' AND REGEXP_SUBSTR(external_ref, '[0-9]+') <> '' GROUP BY external_ref ORDER BY representative_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
