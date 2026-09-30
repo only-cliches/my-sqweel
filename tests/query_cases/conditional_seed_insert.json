@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "conditional_seed_insert",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "hubski/hubski",
+      "commit": "97ddebb02ff404edcf8db6e1a7889cfdf43b367a",
+      "path": "schema.sql",
+      "url": "https://github.com/hubski/hubski/blob/97ddebb02ff404edcf8db6e1a7889cfdf43b367a/schema.sql",
+      "sha256": "69e64af05b60e5858b6c1235894f591611c7cf0e67b4db0bb34f89e4ac8c04e0",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "schema.sql:10 and schema.sql:12",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A seed row is inserted from a SELECT of literal values only when a matching key is absent, allowing initialization to be rerun without duplicate-key errors or overwriting existing data.",
+      "mysql_mariadb_translation": "Reauthored as feature-flag initialization. A missing compact-navigation flag is inserted from a literal SELECT, while a second guarded insert for an existing dark-mode flag is skipped and preserves its original label and rollout value. The source publication schema, names, and values are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "insert",
+    "insert-select",
+    "conditional-insert",
+    "not-exists",
+    "idempotent-mutation",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The compact-navigation flag is absent and is seeded once. The dark-mode flag already exists with rollout 80, so its guarded seed attempt must be a no-op rather than replacing it with rollout 100.",
+  "determinism_notes": "Flag codes are unique, literal seed values are fixed, steps run serially, and the final read is ordered by the primary key. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE feature_flags (flag_code VARCHAR(32) PRIMARY KEY, flag_label VARCHAR(64) NOT NULL, rollout_percent INT NOT NULL)",
+    "INSERT INTO feature_flags VALUES ('dark_mode', 'Dark mode', 80), ('legacy_banner', 'Legacy banner', 0)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO feature_flags (flag_code, flag_label, rollout_percent) SELECT 'compact_nav', 'Compact navigation', 25 WHERE NOT EXISTS (SELECT 1 FROM feature_flags WHERE flag_code = 'compact_nav')",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO feature_flags (flag_code, flag_label, rollout_percent) SELECT 'dark_mode', 'Replacement dark mode', 100 WHERE NOT EXISTS (SELECT 1 FROM feature_flags WHERE flag_code = 'dark_mode')",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT flag_code, flag_label, rollout_percent FROM feature_flags ORDER BY flag_code",
+      "ordered": true
+    }
+  ]
+}
