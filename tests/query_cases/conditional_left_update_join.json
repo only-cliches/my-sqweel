@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "id": "conditional_left_update_join",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "onkar0127/real-estate-Databse-analytics",
+      "commit": "fae8ee7a63c9cbdac0f0d0c5ccfacb06e2425be5",
+      "path": "update.sql",
+      "url": "https://github.com/onkar0127/real-estate-Databse-analytics/blob/fae8ee7a63c9cbdac0f0d0c5ccfacb06e2425be5/update.sql",
+      "sha256": "f1a2f85cc50c5016f848698cda168aedaf6423732d6e6a7d123e684d4dd4a126",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "update.sql:4-18,71-75",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL migration updates one table from related rows through UPDATE ... JOIN, including a derived latest-row mapping and a direct joined correction.",
+      "mysql_mariadb_translation": "Reauthored as a dispatch refresh. A LEFT JOIN supplies optional carrier service data; COALESCE chooses a fallback zone and CASE adjusts priority for fast, slow, or missing service data. The schema, identifiers, rows, and business rules are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "update-join",
+    "left-join",
+    "case-update",
+    "coalesce-enrichment",
+    "null-preservation",
+    "conditional-update",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Queued order 201 has a fast carrier and gains two priority points; queued order 202 has no carrier and receives the fallback zone without a priority change; shipped order 203 is excluded.",
+  "determinism_notes": "Order IDs, carrier service levels, states, fallback values, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE dispatch_orders (order_id INT PRIMARY KEY, order_label VARCHAR(32) NOT NULL, order_state VARCHAR(16) NOT NULL, dispatch_zone VARCHAR(16), priority INT NOT NULL)",
+    "CREATE TABLE carrier_services (carrier_id INT PRIMARY KEY, carrier_name VARCHAR(32) NOT NULL, service_zone VARCHAR(16) NOT NULL, sla_hours INT NOT NULL)",
+    "INSERT INTO dispatch_orders VALUES (201, 'rush-crate', 'queued', NULL, 4), (202, 'local-bundle', 'queued', NULL, 3), (203, 'sent-parcel', 'shipped', 'east', 8)",
+    "INSERT INTO carrier_services VALUES (11, 'swift-line', 'west', 12), (12, 'slow-line', 'south', 72)"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE dispatch_orders o LEFT JOIN carrier_services c ON c.carrier_id = CASE WHEN o.order_id = 201 THEN 11 ELSE NULL END SET o.dispatch_zone = COALESCE(c.service_zone, 'unassigned'), o.priority = CASE WHEN c.sla_hours <= 24 THEN o.priority + 2 WHEN c.sla_hours IS NULL THEN o.priority ELSE o.priority - 1 END WHERE o.order_state = 'queued'",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT order_id, order_label, order_state, dispatch_zone, priority FROM dispatch_orders ORDER BY order_id",
+      "ordered": true
+    }
+  ]
+}
