@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "id": "replace_select_left_join_missing",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Almamu/EVESharp",
+      "commit": "b19fc60f7b6f3a6c3c1914835d8b42c92014cf8b",
+      "path": "Database/Server/04-entity.sql",
+      "url": "https://github.com/Almamu/EVESharp/blob/b19fc60f7b6f3a6c3c1914835d8b42c92014cf8b/Database/Server/04-entity.sql",
+      "sha256": "31ca3f26a5042bd3963cc25e58d9c4772d548e10bab59f64cebbb54176740bab",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Database/Server/04-entity.sql:120-124",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "REPLACE INTO copies rows from a source relation enriched by a LEFT JOIN, while an anti-join subquery limits the replacement to source keys whose target row is absent or has a NULL identifying value.",
+      "mysql_mariadb_translation": "Reauthored as a catalog refresh. Staged products are enriched with optional category labels through a LEFT JOIN, and a nested anti-join selects only missing or NULL-named catalog keys for REPLACE INTO; existing non-NULL catalog rows remain untouched while an unknown category preserves a NULL enrichment. The source inventory schema, names, and values are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "replace",
+    "replace-select",
+    "left-join",
+    "anti-join",
+    "null-extension",
+    "using-join",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Catalog item 8101 has a NULL existing name and is replaced from staging; item 8102 has a non-NULL existing name and is excluded; item 8104 is absent and is inserted with a NULL category label because category C9 is unknown; unrelated item 8103 remains unchanged.",
+  "determinism_notes": "Item IDs, staged rows, category labels, anti-join key, replacement columns, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE catalog_items (item_id INT PRIMARY KEY, item_name VARCHAR(64) NULL, category_code VARCHAR(16) NOT NULL, category_name VARCHAR(64) NULL)",
+    "CREATE TABLE staged_catalog (item_id INT PRIMARY KEY, item_name VARCHAR(64) NOT NULL, category_code VARCHAR(16) NOT NULL)",
+    "CREATE TABLE category_labels (category_code VARCHAR(16) PRIMARY KEY, category_name VARCHAR(64) NOT NULL)",
+    "INSERT INTO catalog_items VALUES (8101, NULL, 'A1', NULL), (8102, 'Notebook', 'B2', 'Books'), (8103, 'Archive', 'A1', 'Apparel')",
+    "INSERT INTO staged_catalog VALUES (8101, 'Linen shirt', 'A1'), (8102, 'Field notebook', 'B2'), (8104, 'Gift card', 'C9')",
+    "INSERT INTO category_labels VALUES ('A1', 'Apparel'), ('B2', 'Books')"
+  ],
+  "steps": [
+    {
+      "sql": "REPLACE INTO catalog_items (item_id, item_name, category_code, category_name) SELECT s.item_id, s.item_name, s.category_code, c.category_name FROM staged_catalog AS s LEFT JOIN category_labels AS c USING (category_code) WHERE s.item_id IN (SELECT s2.item_id FROM staged_catalog AS s2 LEFT JOIN catalog_items AS existing ON existing.item_id = s2.item_id WHERE existing.item_name IS NULL)",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT item_id, item_name, category_code, category_name FROM catalog_items ORDER BY item_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT item_id, item_name, category_code FROM staged_catalog ORDER BY item_id",
+      "ordered": true
+    }
+  ]
+}
