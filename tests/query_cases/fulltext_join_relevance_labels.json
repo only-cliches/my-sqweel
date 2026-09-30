@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "fulltext_join_relevance_labels",
+  "provenance": {
+    "inspiration": {
+      "source_location": "JelsinPalomino/silabuz@e257dc43889efb392c92aa71ec7b8c9be4706cc1: UNIDAD II/semana3/dia14/Clases_join_regex_mysql.sql lines 252-274",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL FULLTEXT query uses MATCH ... AGAINST for text filtering and can project the match result alongside matched text, including BOOLEAN MODE searches.",
+      "mysql_mariadb_translation": "The fixture independently filters documents in a CTE with a BOOLEAN MODE predicate, then LEFT JOINs those matched rows to optional labels while preserving unlabeled matches; the relevance projection is omitted because MySqweel's current full-text compatibility surface is predicate-oriented."
+    }
+  },
+  "features": [
+    "cte",
+    "fulltext-index",
+    "match-against",
+    "boolean-mode",
+    "left-join",
+    "null-preservation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Document 801 matches both required terms without the excluded storm term and has two labels; document 802 is excluded by the negative term; document 803 lacks a required term. The CTE filters before the left join, which retains every matching document's optional labels.",
+  "determinism_notes": "Fixed document IDs, terms, labels, and document/label ordering are used; no clocks, randomness, sleeps, or concurrent connections are involved.",
+  "setup": [
+    "CREATE TABLE knowledge_docs (doc_id INT PRIMARY KEY, doc_title VARCHAR(96) NOT NULL, doc_body TEXT NOT NULL, FULLTEXT KEY ft_knowledge_docs (doc_title, doc_body)) ENGINE=InnoDB",
+    "CREATE TABLE doc_labels (doc_id INT NOT NULL, label VARCHAR(32) NOT NULL, PRIMARY KEY (doc_id, label)) ENGINE=InnoDB",
+    "INSERT INTO knowledge_docs VALUES (801, 'Beacon maintenance', 'Quartz beacon maintenance keeps the channel clear.'), (802, 'Storm watch', 'Quartz beacon readings changed before the storm arrived.'), (803, 'Garden notes', 'Copper seedlings are ready for transplanting.')",
+    "INSERT INTO doc_labels VALUES (801, 'navigation'), (801, 'maintenance')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH matched_docs AS (SELECT doc_id, doc_title FROM knowledge_docs WHERE MATCH(doc_title, doc_body) AGAINST ('+quartz +beacon -storm' IN BOOLEAN MODE)) SELECT m.doc_id, m.doc_title, l.label FROM matched_docs AS m LEFT JOIN doc_labels AS l ON l.doc_id = m.doc_id ORDER BY m.doc_id, l.label",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
