@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "self_join_distinct_period_filter",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "andru98/Andrina-Study-Journal",
+      "commit": "50a74204b25320adac6ba4bbea2c51031941fa17",
+      "path": "sql-practice/leetcode/setoperations/set_operations_intersect_alternatives.sql",
+      "url": "https://github.com/andru98/Andrina-Study-Journal/blob/50a74204b25320adac6ba4bbea2c51031941fa17/sql-practice/leetcode/setoperations/set_operations_intersect_alternatives.sql",
+      "sha256": "e15c55f98edb29208436ee41a2d8540f07cbc11bfbcf5bf56eb24c0b62a848a2",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "set_operations_intersect_alternatives.sql:102-151",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A recurring-period membership query contrasts an INTERSECT set operation with a self-join and a GROUP BY HAVING COUNT(DISTINCT period) alternative to find entities present in every required period.",
+      "mysql_mariadb_translation": "Reauthored as a campaign participation filter. A self-join requires a confirmed middle-period row, while COUNT(DISTINCT period_code) verifies participation across all three fixed periods; the result returns only campaigns represented in every period. Source identifiers, dates, and business context are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "self-join",
+    "count-distinct",
+    "group-by",
+    "having",
+    "in-predicate",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Campaign 701 appears in all three periods and passes; campaign 702 lacks the middle period and is removed by the self-join; campaign 703 appears only in the first two periods and fails the distinct-period count.",
+  "determinism_notes": "Campaign IDs, fixed periods, participation rows, count threshold, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE campaign_participation (participation_id INT PRIMARY KEY, campaign_id INT NOT NULL, period_code CHAR(7) NOT NULL, participant_count INT NOT NULL)",
+    "INSERT INTO campaign_participation VALUES (7011, 701, '2026-01', 12), (7012, 701, '2026-02', 15), (7013, 701, '2026-03', 18), (7021, 702, '2026-01', 20), (7022, 702, '2026-03', 21), (7031, 703, '2026-01', 8), (7032, 703, '2026-02', 9)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT current_period.campaign_id, COUNT(DISTINCT current_period.period_code) AS active_periods, SUM(current_period.participant_count) AS total_participants FROM campaign_participation current_period INNER JOIN campaign_participation confirmed_middle ON confirmed_middle.campaign_id = current_period.campaign_id AND confirmed_middle.period_code = '2026-02' WHERE current_period.period_code IN ('2026-01', '2026-02', '2026-03') GROUP BY current_period.campaign_id HAVING COUNT(DISTINCT current_period.period_code) = 3 ORDER BY current_period.campaign_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT current_period.campaign_id, COUNT(DISTINCT current_period.period_code) AS active_periods, SUM(current_period.participant_count) AS total_participants FROM campaign_participation current_period INNER JOIN campaign_participation confirmed_middle ON confirmed_middle.campaign_id = current_period.campaign_id AND confirmed_middle.period_code = '2026-02' WHERE current_period.period_code IN ('2026-01', '2026-02', '2026-03') GROUP BY current_period.campaign_id HAVING COUNT(DISTINCT current_period.period_code) = 3 ORDER BY current_period.campaign_id",
+      "ordered": true
+    }
+  ]
+}
