@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "id": "cte_marker_count_delta",
+  "provenance": {
+    "kind": "github_sql_pattern",
+    "source_url": "https://github.com/bheckel/code/blob/e5dc9e7cd523e0bfd9593105eafd454fcaf87448/database/with.sql",
+    "source_commit": "e5dc9e7cd523e0bfd9593105eafd454fcaf87448",
+    "source_location": "database/with.sql:5-20",
+    "source_sha256": "62b99b6be4f4fc1e3973e9748e22218926ef2936d5e0406d80a5f276dae4b8fa",
+    "source_dialect": "mysql-mariadb",
+    "observed_pattern": "A finite CTE relation is reused by two grouped derived subqueries to compare all rows with rows that differ from a canonical identifier, then the aggregate counts are joined and differenced per group.",
+    "mysql_mariadb_translation": "Reauthor the count comparison as an independently designed route-marker audit using a CTE UNION ALL literal relation, explicit aggregate aliases, and deterministic route ordering without copying the source identifiers or schema."
+  },
+  "features": ["cte", "cte-union-all", "derived-aggregate", "aggregate-comparison", "deterministic-ordering"],
+  "fixture_notes": "Two routes contain canonical markers whose marker ID equals the route ID; the report compares total markers with noncanonical markers and exposes the canonical count difference.",
+  "determinism_notes": "The CTE literals, grouping keys, and final route ordering are fixed. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "WITH route_markers AS (SELECT 101 AS marker_id, 10 AS route_id UNION ALL SELECT 102, 10 UNION ALL SELECT 10, 10 UNION ALL SELECT 103, 10 UNION ALL SELECT 201, 20 UNION ALL SELECT 20, 20 UNION ALL SELECT 202, 20) SELECT totals.route_id, totals.marker_count, noncanonical.noncanonical_count, totals.marker_count - noncanonical.noncanonical_count AS canonical_count FROM (SELECT route_id, COUNT(*) AS marker_count FROM route_markers GROUP BY route_id) AS totals JOIN (SELECT route_id, COUNT(*) AS noncanonical_count FROM route_markers WHERE marker_id <> route_id GROUP BY route_id) AS noncanonical ON totals.route_id = noncanonical.route_id ORDER BY totals.route_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
