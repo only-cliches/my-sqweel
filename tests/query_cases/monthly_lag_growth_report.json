@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "monthly_lag_growth_report",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "scenarios/window-analytics/mariadb.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/scenarios/window-analytics/mariadb.sql",
+      "sha256": "d624f74a87830c394023c5254d415697c185805cf7dbe52b270b25abb0b23bc9",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "scenarios/window-analytics/mariadb.sql:38-48",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "Daily amounts are bucketed into calendar months, aggregated in a CTE, and compared with the previous month through repeated LAG expressions and NULLIF-protected percentage arithmetic.",
+      "mysql_mariadb_translation": "Reauthored as a fixed monthly ledger with a zero-valued first month, explicit date bucketing, deterministic month ordering, and a prior-month growth report that preserves NULL when the prior total is zero."
+    },
+    "independently_authored": true
+  },
+  "features": ["cte", "date-format", "date-format-bucketing", "grouped-sum", "lag-window", "nullif-division", "decimal-arithmetic", "deterministic-order"],
+  "fixture_notes": "The first month totals zero, the second month has a zero prior denominator, and the third month grows from a nonzero prior total. Multiple daily rows verify monthly grouping.",
+  "determinism_notes": "Dates, amounts, month ordering, and decimal rounding are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE monthly_ledger (entry_id INT PRIMARY KEY, entry_date DATE NOT NULL, amount DECIMAL(10,2) NOT NULL)",
+    "INSERT INTO monthly_ledger VALUES (1, '2025-01-03', 0.00), (2, '2025-01-18', 0.00), (3, '2025-02-04', 5.00), (4, '2025-02-21', 7.00), (5, '2025-03-02', 10.00), (6, '2025-03-19', 8.00)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH monthly AS (SELECT DATE_FORMAT(entry_date, '%Y-%m-01') AS report_month, SUM(amount) AS total_amount FROM monthly_ledger GROUP BY DATE_FORMAT(entry_date, '%Y-%m-01')) SELECT report_month, total_amount, LAG(total_amount) OVER (ORDER BY report_month) AS previous_amount, ROUND((total_amount - LAG(total_amount) OVER (ORDER BY report_month)) / NULLIF(LAG(total_amount) OVER (ORDER BY report_month), 0) * 100, 2) AS growth_percent FROM monthly ORDER BY report_month",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT entry_id, entry_date, amount FROM monthly_ledger ORDER BY entry_id",
+      "ordered": true
+    }
+  ]
+}
