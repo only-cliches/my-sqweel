@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "id": "update_join_latest_owner",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "onkar0127/real-estate-Databse-analytics",
+      "commit": "fae8ee7a63c9cbdac0f0d0c5ccfacb06e2425be5",
+      "path": "update.sql",
+      "url": "https://github.com/onkar0127/real-estate-Databse-analytics/blob/fae8ee7a63c9cbdac0f0d0c5ccfacb06e2425be5/update.sql",
+      "sha256": "f1a2f85cc50c5016f848698cda168aedaf6423732d6e6a7d123e684d4dd4a126",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "update.sql:4-17",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "An UPDATE JOIN derives the latest related record by grouping transactions by entity and joining each entity to its MAX transaction date before applying the associated owner value.",
+      "mysql_mariadb_translation": "Reauthored as an account ownership correction. A derived latest-transfer relation selects each account's newest effective date and joins back to its owner, then UPDATE JOIN applies the owner to accounts with transfer history while untouched accounts remain unchanged. The source real-estate schema, identifiers, and values are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "update-join",
+    "derived-table",
+    "max-aggregate",
+    "group-by",
+    "inner-join",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Account 1501 changes from owner 41 to the owner on its newest transfer; account 1502 receives its only transfer owner; account 1503 has no transfer and remains unassigned. Transfer dates are unique per account so MAX identifies one row without a tie policy.",
+  "determinism_notes": "Account IDs, transfer dates, owner IDs, derived grouping, update join keys, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE customer_accounts (account_id INT PRIMARY KEY, account_label VARCHAR(32) NOT NULL, owner_id INT NULL)",
+    "CREATE TABLE ownership_transfers (transfer_id INT PRIMARY KEY, account_id INT NOT NULL, owner_id INT NOT NULL, effective_on DATE NOT NULL)",
+    "INSERT INTO customer_accounts VALUES (1501, 'nova', 41), (1502, 'orbit', NULL), (1503, 'terra', NULL)",
+    "INSERT INTO ownership_transfers VALUES (15101, 1501, 52, '2026-01-10'), (15102, 1501, 63, '2026-03-15'), (15103, 1502, 74, '2026-02-20')"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE customer_accounts AS a INNER JOIN (SELECT t.account_id, t.owner_id FROM ownership_transfers AS t INNER JOIN (SELECT account_id, MAX(effective_on) AS latest_effective_on FROM ownership_transfers GROUP BY account_id) AS latest ON latest.account_id = t.account_id AND latest.latest_effective_on = t.effective_on) AS latest_owner ON latest_owner.account_id = a.account_id SET a.owner_id = latest_owner.owner_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT account_id, account_label, owner_id FROM customer_accounts ORDER BY account_id",
+      "ordered": true
+    }
+  ]
+}
