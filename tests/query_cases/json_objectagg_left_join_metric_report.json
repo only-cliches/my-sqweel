@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "json_objectagg_left_join_metric_report",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "crawl/dcss_tourney",
+      "commit": "de533574b12775f0eb8ebf2223350891118cb1c4",
+      "path": "database-views.sql",
+      "url": "https://github.com/crawl/dcss_tourney/blob/de533574b12775f0eb8ebf2223350891118cb1c4/database-views.sql",
+      "sha256": "2e84a7b9ce9bf7528a4addbe745bafc5fe829c55ebd37bb7d549f580b2bac327",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "database-views.sql:249-260",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped report preserves optional metadata through a LEFT JOIN while projecting a scalar JSON_OBJECT, summing numeric values, and building a keyed JSON_OBJECTAGG map from grouped detail rows.",
+      "mysql_mariadb_translation": "Reauthored as a project metric report. Projects optionally join owner metadata, metric rows are grouped into a total and a JSON code-to-value map, and the scalar project descriptor retains a JSON null owner for an unassigned project. The source game schema, identifiers, joins, and values are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "json-objectagg",
+    "json-object",
+    "left-join",
+    "inner-join",
+    "aggregate-sum",
+    "group-by",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Project 1201 has one metric and an owner; project 1202 has one metric but no owner, so the LEFT JOIN emits a JSON null owner while the single-key aggregate map and total remain populated. One metric per project removes JSON_OBJECTAGG member-order ambiguity while retaining the grouped map contract.",
+  "determinism_notes": "Project IDs, owner metadata, metric codes, metric values, JSON keys, grouping columns, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE project_catalog (project_id INT PRIMARY KEY, project_code VARCHAR(16) NOT NULL, project_name VARCHAR(64) NOT NULL)",
+    "CREATE TABLE project_owners (owner_id INT PRIMARY KEY, project_id INT NOT NULL, owner_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE project_metrics (metric_id INT PRIMARY KEY, project_id INT NOT NULL, metric_code VARCHAR(16) NOT NULL, metric_value INT NOT NULL)",
+    "INSERT INTO project_catalog VALUES (1201, 'NOVA', 'Nova rollout'), (1202, 'ORBIT', 'Orbit migration')",
+    "INSERT INTO project_owners VALUES (12101, 1201, 'Rhea')",
+    "INSERT INTO project_metrics VALUES (12201, 1201, 'builds', 14), (12202, 1202, 'alerts', 1)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT p.project_id, JSON_OBJECT('code', p.project_code, 'name', p.project_name, 'owner', o.owner_name) AS project_info, SUM(m.metric_value) AS total_metric_value, JSON_OBJECTAGG(m.metric_code, m.metric_value) AS metric_map FROM project_catalog AS p LEFT JOIN project_owners AS o ON o.project_id = p.project_id INNER JOIN project_metrics AS m ON m.project_id = p.project_id GROUP BY p.project_id, p.project_code, p.project_name, o.owner_name ORDER BY p.project_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT p.project_id, JSON_OBJECT('code', p.project_code, 'name', p.project_name, 'owner', o.owner_name) AS project_info, SUM(m.metric_value) AS total_metric_value, JSON_OBJECTAGG(m.metric_code, m.metric_value) AS metric_map FROM project_catalog AS p LEFT JOIN project_owners AS o ON o.project_id = p.project_id INNER JOIN project_metrics AS m ON m.project_id = p.project_id GROUP BY p.project_id, p.project_code, p.project_name, o.owner_name ORDER BY p.project_id",
+      "ordered": true
+    }
+  ]
+}
