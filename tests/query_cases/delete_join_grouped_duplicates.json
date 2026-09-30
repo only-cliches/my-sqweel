@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "id": "delete_join_grouped_duplicates",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "singlestore-labs/wasm-space-program",
+      "commit": "d2f149856234d20d54b06e949104dd41a1ebcce7",
+      "path": "schema.sql",
+      "url": "https://github.com/singlestore-labs/wasm-space-program/blob/d2f149856234d20d54b06e949104dd41a1ebcce7/schema.sql",
+      "sha256": "6a447c69fa8d2391c612a4fa4ede1214bff5a2eb35f06a6df7c78fa14ac911a1",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "schema.sql:426-428",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A multi-table DELETE names the target table before FROM, joins it to a relation identifying rows that should be removed, and deletes only the target-side matches.",
+      "mysql_mariadb_translation": "Reauthored as duplicate shipment cleanup. A grouped derived relation chooses the lowest record ID per shipment from duplicate candidates, then DELETE target FROM ... JOIN removes later duplicates while preserving the retained record and shipments with no duplicate candidates. The source game schema, generated coordinates, and random expressions are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "delete-join",
+    "joined-delete",
+    "inner-join",
+    "derived-table",
+    "group-by",
+    "min-aggregate",
+    "duplicate-elimination",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Shipment 501 has candidate records 9101, 9102, and 9103, so the grouped relation retains 9101 and the joined DELETE removes 9102 and 9103. Shipment 502 has one candidate and is unchanged; shipment 503 is not a candidate and remains untouched.",
+  "determinism_notes": "Record IDs, shipment keys, candidate membership, MIN retention rule, join keys, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE shipment_records (record_id INT PRIMARY KEY, shipment_id INT NOT NULL, record_state VARCHAR(16) NOT NULL, payload VARCHAR(32) NOT NULL)",
+    "CREATE TABLE duplicate_record_candidates (record_id INT PRIMARY KEY, shipment_id INT NOT NULL)",
+    "INSERT INTO shipment_records VALUES (9101, 501, 'accepted', 'scan-a'), (9102, 501, 'accepted', 'scan-b'), (9103, 501, 'accepted', 'scan-c'), (9201, 502, 'accepted', 'scan-d'), (9301, 503, 'accepted', 'scan-e')",
+    "INSERT INTO duplicate_record_candidates VALUES (9101, 501), (9102, 501), (9103, 501), (9201, 502)"
+  ],
+  "steps": [
+    {
+      "sql": "DELETE r FROM shipment_records AS r INNER JOIN (SELECT shipment_id, MIN(record_id) AS retained_record_id FROM duplicate_record_candidates GROUP BY shipment_id) AS keepers ON keepers.shipment_id = r.shipment_id WHERE r.record_id <> keepers.retained_record_id",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT record_id, shipment_id, record_state, payload FROM shipment_records ORDER BY record_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT record_id, shipment_id FROM duplicate_record_candidates ORDER BY record_id",
+      "ordered": true
+    }
+  ]
+}
