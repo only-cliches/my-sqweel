@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "recursive_row_number_ledger",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "mllite/keras2sql",
+      "commit": "a53a2002cd748b71c690a6f9bdf0941b5fbc8a94",
+      "path": "demo/KerasRegressor_SimpleRNN/freidman2/mysql/demo3_keras_KerasRegressor_SimpleRNN_mysql.sql",
+      "url": "https://github.com/mllite/keras2sql/blob/a53a2002cd748b71c690a6f9bdf0941b5fbc8a94/demo/KerasRegressor_SimpleRNN/freidman2/mysql/demo3_keras_KerasRegressor_SimpleRNN_mysql.sql",
+      "sha256": "459f2dc12f42f7fee9982eaaa25915030c331cfdc5a46d06be5fda3728e3defc",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "demo/KerasRegressor_SimpleRNN/freidman2/mysql/demo3_keras_KerasRegressor_SimpleRNN_mysql.sql:15-23,27-35",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "Generated MySQL SQL ranks source rows with ROW_NUMBER in a CTE and feeds those positions into a recursive CTE whose anchor handles the first row and recursive member consumes the next row.",
+      "mysql_mariadb_translation": "Reauthored as an inventory ledger. A windowed ordering CTE assigns deterministic sequence numbers to stock movements, then a recursive CTE carries the running quantity from the first movement through each subsequent movement. Model-specific numeric layers and generated source tables are omitted."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "recursive-cte",
+    "row-number-window",
+    "window-ordering",
+    "recursive-arithmetic",
+    "ordered-read",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Movements are ordered by movement ID. The recursive ledger starts at 40 units, adds 12, subtracts 9, then adds 6, producing running quantities 40, 52, 43, and 49.",
+  "determinism_notes": "Movement IDs, deltas, ordering, recursive anchor, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE stock_movements (movement_id INT PRIMARY KEY, movement_label VARCHAR(32) NOT NULL, quantity_delta INT NOT NULL)",
+    "INSERT INTO stock_movements VALUES (301, 'opening-count', 40), (302, 'inbound-crate', 12), (303, 'damaged-unit', -9), (304, 'late-return', 6)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH RECURSIVE numbered_movements AS (SELECT movement_id, movement_label, quantity_delta, ROW_NUMBER() OVER (ORDER BY movement_id) AS sequence_no FROM stock_movements), inventory_ledger (sequence_no, movement_id, movement_label, running_quantity) AS (SELECT sequence_no, movement_id, movement_label, quantity_delta FROM numbered_movements WHERE sequence_no = 1 UNION ALL SELECT n.sequence_no, n.movement_id, n.movement_label, l.running_quantity + n.quantity_delta FROM numbered_movements n JOIN inventory_ledger l ON n.sequence_no = l.sequence_no + 1) SELECT movement_id, movement_label, sequence_no, running_quantity FROM inventory_ledger ORDER BY sequence_no",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
