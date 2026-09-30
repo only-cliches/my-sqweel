@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "practice_topic_cycle_report",
+  "provenance": {
+    "kind": "github_sql_pattern",
+    "source_url": "https://github.com/kamyu104/LeetCode-Solutions/blob/4351f2d3e00b32787c2c5c4763395f681dc723df/MySQL/find-students-with-study-spiral-pattern.sql",
+    "source_commit": "4351f2d3e00b32787c2c5c4763395f681dc723df",
+    "source_location": "MySQL/find-students-with-study-spiral-pattern.sql:5-44",
+    "source_sha256": "e8fa92c68b428f37b68b721ee4659a0a684068aa3ab1cc46d4d11a64341f8a77",
+    "source_dialect": "mysql-mariadb",
+    "observed_pattern": "Multiple CTEs mark gaps with LAG, assign contiguous groups with a cumulative window, aggregate ordered labels, and retain only groups whose label sequence repeats as a complete cycle before joining descriptive metadata.",
+    "mysql_mariadb_translation": "Reauthor the sequence analysis for member practice topics with independently designed tables, dates, labels, and thresholds; retain standard DATEDIFF, LAG, cumulative SUM, GROUP_CONCAT, SUBSTRING_INDEX, REPEAT, HAVING, and final metadata join semantics."
+  },
+  "features": ["cte", "lag-window", "cumulative-sum-window", "sessionization", "ordered-group-concat", "count-distinct", "sequence-cycle-filter", "derived-metadata-join", "deterministic-ordering"],
+  "fixture_notes": "One member has six consecutive practice entries forming a three-topic cycle; a second member has six entries with a broken final topic and must be excluded.",
+  "determinism_notes": "Practice entry IDs and dates are unique per member; every window, ordered concatenation, grouped result, and final report has explicit deterministic ordering.",
+  "setup": [
+    "CREATE TABLE member_profiles (member_id INT PRIMARY KEY, display_name VARCHAR(32) NOT NULL, track VARCHAR(32) NOT NULL)",
+    "CREATE TABLE practice_log (entry_id INT PRIMARY KEY, member_id INT NOT NULL, practiced_on DATE NOT NULL, topic VARCHAR(16) NOT NULL, minutes_spent DECIMAL(6,1) NOT NULL)",
+    "INSERT INTO member_profiles VALUES (11, 'Ari', 'systems'), (12, 'Bea', 'analytics')",
+    "INSERT INTO practice_log VALUES (1101, 11, '2026-09-01', 'arrays', 24.0), (1102, 11, '2026-09-02', 'joins', 18.5), (1103, 11, '2026-09-03', 'windows', 31.0), (1104, 11, '2026-09-04', 'arrays', 22.5), (1105, 11, '2026-09-05', 'joins', 19.0), (1106, 11, '2026-09-06', 'windows', 30.0), (1201, 12, '2026-09-01', 'arrays', 20.0), (1202, 12, '2026-09-02', 'joins', 21.0), (1203, 12, '2026-09-03', 'windows', 20.0), (1204, 12, '2026-09-04', 'arrays', 20.0), (1205, 12, '2026-09-05', 'joins', 20.0), (1206, 12, '2026-09-06', 'sorting', 20.0)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH entry_gaps AS (SELECT entry_id, member_id, practiced_on, topic, minutes_spent, DATEDIFF(practiced_on, LAG(practiced_on) OVER (PARTITION BY member_id ORDER BY practiced_on, entry_id)) AS day_gap FROM practice_log), entry_groups AS (SELECT entry_id, member_id, practiced_on, topic, minutes_spent, SUM(CASE WHEN day_gap IS NULL OR day_gap > 2 THEN 1 ELSE 0 END) OVER (PARTITION BY member_id ORDER BY practiced_on, entry_id) AS group_id FROM entry_gaps), repeating_tracks AS (SELECT g.member_id, g.group_id, GROUP_CONCAT(g.topic ORDER BY g.practiced_on, g.entry_id SEPARATOR '|') AS topic_sequence, COUNT(*) AS total_entries, COUNT(DISTINCT g.topic) AS cycle_size, ROUND(SUM(g.minutes_spent), 1) AS total_minutes FROM entry_groups g GROUP BY g.member_id, g.group_id HAVING total_entries >= 6 AND cycle_size >= 3 AND total_entries % cycle_size = 0 AND REPEAT(CONCAT(SUBSTRING_INDEX(topic_sequence, '|', cycle_size), '|'), total_entries / cycle_size) = CONCAT(topic_sequence, '|')) SELECT r.member_id, p.display_name, p.track, r.cycle_size, r.total_minutes FROM repeating_tracks r INNER JOIN member_profiles p ON r.member_id = p.member_id ORDER BY r.cycle_size DESC, r.total_minutes DESC, r.member_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
