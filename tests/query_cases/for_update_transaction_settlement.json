@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "id": "for_update_transaction_settlement",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "3shmaoy/SQL",
+      "commit": "db60dbc261a295b9de2d3131fc4c384e4d774f44",
+      "path": "selectForUpdate.sql",
+      "url": "https://github.com/3shmaoy/SQL/blob/db60dbc261a295b9de2d3131fc4c384e4d774f44/selectForUpdate.sql",
+      "sha256": "0d2d9eba04242c0e443cd856c2e026f7e06b6dd771ca31875f0d3b1f6a52c0c6",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "selectForUpdate.sql:1-5",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A transaction selects rows with FOR UPDATE, updates the selected table, and commits the state change in the same transaction.",
+      "mysql_mariadb_translation": "Reauthored as a wallet settlement. A fixed account row is selected with FOR UPDATE, debited only when its balance guard passes, and committed; a second account verifies that the predicate targets only the locked account. The source table and values are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "transaction",
+    "for-update",
+    "update",
+    "dependent-row-guard",
+    "commit-final-state",
+    "transaction-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Account 7 is selected and debited by 35 after its balance is locked; account 8 remains unchanged because the update targets the selected account ID.",
+  "determinism_notes": "Account IDs, balances, debit amount, guard, and final ordering are fixed; one connection executes the transaction sequentially with no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE wallet_accounts (account_id INT PRIMARY KEY, account_label VARCHAR(32) NOT NULL, balance INT NOT NULL, revision INT NOT NULL)",
+    "INSERT INTO wallet_accounts VALUES (7, 'reserve-wallet', 120, 4), (8, 'hold-wallet', 85, 2)"
+  ],
+  "steps": [
+    {
+      "sql": "START TRANSACTION",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT account_id, account_label, balance, revision FROM wallet_accounts WHERE account_id = 7 FOR UPDATE",
+      "ordered": true
+    },
+    {
+      "sql": "UPDATE wallet_accounts SET balance = balance - 35, revision = revision + 1 WHERE account_id = 7 AND balance >= 35",
+      "ordered": false
+    },
+    {
+      "sql": "COMMIT",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT account_id, account_label, balance, revision FROM wallet_accounts ORDER BY account_id",
+      "ordered": true
+    }
+  ]
+}
