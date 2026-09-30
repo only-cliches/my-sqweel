@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "id": "windowed_conditional_marker_totals",
+  "provenance": {
+    "inspiration": {
+      "source_location": "xocolatl/advent-of-code@8434add708bf769cc38e92b8abc309257245d6c1: 2022/dec01.sql lines 22-35",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A running window aggregate counts rows satisfying a condition to derive deterministic groups before an outer aggregate reports each group.",
+      "mysql_mariadb_translation": "The fixture independently translates the filtered window aggregate into SUM(CASE ...) OVER expressions, tracking checkpoint boundaries and scanned weight per route without PostgreSQL FILTER syntax."
+    }
+  },
+  "features": [
+    "cte",
+    "conditional-window-aggregate",
+    "sum-over",
+    "case-expression",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Each route has fixed scan rows; checkpoint scans increment a running checkpoint number while non-NULL parcel weights accumulate independently.",
+  "determinism_notes": "Primary-key scan IDs define every window and final order; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE route_scans (scan_id INT PRIMARY KEY, route_id INT NOT NULL, scan_kind VARCHAR(16) NOT NULL, parcel_weight DECIMAL(6,1) NULL)",
+    "INSERT INTO route_scans VALUES (101, 7, 'arrival', 4.5), (102, 7, 'checkpoint', NULL), (103, 7, 'transfer', 2.0), (104, 7, 'checkpoint', 3.5), (201, 8, 'arrival', NULL), (202, 8, 'checkpoint', 1.5)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH scan_totals AS (SELECT scan_id, route_id, scan_kind, SUM(CASE WHEN scan_kind = 'checkpoint' THEN 1 ELSE 0 END) OVER (PARTITION BY route_id ORDER BY scan_id ROWS UNBOUNDED PRECEDING) AS checkpoint_no, SUM(CASE WHEN parcel_weight IS NULL THEN 0 ELSE parcel_weight END) OVER (PARTITION BY route_id ORDER BY scan_id ROWS UNBOUNDED PRECEDING) AS weighed_total FROM route_scans) SELECT scan_id, route_id, scan_kind, checkpoint_no, weighed_total FROM scan_totals ORDER BY route_id, scan_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
