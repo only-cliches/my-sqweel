@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "id": "json_cleanup_upsert_rules",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "zhoudengt/HiFate-bazi",
+      "commit": "2304c1a2761e087e6d2c583ba662eb07684872cb",
+      "path": "server/db/migrations/fix_marriage_rules_quality_v4.sql",
+      "url": "https://github.com/zhoudengt/HiFate-bazi/blob/2304c1a2761e087e6d2c583ba662eb07684872cb/server/db/migrations/fix_marriage_rules_quality_v4.sql",
+      "sha256": "a2f94f8590f780b6068bd511cf66d1da73446f529fc323dd68dc6a8d12397c8a",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "server/db/migrations/fix_marriage_rules_quality_v4.sql:6-15,18-29 (JSON_REMOVE/JSON_SET repair and duplicate-key refresh)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A migration removes a deprecated JSON member before setting its replacement and separately seeds a rule with INSERT ... ON DUPLICATE KEY UPDATE assignments for mutable JSON and scalar fields.",
+      "mysql_mariadb_translation": "Reauthored as a policy-rule catalog refresh. The duplicate path removes a retired JSON key, applies an incoming threshold through JSON_SET and JSON_EXTRACT(VALUES(rules)), increments a revision, and preserves the existing label; a new policy follows the insert path. Source tables, identifiers, language, and values are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "duplicate-key-update",
+    "json-remove",
+    "json-set",
+    "json-extract",
+    "values-in-upsert",
+    "json-dml",
+    "revision-counter",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The existing alpha policy loses its retired legacy threshold, receives the incoming threshold, retains its label, and advances to revision four; the new beta policy is inserted at revision one.",
+  "determinism_notes": "Policy keys, JSON paths, incoming values, revision arithmetic, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE policy_rules (policy_code VARCHAR(32) PRIMARY KEY, policy_label VARCHAR(32) NOT NULL, rules JSON NOT NULL, revision INT NOT NULL)",
+    "INSERT INTO policy_rules VALUES ('policy-alpha', 'Alpha', JSON_OBJECT('legacy_threshold', 3, 'threshold', 1, 'mode', 'soft'), 3)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO policy_rules (policy_code, policy_label, rules, revision) VALUES ('policy-alpha', 'Ignored Alpha', JSON_OBJECT('deprecated', TRUE, 'threshold', 8), 1) ON DUPLICATE KEY UPDATE policy_label = policy_label, rules = JSON_SET(JSON_REMOVE(rules, '$.legacy_threshold'), '$.threshold', JSON_EXTRACT(VALUES(rules), '$.threshold')), revision = revision + 1",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO policy_rules (policy_code, policy_label, rules, revision) VALUES ('policy-beta', 'Beta', JSON_OBJECT('threshold', 5, 'mode', 'strict'), 1) ON DUPLICATE KEY UPDATE policy_label = VALUES(policy_label), rules = JSON_SET(JSON_REMOVE(rules, '$.legacy_threshold'), '$.threshold', JSON_EXTRACT(VALUES(rules), '$.threshold')), revision = revision + 1",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT policy_code, policy_label, JSON_UNQUOTE(JSON_EXTRACT(rules, '$.legacy_threshold')) AS legacy_threshold, JSON_UNQUOTE(JSON_EXTRACT(rules, '$.threshold')) AS threshold, JSON_UNQUOTE(JSON_EXTRACT(rules, '$.mode')) AS mode, revision FROM policy_rules ORDER BY policy_code",
+      "ordered": true
+    }
+  ]
+}
