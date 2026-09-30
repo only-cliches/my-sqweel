@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "id": "recursive_bounded_cache_cleanup",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Actyx/ipfs-sqlite-block-store",
+      "commit": "8b54ee3c34d41bd790309229bdb70ba271540d32",
+      "path": "tables.sql",
+      "url": "https://github.com/Actyx/ipfs-sqlite-block-store/blob/8b54ee3c34d41bd790309229bdb70ba271540d32/tables.sql",
+      "sha256": "d6441314e1110544408200a71aba9ba209219294b7d593c5812eb73421dd4959",
+      "source_dialect": "sqlite"
+    },
+    "inspiration": {
+      "source_location": "tables.sql:149-157, recursive descendant_of CTE and bounded DELETE",
+      "source_dialect": "sqlite",
+      "observed_pattern": "A recursive CTE collects identifiers reachable from anchored records, and a DELETE removes only a bounded, ordered batch of records whose identifiers are absent from that reachable set.",
+      "mysql_mariadb_translation": "Reauthored as bounded cache cleanup. A recursive reachable set starts at bookmarked entries and follows parent-child cache edges; MariaDB then deletes the first two unreferenced cache entries by ascending identifier, leaving reachable entries and later stale entries intact. SQLite-specific storage tables, recursive source identifiers, and application values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "recursive-cte",
+    "delete",
+    "delete-limit",
+    "not-in-subquery",
+    "order-by",
+    "bounded-delete",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Bookmarked entries 100 and 200 anchor two reachable cache branches: 100 reaches 101 and 102, while 200 reaches 201. Entries 300 through 303 are stale; the ordered LIMIT 2 cleanup removes 300 and 301 while retaining later stale entries 302 and 303 for a subsequent batch.",
+  "determinism_notes": "Entry identifiers, bookmarks, parent-child edges, cleanup ordering, and LIMIT are fixed. The final cache read is ordered by the unique entry ID; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE cache_entries (entry_id INT PRIMARY KEY, entry_label VARCHAR(32) NOT NULL)",
+    "CREATE TABLE cache_bookmarks (entry_id INT PRIMARY KEY)",
+    "CREATE TABLE cache_edges (parent_entry_id INT NOT NULL, child_entry_id INT NOT NULL, PRIMARY KEY (parent_entry_id, child_entry_id))",
+    "INSERT INTO cache_entries VALUES (100, 'root-a'), (101, 'child-a1'), (102, 'leaf-a1'), (200, 'root-b'), (201, 'child-b1'), (300, 'stale-a'), (301, 'stale-b'), (302, 'stale-c'), (303, 'stale-d')",
+    "INSERT INTO cache_bookmarks VALUES (100), (200)",
+    "INSERT INTO cache_edges VALUES (100, 101), (101, 102), (200, 201)"
+  ],
+  "steps": [
+    {
+      "sql": "DELETE FROM cache_entries WHERE entry_id NOT IN (WITH RECURSIVE reachable (entry_id) AS (SELECT entry_id FROM cache_bookmarks UNION ALL SELECT e.child_entry_id FROM cache_edges AS e INNER JOIN reachable AS r ON r.entry_id = e.parent_entry_id) SELECT entry_id FROM reachable) ORDER BY entry_id ASC LIMIT 2",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT entry_id, entry_label FROM cache_entries ORDER BY entry_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT parent_entry_id, child_entry_id FROM cache_edges ORDER BY parent_entry_id, child_entry_id",
+      "ordered": true
+    }
+  ]
+}
