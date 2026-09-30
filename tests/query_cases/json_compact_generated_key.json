@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "id": "json_compact_generated_key",
+  "provenance": {
+    "inspiration": {
+      "source_location": "mariadb-corporation/mariadb-qa@6108102f371b6d48590e8e53dfad3803a730c4: BUGS/MDEV-31402.sql lines 1-2",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A generated unique key derives a compact JSON scalar extracted from a JSON document and is protected by a not-null check.",
+      "mysql_mariadb_translation": "The fixture independently uses profile documents whose generated compact code is indexed uniquely and inspected after insertion; the schema and values are newly authored."
+    }
+  },
+  "features": [
+    "json-compact",
+    "json-extract",
+    "generated-column",
+    "unique-generated-key",
+    "check-constraint"
+  ],
+  "fixture_notes": "The generated key is derived from each document's code field; two distinct codes verify stable derivation and uniqueness metadata.",
+  "determinism_notes": "The check orders by the integer primary key.",
+  "setup": [
+    "CREATE TABLE profile_cards (id INT PRIMARY KEY, doc JSON NOT NULL, compact_code CHAR(16) AS (JSON_COMPACT(JSON_EXTRACT(doc, '$.code'))), UNIQUE KEY uq_compact_code (compact_code))",
+    "INSERT INTO profile_cards (id, doc) VALUES (10, '{\"code\":\"alpha\",\"active\":true}'), (20, '{\"code\":\"beta\",\"active\":false}')",
+    "ALTER TABLE profile_cards ADD CONSTRAINT compact_code_present CHECK (compact_code IS NOT NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT COUNT(*) AS profile_count FROM profile_cards",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "connection": "reader",
+      "sql": "SELECT id, compact_code FROM profile_cards ORDER BY id",
+      "ordered": true
+    }
+  ]
+}
