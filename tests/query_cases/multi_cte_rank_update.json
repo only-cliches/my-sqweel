@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "id": "multi_cte_rank_update",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "allanderek/pole-prediction-elm",
+      "commit": "a80d1f535f7665ae20db784099d74465c35000e2",
+      "path": "update-ranks.sql",
+      "url": "https://github.com/allanderek/pole-prediction-elm/blob/a80d1f535f7665ae20db784099d74465c35000e2/update-ranks.sql",
+      "sha256": "8678c6318a5027668f3ab83aa137fa189895ef1bf26fc845b06e2c5e8f5dc96a",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "update-ranks.sql:5-86",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A multi-CTE ranking pipeline aggregates joined event scores, assigns deterministic ROW_NUMBER ranks, and feeds the derived ranks into an UPDATE while preserving rows that already have a checkpoint.",
+      "mysql_mariadb_translation": "Reauthored as a league leaderboard refresh. Two CTEs aggregate player points and rank the season standings, then a joined UPDATE fills only missing player ranks; a pre-existing checkpoint remains unchanged and all identifiers, rows, and scoring values are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "multi-cte",
+    "aggregate-left-join",
+    "row-number-window",
+    "window-driven-update",
+    "null-preserving-update",
+    "deterministic-ranking",
+    "dml-final-state"
+  ],
+  "fixture_notes": "Players 301 through 304 rank by summed season points with player ID as the tie-breaker. Player 303 already has checkpoint rank 7 and must remain unchanged; the other season players receive computed ranks.",
+  "determinism_notes": "Season IDs, player IDs, score rows, points, ranking order, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE league_players (player_id INT PRIMARY KEY, player_name VARCHAR(32) NOT NULL, season_id INT NOT NULL, current_rank INT NULL)",
+    "CREATE TABLE league_results (result_id INT PRIMARY KEY, season_id INT NOT NULL, player_id INT NOT NULL, points INT NOT NULL)",
+    "INSERT INTO league_players VALUES (301, 'Aster', 2026, NULL), (302, 'Beryl', 2026, NULL), (303, 'Cinder', 2026, 7), (304, 'Dune', 2026, NULL), (305, 'Echo', 2025, NULL)",
+    "INSERT INTO league_results VALUES (9001, 2026, 301, 18), (9002, 2026, 301, 25), (9003, 2026, 302, 43), (9004, 2026, 303, 50), (9005, 2026, 304, 12), (9006, 2025, 305, 99)"
+  ],
+  "steps": [
+    {
+      "sql": "CREATE TEMPORARY TABLE season_rankings AS WITH season_totals AS (SELECT p.player_id, COALESCE(SUM(r.points), 0) AS total_points FROM league_players AS p LEFT JOIN league_results AS r ON r.player_id = p.player_id AND r.season_id = p.season_id WHERE p.season_id = 2026 GROUP BY p.player_id), ranked_players AS (SELECT player_id, ROW_NUMBER() OVER (ORDER BY total_points DESC, player_id ASC) AS new_rank FROM season_totals) SELECT player_id, new_rank FROM ranked_players",
+      "ordered": true
+    },
+    {
+      "sql": "UPDATE league_players AS p JOIN season_rankings AS r ON r.player_id = p.player_id SET p.current_rank = r.new_rank WHERE p.season_id = 2026 AND p.current_rank IS NULL",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT player_id, player_name, season_id, current_rank FROM league_players ORDER BY player_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT player_id, current_rank FROM league_players ORDER BY player_id",
+      "ordered": true
+    }
+  ]
+}
