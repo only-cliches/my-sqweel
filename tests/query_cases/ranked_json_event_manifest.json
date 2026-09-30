@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "id": "ranked_json_event_manifest",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "crawl/dcss_tourney",
+      "commit": "de533574b12775f0eb8ebf2223350891118cb1c4",
+      "path": "database-views.sql",
+      "url": "https://github.com/crawl/dcss_tourney/blob/de533574b12775f0eb8ebf2223350891118cb1c4/database-views.sql",
+      "sha256": "2e84a7b9ce9bf7528a4addbe745bafc5fe829c55ebd37bb7d549f580b2bac327",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "database-views.sql:435-449",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A view ranks rows within each entity using ROW_NUMBER, filters the ranked rows, and then groups the surviving JSON objects into a JSON_ARRAYAGG while also counting distinct categories.",
+      "mysql_mariadb_translation": "Reauthored as an event manifest report. A CTE assigns deterministic per-agent sequence numbers, a second CTE keeps the first two events and constructs JSON_OBJECT values, and the grouped result emits an ordered JSON_ARRAYAGG plus a distinct event-kind count. The source game schema, view definitions, identifiers, and values are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "cte",
+    "row-number-window",
+    "window-filter",
+    "json-object",
+    "json-arrayagg",
+    "count-distinct",
+    "group-by",
+    "aggregate-local-ordering",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Agent 801 has three events and only its first two are serialized; agent 802 has two events with two distinct kinds; agent 803 has one event. The row-number filter and JSON object fields make the rank boundary observable.",
+  "determinism_notes": "Agent IDs, event timestamps, event IDs, sequence ordering, JSON fields, aggregate ordering, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE agent_events (event_id INT PRIMARY KEY, agent_id INT NOT NULL, event_kind VARCHAR(32) NOT NULL, event_label VARCHAR(64) NOT NULL, occurred_at DATETIME NOT NULL)",
+    "INSERT INTO agent_events VALUES (8101, 801, 'login', 'console sign-in', '2026-04-01 09:00:00'), (8102, 801, 'search', 'quota lookup', '2026-04-01 09:05:00'), (8103, 801, 'export', 'ledger export', '2026-04-01 09:10:00'), (8201, 802, 'login', 'mobile sign-in', '2026-04-01 10:00:00'), (8202, 802, 'review', 'approval review', '2026-04-01 10:05:00'), (8301, 803, 'login', 'service sign-in', '2026-04-01 11:00:00')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH ranked_events AS (SELECT event_id, agent_id, event_kind, event_label, occurred_at, ROW_NUMBER() OVER (PARTITION BY agent_id ORDER BY occurred_at, event_id) AS sequence_no FROM agent_events), selected_events AS (SELECT agent_id, event_id, event_kind, event_label, sequence_no, JSON_OBJECT('event_id', event_id, 'kind', event_kind, 'label', event_label, 'sequence', sequence_no) AS event_json FROM ranked_events WHERE sequence_no <= 2) SELECT agent_id, COUNT(DISTINCT event_kind) AS event_kind_count, JSON_ARRAYAGG(event_json ORDER BY sequence_no) AS recent_events FROM selected_events GROUP BY agent_id ORDER BY agent_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "WITH ranked_events AS (SELECT event_id, agent_id, event_kind, event_label, occurred_at, ROW_NUMBER() OVER (PARTITION BY agent_id ORDER BY occurred_at, event_id) AS sequence_no FROM agent_events), selected_events AS (SELECT agent_id, event_id, event_kind, event_label, sequence_no, JSON_OBJECT('event_id', event_id, 'kind', event_kind, 'label', event_label, 'sequence', sequence_no) AS event_json FROM ranked_events WHERE sequence_no <= 2) SELECT agent_id, COUNT(DISTINCT event_kind) AS event_kind_count, JSON_ARRAYAGG(event_json ORDER BY sequence_no) AS recent_events FROM selected_events GROUP BY agent_id ORDER BY agent_id",
+      "ordered": true
+    }
+  ]
+}
