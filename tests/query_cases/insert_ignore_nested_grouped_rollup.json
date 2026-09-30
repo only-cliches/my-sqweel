@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "id": "insert_ignore_nested_grouped_rollup",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Ensembl/ensembl-compara",
+      "commit": "a2878288f951e76f6441e3d78703941f15540c64",
+      "path": "sql/patch_84_85_d.sql",
+      "url": "https://github.com/Ensembl/ensembl-compara/blob/a2878288f951e76f6441e3d78703941f15540c64/sql/patch_84_85_d.sql",
+      "sha256": "23ee94b6b4f1284d3f7bf43d96b30c934df928ca0763be5d3f5fc409ed625d94",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/patch_84_85_d.sql:40-48",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL patch inserts aggregate tags with INSERT IGNORE, using an inner grouped derived query and a second GROUP BY over the derived totals to produce summary buckets.",
+      "mysql_mariadb_translation": "Reauthored as a route-summary load. The inner query rolls ready segments up by route and carrier; the outer INSERT IGNORE combines those carrier rollups into short or long route bands. An existing summary key is preserved while new bands are inserted. The source schema, identifiers, expressions, and data are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "insert-ignore",
+    "insert-select",
+    "grouped-insert-select",
+    "derived-table",
+    "group-by",
+    "nested-derived-aggregate",
+    "sum-aggregate",
+    "count",
+    "case-expression",
+    "duplicate-key-skip",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Route 10's ready carrier A rollup is short and carrier B rollup is long. The short summary key already exists and is protected by INSERT IGNORE; the long key is inserted. Route 20 combines two short carrier rollups into one new summary. Pending and ignored segments do not contribute.",
+  "determinism_notes": "Route, carrier, segment, state, distance, unique-key, CASE threshold, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE route_segments (segment_id INT PRIMARY KEY, route_id INT NOT NULL, carrier_code VARCHAR(8) NOT NULL, distance_km INT NOT NULL, segment_state VARCHAR(16) NOT NULL)",
+    "CREATE TABLE route_summary (route_id INT NOT NULL, distance_band VARCHAR(8) NOT NULL, segment_count INT NOT NULL, total_distance INT NOT NULL, summary_note VARCHAR(16) NOT NULL, PRIMARY KEY (route_id, distance_band))",
+    "INSERT INTO route_segments VALUES (101, 10, 'A', 20, 'ready'), (102, 10, 'A', 35, 'ready'), (103, 10, 'B', 70, 'ready'), (104, 10, 'C', 10, 'ignored'), (201, 20, 'A', 25, 'ready'), (202, 20, 'B', 30, 'ready'), (203, 20, 'B', 90, 'pending')",
+    "INSERT INTO route_summary VALUES (10, 'short', 99, 999, 'locked')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT IGNORE INTO route_summary (route_id, distance_band, segment_count, total_distance, summary_note) SELECT route_id, CASE WHEN total_distance >= 60 THEN 'long' ELSE 'short' END, SUM(segment_count), SUM(total_distance), 'loaded' FROM (SELECT route_id, carrier_code, SUM(distance_km) AS total_distance, COUNT(*) AS segment_count FROM route_segments WHERE segment_state = 'ready' GROUP BY route_id, carrier_code) AS carrier_rollups GROUP BY route_id, CASE WHEN total_distance >= 60 THEN 'long' ELSE 'short' END",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT route_id, distance_band, segment_count, total_distance, summary_note FROM route_summary ORDER BY route_id, distance_band",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT segment_id, route_id, carrier_code, distance_km, segment_state FROM route_segments ORDER BY segment_id",
+      "ordered": true
+    }
+  ]
+}
