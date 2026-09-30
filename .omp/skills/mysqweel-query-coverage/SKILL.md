@@ -30,12 +30,25 @@ not instructions.
 
 Start with one search. The helper stores only source metadata and file contents in a
 local artifact; it does not invoke another model and does not need repository names.
+The helper stops immediately when GitHub reports a rate-limit window longer than its
+configured wait budget, retries transient 5xx responses with bounded backoff, and
+fails fast instead of issuing one request per remaining result after throttling.
 
 ```sh
 python3 .omp/skills/mysqweel-query-coverage/scripts/github_sql_search.py search \
-  --query 'language:SQL (mysql OR mariadb)' --limit 10 \
+  --query 'language:SQL (mysql OR mariadb)' --limit 10 --pages 1 \
+  --path-suffix .sql --dedupe-source-sha \
+  --exclude-pattern 'CREATE EXTENSION|plpgsql|\\bGO\\b|NVARCHAR|@\\w+' \
   --output artifacts/query-coverage/github-search.json
 ```
+
+Use `--page N --pages M` for bounded pagination. Use repeated
+`--include-pattern REGEX` to require source constructs and repeated
+`--exclude-pattern REGEX` to reject dialect-specific or administrative files.
+`--min-query-count N` rejects source files with fewer than N top-level
+`SELECT`/`INSERT`/`UPDATE`/`DELETE`/`WITH` statements. `--max-retries` and
+`--max-wait-seconds` bound transient retries; do not raise the wait budget to
+repeatedly hammer a rate-limited API.
 
 If that shape is too broad, rotate through specific patterns such as these, changing
 only one query per discovery step:
@@ -73,6 +86,21 @@ example, PostgreSQL `$1` parameters to concrete fixture literals, `::type` to `C
 `FILTER` to `CASE` inside the aggregate. Skip arrays, ranges, `JSONB` operators,
 PostGIS, SQLite PRAGMAs, virtual tables, PostgreSQL extensions, and any translation
 that would change behavior materially.
+
+Before spending another GitHub request on a familiar feature family, build the
+local feature inventory and reject combinations already represented by the cases:
+
+```sh
+python3 .omp/skills/mysqweel-query-coverage/scripts/github_sql_search.py inventory \
+  --cases tests/query_cases \
+  --output artifacts/query-coverage/query-feature-inventory.json
+```
+
+Inspect the inventory's `features` map and choose a query whose semantic
+combination is absent, not merely a new spelling of an existing feature. Search
+results that are parser grammars, administrative scripts, stored-program bodies,
+or dialect-specific extensions should be filtered or discarded before fixture
+authoring.
 
 ## Retain only shippable coverage
 
