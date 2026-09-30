@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "ranked_rollup_profit_report",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "stroppy-io/stroppy",
+      "commit": "ce1bcccdc3c04d5c1aa61ce0da4c1532d86138c7",
+      "path": "workloads/tpcds/mysql.sql",
+      "url": "https://github.com/stroppy-io/stroppy/blob/ce1bcccdc3c04d5c1aa61ce0da4c1532d86138c7/workloads/tpcds/mysql.sql",
+      "sha256": "6b5e8302dc144b0c76b4914c48bbcfad64b72067cc8210f4d48e31f18279887b",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "workloads/tpcds/mysql.sql:3649-3682",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped sales report combines WITH ROLLUP hierarchy flags with RANK over aggregate totals, partitioning ranks by subtotal level and parent dimension before ordering the hierarchy.",
+      "mysql_mariadb_translation": "Reauthored as a compact regional profit report. Store profits group by region and county with rollup, explicit NULL checks identify detail, regional subtotal, and grand-total rows, and RANK orders counties or subtotal rows within their parent. TPC-DS tables, filters, grouping flags, and values are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "rank-window",
+    "aggregate-sum",
+    "case-classification",
+    "partition-by",
+    "rollup-flags",
+    "deterministic-order"
+  ],
+  "fixture_notes": "North has counties Alpha and Beta plus a subtotal; South has county Gamma; the grand total is included. Rank partitions follow rollup level and parent region, preserving ties by rank.",
+  "determinism_notes": "Region, county, profit values, rollup ordering, rank partitions, and final order are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE regional_profits (profit_id INT PRIMARY KEY, region_code VARCHAR(16) NOT NULL, county_code VARCHAR(16) NOT NULL, net_profit INT NOT NULL)",
+    "INSERT INTO regional_profits VALUES (601, 'North', 'Alpha', 90), (602, 'North', 'Beta', 70), (603, 'North', 'Beta', 30), (604, 'South', 'Gamma', 55), (605, 'South', 'Gamma', 25)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH rollup_totals AS (SELECT region_code, county_code, SUM(net_profit) AS total_profit FROM regional_profits GROUP BY region_code, county_code WITH ROLLUP), ranked_rollup AS (SELECT region_code, county_code, total_profit, CASE WHEN region_code IS NULL THEN 2 WHEN county_code IS NULL THEN 1 ELSE 0 END AS rollup_level, RANK() OVER (PARTITION BY CASE WHEN region_code IS NULL THEN 2 WHEN county_code IS NULL THEN 1 ELSE 0 END, CASE WHEN county_code IS NULL THEN region_code END ORDER BY total_profit DESC) AS profit_rank FROM rollup_totals) SELECT region_code, county_code, total_profit, rollup_level, profit_rank FROM ranked_rollup ORDER BY rollup_level DESC, region_code, profit_rank, county_code",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "WITH rollup_totals AS (SELECT region_code, county_code, SUM(net_profit) AS total_profit FROM regional_profits GROUP BY region_code, county_code WITH ROLLUP), ranked_rollup AS (SELECT region_code, county_code, total_profit, CASE WHEN region_code IS NULL THEN 2 WHEN county_code IS NULL THEN 1 ELSE 0 END AS rollup_level, RANK() OVER (PARTITION BY CASE WHEN region_code IS NULL THEN 2 WHEN county_code IS NULL THEN 1 ELSE 0 END, CASE WHEN county_code IS NULL THEN region_code END ORDER BY total_profit DESC) AS profit_rank FROM rollup_totals) SELECT region_code, county_code, total_profit, rollup_level, profit_rank FROM ranked_rollup ORDER BY rollup_level DESC, region_code, profit_rank, county_code",
+      "ordered": true
+    }
+  ]
+}
