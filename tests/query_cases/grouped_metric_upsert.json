@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "id": "grouped_metric_upsert",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "amirtuval/mysql-hyperloglog",
+      "commit": "ffd96bc420ba1972ef068845f1f0d1e06053b077",
+      "path": "sql/example.sql",
+      "url": "https://github.com/amirtuval/mysql-hyperloglog/blob/ffd96bc420ba1972ef068845f1f0d1e06053b077/sql/example.sql",
+      "sha256": "1c3f60adac1a5c9a2389ddaf0f3920edf52c05046db87bd26efb39dd733a6f01",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/example.sql:76-81",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "An INSERT ... SELECT groups a later batch by key, then ON DUPLICATE KEY UPDATE merges the grouped metrics into an existing summary row while inserting newly encountered groups.",
+      "mysql_mariadb_translation": "Reauthored as daily channel metrics. A grouped batch counts events and sums minutes per day/channel, then MariaDB upserts those aggregates by adding them to existing totals and creating rows for new day/channel groups. The source HyperLogLog functions, visit schema, and identifiers are replaced with standard COUNT and SUM metrics in a newly authored fixture."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "insert",
+    "insert-select",
+    "aggregate",
+    "group-by",
+    "on-duplicate-key-update",
+    "duplicate-key-update",
+    "upsert",
+    "multi-row-write",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The second batch adds two email events to the existing 2026-06-01 email summary, creates a new 2026-06-01 sms group, and creates a new 2026-06-03 email group. Existing aggregates are incremented rather than replaced.",
+  "determinism_notes": "Event IDs, dates, channels, batch predicate, grouping keys, aggregate values, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE daily_channel_metrics (metric_day DATE NOT NULL, channel VARCHAR(16) NOT NULL, event_count INT NOT NULL, total_minutes INT NOT NULL, PRIMARY KEY (metric_day, channel))",
+    "CREATE TABLE channel_events (event_id INT PRIMARY KEY, metric_day DATE NOT NULL, channel VARCHAR(16) NOT NULL, minutes INT NOT NULL)",
+    "INSERT INTO daily_channel_metrics VALUES ('2026-06-01', 'email', 2, 15), ('2026-06-02', 'push', 1, 4)",
+    "INSERT INTO channel_events VALUES (9001, '2026-06-01', 'email', 10), (9002, '2026-06-01', 'email', 7), (9003, '2026-06-01', 'sms', 3), (9004, '2026-06-03', 'email', 8)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO daily_channel_metrics (metric_day, channel, event_count, total_minutes) SELECT metric_day, channel, COUNT(*), SUM(minutes) FROM channel_events WHERE event_id >= 9000 GROUP BY metric_day, channel ON DUPLICATE KEY UPDATE event_count = event_count + VALUES(event_count), total_minutes = total_minutes + VALUES(total_minutes)",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT metric_day, channel, event_count, total_minutes FROM daily_channel_metrics ORDER BY metric_day, channel",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT event_id, metric_day, channel, minutes FROM channel_events ORDER BY event_id",
+      "ordered": true
+    }
+  ]
+}
