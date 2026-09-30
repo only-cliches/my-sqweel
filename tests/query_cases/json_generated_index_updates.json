@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "id": "json_generated_index_updates",
+  "provenance": {
+    "inspiration": {
+      "source_location": "mariadb-corporation/mariadb-qa@6108102f371b6d48590e8e53dfad3803a730c4: BUGS/MDEV-38140.sql lines 12-29",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "JSON document fields are exposed through generated columns, indexed together, and recomputed after payload updates.",
+      "mysql_mariadb_translation": "The fixture independently models shipment payloads with generated completion and status columns, a composite index, and two payload transitions before deterministic inspection."
+    }
+  },
+  "features": [
+    "json-extract",
+    "json-unquote",
+    "generated-column",
+    "composite-index",
+    "generated-index-refresh",
+    "update"
+  ],
+  "fixture_notes": "Generated columns expose a text completion flag and unquoted status text from each shipment payload; updates verify both values refresh together.",
+  "determinism_notes": "Fixed event IDs and ordered output make generated-column refresh observable without clocks or randomness.",
+  "setup": [
+    "CREATE TABLE shipment_events (event_id INT PRIMARY KEY, payload JSON NOT NULL, completed VARCHAR(4) AS (JSON_UNQUOTE(JSON_EXTRACT(payload, '$.complete'))), status_code VARCHAR(16) AS (JSON_UNQUOTE(JSON_EXTRACT(payload, '$.result'))), KEY idx_status_completed (status_code, completed))",
+    "INSERT INTO shipment_events (event_id, payload) VALUES (31, '{\"complete\":0,\"result\":\"QUEUED\"}'), (32, '{\"complete\":1,\"result\":\"DELIVERED\"}')"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE shipment_events SET payload = CASE event_id WHEN 31 THEN '{\"complete\":1,\"result\":\"DELIVERED\"}' WHEN 32 THEN '{\"complete\":0,\"result\":\"RETRY\"}' END WHERE event_id IN (31, 32)"
+    },
+    {
+      "sql": "SELECT event_id, completed, status_code FROM shipment_events ORDER BY event_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT event_id, payload FROM shipment_events ORDER BY event_id",
+      "ordered": true
+    }
+  ]
+}
