@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "id": "update_ignore_inner_mapping_conflict",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Tatoeba/tatoeba2",
+      "commit": "0fbb4506ce071827f85375bd4c8c8f9c7cf23d41",
+      "path": "docs/database/updates/2016-09-11.sql",
+      "url": "https://github.com/Tatoeba/tatoeba2/blob/0fbb4506ce071827f85375bd4c8c8f9c7cf23d41/docs/database/updates/2016-09-11.sql",
+      "sha256": "33397a044af51242f532e8fddc6cd9c15a1b07b7f93c85501ee38576afa938f8",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "docs/database/updates/2016-09-11.sql:10-12",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL migration uses UPDATE IGNORE with an INNER JOIN to translate target foreign-key values from a mapping table, allowing duplicate-key conflicts to be skipped without aborting the migration.",
+      "mysql_mariadb_translation": "Reauthored as membership-team reconciliation. An INNER JOIN maps legacy team codes to replacement team IDs; UPDATE IGNORE applies successful remaps and skips one row whose replacement would violate a subject/team unique key. The source vocabulary schema, hash expressions, identifiers, and migration context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "update-ignore",
+    "inner-join",
+    "joined-update",
+    "unique-conflict",
+    "duplicate-key-skip",
+    "partial-mutation",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Membership 101 maps from team 1 to team 2 but conflicts with membership 102 for the same subject, so UPDATE IGNORE leaves 101 unchanged. Membership 103 remaps successfully; membership 104 has no mapping and remains unchanged.",
+  "determinism_notes": "Membership IDs, subject IDs, legacy codes, replacement IDs, unique-key constraint, mapping rows, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE team_memberships (membership_id INT PRIMARY KEY, subject_id INT NOT NULL, legacy_team_code VARCHAR(16) NOT NULL, team_id INT NOT NULL, membership_state VARCHAR(16) NOT NULL, UNIQUE KEY subject_team (subject_id, team_id))",
+    "CREATE TABLE team_code_map (legacy_team_code VARCHAR(16) PRIMARY KEY, replacement_team_id INT NOT NULL)",
+    "INSERT INTO team_memberships VALUES (101, 7, 'ops-old', 1, 'pending'), (102, 7, 'ops-current', 2, 'active'), (103, 8, 'ops-old', 1, 'pending'), (104, 9, 'sales-current', 3, 'active')",
+    "INSERT INTO team_code_map VALUES ('ops-old', 2), ('ops-current', 2)"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE IGNORE team_memberships AS m INNER JOIN team_code_map AS c ON c.legacy_team_code = m.legacy_team_code SET m.team_id = c.replacement_team_id, m.membership_state = 'remapped' WHERE m.team_id <> c.replacement_team_id",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT membership_id, subject_id, legacy_team_code, team_id, membership_state FROM team_memberships ORDER BY membership_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT legacy_team_code, replacement_team_id FROM team_code_map ORDER BY legacy_team_code",
+      "ordered": true
+    }
+  ]
+}
