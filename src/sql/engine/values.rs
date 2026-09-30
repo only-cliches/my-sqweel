@@ -193,6 +193,35 @@ pub(super) fn eval_insert_update_value(
                 .last()
                 .map(|identifier| identifier.value.to_ascii_uppercase())
                 .unwrap_or_default();
+            if is_json_mutation_name(name.as_str()) || name == "JSON_EXTRACT" {
+                let FunctionArguments::List(arguments) = &function.args else {
+                    return Ok(Value::Null);
+                };
+                let values = arguments
+                    .args
+                    .iter()
+                    .map(|argument| match argument {
+                        FunctionArg::Unnamed(FunctionArgExpr::Expr(expr))
+                        | FunctionArg::Named {
+                            arg: FunctionArgExpr::Expr(expr),
+                            ..
+                        }
+                        | FunctionArg::ExprNamed {
+                            arg: FunctionArgExpr::Expr(expr),
+                            ..
+                        } => eval_insert_update_value(expr, existing, incoming),
+                        _ => Ok(Value::Null),
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let Some(value) = eval::eval_insert_update_json_function(name.as_str(), &values)?
+                else {
+                    unreachable!("JSON function name was checked before evaluation");
+                };
+                if is_json_mutation_name(name.as_str()) {
+                    return preserve_json_mutation_text(value);
+                }
+                return Ok(value);
+            }
             let greatest = match name.as_str() {
                 "GREATEST" => true,
                 "LEAST" => false,

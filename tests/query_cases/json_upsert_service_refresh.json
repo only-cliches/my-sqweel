@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "id": "json_upsert_service_refresh",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "linxiLIFE/small_program",
+      "commit": "559ae615d095a4d8e2a76c1b0f143e8ce96fa29b",
+      "path": "docs/mysql-booking-addons-migration.sql",
+      "url": "https://github.com/linxiLIFE/small_program/blob/559ae615d095a4d8e2a76c1b0f143e8ce96fa29b/docs/mysql-booking-addons-migration.sql",
+      "sha256": "bd57b60c2425ebb2fbd616f4aabf243641abb27776578fb2f8b67b5942f983e7",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "docs/mysql-booking-addons-migration.sql:2-11 (JSON_SET updates and idempotent JSON upserts)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A migration updates selected JSON members in place and uses INSERT ... ON DUPLICATE KEY UPDATE with JSON_SET to make repeated catalog seeding converge on the desired payload.",
+      "mysql_mariadb_translation": "Reauthored as a service catalog refresh. A duplicate service key updates selected JSON scalars from the incoming row while preserving the existing document shape, a new service is inserted, and revision counters distinguish insert from duplicate-update paths; source identifiers, values, and timestamp expressions are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "duplicate-key-update",
+    "json-set",
+    "json-object",
+    "json-extract",
+    "upsert",
+    "json-dml",
+    "revision-counter",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The existing emerald service changes only the selected price, active flag, and tier members while retaining its original label; the new cobalt service follows the insert path with revision one. The final projection verifies both payloads and revisions in service-id order.",
+  "determinism_notes": "All service identifiers, JSON values, paths, revision arithmetic, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE service_catalog (service_id VARCHAR(32) PRIMARY KEY, payload JSON NOT NULL, revision INT NOT NULL)",
+    "INSERT INTO service_catalog VALUES ('svc-emerald', JSON_OBJECT('label', 'Core', 'price', 1200, 'active', TRUE, 'tier', 'standard'), 4)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO service_catalog (service_id, payload, revision) VALUES ('svc-emerald', JSON_OBJECT('label', 'Ignored incoming label', 'price', 1500, 'active', FALSE, 'tier', 'premium'), 1) ON DUPLICATE KEY UPDATE payload = JSON_SET(payload, '$.price', JSON_EXTRACT(VALUES(payload), '$.price'), '$.active', JSON_EXTRACT(VALUES(payload), '$.active'), '$.tier', JSON_EXTRACT(VALUES(payload), '$.tier')), revision = revision + 1",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO service_catalog (service_id, payload, revision) VALUES ('svc-cobalt', JSON_OBJECT('label', 'Edge', 'price', 800, 'active', TRUE, 'tier', 'starter'), 1) ON DUPLICATE KEY UPDATE payload = JSON_SET(payload, '$.price', JSON_EXTRACT(VALUES(payload), '$.price'), '$.active', JSON_EXTRACT(VALUES(payload), '$.active'), '$.tier', JSON_EXTRACT(VALUES(payload), '$.tier')), revision = revision + 1",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT service_id, JSON_UNQUOTE(JSON_EXTRACT(payload, '$.label')) AS label, JSON_UNQUOTE(JSON_EXTRACT(payload, '$.price')) AS price, JSON_UNQUOTE(JSON_EXTRACT(payload, '$.active')) AS active, JSON_UNQUOTE(JSON_EXTRACT(payload, '$.tier')) AS tier, revision FROM service_catalog ORDER BY service_id",
+      "ordered": true
+    }
+  ]
+}

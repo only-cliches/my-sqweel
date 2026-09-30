@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "json_upsert_values_set_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "linxiLIFE/small_program",
+      "commit": "559ae615d095a4d8e2a76c1b0f143e8ce96fa29b",
+      "path": "docs/mysql-booking-addons-migration.sql",
+      "url": "https://github.com/linxiLIFE/small_program/blob/559ae615d095a4d8e2a76c1b0f143e8ce96fa29b/docs/mysql-booking-addons-migration.sql",
+      "sha256": "bd57b60c2425ebb2fbd616f4aabf243641abb27776578fb2f8b67b5942f983e7",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "docs/mysql-booking-addons-migration.sql:8-11 (JSON_SET inside duplicate-key assignments)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "An idempotent JSON upsert reads a member from the incoming VALUES row inside JSON_SET while updating an existing primary-key row.",
+      "mysql_mariadb_translation": "Minimized to one existing service, one duplicate JSON upsert, and one final document read so nested VALUES(payload) resolution inside JSON_SET is the only observable behavior."
+    },
+    "independently_authored": true,
+    "minimized_from": "json_upsert_service_refresh"
+  },
+  "features": [
+    "duplicate-key-update",
+    "json-set",
+    "json-extract",
+    "values-function",
+    "json-dml"
+  ],
+  "fixture_notes": "The existing service payload changes its state member from queued to live through the incoming duplicate row and retains its label.",
+  "determinism_notes": "The service key, JSON documents, JSON path, and final projection are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE json_upsert_probe (service_id VARCHAR(32) PRIMARY KEY, payload JSON NOT NULL)",
+    "INSERT INTO json_upsert_probe VALUES ('svc-probe', JSON_OBJECT('label', 'Probe', 'state', 'queued'))"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO json_upsert_probe (service_id, payload) VALUES ('svc-probe', JSON_OBJECT('label', 'Ignored', 'state', 'live')) ON DUPLICATE KEY UPDATE payload = JSON_SET(payload, '$.state', JSON_EXTRACT(VALUES(payload), '$.state'))",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT service_id, JSON_UNQUOTE(JSON_EXTRACT(payload, '$.label')) AS label, JSON_UNQUOTE(JSON_EXTRACT(payload, '$.state')) AS state FROM json_upsert_probe ORDER BY service_id",
+      "ordered": true
+    }
+  ]
+}

@@ -31,6 +31,32 @@ pub(super) fn eval_json_extract(
     }
 }
 
+pub(super) fn eval_json_extract_values(values: &[Value]) -> Result<Value> {
+    let Some(first) = values.first() else {
+        return Ok(Value::Null);
+    };
+    let document = parse_json_document_value(first.clone());
+    if document == Value::Null {
+        return Ok(Value::Null);
+    }
+    let mut matches = Vec::new();
+    for path_value in values.iter().skip(1) {
+        let path = json_scalar_to_string(path_value);
+        let Some(value) = json_extract_path(&document, &path) else {
+            return Ok(Value::Null);
+        };
+        matches.push(value);
+    }
+    match matches.len() {
+        0 => Ok(Value::Null),
+        1 => {
+            let value = matches.pop().unwrap_or(Value::Null);
+            json_extract_text_value(value)
+        }
+        _ => json_extract_text_value(Value::Array(matches)),
+    }
+}
+
 pub(super) fn eval_json_query(
     args: &[String],
     data: &Map<String, Value>,
@@ -1160,31 +1186,39 @@ pub(super) fn eval_json_mutation(
     last_insert_id: u64,
     mutation: JsonMutation,
 ) -> Result<Value> {
-    let Some(first) = args.first() else {
+    let values = args
+        .iter()
+        .map(|arg| eval_scalar_text(arg, data, last_insert_id))
+        .collect::<Result<Vec<_>>>()?;
+    eval_json_mutation_values(&values, mutation)
+}
+
+pub(super) fn eval_json_mutation_values(values: &[Value], mutation: JsonMutation) -> Result<Value> {
+    let Some(first) = values.first() else {
         return Ok(Value::Null);
     };
-    let mut document = eval_json_document(first, data, last_insert_id)?;
+    let mut document = parse_json_document_value(first.clone());
     if document == Value::Null {
         return Ok(Value::Null);
     }
 
     match mutation {
         JsonMutation::Set | JsonMutation::Insert | JsonMutation::Replace => {
-            for pair in args.iter().skip(1).collect::<Vec<_>>().chunks(2) {
-                let Some(path_arg) = pair.first() else {
+            for pair in values.iter().skip(1).collect::<Vec<_>>().chunks(2) {
+                let Some(path_value) = pair.first() else {
                     break;
                 };
-                let Some(value_arg) = pair.get(1) else {
+                let Some(value_value) = pair.get(1) else {
                     break;
                 };
-                let path = eval_scalar_text(path_arg, data, last_insert_id)?;
-                let value = eval_json_mutation_value(value_arg, data, last_insert_id)?;
+                let path = json_scalar_to_string(path_value);
+                let value =
+                    json_extract_value(value_value).unwrap_or_else(|| (*value_value).clone());
                 let value = if value == Value::Null {
                     json_null_value()
                 } else {
                     mark_json_nulls(value)
                 };
-                let path = json_scalar_to_string(&path);
                 let exists = json_extract_path(&document, &path).is_some();
                 if matches!(mutation, JsonMutation::Set)
                     || (matches!(mutation, JsonMutation::Insert) && !exists)
@@ -1195,22 +1229,21 @@ pub(super) fn eval_json_mutation(
             }
         }
         JsonMutation::Remove => {
-            for path_arg in args.iter().skip(1) {
-                let path = eval_scalar_text(path_arg, data, last_insert_id)?;
-                json_remove_path(&mut document, &json_scalar_to_string(&path));
+            for path_value in values.iter().skip(1) {
+                json_remove_path(&mut document, &json_scalar_to_string(path_value));
             }
         }
         JsonMutation::ArrayAppend | JsonMutation::ArrayInsert => {
-            for pair in args.iter().skip(1).collect::<Vec<_>>().chunks(2) {
-                let Some(path_arg) = pair.first() else {
+            for pair in values.iter().skip(1).collect::<Vec<_>>().chunks(2) {
+                let Some(path_value) = pair.first() else {
                     break;
                 };
-                let Some(value_arg) = pair.get(1) else {
+                let Some(value_value) = pair.get(1) else {
                     break;
                 };
-                let path =
-                    json_scalar_to_string(&eval_scalar_text(path_arg, data, last_insert_id)?);
-                let value = eval_json_mutation_value(value_arg, data, last_insert_id)?;
+                let path = json_scalar_to_string(path_value);
+                let value =
+                    json_extract_value(value_value).unwrap_or_else(|| (*value_value).clone());
                 let value = if value == Value::Null {
                     json_null_value()
                 } else {
@@ -1297,24 +1330,6 @@ fn json_path_to_string(tokens: &[JsonPathToken]) -> String {
 fn eval_json_document(arg: &str, data: &Map<String, Value>, last_insert_id: u64) -> Result<Value> {
     let value = eval_scalar_text(arg, data, last_insert_id)?;
     Ok(parse_json_document_value(value))
-}
-
-fn eval_json_mutation_value(
-    arg: &str,
-    data: &Map<String, Value>,
-    last_insert_id: u64,
-) -> Result<Value> {
-    let value = eval_scalar_text(arg, data, last_insert_id)?;
-    if value == Value::Null {
-        return Ok(Value::Null);
-    }
-    // JSON_QUERY and JSON_EXTRACT return their document through an internal
-    // text sentinel. Mutation functions consume that as JSON, not as a SQL
-    // string, so an object selected from a recursive CTE remains embedded.
-    if let Some(value) = json_extract_value(&value) {
-        return Ok(value);
-    }
-    Ok(value)
 }
 
 pub(crate) fn parse_json_document_value(value: Value) -> Value {

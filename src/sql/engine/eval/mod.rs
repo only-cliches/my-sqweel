@@ -72,6 +72,25 @@ pub(super) use datetime::*;
 use json::*;
 use scalar::*;
 
+pub(super) fn eval_insert_update_json_function(
+    name: &str,
+    values: &[Value],
+) -> Result<Option<Value>> {
+    if name == "JSON_EXTRACT" {
+        return Ok(Some(eval_json_extract_values(values)?));
+    }
+    let mutation = match name {
+        "JSON_SET" => JsonMutation::Set,
+        "JSON_INSERT" => JsonMutation::Insert,
+        "JSON_REPLACE" => JsonMutation::Replace,
+        "JSON_ARRAY_APPEND" => JsonMutation::ArrayAppend,
+        "JSON_ARRAY_INSERT" => JsonMutation::ArrayInsert,
+        "JSON_REMOVE" => JsonMutation::Remove,
+        _ => return Ok(None),
+    };
+    Ok(Some(eval_json_mutation_values(values, mutation)?))
+}
+
 pub(super) fn eval_extreme_values(
     values: impl IntoIterator<Item = Result<Value>>,
     greatest: bool,
