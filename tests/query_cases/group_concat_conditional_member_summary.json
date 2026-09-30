@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "id": "group_concat_conditional_member_summary",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "phuongt/SQLTestDataGenerator",
+      "commit": "52de0e9f5bda97085ead360519d034996f4a1f83",
+      "path": "sql/debug_mysql_data.sql",
+      "url": "https://github.com/phuongt/SQLTestDataGenerator/blob/52de0e9f5bda97085ead360519d034996f4a1f83/sql/debug_mysql_data.sql",
+      "sha256": "d8bce0be4f0adfe72482eb0b436b2d0cd1dcb651852160595ec83362d9de0e49",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/debug_mysql_data.sql:6-18",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped diagnostic query uses DISTINCT GROUP_CONCAT with an inline LIMIT to sample labels and COUNT(CASE WHEN ...) expressions to count a conditional subset in the same aggregate projection.",
+      "mysql_mariadb_translation": "Reauthored as a squad membership summary. Each squad emits up to three distinct member aliases in deterministic order, while separate COUNT(CASE WHEN ...) expressions count active and pending memberships. The source debug schema, identifiers, predicates, and values are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "group-concat-inline-limit",
+    "group-concat-distinct",
+    "conditional-aggregate",
+    "case-expression",
+    "group-by",
+    "aggregate-local-ordering",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Squad 901 contains four rows with a repeated alias, so DISTINCT removes the duplicate and the inline LIMIT retains the first three sorted aliases; its active and pending counts are independently observable. Squad 902 exercises a smaller result set.",
+  "determinism_notes": "Squad IDs, aliases, membership states, aggregate ordering, inline limit, and final squad ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE squad_members (membership_id INT PRIMARY KEY, squad_id INT NOT NULL, member_alias VARCHAR(32) NOT NULL, membership_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO squad_members VALUES (9011, 901, 'Aster', 'active'), (9012, 901, 'Beryl', 'active'), (9013, 901, 'Aster', 'pending'), (9014, 901, 'Cedar', 'active'), (9015, 901, 'Dune', 'inactive'), (9021, 902, 'Iris', 'pending'), (9022, 902, 'Jade', 'active')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT squad_id, GROUP_CONCAT(DISTINCT member_alias ORDER BY member_alias LIMIT 3) AS sample_members, COUNT(CASE WHEN membership_state = 'active' THEN 1 END) AS active_members, COUNT(CASE WHEN membership_state = 'pending' THEN 1 END) AS pending_members FROM squad_members GROUP BY squad_id ORDER BY squad_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT squad_id, GROUP_CONCAT(DISTINCT member_alias ORDER BY member_alias LIMIT 3) AS sample_members, COUNT(CASE WHEN membership_state = 'active' THEN 1 END) AS active_members, COUNT(CASE WHEN membership_state = 'pending' THEN 1 END) AS pending_members FROM squad_members GROUP BY squad_id ORDER BY squad_id",
+      "ordered": true
+    }
+  ]
+}
