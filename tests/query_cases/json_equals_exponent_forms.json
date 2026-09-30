@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "json_equals_exponent_forms",
+  "provenance": {
+    "inspiration": {
+      "source_location": "mariadb-corporation/mariadb-qa@6108102f371b6d48590e8e53dfad3803a730c4: BUGS/MDEV-29026.sql lines 1-3",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "JSON_EQUALS is evaluated on JSON documents containing positive, fractional, and negative exponent-form numbers.",
+      "mysql_mariadb_translation": "The fixture independently compares exponent-form numbers with their plain decimal equivalents and contrasts a numeric exponent value with a JSON string."
+    }
+  },
+  "features": [
+    "json-equals",
+    "json-exponent-numbers",
+    "numeric-normalization",
+    "json-scalar-types"
+  ],
+  "fixture_notes": "Equivalent numeric spellings should compare equal while a numeric value and JSON string remain distinct.",
+  "determinism_notes": "Fixed case IDs provide deterministic ordering; no clocks, randomness, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE json_number_pairs (case_id INT PRIMARY KEY, left_document JSON NOT NULL, right_document JSON NOT NULL)",
+    "INSERT INTO json_number_pairs VALUES (1, '{\"value\":1e1}', '{\"value\":10}'), (2, '{\"value\":1e-1}', '{\"value\":0.1}'), (3, '{\"value\":-1e+1}', '{\"value\":-10}'), (4, '{\"value\":1e1}', '{\"value\":\"10\"}')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT case_id, JSON_EQUALS(left_document, right_document) AS documents_equal FROM json_number_pairs ORDER BY case_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
