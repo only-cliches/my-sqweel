@@ -51,7 +51,7 @@ class GitHubSqlSearchTests(unittest.TestCase):
             {"sha": "a" * 40},
             {"encoding": "base64", "size": 9, "content": "U0VMRUNUIDE="},
         ])
-        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"GH_TOKEN": "secret"}, clear=True), patch.object(search, "api", side_effect=lambda path: next(responses)):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"GH_TOKEN": "secret"}, clear=True), patch.object(search, "api", side_effect=lambda path, **kwargs: next(responses)):
             output = Path(directory) / "result.json"
             self.assertEqual(search.main(["search", "--query", "mysql extension:sql", "--output", str(output)]), 0)
             document = json.loads(output.read_text())

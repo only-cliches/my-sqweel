@@ -4483,7 +4483,7 @@ impl RawEngine {
                     if let Some(value) = data.get(&hidden_column) {
                         return Ok(value.clone());
                     }
-                    return self.eval_expr_ctx(argument, data, last_insert_id);
+                    return Ok(Value::Null);
                 }
                 if function
                     .name
