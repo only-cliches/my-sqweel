@@ -44,5 +44,11 @@
       "sql": "SELECT fingerprint, representative_label, source_count FROM label_fingerprints ORDER BY fingerprint",
       "ordered": true
     }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT fingerprint, representative_label, source_count FROM label_fingerprints ORDER BY fingerprint",
+      "ordered": true
+    }
   ]
 }

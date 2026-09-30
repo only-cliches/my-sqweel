@@ -43,5 +43,11 @@
       "sql": "SELECT operator_handle, cluster_id, total_weight FROM operator_cluster_scores ORDER BY operator_handle, cluster_id",
       "ordered": true
     }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT operator_handle, cluster_id, total_weight FROM operator_cluster_scores ORDER BY operator_handle, cluster_id",
+      "ordered": true
+    }
   ]
 }

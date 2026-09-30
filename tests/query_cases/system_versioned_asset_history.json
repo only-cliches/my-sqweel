@@ -45,5 +45,11 @@
       "sql": "SELECT asset_id, asset_label, asset_state FROM asset_state_history FOR SYSTEM_TIME ALL ORDER BY asset_id, asset_state",
       "ordered": true
     }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT asset_id, asset_label, asset_state FROM asset_state_history ORDER BY asset_id",
+      "ordered": true
+    }
   ]
 }

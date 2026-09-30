@@ -42,5 +42,11 @@
       "sql": "SELECT registry_id, quota, registry_state FROM quota_registry ORDER BY registry_id",
       "ordered": true
     }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT registry_id, quota, registry_state FROM quota_registry ORDER BY registry_id",
+      "ordered": true
+    }
   ]
 }

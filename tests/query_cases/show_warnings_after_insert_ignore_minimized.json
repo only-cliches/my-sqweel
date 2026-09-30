@@ -42,5 +42,11 @@
       "sql": "SHOW WARNINGS",
       "ordered": true
     }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT probe_id, probe_label FROM warning_probe ORDER BY probe_id",
+      "ordered": true
+    }
   ]
 }

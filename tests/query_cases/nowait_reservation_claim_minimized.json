@@ -33,5 +33,10 @@
     {"sql": "SELECT reservation_id, reservation_state FROM mini_reservation_queue ORDER BY reservation_id FOR UPDATE NOWAIT", "ordered": true},
     {"sql": "ROLLBACK", "ordered": false}
   ],
-  "checks": []
+  "checks": [
+    {
+      "sql": "SELECT reservation_id, reservation_state FROM mini_reservation_queue ORDER BY reservation_id",
+      "ordered": true
+    }
+  ]
 }

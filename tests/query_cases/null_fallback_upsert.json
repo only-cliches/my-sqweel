@@ -48,5 +48,11 @@
       "sql": "SELECT profile_id, account_id FROM profile_account_links ORDER BY profile_id",
       "ordered": true
     }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT profile_id, account_id FROM profile_account_links ORDER BY profile_id",
+      "ordered": true
+    }
   ]
 }

@@ -42,5 +42,10 @@
       "ordered": true
     }
   ],
-  "checks": []
+  "checks": [
+    {
+      "sql": "SELECT alert_id, alert_label, alert_state FROM quick_alert_queue_min ORDER BY alert_id",
+      "ordered": true
+    }
+  ]
 }

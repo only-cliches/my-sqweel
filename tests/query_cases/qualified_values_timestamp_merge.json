@@ -46,5 +46,10 @@
       "ordered": true
     }
   ],
-  "checks": []
+  "checks": [
+    {
+      "sql": "SELECT window_key, first_seen, last_seen FROM metric_windows ORDER BY window_key",
+      "ordered": true
+    }
+  ]
 }

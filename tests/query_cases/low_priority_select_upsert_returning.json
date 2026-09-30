@@ -46,5 +46,10 @@
       "ordered": true
     }
   ],
-  "checks": []
+  "checks": [
+    {
+      "sql": "SELECT receipt_id, item_code, quantity, receipt_state FROM receipt_merge ORDER BY receipt_id",
+      "ordered": true
+    }
+  ]
 }

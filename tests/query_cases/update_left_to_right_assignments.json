@@ -41,5 +41,11 @@
       "sql": "SELECT job_id, job_state, attempts, audited_attempts FROM job_attempt_audit ORDER BY job_id",
       "ordered": true
     }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT job_id, job_state, attempts, audited_attempts FROM job_attempt_audit ORDER BY job_id",
+      "ordered": true
+    }
   ]
 }

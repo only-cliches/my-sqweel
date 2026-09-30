@@ -50,5 +50,11 @@
       "sql": "SELECT queue_id, queue_state FROM audit_queue ORDER BY queue_id",
       "ordered": true
     }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT queue_id, queue_state FROM audit_queue ORDER BY queue_id",
+      "ordered": true
+    }
   ]
 }

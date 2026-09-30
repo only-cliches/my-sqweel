@@ -32,5 +32,11 @@
       "sql": "SELECT p.product_id, p.product_name, jt.ordinal_no, jt.label FROM product_labels AS p, JSON_TABLE(CONCAT('[\\\"', REPLACE(p.label_csv, ',', '\\\",\\\"'), '\\\"]'), '$[*]' COLUMNS (ordinal_no FOR ORDINALITY, label VARCHAR(32) PATH '$')) AS jt ORDER BY p.product_id, jt.ordinal_no",
       "ordered": true
     }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT product_id, product_name, label_csv FROM product_labels ORDER BY product_id",
+      "ordered": true
+    }
   ]
 }

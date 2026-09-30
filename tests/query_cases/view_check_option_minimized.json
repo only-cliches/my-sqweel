@@ -41,5 +41,11 @@
       "sql": "SELECT task_id, task_state FROM visible_tasks ORDER BY task_id",
       "ordered": true
     }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT task_id, task_state FROM visible_tasks ORDER BY task_id",
+      "ordered": true
+    }
   ]
 }

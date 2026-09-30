@@ -48,5 +48,10 @@
       "ordered": false
     }
   ],
-  "checks": []
+  "checks": [
+    {
+      "sql": "SELECT job_id, worker_id, job_state FROM mini_dispatch_jobs ORDER BY job_id",
+      "ordered": true
+    }
+  ]
 }

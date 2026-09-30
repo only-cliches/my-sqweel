@@ -37,5 +37,11 @@
       "sql": "INSERT INTO default_jobs () VALUES () RETURNING job_id, job_label",
       "ordered": true
     }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT job_id, job_label FROM default_jobs ORDER BY job_id",
+      "ordered": true
+    }
   ]
 }
