@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "id": "batch_json_label_roundtrip",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "sqlpage/SQLPage",
+      "commit": "8a0c488a9098eda3b1e347ea709f3abed38ea7af",
+      "path": "examples/mysql json handling/index.sql",
+      "url": "https://github.com/sqlpage/SQLPage/blob/8a0c488a9098eda3b1e347ea709f3abed38ea7af/examples/mysql%20json%20handling/index.sql",
+      "sha256": "16f67337a9ec37ca41add1775c89f262a6048aa1e6d65197814c772991da3280",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "examples/mysql json handling/index.sql:L11-L18,L20-L26",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "The source aggregates rows into JSON_ARRAYAGG(JSON_OBJECT(...)) and separately expands a JSON array parameter with JSON_TABLE into relational membership rows.",
+      "mysql_mariadb_translation": "Reauthored as a batch-label normalization report. JSON_TABLE expands each stored label array with ordinality, and a grouped JSON_ARRAYAGG(JSON_OBJECT(...)) rebuilds an ordered array of positional label objects per batch. The source application schema, parameters, identifiers, and values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "json-table",
+    "json-arrayagg",
+    "json-object",
+    "ordered-json-arrayagg",
+    "json-ordinality",
+    "grouped-report",
+    "cte",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Batch 401 stores labels in the order amber, cobalt, ivory, while batch 402 stores mint and slate. JSON_TABLE ordinality must preserve each source position, and JSON_ARRAYAGG must rebuild the same order as labeled objects.",
+  "determinism_notes": "Batch IDs, JSON arrays, ordinality, label values, object fields, aggregate ordering, and final batch ordering are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE label_batches (batch_id INT PRIMARY KEY, batch_name VARCHAR(32) NOT NULL, labels_json JSON NOT NULL)",
+    "INSERT INTO label_batches VALUES (401, 'warm palette', '[\"amber\", \"cobalt\", \"ivory\"]'), (402, 'cool palette', '[\"mint\", \"slate\"]')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH expanded_labels AS (SELECT b.batch_id, b.batch_name, jt.position, jt.label FROM label_batches AS b INNER JOIN JSON_TABLE(b.labels_json, '$[*]' COLUMNS (position FOR ORDINALITY, label VARCHAR(32) PATH '$')) AS jt ON TRUE) SELECT batch_id, batch_name, JSON_ARRAYAGG(JSON_OBJECT('position', position, 'label', label) ORDER BY position) AS normalized_labels FROM expanded_labels GROUP BY batch_id, batch_name ORDER BY batch_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "WITH expanded_labels AS (SELECT b.batch_id, b.batch_name, jt.position, jt.label FROM label_batches AS b INNER JOIN JSON_TABLE(b.labels_json, '$[*]' COLUMNS (position FOR ORDINALITY, label VARCHAR(32) PATH '$')) AS jt ON TRUE) SELECT batch_id, position, label FROM expanded_labels ORDER BY batch_id, position",
+      "ordered": true
+    },
+    {
+      "sql": "WITH expanded_labels AS (SELECT b.batch_id, b.batch_name, jt.position, jt.label FROM label_batches AS b INNER JOIN JSON_TABLE(b.labels_json, '$[*]' COLUMNS (position FOR ORDINALITY, label VARCHAR(32) PATH '$')) AS jt ON TRUE) SELECT batch_id, JSON_ARRAYAGG(JSON_OBJECT('label', label) ORDER BY position) AS labels_only FROM expanded_labels GROUP BY batch_id ORDER BY batch_id",
+      "ordered": true
+    }
+  ]
+}
