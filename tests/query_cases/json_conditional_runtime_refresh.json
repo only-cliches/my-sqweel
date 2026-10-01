@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "id": "json_conditional_runtime_refresh",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "open-metadata/OpenMetadata",
+      "commit": "6657a29d51152a569988529b1110aafc647cdf01",
+      "path": "bootstrap/sql/migrations/native/1.7.1/mysql/schemaChanges.sql",
+      "url": "https://github.com/open-metadata/OpenMetadata/blob/6657a29d51152a569988529b1110aafc647cdf01/bootstrap/sql/migrations/native/1.7.1/mysql/schemaChanges.sql",
+      "sha256": "9fab85c417131c0b29707dac87519a9e0087af39764b4835596665b770bf0486",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "bootstrap/sql/migrations/native/1.7.1/mysql/schemaChanges.sql:29-37",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A migration updates a JSON application record with a CASE expression: rows without a runtime object receive a nested JSON_MERGE_PATCH, while rows that already have runtime state are normalized with JSON_SET.",
+      "mysql_mariadb_translation": "Reauthored as a deployment-profile refresh. Profiles missing runtime settings receive a new nested enabled/attempts object through JSON_MERGE_PATCH; profiles with existing runtime settings only flip the nested enabled flag through JSON_SET. New table names, values, JSON fields, and deployment context are independently authored."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "json-column",
+    "json-extract",
+    "json-merge-patch",
+    "json-object",
+    "json-set",
+    "case-expression",
+    "conditional-json-update",
+    "idempotent-json-refresh",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Profiles 501 and 502 are deployment records for the same service: 501 lacks runtime settings and must receive enabled=true plus attempts=1, while 502 already has runtime settings and must preserve its region and attempts while flipping enabled=true. Profile 503 belongs to another service and must remain unchanged. A repeated refresh exercises the existing-runtime branch for both updated rows.",
+  "determinism_notes": "Profile IDs, service names, JSON documents, paths, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE deployment_profiles (profile_id INT PRIMARY KEY, service_name VARCHAR(48) NOT NULL, config JSON NOT NULL)",
+    "INSERT INTO deployment_profiles VALUES (501, 'orbit-console', JSON_OBJECT('owner', 'platform', 'tier', 'edge')), (502, 'orbit-console', JSON_OBJECT('owner', 'platform', 'tier', 'core', 'runtime', JSON_OBJECT('enabled', FALSE, 'attempts', 4, 'region', 'eu-central'))), (503, 'atlas-console', JSON_OBJECT('owner', 'analytics', 'tier', 'batch'))"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE deployment_profiles SET config = CASE WHEN JSON_EXTRACT(config, '$.runtime') IS NULL THEN JSON_MERGE_PATCH(config, JSON_OBJECT('runtime', JSON_OBJECT('enabled', TRUE, 'attempts', 1))) ELSE JSON_SET(config, '$.runtime.enabled', TRUE) END WHERE service_name = 'orbit-console'",
+      "ordered": false
+    },
+    {
+      "sql": "UPDATE deployment_profiles SET config = CASE WHEN JSON_EXTRACT(config, '$.runtime') IS NULL THEN JSON_MERGE_PATCH(config, JSON_OBJECT('runtime', JSON_OBJECT('enabled', TRUE, 'attempts', 1))) ELSE JSON_SET(config, '$.runtime.enabled', TRUE) END WHERE service_name = 'orbit-console'",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT profile_id, service_name, JSON_UNQUOTE(JSON_EXTRACT(config, '$.runtime.enabled')) AS runtime_enabled, JSON_UNQUOTE(JSON_EXTRACT(config, '$.runtime.attempts')) AS runtime_attempts, JSON_UNQUOTE(JSON_EXTRACT(config, '$.runtime.region')) AS runtime_region, JSON_UNQUOTE(JSON_EXTRACT(config, '$.tier')) AS tier FROM deployment_profiles ORDER BY profile_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT profile_id, service_name, JSON_UNQUOTE(JSON_EXTRACT(config, '$.runtime.enabled')) AS runtime_enabled, JSON_UNQUOTE(JSON_EXTRACT(config, '$.runtime.attempts')) AS runtime_attempts, JSON_UNQUOTE(JSON_EXTRACT(config, '$.runtime.region')) AS runtime_region, JSON_UNQUOTE(JSON_EXTRACT(config, '$.tier')) AS tier FROM deployment_profiles ORDER BY profile_id",
+      "ordered": true
+    }
+  ]
+}

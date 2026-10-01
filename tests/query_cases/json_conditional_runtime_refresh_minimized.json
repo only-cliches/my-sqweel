@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "id": "json_conditional_runtime_refresh_minimized",
+  "provenance": {
+    "kind": "minimized-from-query-case",
+    "source": {
+      "kind": "github",
+      "repository": "open-metadata/OpenMetadata",
+      "commit": "6657a29d51152a569988529b1110aafc647cdf01",
+      "path": "bootstrap/sql/migrations/native/1.7.1/mysql/schemaChanges.sql",
+      "url": "https://github.com/open-metadata/OpenMetadata/blob/6657a29d51152a569988529b1110aafc647cdf01/bootstrap/sql/migrations/native/1.7.1/mysql/schemaChanges.sql",
+      "sha256": "9fab85c417131c0b29707dac87519a9e0087af39764b4835596665b770bf0486",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "bootstrap/sql/migrations/native/1.7.1/mysql/schemaChanges.sql:29-37",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A JSON update chooses between a nested JSON merge for missing state and a nested JSON_SET for existing state.",
+      "mysql_mariadb_translation": "Reduced to one independently authored deployment profile that starts without runtime state, followed by two deterministic refreshes so the first call exercises JSON_MERGE_PATCH and the second call exercises JSON_SET."
+    },
+    "independently_authored": true,
+    "minimized_from": "json_conditional_runtime_refresh"
+  },
+  "features": [
+    "json-column",
+    "json-extract",
+    "json-merge-patch",
+    "json-set",
+    "case-expression",
+    "conditional-json-update",
+    "idempotent-json-refresh"
+  ],
+  "fixture_notes": "The one profile starts with only an owner field. The first refresh must add runtime.enabled=true and runtime.attempts=1; the repeated refresh must take the existing-runtime JSON_SET branch without changing attempts.",
+  "determinism_notes": "The profile ID, JSON document, update path, and final projection are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE runtime_probe (probe_id INT PRIMARY KEY, service_name VARCHAR(48) NOT NULL, config JSON NOT NULL)",
+    "INSERT INTO runtime_probe VALUES (901, 'single-orbit', JSON_OBJECT('owner', 'platform'))"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE runtime_probe SET config = CASE WHEN JSON_EXTRACT(config, '$.runtime') IS NULL THEN JSON_MERGE_PATCH(config, JSON_OBJECT('runtime', JSON_OBJECT('enabled', TRUE, 'attempts', 1))) ELSE JSON_SET(config, '$.runtime.enabled', TRUE) END WHERE probe_id = 901",
+      "ordered": false
+    },
+    {
+      "sql": "UPDATE runtime_probe SET config = CASE WHEN JSON_EXTRACT(config, '$.runtime') IS NULL THEN JSON_MERGE_PATCH(config, JSON_OBJECT('runtime', JSON_OBJECT('enabled', TRUE, 'attempts', 1))) ELSE JSON_SET(config, '$.runtime.enabled', TRUE) END WHERE probe_id = 901",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT probe_id, JSON_UNQUOTE(JSON_EXTRACT(config, '$.runtime.enabled')) AS runtime_enabled, JSON_UNQUOTE(JSON_EXTRACT(config, '$.runtime.attempts')) AS runtime_attempts FROM runtime_probe ORDER BY probe_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT probe_id, JSON_UNQUOTE(JSON_EXTRACT(config, '$.runtime.enabled')) AS runtime_enabled, JSON_UNQUOTE(JSON_EXTRACT(config, '$.runtime.attempts')) AS runtime_attempts FROM runtime_probe ORDER BY probe_id",
+      "ordered": true
+    }
+  ]
+}
