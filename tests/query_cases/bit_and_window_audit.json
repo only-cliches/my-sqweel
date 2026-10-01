@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "bit_and_window_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/4860.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/4860.sql",
+      "sha256": "62c360987c5676b04ed02a8eb76592d5e28e35fe89b53cd4e4b6831b12d87dea",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/docker/fuzz_root/mysql_initlib/4860.sql:7-10",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "BIT_AND operates as a numeric window aggregate over bounded preceding-row frames, including ordered windows with changing frame direction.",
+      "mysql_mariadb_translation": "Reauthored as an independent rolling permission-mask audit. BIT_AND intersects each cohort's current mask with its two preceding event masks; the source table, values, and statements are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "bit-and-window",
+    "window-partition",
+    "ordered-window-frame",
+    "bounded-preceding-frame",
+    "rolling-bitmask",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Each cohort exercises singleton, growing, and bounded three-row intersections while preserving a deterministic event order.",
+  "determinism_notes": "All cohort labels, event IDs, mask values, frame bounds, and output ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE permission_events (event_id INT PRIMARY KEY, cohort VARCHAR(16) NOT NULL, mask_value INT NOT NULL)",
+    "INSERT INTO permission_events VALUES (1101, 'ALPHA', 15), (1102, 'ALPHA', 7), (1103, 'ALPHA', 3), (1201, 'BETA', 12), (1202, 'BETA', 10)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT event_id, cohort, mask_value, BIT_AND(mask_value) OVER (PARTITION BY cohort ORDER BY event_id ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) AS running_mask FROM permission_events ORDER BY cohort, event_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}

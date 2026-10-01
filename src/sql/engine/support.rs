@@ -109,6 +109,7 @@ impl Visitor for SupportValidator {
                         | "AVG"
                         | "MIN"
                         | "MAX"
+                        | "BIT_AND"
                         | "BIT_XOR"
                         | "STD"
                         | "STDDEV"
