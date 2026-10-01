@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "id": "correlated_analytics_update",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "lailaparedes/poossh_stamp",
+      "commit": "b74a37daf9d7a56007a575c4d885c86dfe25b6d2",
+      "path": "UPDATE_ALL_ANALYTICS_FINAL.sql",
+      "url": "https://github.com/lailaparedes/poossh_stamp/blob/b74a37daf9d7a56007a575c4d885c86dfe25b6d2/UPDATE_ALL_ANALYTICS_FINAL.sql",
+      "sha256": "450565ea6e1dbf6fb9e8075a7d2592c307442028a22f89931551d0ceebd0d691",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "UPDATE_ALL_ANALYTICS_FINAL.sql:2-43",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A multi-column UPDATE derives several denormalized metrics from correlated scalar subqueries, including COUNT(DISTINCT), SUM, COALESCE fallbacks, and an EXISTS guard for valid parent rows.",
+      "mysql_mariadb_translation": "Reauthored as a deterministic merchant-card analytics refresh. The update computes distinct active users, stamp totals, reward totals, and unredeemed rewards from separate correlated aggregates, copies the parent name, and skips an orphan analytics row. Timestamps and source schemas are omitted; all tables, rows, and identifiers are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "correlated-aggregate",
+    "count-distinct",
+    "scalar-subqueries",
+    "multi-column-update",
+    "coalesce-zero-fill",
+    "exists-guard",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Merchant 1201 has duplicate incomplete cards for one user plus another incomplete user, so COUNT(DISTINCT) differs from row count. Merchant 1202 has no cards or history and exercises COALESCE. Analytics row 1203 points to no merchant and must retain its sentinel values because of the EXISTS guard.",
+  "determinism_notes": "Fixed IDs, metrics, parent names, and ordered final-state checks are used; no clocks, randomness, sleeps, or concurrent schedules are involved.",
+  "setup": [
+    "CREATE TABLE merchant_cards (id INT PRIMARY KEY, name VARCHAR(64) NOT NULL, stamps_required INT NOT NULL)",
+    "CREATE TABLE stamp_cards (card_id INT PRIMARY KEY, merchant_id INT NOT NULL, user_id INT NOT NULL, current_stamps INT NOT NULL, total_rewards INT NOT NULL)",
+    "CREATE TABLE stamp_history (history_id INT PRIMARY KEY, merchant_id INT NOT NULL, amount INT NOT NULL)",
+    "CREATE TABLE merchant_card_analytics (analytics_id INT PRIMARY KEY, merchant_card_id INT NOT NULL, active_cards_count INT NOT NULL, total_stamps_collected INT NOT NULL, total_rewards_earned INT NOT NULL, total_rewards_redeemed INT NOT NULL, unredeemed_rewards_count INT NOT NULL, merchant_name VARCHAR(64) NOT NULL)",
+    "INSERT INTO merchant_cards VALUES (1201, 'North Star Market', 5), (1202, 'South Pier Market', 3)",
+    "INSERT INTO stamp_cards VALUES (2201, 1201, 7001, 2, 3), (2202, 1201, 7001, 4, 1), (2203, 1201, 7002, 7, 2), (2204, 1201, 7003, 3, 0)",
+    "INSERT INTO stamp_history VALUES (3201, 1201, 4), (3202, 1201, 3)",
+    "INSERT INTO merchant_card_analytics VALUES (4201, 1201, 99, 99, 99, 2, 99, 'stale north'), (4202, 1202, 99, 99, 99, 1, 99, 'stale south'), (4203, 1203, 77, 66, 55, 4, 51, 'orphan sentinel')"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE merchant_card_analytics AS mca SET active_cards_count = COALESCE((SELECT COUNT(DISTINCT sc.user_id) FROM stamp_cards AS sc JOIN merchant_cards AS mc ON mc.id = sc.merchant_id WHERE sc.merchant_id = mca.merchant_card_id AND sc.current_stamps < mc.stamps_required), 0), total_stamps_collected = COALESCE((SELECT SUM(amount) FROM stamp_history WHERE merchant_id = mca.merchant_card_id), 0), total_rewards_earned = COALESCE((SELECT SUM(total_rewards) FROM stamp_cards WHERE merchant_id = mca.merchant_card_id), 0), unredeemed_rewards_count = COALESCE((SELECT SUM(total_rewards) FROM stamp_cards WHERE merchant_id = mca.merchant_card_id), 0) - COALESCE(mca.total_rewards_redeemed, 0), merchant_name = (SELECT name FROM merchant_cards WHERE id = mca.merchant_card_id) WHERE EXISTS (SELECT 1 FROM merchant_cards WHERE id = mca.merchant_card_id)",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT analytics_id, merchant_card_id, active_cards_count, total_stamps_collected, total_rewards_earned, total_rewards_redeemed, unredeemed_rewards_count, merchant_name FROM merchant_card_analytics ORDER BY analytics_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT card_id, merchant_id, user_id, current_stamps, total_rewards FROM stamp_cards ORDER BY card_id",
+      "ordered": true
+    }
+  ]
+}

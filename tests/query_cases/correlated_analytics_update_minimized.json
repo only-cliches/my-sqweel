@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "id": "correlated_analytics_update_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "correlated_analytics_update",
+    "source": {
+      "kind": "github",
+      "repository": "lailaparedes/poossh_stamp",
+      "commit": "b74a37daf9d7a56007a575c4d885c86dfe25b6d2",
+      "path": "UPDATE_ALL_ANALYTICS_FINAL.sql",
+      "url": "https://github.com/lailaparedes/poossh_stamp/blob/b74a37daf9d7a56007a575c4d885c86dfe25b6d2/UPDATE_ALL_ANALYTICS_FINAL.sql",
+      "sha256": "450565ea6e1dbf6fb9e8075a7d2592c307442028a22f89931551d0ceebd0d691",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "UPDATE_ALL_ANALYTICS_FINAL.sql:2-43",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A multi-column UPDATE combines correlated COUNT(DISTINCT), SUM, COALESCE, and EXISTS expressions.",
+      "mysql_mariadb_translation": "Minimized to one merchant with duplicate incomplete rows for one user, one second user, and an orphan analytics row; the refresh must count users rather than rows and leave the orphan unchanged."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "correlated-aggregate",
+    "count-distinct",
+    "scalar-subqueries",
+    "multi-column-update",
+    "exists-guard"
+  ],
+  "fixture_notes": "Two incomplete rows belong to one user, so the active count must be one rather than two; the orphan analytics row remains unchanged.",
+  "determinism_notes": "Fixed IDs, metrics, parent names, and ordered final-state checks are used; no clocks, randomness, sleeps, or concurrent schedules are involved.",
+  "setup": [
+    "CREATE TABLE merchant_cards (id INT PRIMARY KEY, name VARCHAR(64) NOT NULL, stamps_required INT NOT NULL)",
+    "CREATE TABLE stamp_cards (card_id INT PRIMARY KEY, merchant_id INT NOT NULL, user_id INT NOT NULL, current_stamps INT NOT NULL, total_rewards INT NOT NULL)",
+    "CREATE TABLE stamp_history (history_id INT PRIMARY KEY, merchant_id INT NOT NULL, amount INT NOT NULL)",
+    "CREATE TABLE merchant_card_analytics (analytics_id INT PRIMARY KEY, merchant_card_id INT NOT NULL, active_cards_count INT NOT NULL, total_stamps_collected INT NOT NULL, total_rewards_earned INT NOT NULL, total_rewards_redeemed INT NOT NULL, unredeemed_rewards_count INT NOT NULL, merchant_name VARCHAR(64) NOT NULL)",
+    "INSERT INTO merchant_cards VALUES (1251, 'North Star Market', 5)",
+    "INSERT INTO stamp_cards VALUES (2251, 1251, 7101, 2, 2), (2252, 1251, 7101, 4, 1), (2253, 1251, 7102, 6, 3)",
+    "INSERT INTO stamp_history VALUES (3251, 1251, 5)",
+    "INSERT INTO merchant_card_analytics VALUES (4251, 1251, 88, 88, 88, 1, 88, 'stale north'), (4252, 1252, 77, 77, 77, 2, 75, 'orphan sentinel')"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE merchant_card_analytics AS mca SET active_cards_count = COALESCE((SELECT COUNT(DISTINCT sc.user_id) FROM stamp_cards AS sc JOIN merchant_cards AS mc ON mc.id = sc.merchant_id WHERE sc.merchant_id = mca.merchant_card_id AND sc.current_stamps < mc.stamps_required), 0), total_stamps_collected = COALESCE((SELECT SUM(amount) FROM stamp_history WHERE merchant_id = mca.merchant_card_id), 0), total_rewards_earned = COALESCE((SELECT SUM(total_rewards) FROM stamp_cards WHERE merchant_id = mca.merchant_card_id), 0), unredeemed_rewards_count = COALESCE((SELECT SUM(total_rewards) FROM stamp_cards WHERE merchant_id = mca.merchant_card_id), 0) - COALESCE(mca.total_rewards_redeemed, 0), merchant_name = (SELECT name FROM merchant_cards WHERE id = mca.merchant_card_id) WHERE EXISTS (SELECT 1 FROM merchant_cards WHERE id = mca.merchant_card_id)",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT analytics_id, merchant_card_id, active_cards_count, total_stamps_collected, total_rewards_earned, total_rewards_redeemed, unredeemed_rewards_count, merchant_name FROM merchant_card_analytics ORDER BY analytics_id",
+      "ordered": true
+    }
+  ]
+}
