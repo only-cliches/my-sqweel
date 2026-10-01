@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "id": "intersect_all_ranked_inventory_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "ila/openivm",
+      "commit": "9abf1e00084010f69360eed0c0768e5fef89566e",
+      "path": "benchmark/queries/tpcc/query_2047.sql",
+      "url": "https://github.com/ila/openivm/blob/9abf1e00084010f69360eed0c0768e5fef89566e/benchmark/queries/tpcc/query_2047.sql",
+      "sha256": "abcaefeae575879d84acd5160452bdff19493a46b32aec41a801b64baf586ec7",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "benchmark/queries/tpcc/query_2047.sql:1-2",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "Two relations independently assign ROW_NUMBER within warehouse partitions and combine the ranked projections with INTERSECT ALL, preserving duplicate matching rows.",
+      "mysql_mariadb_translation": "Reauthored as an independent inventory/request alignment report. Separate warehouse and dispatch tables rank repeated item occurrences by location and item code, then INTERSECT ALL retains only occurrence positions present in both streams. The tables, values, aliases, and operational meaning are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "intersect-all",
+    "set-operations",
+    "window-function",
+    "row-number",
+    "partitioned-window",
+    "duplicate-preservation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The minimized data keeps one location, two repeated matching A-101 occurrences, and one differing third item on each side so occurrence-position matching and duplicate preservation remain observable.",
+  "determinism_notes": "Location code, item codes, duplicate rows, partition ordering, set-operation branches, and final ordering are fixed; there are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE warehouse_inventory (inventory_id INT PRIMARY KEY, location_code INT NOT NULL, item_code VARCHAR(16) NOT NULL)",
+    "CREATE TABLE dispatch_requests (request_id INT PRIMARY KEY, location_code INT NOT NULL, item_code VARCHAR(16) NOT NULL)",
+    "INSERT INTO warehouse_inventory VALUES (1, 10, 'A-101'), (2, 10, 'A-101'), (3, 10, 'A-102')",
+    "INSERT INTO dispatch_requests VALUES (11, 10, 'A-101'), (12, 10, 'A-101'), (13, 10, 'A-103')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT location_code, item_code, ROW_NUMBER() OVER (PARTITION BY location_code ORDER BY item_code, inventory_id) AS occurrence FROM warehouse_inventory INTERSECT ALL SELECT location_code, item_code, ROW_NUMBER() OVER (PARTITION BY location_code ORDER BY item_code, request_id) AS occurrence FROM dispatch_requests ORDER BY location_code, item_code, occurrence",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT location_code, item_code, COUNT(*) AS row_count FROM warehouse_inventory GROUP BY location_code, item_code ORDER BY location_code, item_code",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT location_code, item_code, COUNT(*) AS row_count FROM dispatch_requests GROUP BY location_code, item_code ORDER BY location_code, item_code",
+      "ordered": true
+    }
+  ]
+}
