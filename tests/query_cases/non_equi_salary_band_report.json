@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "id": "non_equi_salary_band_report",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "amansinghrajpoot/Oracle-1Z0-170-PracticeSQL",
+      "commit": "0a819ba85672776f502f9deba7ab8a1a1b3b2238",
+      "path": "joins.sql",
+      "url": "https://github.com/amansinghrajpoot/Oracle-1Z0-170-PracticeSQL/blob/0a819ba85672776f502f9deba7ab8a1a1b3b2238/joins.sql",
+      "sha256": "6ee57fc7240406264205e5e1de2478a34852bc58292b98bb167cc1f1ed1ca593",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "joins.sql:28-32",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "Employees join job-grade rows through a non-equality salary range predicate using BETWEEN rather than a key equality.",
+      "mysql_mariadb_translation": "Reauthored as a salary-band report. Every declared band is preserved with a LEFT JOIN, employees match when their salary falls within the inclusive band bounds, and the report aggregates headcount and average salary while retaining an empty band. The source schema, identifiers, and values are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "non-equi-join",
+    "between-join-predicate",
+    "left-join",
+    "group-by",
+    "aggregate-count",
+    "aggregate-average",
+    "empty-group-preservation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Band B1 matches two employees, B2 matches one employee at the inclusive lower boundary, and B3 matches none; the LEFT JOIN preserves B3 with zero count and NULL average.",
+  "determinism_notes": "Fixed salary bounds, employee salaries, grouping labels, inclusive boundaries, and final ordering; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE salary_bands (band_code VARCHAR(8) PRIMARY KEY, minimum_salary INT NOT NULL, maximum_salary INT NOT NULL)",
+    "CREATE TABLE band_employees (employee_id INT PRIMARY KEY, employee_name VARCHAR(32) NOT NULL, salary INT NOT NULL)",
+    "INSERT INTO salary_bands VALUES ('B1', 40000, 59999), ('B2', 60000, 79999), ('B3', 80000, 99999)",
+    "INSERT INTO band_employees VALUES (7101, 'Mira', 45000), (7102, 'Noah', 59999), (7103, 'Owen', 60000)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT b.band_code, COUNT(e.employee_id) AS employee_count, AVG(e.salary) AS average_salary FROM salary_bands AS b LEFT JOIN band_employees AS e ON e.salary BETWEEN b.minimum_salary AND b.maximum_salary GROUP BY b.band_code ORDER BY b.band_code",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT b.band_code, COUNT(e.employee_id) AS employee_count, AVG(e.salary) AS average_salary FROM salary_bands AS b LEFT JOIN band_employees AS e ON e.salary BETWEEN b.minimum_salary AND b.maximum_salary GROUP BY b.band_code ORDER BY b.band_code",
+      "ordered": true
+    }
+  ]
+}
