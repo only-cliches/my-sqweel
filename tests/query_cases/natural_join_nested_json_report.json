@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "id": "natural_join_nested_json_report",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "highonchocolate/vet-clinic-database-design",
+      "commit": "fe36196ff583c584833fa0d8cfcfa3d2b76ccecb",
+      "path": "sql/queries/T3-mns-json (1).sql",
+      "url": "https://github.com/highonchocolate/vet-clinic-database-design/blob/fe36196ff583c584833fa0d8cfcfa3d2b76ccecb/sql/queries/T3-mns-json%20%281%29.sql",
+      "sha256": "5fe83791ba1600a7f5b485df1e4f5c992be6c244542e6f2f0a83c64f91622eeb",
+      "source_dialect": "oracle"
+    },
+    "inspiration": {
+      "source_location": "sql/queries/T3-mns-json (1).sql:23-60",
+      "source_dialect": "oracle",
+      "observed_pattern": "A grouped parent query uses chained NATURAL JOINs and JSON_ARRAYAGG(JSON_OBJECT(...)) to produce one nested JSON document per parent, with child rows ordered by their sequence field.",
+      "mysql_mariadb_translation": "Reauthored as a depot route manifest. Oracle JSON_OBJECT VALUE clauses and FORMAT JSON output were translated to MySQL/MariaDB JSON_OBJECT key-value arguments and native JSON_ARRAYAGG ordering; shared depot_id and route_id columns intentionally drive the chained NATURAL JOINs. The schema, values, aliases, and operational meaning are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "natural-join",
+    "nested-json-arrayagg",
+    "json-arrayagg",
+    "ordered-json-arrayagg",
+    "json-object",
+    "grouping",
+    "aggregate-count",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Depot 401 has two routes and four ordered stops; Depot 402 has one route and two stops. The chained NATURAL JOINs use depot_id and route_id as shared keys, while each depot document nests stops in sequence order.",
+  "determinism_notes": "Depot IDs, route IDs, stop IDs, shared NATURAL JOIN columns, child sequence ordering, grouping columns, and final depot ordering are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE depots (depot_id INT PRIMARY KEY, depot_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE routes (route_id INT PRIMARY KEY, depot_id INT NOT NULL, route_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE route_stops (stop_id INT PRIMARY KEY, route_id INT NOT NULL, stop_name VARCHAR(32) NOT NULL, sequence_no INT NOT NULL)",
+    "INSERT INTO depots VALUES (401, 'North Hub'), (402, 'South Hub')",
+    "INSERT INTO routes VALUES (501, 401, 'Morning Loop'), (502, 401, 'Evening Loop'), (503, 402, 'Coastal Loop')",
+    "INSERT INTO route_stops VALUES (601, 501, 'Market', 2), (602, 501, 'Warehouse', 1), (603, 502, 'Library', 3), (604, 502, 'Clinic', 1), (605, 503, 'Harbor', 2), (606, 503, 'Terminal', 1)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT depot_id, depot_name, COUNT(stop_id) AS stop_count, JSON_ARRAYAGG(JSON_OBJECT('stop_id', stop_id, 'stop_name', stop_name, 'sequence_no', sequence_no) ORDER BY sequence_no, stop_id) AS stops FROM depots NATURAL JOIN routes NATURAL JOIN route_stops GROUP BY depot_id, depot_name ORDER BY depot_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT depot_id, route_id, stop_id, sequence_no FROM depots NATURAL JOIN routes NATURAL JOIN route_stops ORDER BY depot_id, route_id, sequence_no, stop_id",
+      "ordered": true
+    }
+  ]
+}
