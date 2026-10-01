@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "ordered_delete_returning",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "xnacly/sqleibniz",
+      "commit": "43bc64452f595afd58bc554993ac81bce57efe2b",
+      "path": "example/stmt.sql",
+      "url": "https://github.com/xnacly/sqleibniz/blob/43bc64452f595afd58bc554993ac81bce57efe2b/example/stmt.sql",
+      "sha256": "bc32ae59b1f1339741ca7b6e495c30ea7a39c529cde7f7b9b96bbb25a681dbfd",
+      "source_dialect": "sqlite"
+    },
+    "inspiration": {
+      "source_location": "example/stmt.sql:89-94",
+      "source_dialect": "sqlite",
+      "observed_pattern": "A DELETE statement combines an ordered, limited row selection with RETURNING so the removed rows are emitted by the same mutation.",
+      "mysql_mariadb_translation": "Translated the SQLite form to MariaDB syntax by placing ORDER BY and LIMIT before RETURNING. The independent fixture removes the two newest expired alerts and returns their IDs and codes, then verifies the remaining table state; schema, rows, and domain context are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "delete",
+    "delete-returning",
+    "ordered-delete",
+    "delete-limit",
+    "dml-result-rows",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Four expired alerts are seeded with distinct timestamps. ORDER BY occurred_at DESC LIMIT 2 must return and remove only the two newest expired alerts, while a non-expired alert and the two older expired alerts remain.",
+  "determinism_notes": "Fixed alert IDs, statuses, timestamps, ordering column, limit, returned columns, and final-state ordering; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE alert_events (alert_id INT PRIMARY KEY, alert_code VARCHAR(16) NOT NULL, alert_status VARCHAR(16) NOT NULL, occurred_at DATETIME NOT NULL)",
+    "INSERT INTO alert_events VALUES (1001, 'A-OLD', 'expired', '2024-03-01 08:00:00'), (1002, 'A-MID', 'expired', '2024-03-02 08:00:00'), (1003, 'A-NEW', 'expired', '2024-03-04 08:00:00'), (1004, 'A-LATEST', 'expired', '2024-03-05 08:00:00'), (1005, 'A-LIVE', 'active', '2024-03-06 08:00:00')"
+  ],
+  "steps": [
+    {
+      "sql": "DELETE FROM alert_events WHERE alert_status = 'expired' ORDER BY occurred_at DESC LIMIT 2 RETURNING alert_id, alert_code",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT alert_id, alert_code, alert_status, occurred_at FROM alert_events ORDER BY alert_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT alert_id, alert_code, alert_status, occurred_at FROM alert_events ORDER BY alert_id",
+      "ordered": true
+    }
+  ]
+}
