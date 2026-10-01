@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "field_priority_order_minimized",
+  "provenance": {
+    "kind": "minimized-from-query-case",
+    "source_case": "field_priority_order",
+    "minimized_from": "field_priority_order",
+    "source": {
+      "kind": "github",
+      "repository": "Vorschlag-bit/01_db",
+      "commit": "6067c9560de2093759dbf8769fe0f1f8910244ed",
+      "path": "02_order by.sql",
+      "url": "https://github.com/Vorschlag-bit/01_db/blob/6067c9560de2093759dbf8769fe0f1f8910244ed/02_order%20by.sql",
+      "sha256": "fe89a6facd41c7fb0f67f410a344d8436db57c749416bba674dbcc21bc97660c",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "02_order by.sql:24-37",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "MariaDB FIELD maps a value to its first matching position in an explicit list and can be used as an ORDER BY priority expression.",
+      "mysql_mariadb_translation": "Reduced to one listed status and one unknown status so FIELD's one-based match and zero-on-miss result remain observable in the priority ordering."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "field-function",
+    "custom-priority-order",
+    "unknown-to-zero",
+    "order-by-expression",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Ready is listed and paused is not, so their ranks must be one and zero respectively.",
+  "determinism_notes": "Task IDs, FIELD arguments, and the secondary task-ID ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE task_queue (task_id INT PRIMARY KEY, status VARCHAR(16) NOT NULL)",
+    "INSERT INTO task_queue VALUES (901, 'paused'), (902, 'ready')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT task_id, status, FIELD(status, 'ready') AS status_rank FROM task_queue ORDER BY FIELD(status, 'ready') DESC, task_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}

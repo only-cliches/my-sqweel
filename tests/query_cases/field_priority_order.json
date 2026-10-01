@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "field_priority_order",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Vorschlag-bit/01_db",
+      "commit": "6067c9560de2093759dbf8769fe0f1f8910244ed",
+      "path": "02_order by.sql",
+      "url": "https://github.com/Vorschlag-bit/01_db/blob/6067c9560de2093759dbf8769fe0f1f8910244ed/02_order%20by.sql",
+      "sha256": "fe89a6facd41c7fb0f67f410a344d8436db57c749416bba674dbcc21bc97660c",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "02_order by.sql:24-37",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "MariaDB FIELD maps a value to its first matching position in an explicit list and can be used as an ORDER BY priority expression.",
+      "mysql_mariadb_translation": "Reauthored as an independent task-queue priority report. FIELD ranks known statuses in a custom order, returns zero for an unknown status, and the same expression drives deterministic descending priority ordering; the source table, labels, rows, and purpose are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "field-function",
+    "custom-priority-order",
+    "unknown-to-zero",
+    "order-by-expression",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Ready, new, blocked, and done use an explicit priority list; paused is not listed and must receive rank zero and sort last.",
+  "determinism_notes": "Task IDs, status labels, FIELD arguments, and the secondary task-ID ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE task_queue (task_id INT PRIMARY KEY, status VARCHAR(16) NOT NULL)",
+    "INSERT INTO task_queue VALUES (701, 'new'), (702, 'ready'), (703, 'paused'), (704, 'blocked'), (705, 'done')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT task_id, status, FIELD(status, 'ready', 'new', 'blocked', 'done') AS status_rank FROM task_queue ORDER BY FIELD(status, 'ready', 'new', 'blocked', 'done') DESC, task_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
