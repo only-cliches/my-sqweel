@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "json_array_object_aggregate_report_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "json_array_object_aggregate_report",
+    "source": {
+      "kind": "github",
+      "repository": "snower/syncany-sql",
+      "commit": "c611d27a86acbc37cc00533af8014c7fcd5e6959",
+      "path": "examples/aggregate/aggregate.sql",
+      "url": "https://github.com/snower/syncany-sql/blob/c611d27a86acbc37cc00533af8014c7fcd5e6959/examples/aggregate/aggregate.sql",
+      "sha256": "a8214fafe86af90f39495802d2703d3c8b76213a623957634f07df6e57d7773f",
+      "source_dialect": "mysql-mariadb"
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "json-arrayagg",
+    "json-objectagg",
+    "group-by",
+    "where-filter",
+    "aggregate-pair",
+    "minimized-regression"
+  ],
+  "fixture_notes": "Customer 3101 has two active orders and one inactive order. Unique goods IDs avoid duplicate JSON_OBJECTAGG keys while retaining multiple members in both aggregates.",
+  "determinism_notes": "Fixed identifiers, statuses, aggregate ordering, and one grouped result; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE mini_aggregate_orders (order_id INT PRIMARY KEY, customer_id INT NOT NULL, goods_id INT NOT NULL, order_ref VARCHAR(16) NOT NULL, status TINYINT NOT NULL)",
+    "INSERT INTO mini_aggregate_orders VALUES (5101, 3101, 801, 'M-100', 0), (5102, 3101, 802, 'M-101', 0), (5103, 3101, 803, 'M-102', 1)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT customer_id, JSON_ARRAYAGG(goods_id ORDER BY goods_id) AS goods_ids, JSON_OBJECTAGG(goods_id, order_ref) AS order_map FROM mini_aggregate_orders WHERE status = 0 GROUP BY customer_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT customer_id, JSON_ARRAYAGG(goods_id ORDER BY goods_id) AS goods_ids, JSON_OBJECTAGG(goods_id, order_ref) AS order_map FROM mini_aggregate_orders WHERE status = 0 GROUP BY customer_id",
+      "ordered": true
+    }
+  ]
+}

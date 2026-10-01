@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "json_array_object_aggregate_report",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "snower/syncany-sql",
+      "commit": "c611d27a86acbc37cc00533af8014c7fcd5e6959",
+      "path": "examples/aggregate/aggregate.sql",
+      "url": "https://github.com/snower/syncany-sql/blob/c611d27a86acbc37cc00533af8014c7fcd5e6959/examples/aggregate/aggregate.sql",
+      "sha256": "a8214fafe86af90f39495802d2703d3c8b76213a623957634f07df6e57d7773f",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "examples/aggregate/aggregate.sql",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped order report filters active rows by status and projects both JSON_ARRAYAGG of item identifiers and JSON_OBJECTAGG of item-to-order mappings per user.",
+      "mysql_mariadb_translation": "Reauthored as an active-order report. Each customer group collects goods IDs in deterministic order and maps each goods ID to its order reference; inactive orders and customers with no active orders are excluded. The source data, identifiers, and values are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "json-arrayagg",
+    "json-objectagg",
+    "group-by",
+    "where-filter",
+    "aggregate-pair",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Customer 3101 has two active orders and one inactive order; customer 3102 has two active orders; customer 3103 has only an inactive order and is excluded. Goods IDs are unique per customer, so JSON_OBJECTAGG duplicate-key behavior is not part of this contract.",
+  "determinism_notes": "Primary keys, customer IDs, goods IDs, order references, statuses, aggregate ordering, grouping, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE aggregate_orders (order_id INT PRIMARY KEY, customer_id INT NOT NULL, goods_id INT NOT NULL, order_ref VARCHAR(16) NOT NULL, status TINYINT NOT NULL)",
+    "INSERT INTO aggregate_orders VALUES (4101, 3101, 501, 'A-100', 0), (4102, 3101, 502, 'A-101', 0), (4103, 3101, 503, 'A-102', 1), (4201, 3102, 601, 'B-200', 0), (4202, 3102, 602, 'B-201', 0), (4301, 3103, 701, 'C-300', 1)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT customer_id, JSON_ARRAYAGG(goods_id ORDER BY goods_id) AS goods_ids, JSON_OBJECTAGG(goods_id, order_ref) AS order_map FROM aggregate_orders WHERE status = 0 GROUP BY customer_id ORDER BY customer_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT customer_id, JSON_ARRAYAGG(goods_id ORDER BY goods_id) AS goods_ids, JSON_OBJECTAGG(goods_id, order_ref) AS order_map FROM aggregate_orders WHERE status = 0 GROUP BY customer_id ORDER BY customer_id",
+      "ordered": true
+    }
+  ]
+}
