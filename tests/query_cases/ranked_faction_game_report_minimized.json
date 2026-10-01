@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "ranked_faction_game_report_minimized",
+  "provenance": {
+    "kind": "minimized-from-public-query-case",
+    "parent_case": "ranked_faction_game_report",
+    "source": {
+      "repository": "crawl/dcss_tourney",
+      "commit": "de533574b12775f0eb8ebf2223350891118cb1c4",
+      "path": "database-views.sql",
+      "url": "https://github.com/crawl/dcss_tourney/blob/de533574b12775f0eb8ebf2223350891118cb1c4/database-views.sql",
+      "sha256": "11fae3356b408cb15fd549da2f1d1312a8ab5c49c342fb1b418820e011523532",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from ranked_faction_game_report",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A ranked child row is filtered to ROW_NUMBER() = 1 before JSON_OBJECT payloads are aggregated into one JSON_ARRAYAGG result per parent.",
+      "mysql_mariadb_translation": "Reduced to one player, two counted factions, and a repeated faction row so the partitioned ranking, first-row filter, JSON object construction, and ordered JSON array remain observable without unrelated players or practice data."
+    },
+    "independently_authored": true,
+    "minimized_from": "ranked_faction_game_report"
+  },
+  "features": ["row-number-window", "window-filter", "json-object", "json-arrayagg", "count-distinct", "minimized-regression", "deterministic-order"],
+  "fixture_notes": "Player 701 has two counted Red matches and one counted Blue match. The later Red row is excluded by the row-number filter; the result contains exactly two distinct factions and two retained JSON objects.",
+  "determinism_notes": "Player ID, match IDs, faction labels, timestamps, ranking order, aggregate order, and final order are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE mini_arena_players (player_id INT PRIMARY KEY, player_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE mini_arena_matches (match_id INT PRIMARY KEY, player_id INT NOT NULL, faction_code VARCHAR(16) NOT NULL, played_at DATETIME NOT NULL, result_state VARCHAR(16) NOT NULL, score INT NOT NULL)",
+    "INSERT INTO mini_arena_players VALUES (701, 'Dara')",
+    "INSERT INTO mini_arena_matches VALUES (9701, 701, 'RED', '2025-02-01 09:00:00', 'counted', 14), (9702, 701, 'RED', '2025-02-02 09:00:00', 'counted', 19), (9703, 701, 'BLUE', '2025-02-03 09:00:00', 'counted', 22)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH ranked_matches AS (SELECT m.player_id, m.match_id, m.faction_code, m.played_at, m.score, ROW_NUMBER() OVER (PARTITION BY m.player_id, m.faction_code ORDER BY m.played_at, m.match_id) AS faction_finish FROM mini_arena_matches AS m WHERE m.result_state = 'counted'), retained_matches AS (SELECT player_id, match_id, faction_code, score, JSON_OBJECT('match_id', match_id, 'faction', faction_code, 'score', score) AS match_json FROM ranked_matches WHERE faction_finish = 1) SELECT p.player_id, COUNT(DISTINCT r.faction_code) AS faction_count, JSON_ARRAYAGG(r.match_json ORDER BY r.faction_code, r.match_id) AS featured_matches FROM mini_arena_players AS p INNER JOIN retained_matches AS r ON r.player_id = p.player_id GROUP BY p.player_id ORDER BY p.player_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT player_id, COUNT(*) AS match_count FROM mini_arena_matches GROUP BY player_id ORDER BY player_id",
+      "ordered": true
+    }
+  ]
+}

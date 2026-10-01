@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "ranked_faction_game_report",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "repository": "crawl/dcss_tourney",
+      "commit": "de533574b12775f0eb8ebf2223350891118cb1c4",
+      "path": "database-views.sql",
+      "url": "https://github.com/crawl/dcss_tourney/blob/de533574b12775f0eb8ebf2223350891118cb1c4/database-views.sql",
+      "sha256": "11fae3356b408cb15fd549da2f1d1312a8ab5c49c342fb1b418820e011523532",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "database-views.sql:435-477",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL report ranks rows within each parent and category with ROW_NUMBER, keeps the first ranked row, constructs JSON_OBJECT payloads, and groups the retained payloads with JSON_ARRAYAGG alongside COUNT(DISTINCT ...).",
+      "mysql_mariadb_translation": "Reauthored as an arena faction-game report. Counted matches are ranked per player and faction, only the earliest match per faction is retained, and the report combines a distinct faction count with an ordered JSON array of match objects. The source schema, names, values, and tournament purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["row-number-window", "window-filter", "json-object", "json-arrayagg", "count-distinct", "grouped-report", "deterministic-order"],
+  "fixture_notes": "Player 501 has two counted matches for faction Red, one counted match for Blue, and one ignored practice match; only the earliest counted Red match and the Blue match enter the JSON array. Player 502 has one counted faction. Final rows and aggregate members have explicit deterministic ordering.",
+  "determinism_notes": "Player IDs, faction labels, match IDs, timestamps, result states, window ordering, aggregate ordering, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE arena_players (player_id INT PRIMARY KEY, player_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE arena_matches (match_id INT PRIMARY KEY, player_id INT NOT NULL, faction_code VARCHAR(16) NOT NULL, played_at DATETIME NOT NULL, result_state VARCHAR(16) NOT NULL, score INT NOT NULL)",
+    "INSERT INTO arena_players VALUES (501, 'Aster'), (502, 'Bram'), (503, 'Cyra')",
+    "INSERT INTO arena_matches VALUES (9001, 501, 'RED', '2025-01-01 09:00:00', 'counted', 18), (9002, 501, 'RED', '2025-01-02 09:00:00', 'counted', 25), (9003, 501, 'BLUE', '2025-01-03 09:00:00', 'counted', 21), (9004, 501, 'GOLD', '2025-01-04 09:00:00', 'practice', 99), (9010, 502, 'GREEN', '2025-01-05 09:00:00', 'counted', 17), (9011, 503, 'YELLOW', '2025-01-06 09:00:00', 'practice', 40)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH ranked_matches AS (SELECT m.player_id, m.match_id, m.faction_code, m.played_at, m.score, ROW_NUMBER() OVER (PARTITION BY m.player_id, m.faction_code ORDER BY m.played_at, m.match_id) AS faction_finish FROM arena_matches AS m INNER JOIN arena_players AS p ON p.player_id = m.player_id WHERE m.result_state = 'counted'), retained_matches AS (SELECT player_id, match_id, faction_code, played_at, score, JSON_OBJECT('match_id', match_id, 'faction', faction_code, 'score', score) AS match_json FROM ranked_matches WHERE faction_finish = 1) SELECT p.player_id, p.player_name, COUNT(DISTINCT r.faction_code) AS faction_count, JSON_ARRAYAGG(r.match_json ORDER BY r.faction_code, r.match_id) AS featured_matches FROM arena_players AS p INNER JOIN retained_matches AS r ON r.player_id = p.player_id GROUP BY p.player_id, p.player_name ORDER BY p.player_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT player_id, COUNT(*) AS counted_matches FROM arena_matches WHERE result_state = 'counted' GROUP BY player_id ORDER BY player_id",
+      "ordered": true
+    }
+  ]
+}
