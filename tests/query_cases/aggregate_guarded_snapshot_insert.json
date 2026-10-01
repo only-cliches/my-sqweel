@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "id": "aggregate_guarded_snapshot_insert",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "repository": "gzxx-2025/aid-studio",
+      "commit": "c8fc660dee2a79772a59a6ecdbf12e75120cee31",
+      "path": "sql/v1.0.0-beta.2.sql",
+      "location": "lines 12-33",
+      "url": "https://github.com/gzxx-2025/aid-studio/blob/c8fc660dee2a79772a59a6ecdbf12e75120cee31/sql/v1.0.0-beta.2.sql#L12-L33",
+      "source_sha256": "74c28f2c58fb5bd993ca695f5f15e7eb103630c919f1d16ca8aaac023a0086fa",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL/MariaDB migration inserts one synthesized configuration row from conditional aggregate expressions and uses HAVING with a NOT EXISTS subquery to suppress the insert when the destination key already exists.",
+      "mysql_mariadb_translation": "Reauthored as an independent snapshot initializer: fixed source settings are reduced with MAX(CASE), whitespace is normalized with TRIM and NULLIF, a missing-region guard is evaluated in HAVING, and an existing snapshot row prevents a duplicate insert. Table names, values, labels, and application context are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "aggregate-having",
+    "conditional-aggregate",
+    "insert-select",
+    "not-exists",
+    "trim-nullif-coalesce",
+    "guarded-insert",
+    "deterministic-order"
+  ],
+  "fixture_notes": "North has two source settings and is inserted as one normalized snapshot; south already has a snapshot and must not be overwritten; east has no source rows and is not targeted by the fixed north projection.",
+  "determinism_notes": "All source values, target keys, and aggregate expressions are fixed; the final primary-key read is ordered, with no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE region_settings (setting_id INT PRIMARY KEY, region_code VARCHAR(16) NOT NULL, setting_name VARCHAR(32) NOT NULL, setting_value VARCHAR(64) NULL)",
+    "CREATE TABLE region_snapshots (region_code VARCHAR(16) PRIMARY KEY, snapshot_value VARCHAR(64) NOT NULL, source_count INT NOT NULL)",
+    "INSERT INTO region_settings VALUES (1, 'north', 'primary_endpoint', '  https://north.example.test  '), (2, 'north', 'fallback_endpoint', 'https://fallback.example.test'), (3, 'south', 'primary_endpoint', 'https://south.example.test'), (4, 'east', 'primary_endpoint', NULL)",
+    "INSERT INTO region_snapshots VALUES ('south', 'https://existing.example.test', 77)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO region_snapshots (region_code, snapshot_value, source_count) SELECT 'north', COALESCE(NULLIF(TRIM(MAX(CASE WHEN setting_name = 'primary_endpoint' THEN setting_value END)), ''), NULLIF(TRIM(MAX(CASE WHEN setting_name = 'fallback_endpoint' THEN setting_value END)), ''), 'unset'), COUNT(*) FROM region_settings WHERE region_code = 'north' HAVING NOT EXISTS (SELECT 1 FROM region_snapshots existing WHERE existing.region_code = 'north')",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO region_snapshots (region_code, snapshot_value, source_count) SELECT 'south', COALESCE(NULLIF(TRIM(MAX(CASE WHEN setting_name = 'primary_endpoint' THEN setting_value END)), ''), NULLIF(TRIM(MAX(CASE WHEN setting_name = 'fallback_endpoint' THEN setting_value END)), ''), 'unset'), COUNT(*) FROM region_settings WHERE region_code = 'south' HAVING NOT EXISTS (SELECT 1 FROM region_snapshots existing WHERE existing.region_code = 'south')",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT region_code, snapshot_value, source_count FROM region_snapshots ORDER BY region_code",
+      "ordered": true
+    }
+  ]
+}

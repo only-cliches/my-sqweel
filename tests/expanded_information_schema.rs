@@ -153,6 +153,7 @@ fn empty_information_schema_columns_retains_drizzle_result_columns() {
             "generation_expression",
             "column_key",
             "extra",
+            "column_comment",
         ]
     );
 }

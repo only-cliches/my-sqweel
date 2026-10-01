@@ -5741,8 +5741,8 @@ fn strip_alter_auto_increment(sql: &str) -> String {
         return sql.to_string();
     };
     // Keep column definitions such as `id BIGINT PRIMARY KEY
-    // AUTO_INCREMENT`; only strip a table-level next-value assignment so the
-    // SQL parser can handle the rest of the ALTER statement.
+    // AUTO_INCREMENT`; only strip a complete table-level next-value
+    // assignment so the SQL parser can handle the rest of the ALTER statement.
     if !is_table_level_auto_increment_assignment(sql) {
         return sql.to_string();
     }
@@ -5757,6 +5757,14 @@ fn strip_alter_auto_increment(sql: &str) -> String {
         .find(|character: char| character == ',' || character == '\n' || character == ';')
         .map(|offset| start + offset)
         .unwrap_or(sql.len());
+    let assignment = &sql[start..end];
+    let mut value = assignment["AUTO_INCREMENT".len()..].trim_start();
+    if let Some(rest) = value.strip_prefix('=') {
+        value = rest.trim_start();
+    }
+    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return sql.to_string();
+    }
     let mut result = String::with_capacity(sql.len());
     result.push_str(&sql[..begin]);
     result.push_str(&sql[end..]);

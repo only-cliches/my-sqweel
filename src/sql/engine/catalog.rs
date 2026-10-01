@@ -806,6 +806,20 @@ fn parse_auto_increment_option(sql: &str) -> Result<Option<(ObjectName, u64)>> {
     if !parser.parse_keyword(Keyword::AUTO_INCREMENT) {
         return Ok(None);
     }
+    let upper = sql.to_ascii_uppercase();
+    let start = upper.find("AUTO_INCREMENT").unwrap();
+    let end = sql[start..]
+        .find(|character: char| character == ',' || character == '\n' || character == ';')
+        .map(|offset| start + offset)
+        .unwrap_or(sql.len());
+    let mut value = sql[start + "AUTO_INCREMENT".len()..end].trim();
+    if let Some(rest) = value.strip_prefix('=') {
+        value = rest.trim_start();
+    }
+    ensure!(
+        !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()),
+        "AUTO_INCREMENT requires an unsigned integer"
+    );
     let _ = parser.consume_token(&Token::Eq);
     let Token::Number(value, _) = parser.next_token().token else {
         bail!("AUTO_INCREMENT requires an unsigned integer");
@@ -1555,6 +1569,9 @@ mod tests {
             parse_auto_increment_option("/* leading */ ALTER TABLE items AUTO_INCREMENT=2")
                 .unwrap()
                 .is_some()
+        );
+        assert!(
+            parse_auto_increment_option("ALTER TABLE items AUTO_INCREMENT=2 garbage").is_err()
         );
         assert!(
             normalize_rename("/* leading */ RENAME TABLE items TO renamed")
