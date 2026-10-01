@@ -948,6 +948,10 @@ pub(super) fn table_schema_from_create(
     for col in columns {
         let mut column_hint = ColumnHint {
             sql_type: Some(col.data_type.to_string()),
+            collation: col
+                .collation
+                .as_ref()
+                .map(|collation| collation.to_string().to_ascii_lowercase()),
             ..ColumnHint::default()
         };
 

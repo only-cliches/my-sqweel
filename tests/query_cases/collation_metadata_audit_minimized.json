@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "collation_metadata_audit_minimized",
+  "provenance": {
+    "kind": "minimized-from-query-case",
+    "source_case": "collation_metadata_audit",
+    "minimized_from": "collation_metadata_audit",
+    "source": {
+      "kind": "github",
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/2075.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/2075.sql",
+      "sha256": "0b57101a32a634a84e7eef7f674617d8b9a17d67056dface6a57701510dd1ec7",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/docker/fuzz_root/mysql_initlib/2075.sql:16-17",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "The COLLATION scalar function reports the collation metadata of selected character columns.",
+      "mysql_mariadb_translation": "Reduced to one row with one general-collation label and one binary-collation code so both reported metadata names remain observable."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "collation-function",
+    "character-column-metadata",
+    "explicit-collation",
+    "metadata-introspection",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The label and machine code use distinct explicit utf8mb4 collations, which COLLATION must report.",
+  "determinism_notes": "Column declarations, row ID, collation names, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE label_catalog (label_id INT PRIMARY KEY, display_label VARCHAR(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL, machine_code VARCHAR(16) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL)",
+    "INSERT INTO label_catalog VALUES (901, 'Alpha', 'A-01')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT label_id, COLLATION(display_label) AS display_collation, COLLATION(machine_code) AS code_collation FROM label_catalog ORDER BY label_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}

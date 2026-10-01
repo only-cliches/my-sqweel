@@ -4624,8 +4624,13 @@ impl RawEngine {
                         _ => None,
                     };
                     if function_name == "COLLATION" {
+                        let inferred_collation = self
+                            .comparison_column_hint(argument)
+                            .and_then(|hint| hint.collation);
                         return Ok(Value::String(
-                            explicit_collation.unwrap_or_else(|| "utf8mb4_general_ci".to_string()),
+                            explicit_collation
+                                .or(inferred_collation)
+                                .unwrap_or_else(|| "utf8mb4_general_ci".to_string()),
                         ));
                     }
                     let coercibility = if explicit_collation.is_some() {
