@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "id": "unused_account_cleanup",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "picosh/pico",
+      "commit": "fed4e392178a70f6675ad22f72210a47d7ba55b3",
+      "path": "scripts/reap.sql",
+      "url": "https://github.com/picosh/pico/blob/fed4e392178a70f6675ad22f72210a47d7ba55b3/scripts/reap.sql",
+      "sha256": "19e1164edbfba6e322547406ca88b95f65354180fbddbcc0acb0b12e3c2ec8cc",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "scripts/reap.sql:2-4",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A cleanup query deletes parent accounts only when several independent NOT EXISTS predicates confirm that no dependent posts, projects, recent activity, flags, or payments remain.",
+      "mysql_mariadb_translation": "Reauthored as an independent workspace-account cleanup. Three correlated NOT EXISTS checks identify an account with no posts, projects, or recent audit record; MariaDB RETURNING exposes the deleted account and a final ordered read verifies retained dependents and surviving accounts. Fixed fixture rows replace the source's time-based predicate, avoiding clocks and nondeterminism."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "delete",
+    "delete-returning",
+    "not-exists",
+    "correlated-subquery",
+    "multiple-anti-predicates",
+    "dml-result-rows",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Account 1101 has no post, project, or recent audit and must be deleted. Accounts 1102, 1103, and 1104 each have one independent retention reason and must remain.",
+  "determinism_notes": "Fixed account IDs, dependent rows, audit-kind predicate, returned columns, and final ordering; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE workspace_accounts (account_id INT PRIMARY KEY, account_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE workspace_posts (post_id INT PRIMARY KEY, account_id INT NOT NULL)",
+    "CREATE TABLE workspace_projects (project_id INT PRIMARY KEY, account_id INT NOT NULL)",
+    "CREATE TABLE workspace_audits (audit_id INT PRIMARY KEY, account_id INT NOT NULL, audit_kind VARCHAR(16) NOT NULL)",
+    "INSERT INTO workspace_accounts VALUES (1101, 'Orchid'), (1102, 'Pine'), (1103, 'Quartz'), (1104, 'River')",
+    "INSERT INTO workspace_posts VALUES (1201, 1102)",
+    "INSERT INTO workspace_projects VALUES (1301, 1103)",
+    "INSERT INTO workspace_audits VALUES (1401, 1104, 'recent'), (1402, 1101, 'archived')"
+  ],
+  "steps": [
+    {
+      "sql": "DELETE FROM workspace_accounts WHERE NOT EXISTS (SELECT 1 FROM workspace_posts AS p WHERE p.account_id = workspace_accounts.account_id) AND NOT EXISTS (SELECT 1 FROM workspace_projects AS q WHERE q.account_id = workspace_accounts.account_id) AND NOT EXISTS (SELECT 1 FROM workspace_audits AS a WHERE a.account_id = workspace_accounts.account_id AND a.audit_kind = 'recent') RETURNING account_id, account_name",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT account_id, account_name FROM workspace_accounts ORDER BY account_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT account_id, account_name FROM workspace_accounts ORDER BY account_id",
+      "ordered": true
+    }
+  ]
+}
