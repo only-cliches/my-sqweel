@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "atan2_route_bearing_audit_minimized",
+  "provenance": {
+    "kind": "minimized-from-query-case",
+    "parent_case": "atan2_route_bearing_audit",
+    "source": {
+      "kind": "github",
+      "repository": "little-brother/sqlite-gui",
+      "commit": "dac333d1a9c0263b8b4726a7ef17b809a476de91",
+      "path": "resources/help.sql",
+      "url": "https://github.com/little-brother/sqlite-gui/blob/dac333d1a9c0263b8b4726a7ef17b809a476de91/resources/help.sql",
+      "sha256": "bc5acf81d48f785f1595dc41f800a24b6682240310da85e88128bf1661645613",
+      "source_dialect": "sqlite"
+    },
+    "inspiration": {
+      "source_location": "Minimized from resources/help.sql:71",
+      "source_dialect": "sqlite",
+      "observed_pattern": "ATAN2 returns a signed angle from two numeric arguments, including a zero-axis case.",
+      "mysql_mariadb_translation": "Reduced to one positive-quadrant route and one east-axis route with independently authored coordinate values, retaining signed deltas and deterministic bearing projection."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "atan2",
+    "trigonometry",
+    "signed-coordinate-deltas",
+    "numeric-expression",
+    "deterministic-order"
+  ],
+  "fixture_notes": "One route has positive north/east deltas and one has zero north delta, preserving quadrant and axis behavior with two rows.",
+  "determinism_notes": "Route IDs, coordinates, origin constants, numeric expressions, and output ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE mini_route_points (route_id INT PRIMARY KEY, route_name VARCHAR(32) NOT NULL, latitude DECIMAL(8,4) NOT NULL, longitude DECIMAL(8,4) NOT NULL)",
+    "INSERT INTO mini_route_points VALUES (701, 'north-east', 40.5000, -72.5000), (702, 'east-axis', 40.0000, -72.5000)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT route_id, ATAN2(latitude - 40.0000, longitude + 73.0000) AS bearing_radians FROM mini_route_points ORDER BY route_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}

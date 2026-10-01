@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "atan2_route_bearing_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "little-brother/sqlite-gui",
+      "commit": "dac333d1a9c0263b8b4726a7ef17b809a476de91",
+      "path": "resources/help.sql",
+      "url": "https://github.com/little-brother/sqlite-gui/blob/dac333d1a9c0263b8b4726a7ef17b809a476de91/resources/help.sql",
+      "sha256": "bc5acf81d48f785f1595dc41f800a24b6682240310da85e88128bf1661645613",
+      "source_dialect": "sqlite"
+    },
+    "inspiration": {
+      "source_location": "resources/help.sql:71",
+      "source_dialect": "sqlite",
+      "observed_pattern": "ATAN2 converts two signed numeric components into an angle in radians, with the result determined by both component signs and magnitudes.",
+      "mysql_mariadb_translation": "Reauthored as a route-bearing audit. Fixed coordinates are translated into signed north/east deltas from an origin, and ATAN2 projects each route's deterministic bearing without copying the source help schema or values."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "atan2",
+    "trigonometry",
+    "signed-coordinate-deltas",
+    "numeric-expression",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The route set includes positive, negative, and zero coordinate deltas so ATAN2's quadrant and axis behavior are observable.",
+  "determinism_notes": "Route IDs, coordinates, origin constants, numeric expressions, and output ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE route_points (route_id INT PRIMARY KEY, route_name VARCHAR(32) NOT NULL, latitude DECIMAL(8,4) NOT NULL, longitude DECIMAL(8,4) NOT NULL)",
+    "INSERT INTO route_points VALUES (601, 'north-east', 40.7500, -72.2500), (602, 'south-west', 39.2500, -73.7500), (603, 'east-axis', 40.0000, -72.5000), (604, 'west-axis', 40.0000, -73.5000)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT route_id, route_name, ATAN2(latitude - 40.0000, longitude + 73.0000) AS bearing_radians FROM route_points ORDER BY route_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
