@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "id": "cume_dist_upsert_snapshot",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "antlr/grammars-v4",
+      "commit": "e199816b3f1a7a49ea1ad84fb6b87c382ea36a33",
+      "path": "sql/sqlite/examples/WindowsFunctionsForSqLite.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/e199816b3f1a7a49ea1ad84fb6b87c382ea36a33/sql/sqlite/examples/WindowsFunctionsForSqLite.sql",
+      "sha256": "cd37716f8e54ae08801820feccee3cbaef8181be466478f920f77963d1e7cd5a",
+      "source_dialect": "sqlite"
+    },
+    "inspiration": {
+      "source_location": "sql/sqlite/examples/WindowsFunctionsForSqLite.sql:29-36",
+      "source_dialect": "sqlite",
+      "observed_pattern": "A window query computes CUME_DIST over an ordered score stream.",
+      "mysql_mariadb_translation": "Reauthored as a regional cumulative-distribution snapshot. A derived SELECT computes partitioned CUME_DIST values with a deterministic representative tie-break, INSERT ... SELECT persists them, and ON DUPLICATE KEY UPDATE refreshes a pre-existing stale snapshot row. The source tables, rows, schema, and track context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "cume-dist-window",
+    "partitioned-distribution",
+    "window-insert-select",
+    "on-duplicate-key-update",
+    "derived-table",
+    "deterministic-tie-order"
+  ],
+  "fixture_notes": "Region 51 has scores 100, 80, 80, and 50; the two 80 scores share a cumulative distribution of 0.75, while representative ID orders the tied rows deterministically. Region 52 has scores 90 and 60. Snapshot row 5102 starts stale so the upsert path must refresh it.",
+  "determinism_notes": "Region IDs, representative IDs, scores, partition ordering, primary keys, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE regional_cume_inputs (score_id INT PRIMARY KEY, region_id INT NOT NULL, representative_id INT NOT NULL, score INT NOT NULL)",
+    "CREATE TABLE regional_cume_snapshots (region_id INT NOT NULL, representative_id INT NOT NULL, score INT NOT NULL, cumulative_distribution DOUBLE NOT NULL, PRIMARY KEY (region_id, representative_id))",
+    "INSERT INTO regional_cume_inputs VALUES (5101, 51, 101, 100), (5102, 51, 102, 80), (5103, 51, 103, 80), (5104, 51, 104, 50), (5201, 52, 201, 90), (5202, 52, 202, 60)",
+    "INSERT INTO regional_cume_snapshots VALUES (51, 102, -1, 0.0)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO regional_cume_snapshots (region_id, representative_id, score, cumulative_distribution) SELECT ranked.region_id, ranked.representative_id, ranked.score, ranked.cumulative_distribution FROM (SELECT region_id, representative_id, score, CUME_DIST() OVER (PARTITION BY region_id ORDER BY score DESC, representative_id ASC) AS cumulative_distribution FROM regional_cume_inputs) AS ranked ON DUPLICATE KEY UPDATE score = VALUES(score), cumulative_distribution = VALUES(cumulative_distribution)",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT region_id, representative_id, score, cumulative_distribution FROM regional_cume_snapshots ORDER BY region_id, representative_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT score_id, region_id, representative_id, score FROM regional_cume_inputs ORDER BY score_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT region_id, representative_id, score, cumulative_distribution FROM regional_cume_snapshots ORDER BY region_id, representative_id",
+      "ordered": true
+    }
+  ]
+}
