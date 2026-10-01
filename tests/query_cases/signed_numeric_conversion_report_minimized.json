@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "signed_numeric_conversion_report_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "jk983294/CommonScript",
+      "commit": "4589db3c9d31174aebaaa1f8613e0db1c2a62dd2",
+      "path": "db/mysql/select_builtin_functions.sql",
+      "url": "https://github.com/jk983294/CommonScript/blob/4589db3c9d31174aebaaa1f8613e0db1c2a62dd2/db/mysql/select_builtin_functions.sql",
+      "sha256": "f9eb06f066ee52235beba4108dd6e2a95b7d7c2857daa9b78906324bc7b639af",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "db/mysql/select_builtin_functions.sql:95-108",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL built-in-function smoke query exercises signed values with SIGN, formats decimal output, and converts an integer between numeric bases with CONV.",
+      "mysql_mariadb_translation": "Reduced to one negative metric while preserving the combined SIGN, FORMAT, ABS, and CONV report under deterministic ordering."
+    },
+    "independently_authored": true
+  },
+  "features": ["sign", "format-number", "conv", "base-conversion", "abs", "decimal-input", "deterministic-order"],
+  "fixture_notes": "Metric 10 has the fixed value -26.50. Its absolute integral magnitude is converted to hexadecimal and formatted with two decimal places.",
+  "determinism_notes": "Metric ID and value are fixed and the final scalar report orders by metric ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE signed_metrics (metric_id INT PRIMARY KEY, metric_value DECIMAL(10,2) NOT NULL)",
+    "INSERT INTO signed_metrics VALUES (10, -26.50)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT metric_id, metric_value, SIGN(metric_value) AS polarity, FORMAT(ABS(metric_value), 2) AS formatted_magnitude, CONV(CAST(ABS(metric_value) AS UNSIGNED), 10, 16) AS hexadecimal_magnitude FROM signed_metrics ORDER BY metric_id",
+      "ordered": true
+    }
+  ]
+}

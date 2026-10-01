@@ -5664,7 +5664,7 @@ pub(super) fn cast_json_value(value: Value, data_type: &str) -> Result<Value> {
             }
         }
         return Ok(Value::Number(Number::from(
-            json_to_f64_lossy(&value)? as i64
+            json_to_f64_lossy(&value)?.round() as i64
         )));
     }
     if data_type.contains("decimal")
