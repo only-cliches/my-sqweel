@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "id": "replace_select_freshness_merge_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "replace_select_freshness_merge",
+    "source": {
+      "kind": "github",
+      "repository": "maplibre/maplibre-native",
+      "commit": "ba9fc57bc88725d7602fd652e601384e9f2e3183",
+      "path": "platform/default/include/mln/storage/merge_sideloaded.sql",
+      "url": "https://github.com/maplibre/maplibre-native/blob/ba9fc57bc88725d7602fd652e601384e9f2e3183/platform/default/include/mln/storage/merge_sideloaded.sql",
+      "sha256": "39e1544e03f84a4b11c4bdd008bbd53de18ddbd290d44860cd43b2f3e3495da8",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "merge_sideloaded.sql:14-22",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A REPLACE INTO reads a DISTINCT subset from a joined source relation, left joins existing target rows, and applies the replacement only when the source is new or newer.",
+      "mysql_mariadb_translation": "Minimized to one stale target, one newer linked source duplicated through two links, and one new linked source."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "replace-select",
+    "derived-table",
+    "distinct-source-rows",
+    "left-join",
+    "freshness-filter"
+  ],
+  "fixture_notes": "Resource alpha is replaced by revision 2 after duplicate source rows collapse; beta is inserted at revision 1.",
+  "determinism_notes": "Resource keys, revisions, links, payloads, and ordered final-state checks are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE resource_catalog (resource_key VARCHAR(24) PRIMARY KEY, revision INT NOT NULL, body VARCHAR(64) NOT NULL)",
+    "CREATE TABLE incoming_resources (incoming_id INT PRIMARY KEY, resource_key VARCHAR(24) NOT NULL, revision INT NOT NULL, body VARCHAR(64) NOT NULL)",
+    "CREATE TABLE incoming_resource_links (link_id INT PRIMARY KEY, incoming_id INT NOT NULL)",
+    "INSERT INTO resource_catalog VALUES ('alpha', 1, 'old-alpha')",
+    "INSERT INTO incoming_resources VALUES (11, 'alpha', 2, 'new-alpha'), (12, 'alpha', 2, 'new-alpha'), (13, 'beta', 1, 'new-beta')",
+    "INSERT INTO incoming_resource_links VALUES (201, 11), (202, 12), (203, 13)"
+  ],
+  "steps": [
+    {
+      "sql": "REPLACE INTO resource_catalog (resource_key, revision, body) SELECT candidate.resource_key, candidate.revision, candidate.body FROM (SELECT DISTINCT i.resource_key, i.revision, i.body FROM incoming_resource_links AS l JOIN incoming_resources AS i ON l.incoming_id = i.incoming_id) AS candidate LEFT JOIN resource_catalog AS current ON current.resource_key = candidate.resource_key WHERE current.resource_key IS NULL OR candidate.revision > current.revision",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT resource_key, revision, body FROM resource_catalog ORDER BY resource_key",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT incoming_id, resource_key, revision, body FROM incoming_resources ORDER BY incoming_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT link_id, incoming_id FROM incoming_resource_links ORDER BY link_id",
+      "ordered": true
+    }
+  ]
+}
