@@ -874,6 +874,12 @@ fn json_merge_preserve_value(left: Value, right: Value) -> Value {
             left.push(right);
             Value::Array(left)
         }
+        (left, Value::Array(right)) => {
+            let mut merged = Vec::with_capacity(right.len() + 1);
+            merged.push(left);
+            merged.extend(right);
+            Value::Array(merged)
+        }
         (left, right) => Value::Array(vec![left, right]),
     }
 }

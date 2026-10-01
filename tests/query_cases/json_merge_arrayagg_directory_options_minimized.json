@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "id": "json_merge_arrayagg_directory_options_minimized",
+  "provenance": {
+    "kind": "minimized-from-query-case",
+    "parent_case": "json_merge_arrayagg_directory_options",
+    "source": {
+      "kind": "github",
+      "repository": "sqlpage/SQLPage",
+      "commit": "b04d7153adf8452f3a76cbb01154009422a5dff6",
+      "path": "examples/custom form component/basic.sql",
+      "url": "https://github.com/sqlpage/SQLPage/blob/b04d7153adf8452f3a76cbb01154009422a5dff6/examples/custom%20form%20component/basic.sql",
+      "sha256": "f512316a8128c72741a098e83ce5c71cbbabdec0a48874373b7a44cd0e670147",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from examples/custom form component/basic.sql:16-36",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "JSON_MERGE combines one object prefix with an aggregated JSON array of JSON objects produced from a left join.",
+      "mysql_mariadb_translation": "Reduced to two directory people and one team membership so both selected branches, left-join retention, JSON_ARRAYAGG, and JSON_MERGE remain observable without unrelated rows."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "json-merge-alias",
+    "json-arrayagg",
+    "nested-json",
+    "left-join-null-extension",
+    "boolean-json-value",
+    "deterministic-order"
+  ],
+  "fixture_notes": "One person belongs to team 11 and one does not; the merged array must retain both rows and expose both boolean branches.",
+  "determinism_notes": "Person IDs, names, membership, aggregate-local ordering, and the scalar result are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE mini_directory_people (person_id INT PRIMARY KEY, display_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE mini_directory_memberships (person_id INT NOT NULL, team_id INT NOT NULL, PRIMARY KEY (person_id, team_id))",
+    "INSERT INTO mini_directory_people VALUES (501, 'Iris'), (502, 'Jules')",
+    "INSERT INTO mini_directory_memberships VALUES (501, 11)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT JSON_MERGE(JSON_OBJECT('label', 'Team 11'), JSON_ARRAYAGG(JSON_OBJECT('label', p.display_name, 'value', p.person_id, 'selected', m.team_id IS NOT NULL) ORDER BY p.person_id)) AS options FROM mini_directory_people AS p LEFT JOIN mini_directory_memberships AS m ON m.person_id = p.person_id AND m.team_id = 11",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}

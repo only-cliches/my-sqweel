@@ -2802,7 +2802,36 @@ impl RawEngine {
                     "JSON_ARRAYAGG" | "JSON_OBJECTAGG" => MysqlColumnType::Blob,
                     "JSON_ARRAY" => MysqlColumnType::VarChar,
                     "JSON_ARRAY_APPEND" | "JSON_ARRAY_INSERT" => MysqlColumnType::LongBlob,
-                    "JSON_MERGE" | "JSON_MERGE_PRESERVE" => MysqlColumnType::LongBlob,
+                    "JSON_MERGE" | "JSON_MERGE_PRESERVE" => {
+                        let argument_types = function_arguments(function)
+                            .ok()
+                            .map(|arguments| {
+                                arguments
+                                    .into_iter()
+                                    .flatten()
+                                    .map(|argument| {
+                                        self.expression_metadata(
+                                            select,
+                                            &argument,
+                                            String::new(),
+                                            first_row,
+                                        )
+                                        .column_type
+                                    })
+                                    .collect::<Vec<_>>()
+                            })
+                            .unwrap_or_default();
+                        if argument_types.iter().any(|column_type| {
+                            matches!(
+                                column_type,
+                                MysqlColumnType::Json | MysqlColumnType::LongBlob
+                            )
+                        }) {
+                            MysqlColumnType::LongBlob
+                        } else {
+                            MysqlColumnType::MediumBlob
+                        }
+                    }
                     "JSON_EXTRACT" => {
                         let uses_user_variable = function.to_string().contains('@');
                         let argument = function_arguments(function)

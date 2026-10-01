@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "json_merge_arrayagg_directory_options",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "sqlpage/SQLPage",
+      "commit": "b04d7153adf8452f3a76cbb01154009422a5dff6",
+      "path": "examples/custom form component/basic.sql",
+      "url": "https://github.com/sqlpage/SQLPage/blob/b04d7153adf8452f3a76cbb01154009422a5dff6/examples/custom%20form%20component/basic.sql",
+      "sha256": "f512316a8128c72741a098e83ce5c71cbbabdec0a48874373b7a44cd0e670147",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "examples/custom form component/basic.sql:16-36",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A JSON_MERGE object prefix is combined with a JSON_ARRAYAGG of JSON_OBJECT rows from a left join, preserving an explicit option label and selected-state booleans for every row.",
+      "mysql_mariadb_translation": "Reauthored as a team-directory options document. A fixed label object is merged with an ordered aggregate of person objects; the left join marks members of one team while retaining non-members, with new schema, identifiers, values, and application context."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "json-merge-alias",
+    "json-arrayagg",
+    "nested-json",
+    "left-join-null-extension",
+    "boolean-json-value",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The directory contains three people; two belong to team 9 and one belongs to another team. The merged array must retain every person and expose selected true or false values.",
+  "determinism_notes": "Person IDs, names, team membership, aggregate-local ordering, and the scalar result are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE directory_people (person_id INT PRIMARY KEY, display_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE directory_memberships (person_id INT NOT NULL, team_id INT NOT NULL, PRIMARY KEY (person_id, team_id))",
+    "INSERT INTO directory_people VALUES (401, 'Ada'), (402, 'Bo'), (403, 'Cy')",
+    "INSERT INTO directory_memberships VALUES (401, 9), (403, 9), (402, 8)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT JSON_MERGE(JSON_OBJECT('label', 'Team 9'), JSON_ARRAYAGG(JSON_OBJECT('label', p.display_name, 'value', p.person_id, 'selected', m.team_id IS NOT NULL) ORDER BY p.person_id)) AS options FROM directory_people AS p LEFT JOIN directory_memberships AS m ON m.person_id = p.person_id AND m.team_id = 9",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
