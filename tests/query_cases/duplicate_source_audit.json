@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "duplicate_source_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "en-wl/wordlist",
+      "commit": "1e5b7d3a72f47a71da5d28686c1dd4b397178485",
+      "path": "libscowl/views.sql",
+      "url": "https://github.com/en-wl/wordlist/blob/1e5b7d3a72f47a71da5d28686c1dd4b397178485/libscowl/views.sql",
+      "sha256": "20615ffcddc39093a7418838d2f5239166692827b2dea7aecac4d3e38f955853",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "libscowl/views.sql:31-32,59-63",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "The public SQL defines a grouped duplicate check with COUNT(DISTINCT ...) and HAVING, alongside a correlated NOT EXISTS anti-join that removes rows having a qualifying sibling in the same group.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored account-alias audit: grouped aliases are retained only when they occur in multiple source systems and the account has no active suppression row, with fixed identifiers and deterministic ordering."
+    },
+    "independently_authored": true
+  },
+  "features": ["correlated-not-exists", "anti-semi-join", "grouped-distinct-count", "having-threshold", "duplicate-source-detection", "deterministic-order"],
+  "fixture_notes": "Accounts 101 and 104 have aliases from multiple source systems and are reported; account 103 has the same duplicate-source shape but an active suppression row and is removed; account 102 has only one source and fails the HAVING threshold.",
+  "determinism_notes": "All identifiers, names, source labels, and suppression flags are fixed. The final report orders by account ID and alias name; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE audit_aliases (alias_id INT PRIMARY KEY, account_id INT NOT NULL, alias_name VARCHAR(64) NOT NULL, source_system VARCHAR(16) NOT NULL)",
+    "CREATE TABLE audit_suppressions (suppression_id INT PRIMARY KEY, account_id INT NOT NULL, active TINYINT NOT NULL)",
+    "INSERT INTO audit_aliases VALUES (1, 101, 'northwind', 'crm'), (2, 101, 'northwind', 'support'), (3, 102, 'bluebird', 'crm'), (4, 103, 'redwood', 'crm'), (5, 103, 'redwood', 'support'), (6, 104, 'cedar', 'billing'), (7, 104, 'cedar', 'ops'), (8, 104, 'cedar', 'support'), (9, 105, 'elm', 'crm'), (10, 105, 'elm', 'crm')",
+    "INSERT INTO audit_suppressions VALUES (1, 103, 1), (2, 105, 0)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT a.account_id, a.alias_name, COUNT(DISTINCT a.source_system) AS source_count FROM audit_aliases a WHERE NOT EXISTS (SELECT 1 FROM audit_suppressions s WHERE s.account_id = a.account_id AND s.active = 1) GROUP BY a.account_id, a.alias_name HAVING COUNT(DISTINCT a.source_system) > 1 ORDER BY a.account_id, a.alias_name",
+      "ordered": true
+    }
+  ]
+}
