@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "id": "natural_right_join_catalog_minimized",
+  "provenance": {
+    "kind": "minimized-from-query-case",
+    "source_case": "natural_right_join_catalog",
+    "minimized_from": "natural_right_join_catalog",
+    "source": {
+      "kind": "github",
+      "repository": "GoesToEleven/postgresql-course",
+      "commit": "e50dc7cd80bd153eb04e7b57eafcbb5bbccaa507",
+      "path": "162/n12e2.sql",
+      "url": "https://github.com/GoesToEleven/postgresql-course/blob/e50dc7cd80bd153eb04e7b57eafcbb5bbccaa507/162/n12e2.sql",
+      "sha256": "3aaa3a74314f05e61355b8bb8845ced1652a76549b838299270cb252e2314b21",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "162/n12e2.sql:1-5",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A natural inner join is followed by a natural right join so the final relation preserves right-side rows without matching rental data.",
+      "mysql_mariadb_translation": "Reduced to one rented movie and one unrented movie so the natural right join's matched and NULL-preserving rows remain observable."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "natural-join",
+    "natural-right-join",
+    "right-preservation",
+    "null-preserving",
+    "multi-join",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The single unrented movie isolates right-side preservation and NULL propagation through the natural join chain.",
+  "determinism_notes": "All identifiers, names, relationships, and ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE customers (customer_id INT PRIMARY KEY, customer_name VARCHAR(64) NOT NULL)",
+    "CREATE TABLE rentals (rental_id INT PRIMARY KEY, customer_id INT NOT NULL, movie_id INT NOT NULL)",
+    "CREATE TABLE movies (movie_id INT PRIMARY KEY, movie_title VARCHAR(64) NOT NULL)",
+    "INSERT INTO customers VALUES (41, 'Cora Pine')",
+    "INSERT INTO rentals VALUES (801, 41, 601)",
+    "INSERT INTO movies VALUES (601, 'Signal Room'), (602, 'Quiet Current')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT movie_id, movie_title, rental_id, customer_id, customer_name FROM customers NATURAL JOIN rentals NATURAL RIGHT JOIN movies ORDER BY movie_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
