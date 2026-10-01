@@ -1,0 +1,76 @@
+{
+  "version": 1,
+  "id": "json_window_dedup_upsert",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "i-kontets/TABI",
+      "commit": "05389ba963f4c8c13f2cfbada0ff527cefdeba00",
+      "path": "database/seed_faq_items.sql",
+      "url": "https://github.com/i-kontets/TABI/blob/05389ba963f4c8c13f2cfbada0ff527cefdeba00/database/seed_faq_items.sql",
+      "sha256": "216727fc4009d2634a6448dc06222195f638deb25f390462ec63946558889477",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "database/seed_faq_items.sql:59-124",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A transactional settings refresh combines existing JSON-array objects from JSON_TABLE with staged rows through UNION ALL, assigns ROW_NUMBER values partitioned by business key to preserve the first source, rebuilds an ordered JSON_ARRAYAGG, and applies the result with INSERT ... ON DUPLICATE KEY UPDATE.",
+      "mysql_mariadb_translation": "Reauthored as a help-center article refresh. Existing article objects are expanded with JSON_TABLE, staged replacements and additions are unioned with existing-first precedence, duplicate questions are ranked deterministically, and the rebuilt JSON document is written through a transactional upsert with newly authored tables, labels, rows, and revision values."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "json-table",
+    "json-ordinality",
+    "row-number-window",
+    "union-all",
+    "json-arrayagg",
+    "insert-select",
+    "on-duplicate-key-update",
+    "transaction",
+    "duplicate-preservation",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The stored help-center document wins duplicate-question conflicts over staged revisions, while new questions are appended in staged order. The revision changes from 4 to 5 through the upsert, and the transaction is committed before the final JSON_TABLE projection.",
+  "determinism_notes": "Article keys, ordinality, source precedence, staged order, JSON object fields, revision values, and all final ORDER BY clauses are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE help_center_settings (setting_key VARCHAR(32) PRIMARY KEY, payload JSON NOT NULL, revision INT NOT NULL)",
+    "CREATE TABLE help_center_updates (seed_order INT PRIMARY KEY, category VARCHAR(32) NOT NULL, question VARCHAR(128) NOT NULL, answer VARCHAR(255) NOT NULL)",
+    "INSERT INTO help_center_settings VALUES ('help_center', '[{\"category\":\"account\",\"question\":\"How do I change my email?\",\"answer\":\"Open account settings.\"},{\"category\":\"billing\",\"question\":\"Where is my invoice?\",\"answer\":\"Invoices appear after payment.\"}]', 4)",
+    "INSERT INTO help_center_updates VALUES (1, 'account', 'How do I change my email?', 'Use the profile contact panel.'), (2, 'account', 'How do I export data?', 'Choose Export from the account menu.'), (3, 'billing', 'Where is my invoice?', 'Download invoices from Billing.'), (4, 'support', 'How do I contact support?', 'Use the support request form.')"
+  ],
+  "steps": [
+    {
+      "sql": "START TRANSACTION",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO help_center_settings (setting_key, payload, revision) SELECT 'help_center', JSON_ARRAYAGG(JSON_OBJECT('category', merged.category, 'question', merged.question, 'answer', merged.answer) ORDER BY merged.source_order, merged.sort_order), 5 FROM (SELECT ranked.category, ranked.question, ranked.answer, ranked.source_order, ranked.sort_order FROM (SELECT combined.category, combined.question, combined.answer, combined.source_order, combined.sort_order, ROW_NUMBER() OVER (PARTITION BY combined.question ORDER BY combined.source_order, combined.sort_order) AS duplicate_rank FROM (SELECT 0 AS source_order, existing_items.item_order AS sort_order, existing_items.category, existing_items.question, existing_items.answer FROM help_center_settings AS stored JOIN JSON_TABLE(stored.payload, '$[*]' COLUMNS (item_order FOR ORDINALITY, category VARCHAR(32) PATH '$.category', question VARCHAR(128) PATH '$.question', answer VARCHAR(255) PATH '$.answer')) AS existing_items WHERE stored.setting_key = 'help_center' UNION ALL SELECT 1 AS source_order, seed_order AS sort_order, category, question, answer FROM help_center_updates) AS combined) AS ranked WHERE ranked.duplicate_rank = 1) AS merged ON DUPLICATE KEY UPDATE payload = VALUES(payload), revision = VALUES(revision)",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT setting_key, JSON_LENGTH(payload) AS article_count, revision FROM help_center_settings ORDER BY setting_key",
+      "ordered": true
+    },
+    {
+      "sql": "COMMIT",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT articles.item_order, articles.category, articles.question, articles.answer FROM help_center_settings AS stored JOIN JSON_TABLE(stored.payload, '$[*]' COLUMNS (item_order FOR ORDINALITY, category VARCHAR(32) PATH '$.category', question VARCHAR(128) PATH '$.question', answer VARCHAR(255) PATH '$.answer')) AS articles WHERE stored.setting_key = 'help_center' ORDER BY articles.item_order",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT setting_key, JSON_LENGTH(payload) AS article_count, revision FROM help_center_settings ORDER BY setting_key",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT articles.item_order, articles.category, articles.question, articles.answer FROM help_center_settings AS stored JOIN JSON_TABLE(stored.payload, '$[*]' COLUMNS (item_order FOR ORDINALITY, category VARCHAR(32) PATH '$.category', question VARCHAR(128) PATH '$.question', answer VARCHAR(255) PATH '$.answer')) AS articles WHERE stored.setting_key = 'help_center' ORDER BY articles.item_order",
+      "ordered": true
+    }
+  ]
+}
