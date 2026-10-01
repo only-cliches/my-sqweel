@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "period_diff_month_bucket_report_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "kagurazakayashi/CodeNotebook",
+      "commit": "14e76b8a358d5e48f376fa1a8bc38d0c14b2f96f",
+      "path": "MySQL/查找指定日期.sql",
+      "url": "https://github.com/kagurazakayashi/CodeNotebook/blob/14e76b8a358d5e48f376fa1a8bc38d0c14b2f96f/MySQL/%E6%9F%A5%E6%89%BE%E6%8C%87%E5%AE%9A%E6%97%A5%E6%9C%9F.sql",
+      "sha256": "ecb7c0ff8f81aa940e440ef66855ff99724c1dfd289f042ba9390fceff4334b4",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/查找指定日期.sql:27-32",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A date lookup formats a reference date and row date as YYYYMM strings, then uses PERIOD_DIFF to identify records from the previous calendar month.",
+      "mysql_mariadb_translation": "Reduced to one previous-month event while preserving the fixed reference date, DATE_FORMAT month keys, PERIOD_DIFF calculation, and deterministic ordering."
+    },
+    "independently_authored": true
+  },
+  "features": ["period-diff", "date-format", "month-bucket", "date-boundary", "deterministic-order"],
+  "fixture_notes": "The fixed reference date is 2024-06-15 and the event is 2024-05-31 23:59:59, exactly one calendar month earlier.",
+  "determinism_notes": "Reference date, event ID, timestamp, and format string are fixed; the final report orders by event ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE monthly_events (event_id INT PRIMARY KEY, event_at DATETIME NOT NULL)",
+    "INSERT INTO monthly_events VALUES (101, '2024-05-31 23:59:59')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT event_id, DATE_FORMAT(event_at, '%Y%m') AS month_key, PERIOD_DIFF(DATE_FORMAT('2024-06-15', '%Y%m'), DATE_FORMAT(event_at, '%Y%m')) AS months_from_reference FROM monthly_events ORDER BY event_id",
+      "ordered": true
+    }
+  ]
+}
