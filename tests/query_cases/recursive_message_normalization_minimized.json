@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "recursive_message_normalization_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "kamyu104/LeetCode-Solutions",
+      "commit": "4351f2d3e00b32787c2c5c4763395f681dc723df",
+      "path": "MySQL/first-letter-capitalization.sql",
+      "url": "https://github.com/kamyu104/LeetCode-Solutions/blob/4351f2d3e00b32787c2c5c4763395f681dc723df/MySQL/first-letter-capitalization.sql",
+      "sha256": "0af3ae46a833685cc2fc8f2ad55178686a97d186f64f5257978c305508dcce6d",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/first-letter-capitalization.sql:5-36",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A recursive CTE splits each space-delimited text value into ordered words, a second CTE normalizes each word, and GROUP_CONCAT reassembles the transformed words in ordinal order.",
+      "mysql_mariadb_translation": "Minimized independently authored shipment-message normalizer preserving recursive word expansion, per-fragment case normalization, ordered GROUP_CONCAT, and one-word termination."
+    },
+    "independently_authored": true
+  },
+  "features": ["recursive-cte", "recursive-string-splitting", "substring-index", "case-normalization", "ordered-group-concat", "cte-projection", "deterministic-order"],
+  "fixture_notes": "One two-word message and one one-word message exercise recursive continuation and the terminal fragment while retaining the original text.",
+  "determinism_notes": "Message IDs and text literals are fixed, recursion advances by one ordinal per fragment, GROUP_CONCAT orders by ordinal, and the final report orders by message ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE shipment_messages (message_id INT PRIMARY KEY, message_text VARCHAR(128) NOT NULL)",
+    "INSERT INTO shipment_messages VALUES (901, 'north WIND'), (902, 'solo')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH RECURSIVE fragments AS (SELECT message_id, message_text, SUBSTRING_INDEX(message_text, ' ', 1) AS fragment, CASE WHEN INSTR(message_text, ' ') = 0 THEN '' ELSE SUBSTRING(message_text, INSTR(message_text, ' ') + 1) END AS tail, 1 AS ordinal FROM shipment_messages UNION ALL SELECT message_id, message_text, SUBSTRING_INDEX(tail, ' ', 1) AS fragment, CASE WHEN INSTR(tail, ' ') = 0 THEN '' ELSE SUBSTRING(tail, INSTR(tail, ' ') + 1) END AS tail, ordinal + 1 FROM fragments WHERE tail <> ''), normalized AS (SELECT message_id, message_text, ordinal, CONCAT(UPPER(SUBSTRING(fragment, 1, 1)), LOWER(SUBSTRING(fragment, 2, 255))) AS normalized_fragment FROM fragments) SELECT message_id, message_text AS original_text, GROUP_CONCAT(normalized_fragment ORDER BY ordinal SEPARATOR ' / ') AS normalized_text FROM normalized GROUP BY message_id, message_text ORDER BY message_id",
+      "ordered": true
+    }
+  ]
+}
