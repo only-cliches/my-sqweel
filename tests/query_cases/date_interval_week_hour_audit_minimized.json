@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "date_interval_week_hour_audit_minimized",
+  "provenance": {
+    "kind": "minimized-from-query-case",
+    "source_case": "date_interval_week_hour_audit",
+    "minimized_from": "date_interval_week_hour_audit",
+    "source": {
+      "kind": "github",
+      "repository": "ricksilva/mysql_cc",
+      "commit": "2228e0cdc26a24e9ca16edf80b3f7164c1266555",
+      "path": "chapter_8.sql",
+      "url": "https://github.com/ricksilva/mysql_cc/blob/2228e0cdc26a24e9ca16edf80b3f7164c1266555/chapter_8.sql",
+      "sha256": "279f11a0e0a658b1161e8a86c2b186ddf41793e65440e12af61d141d2811f8cb",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "chapter_8.sql:310-315",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "DATE_ADD applies multiple interval units to a stored event timestamp in one deterministic projection.",
+      "mysql_mariadb_translation": "Reduced to one shipment while retaining both the two-week review deadline and four-hour handoff projection needed to distinguish the interval units."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "date-add",
+    "interval-week",
+    "interval-hour",
+    "timestamp-projection",
+    "deterministic-order"
+  ],
+  "fixture_notes": "One fixed schedule row retains both interval units so the minimized case isolates date arithmetic semantics.",
+  "determinism_notes": "The timestamp, interval amounts, identifier, and ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE shipment_schedule (shipment_id INT PRIMARY KEY, scheduled_at DATETIME NOT NULL, route_code VARCHAR(16) NOT NULL)",
+    "INSERT INTO shipment_schedule VALUES (901, '2025-06-11 22:15:00', 'EAST-4')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT shipment_id, route_code, DATE_ADD(scheduled_at, INTERVAL 2 WEEK) AS review_due, DATE_ADD(scheduled_at, INTERVAL 4 HOUR) AS handoff_at FROM shipment_schedule ORDER BY shipment_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}

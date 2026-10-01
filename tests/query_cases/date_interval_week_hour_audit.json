@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "date_interval_week_hour_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "ricksilva/mysql_cc",
+      "commit": "2228e0cdc26a24e9ca16edf80b3f7164c1266555",
+      "path": "chapter_8.sql",
+      "url": "https://github.com/ricksilva/mysql_cc/blob/2228e0cdc26a24e9ca16edf80b3f7164c1266555/chapter_8.sql",
+      "sha256": "279f11a0e0a658b1161e8a86c2b186ddf41793e65440e12af61d141d2811f8cb",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "chapter_8.sql:310-315",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "DATE_ADD applies multiple interval units to a stored event timestamp in one deterministic projection.",
+      "mysql_mariadb_translation": "Reauthored as an independent shipment schedule audit. Each shipment projects a two-week review deadline and a four-hour handoff time from its scheduled timestamp; source names, schema, and rows are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "date-add",
+    "interval-week",
+    "interval-hour",
+    "timestamp-projection",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Review deadlines use a calendar-week interval while handoff times use an hour interval, exposing both unit paths against fixed DATETIME values.",
+  "determinism_notes": "All timestamps, interval amounts, IDs, and ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE shipment_schedule (shipment_id INT PRIMARY KEY, scheduled_at DATETIME NOT NULL, route_code VARCHAR(16) NOT NULL)",
+    "INSERT INTO shipment_schedule VALUES (611, '2025-02-03 09:30:00', 'NORTH-7'), (612, '2025-02-14 18:45:00', 'SOUTH-2')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT shipment_id, route_code, DATE_ADD(scheduled_at, INTERVAL 2 WEEK) AS review_due, DATE_ADD(scheduled_at, INTERVAL 4 HOUR) AS handoff_at FROM shipment_schedule ORDER BY shipment_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
