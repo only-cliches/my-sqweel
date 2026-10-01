@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "id": "department_distinct_json_lists",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "kvarlamov/lessons",
+      "commit": "2f775605309ed44072278b0539d0aa57ecba6e79",
+      "path": "SqlPractice/Lesson6.sql",
+      "url": "https://github.com/kvarlamov/lessons/blob/2f775605309ed44072278b0539d0aa57ecba6e79/SqlPractice/Lesson6.sql",
+      "sha256": "e35011cee588eb08fe5ae93ea3824a98f06986da4428e549e05de94c35954ddf",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "SqlPractice/Lesson6.sql:80-145",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped CTE computes parent-level metrics, while correlated scalar subqueries build DISTINCT JSON_ARRAYAGG lists of related identifiers for each parent row.",
+      "mysql_mariadb_translation": "Reauthored as a department work-summary report. A grouped department CTE counts distinct employees and sums hours; two correlated subqueries independently return deterministically ordered distinct employee IDs and skill codes as JSON arrays. The schema, values, aliases, and operational meaning are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "cte",
+    "grouping",
+    "aggregate-count-distinct",
+    "aggregate-sum",
+    "correlated-subquery",
+    "correlated-json-arrayagg",
+    "json-arrayagg",
+    "json-arrayagg-distinct",
+    "ordered-json-arrayagg",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Design has three distinct employees and three distinct skills, with repeated work-log rows for employee 41 and skill ui; Support has two employees and two skills with a repeated triage log. The CTE totals every log while the correlated arrays deduplicate identities and skills.",
+  "determinism_notes": "Department IDs, log IDs, grouping columns, correlated predicates, JSON_ARRAYAGG ordering, and final department ordering are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE departments (department_id INT PRIMARY KEY, department_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE work_logs (log_id INT PRIMARY KEY, department_id INT NOT NULL, employee_id INT NOT NULL, skill_code VARCHAR(16) NOT NULL, billable_hours INT NOT NULL)",
+    "INSERT INTO departments VALUES (301, 'Design'), (302, 'Support')",
+    "INSERT INTO work_logs VALUES (1, 301, 41, 'ui', 5), (2, 301, 42, 'api', 7), (3, 301, 41, 'ui', 3), (4, 301, 43, 'ux', 4), (5, 302, 51, 'triage', 6), (6, 302, 52, 'billing', 8), (7, 302, 51, 'triage', 2)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH department_metrics AS (SELECT d.department_id, d.department_name, COUNT(DISTINCT w.employee_id) AS employee_count, SUM(w.billable_hours) AS total_hours FROM departments d INNER JOIN work_logs w ON w.department_id = d.department_id GROUP BY d.department_id, d.department_name) SELECT dm.department_id, dm.department_name, dm.employee_count, dm.total_hours, (SELECT JSON_ARRAYAGG(DISTINCT w2.employee_id ORDER BY w2.employee_id) FROM work_logs w2 WHERE w2.department_id = dm.department_id) AS employee_ids, (SELECT JSON_ARRAYAGG(DISTINCT w3.skill_code ORDER BY w3.skill_code) FROM work_logs w3 WHERE w3.department_id = dm.department_id) AS skill_codes FROM department_metrics dm ORDER BY dm.department_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT department_id, log_id, employee_id, skill_code, billable_hours FROM work_logs ORDER BY department_id, log_id",
+      "ordered": true
+    }
+  ]
+}
