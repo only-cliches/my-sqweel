@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "stddev_pop_window_audit_minimized",
+  "provenance": {
+    "kind": "minimized-from-query-case",
+    "source_case": "stddev_pop_window_audit",
+    "minimized_from": "stddev_pop_window_audit",
+    "source": {
+      "kind": "github",
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/4894.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/4894.sql",
+      "sha256": "e25cdaa1affb10e05f18844e0d1bcff63877367684871809f486f95b2a4b20c0",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/docker/fuzz_root/mysql_initlib/4894.sql:8-18",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "Population variance and standard deviation functions operate as ordered window aggregates over a running frame.",
+      "mysql_mariadb_translation": "Reduced to one zone with three fixed readings so the zero, first-spread, and second-spread running states remain observable."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "stddev-pop-window",
+    "window-partition",
+    "ordered-window-frame",
+    "running-statistic",
+    "deterministic-order"
+  ],
+  "fixture_notes": "One zone isolates the running population standard deviation across three ordered readings.",
+  "determinism_notes": "The readings, frame order, and output order are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE sensor_telemetry (reading_id INT PRIMARY KEY, zone_code VARCHAR(16) NOT NULL, reading_value DECIMAL(8,2) NOT NULL)",
+    "INSERT INTO sensor_telemetry VALUES (501, 'WEST', 5.00), (502, 'WEST', 9.00), (503, 'WEST', 11.00)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT reading_id, zone_code, reading_value, STDDEV_POP(reading_value) OVER (PARTITION BY zone_code ORDER BY reading_id ROWS UNBOUNDED PRECEDING) AS running_stddev FROM sensor_telemetry ORDER BY zone_code, reading_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}

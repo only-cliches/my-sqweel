@@ -1333,8 +1333,8 @@ impl RawEngine {
                     .transpose()
                     .map(|value| value.unwrap_or(Value::Null))
             }
-            "COUNT" | "SUM" | "AVG" | "MIN" | "MAX" | "STD" | "STDDEV" | "STDDEV_SAMP"
-            | "MEDIAN" => {
+            "COUNT" | "SUM" | "AVG" | "MIN" | "MAX" | "STD" | "STDDEV" | "STDDEV_POP"
+            | "STDDEV_SAMP" | "MEDIAN" => {
                 let mut aggregate_values = Vec::new();
                 for index in frame_rows {
                     let value = if arguments.is_empty()
@@ -1398,7 +1398,7 @@ impl RawEngine {
                             Ok(number_from_f64(value))
                         }
                     }
-                    "STD" | "STDDEV" | "STDDEV_SAMP" => {
+                    "STD" | "STDDEV" | "STDDEV_POP" | "STDDEV_SAMP" => {
                         if aggregate_values.is_empty()
                             || (function == "STDDEV_SAMP" && aggregate_values.len() < 2)
                         {

@@ -111,6 +111,7 @@ impl Visitor for SupportValidator {
                         | "MAX"
                         | "STD"
                         | "STDDEV"
+                        | "STDDEV_POP"
                         | "STDDEV_SAMP"
                 ) {
                     ControlFlow::Continue(())
