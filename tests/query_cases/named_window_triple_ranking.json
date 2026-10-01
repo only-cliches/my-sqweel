@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "id": "named_window_triple_ranking",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "rozhnev/university-db",
+      "commit": "4d669801d17a4ee641d9b6d06cc02833673bb0f9",
+      "path": "queries/level3.sql",
+      "url": "https://github.com/rozhnev/university-db/blob/4d669801d17a4ee641d9b6d06cc02833673bb0f9/queries/level3.sql",
+      "sha256": "d1a6c4f335c16519898e096d168c46d3476d504d0c606b00f520494eddb8cad8",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "queries/level3.sql:10-21",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A named window partitions rows by an owning group and orders scores descending, then the same window is reused by RANK, DENSE_RANK, and PERCENT_RANK projections.",
+      "mysql_mariadb_translation": "Reauthored as a service-quality scoreboard. Analyst scores are ranked within fixed divisions through one named window; tied scores expose the distinction between ordinal rank, dense rank, and percent rank, while NULL scores are filtered. The schema, labels, values, and reporting purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "named-window-clause",
+    "window-reuse",
+    "rank-window",
+    "dense-rank-window",
+    "percent-rank-window",
+    "partitioned-ranking",
+    "null-filter",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Division 41 has tied scores 98, 98, and 91; division 42 has scores 85 and 70; analyst 406 has a NULL score and is filtered. The repeated named window makes rank gaps, dense-rank compression, and percent-rank endpoints directly observable.",
+  "determinism_notes": "Division IDs, analyst IDs, scores, named-window partitioning, descending score order, NULL filter, and final tie-breaking order are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE analyst_scores (analyst_id INT PRIMARY KEY, division_id INT NOT NULL, analyst_name VARCHAR(32) NOT NULL, quality_score DECIMAL(6,2))",
+    "INSERT INTO analyst_scores VALUES (401, 41, 'Aster', 98.00), (402, 41, 'Beryl', 98.00), (403, 41, 'Cedar', 91.00), (404, 42, 'Dune', 85.00), (405, 42, 'Ember', 70.00), (406, 42, 'Fallow', NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT division_id, analyst_id, analyst_name, quality_score, RANK() OVER division_scores AS score_rank, DENSE_RANK() OVER division_scores AS dense_score_rank, PERCENT_RANK() OVER division_scores AS percentile_rank FROM analyst_scores WHERE quality_score IS NOT NULL WINDOW division_scores AS (PARTITION BY division_id ORDER BY quality_score DESC) ORDER BY division_id, score_rank, analyst_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT division_id, COUNT(*) AS analyst_count FROM analyst_scores WHERE quality_score IS NOT NULL GROUP BY division_id ORDER BY division_id",
+      "ordered": true
+    }
+  ]
+}

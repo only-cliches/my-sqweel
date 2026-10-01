@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "id": "named_window_triple_ranking_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "rozhnev/university-db",
+      "commit": "4d669801d17a4ee641d9b6d06cc02833673bb0f9",
+      "path": "queries/level3.sql",
+      "url": "https://github.com/rozhnev/university-db/blob/4d669801d17a4ee641d9b6d06cc02833673bb0f9/queries/level3.sql",
+      "sha256": "d1a6c4f335c16519898e096d168c46d3476d504d0c606b00f520494eddb8cad8",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from queries/level3.sql:10-21",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "One named partitioned window is reused by RANK, DENSE_RANK, and PERCENT_RANK over a tied score set.",
+      "mysql_mariadb_translation": "Reduced to one division with two tied scores, one lower score, and one NULL row filtered before the named-window projections."
+    },
+    "independently_authored": true,
+    "minimized_from": "named_window_triple_ranking"
+  },
+  "features": [
+    "named-window-clause",
+    "window-reuse",
+    "rank-window",
+    "dense-rank-window",
+    "percent-rank-window",
+    "partitioned-ranking",
+    "null-filter",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Division 91 has tied scores 88, 88, and 72; analyst 904 has a NULL score and is filtered. The three named-window rankings retain a gap at rank 3 and a compressed dense rank at 2.",
+  "determinism_notes": "Analyst IDs, scores, named-window partitioning, NULL filter, ranking order, and final tie-breaking order are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE mini_analyst_scores (analyst_id INT PRIMARY KEY, division_id INT NOT NULL, analyst_name VARCHAR(32) NOT NULL, quality_score DECIMAL(6,2))",
+    "INSERT INTO mini_analyst_scores VALUES (901, 91, 'Gale', 88.00), (902, 91, 'Harbor', 88.00), (903, 91, 'Iris', 72.00), (904, 91, 'Juniper', NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT division_id, analyst_id, analyst_name, quality_score, RANK() OVER division_scores AS score_rank, DENSE_RANK() OVER division_scores AS dense_score_rank, PERCENT_RANK() OVER division_scores AS percentile_rank FROM mini_analyst_scores WHERE quality_score IS NOT NULL WINDOW division_scores AS (PARTITION BY division_id ORDER BY quality_score DESC) ORDER BY division_id, score_rank, analyst_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT analyst_id, quality_score FROM mini_analyst_scores ORDER BY analyst_id",
+      "ordered": true
+    }
+  ]
+}
