@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "id": "upsert_last_insert_id_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "langgraph4j/langgraph4j",
+      "commit": "14a8af0d475a1c957ed0785e0079ff443ab74ae2",
+      "path": "langgraph4j-mysql-saver/src/main/resources/db/v2.0__commands.sql",
+      "url": "https://github.com/langgraph4j/langgraph4j/blob/14a8af0d475a1c957ed0785e0079ff443ab74ae2/langgraph4j-mysql-saver/src/main/resources/db/v2.0__commands.sql",
+      "sha256": "86d31329ce7ec3ca39a40c921b691cb30bf22dc345511a91a0d7d76e78decb6f",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "langgraph4j-mysql-saver/src/main/resources/db/v2.0__commands.sql:22-29",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "An upsert on an existing unique key assigns LAST_INSERT_ID from the existing row before a same-connection SELECT retrieves that identity.",
+      "mysql_mariadb_translation": "Reauthored as an independent contact registry refresh. A duplicate external key updates its label and revision while LAST_INSERT_ID(contact_id) exposes the preserved primary key; source tables, names, and values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "insert-on-duplicate-key-update",
+    "last-insert-id",
+    "connection-state",
+    "duplicate-key-enforcement",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The seeded contact owns the duplicate external key; the upsert must preserve its generated ID, increment its revision, and expose that ID through LAST_INSERT_ID().",
+  "determinism_notes": "The table starts empty, all labels and revisions are fixed, and final rows are ordered by the generated contact ID with no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE contact_registry (contact_id INT AUTO_INCREMENT PRIMARY KEY, external_key VARCHAR(32) NOT NULL UNIQUE, display_name VARCHAR(64) NOT NULL, revision INT NOT NULL)",
+    "INSERT INTO contact_registry (external_key, display_name, revision) VALUES ('north-ops', 'North Operations', 3), ('south-ops', 'South Operations', 4)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO contact_registry (external_key, display_name, revision) VALUES ('north-ops', 'Northern Operations', 1) ON DUPLICATE KEY UPDATE contact_id = LAST_INSERT_ID(contact_id), display_name = VALUES(display_name), revision = revision + 1"
+    },
+    {
+      "sql": "SELECT LAST_INSERT_ID() AS resolved_contact_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT contact_id, external_key, display_name, revision FROM contact_registry ORDER BY contact_id",
+      "ordered": true
+    }
+  ]
+}
