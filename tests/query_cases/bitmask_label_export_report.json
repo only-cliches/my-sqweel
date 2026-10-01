@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "bitmask_label_export_report",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/2412.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/2412.sql",
+      "sha256": "2e46e3649ba3280da7fa087396fd2d55eb4935032fe86e060fd87fd188ca1b01",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/docker/fuzz_root/mysql_initlib/2412.sql:27-30",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL scalar-function probe renders one integer bitmask as both a comma-separated MAKE_SET label list and an ordered EXPORT_SET bit string, including null and arithmetic mask inputs.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored permission-profile report with new table names, fixed masks, four named capabilities, explicit four-bit output, and deterministic profile ordering; null and arithmetic probe cases are omitted."
+    },
+    "independently_authored": true
+  },
+  "features": ["make-set", "export-set", "bitmask-to-labels", "bitmask-to-text", "deterministic-order"],
+  "fixture_notes": "Profile 10 has mask 5 (read and admin), profile 20 has mask 2 (write), profile 30 has mask 0 (no labels), and profile 40 has mask 9 (read and audit). EXPORT_SET emits four explicit bits for every profile.",
+  "determinism_notes": "Profile IDs and masks are fixed, capability labels are literal, EXPORT_SET uses a fixed four-bit width and separator, and the final report orders by profile ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE permission_profiles (profile_id INT PRIMARY KEY, permission_mask INT NOT NULL)",
+    "INSERT INTO permission_profiles VALUES (10, 5), (20, 2), (30, 0), (40, 9)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT profile_id, permission_mask, MAKE_SET(permission_mask, 'read', 'write', 'admin', 'audit') AS enabled_permissions, EXPORT_SET(permission_mask, '1', '0', ',', 4) AS permission_bits FROM permission_profiles ORDER BY profile_id",
+      "ordered": true
+    }
+  ]
+}
