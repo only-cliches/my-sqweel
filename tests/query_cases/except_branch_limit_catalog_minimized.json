@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "id": "except_branch_limit_catalog_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "except_branch_limit_catalog",
+    "source": {
+      "kind": "github",
+      "repository": "jquan114/except-with-unions",
+      "commit": "005e120da770c6a9f1915b79f09dedf88398143f",
+      "path": "excepts.sql",
+      "url": "https://github.com/jquan114/except-with-unions/blob/005e120da770c6a9f1915b79f09dedf88398143f/excepts.sql",
+      "sha256": "3a85e031a10505abd6167f866c70c32a3bddccd714ea8270e03595b221e6ffaf",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "excepts.sql:2-16",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "Parenthesized EXCEPT operands independently rank products with ORDER BY and LIMIT, removing the second ranked set from the first.",
+      "mysql_mariadb_translation": "Minimized to five catalog rows and LIMIT 3 in each branch while retaining a high-price product absent from the high price-to-weight branch."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "except",
+    "branch-order-limit",
+    "outer-order-limit"
+  ],
+  "fixture_notes": "Product 2151 remains after the top-three price IDs are subtracted by the top-three price-to-weight IDs.",
+  "determinism_notes": "Price, density, and product ID ordering include fixed tie-breakers; all rows and limits are constant, with no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE catalog_items (product_id INT PRIMARY KEY, product_name VARCHAR(64) NOT NULL, price DECIMAL(8,2) NOT NULL, weight DECIMAL(8,2) NOT NULL)",
+    "INSERT INTO catalog_items VALUES (2151, 'Lumen', 90.00, 9.00), (2152, 'Mica', 84.00, 7.00), (2153, 'Nova', 78.00, 6.00), (2154, 'Orchid', 72.00, 12.00), (2155, 'Pine', 66.00, 4.00)"
+  ],
+  "steps": [
+    {
+      "sql": "(SELECT product_id FROM catalog_items ORDER BY price DESC, product_id ASC LIMIT 3) EXCEPT (SELECT product_id FROM catalog_items ORDER BY price / weight DESC, product_id ASC LIMIT 3) ORDER BY product_id ASC",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT product_id, product_name, price, weight FROM catalog_items ORDER BY product_id",
+      "ordered": true
+    }
+  ]
+}

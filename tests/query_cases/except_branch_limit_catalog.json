@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "id": "except_branch_limit_catalog",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "jquan114/except-with-unions",
+      "commit": "005e120da770c6a9f1915b79f09dedf88398143f",
+      "path": "excepts.sql",
+      "url": "https://github.com/jquan114/except-with-unions/blob/005e120da770c6a9f1915b79f09dedf88398143f/excepts.sql",
+      "sha256": "3a85e031a10505abd6167f866c70c32a3bddccd714ea8270e03595b221e6ffaf",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "excepts.sql:2-16",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "Parenthesized EXCEPT operands independently rank products with ORDER BY and LIMIT, removing the second ranked set from the first.",
+      "mysql_mariadb_translation": "Reauthored as a catalog eligibility report that subtracts the four highest-price product IDs from the four highest price-to-weight product IDs, with a deterministic final ordering. The schema, rows, expressions, and business labels are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "except",
+    "branch-order-limit",
+    "outer-order-limit",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The report keeps products in the high-price branch that are absent from the high price-to-weight branch; product 2101 and product 2104 remain after set subtraction.",
+  "determinism_notes": "Price, density, and product ID ordering include fixed tie-breakers; all rows and limits are constant, with no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE catalog_items (product_id INT PRIMARY KEY, product_name VARCHAR(64) NOT NULL, price DECIMAL(8,2) NOT NULL, weight DECIMAL(8,2) NOT NULL)",
+    "INSERT INTO catalog_items VALUES (2101, 'Atlas', 90.00, 9.00), (2102, 'Birch', 84.00, 7.00), (2103, 'Cedar', 78.00, 6.00), (2104, 'Dune', 72.00, 12.00), (2105, 'Ember', 66.00, 4.00), (2106, 'Fjord', 60.00, 5.00), (2107, 'Grove', 54.00, 3.00), (2108, 'Harbor', 48.00, 8.00)"
+  ],
+  "steps": [
+    {
+      "sql": "(SELECT product_id FROM catalog_items ORDER BY price DESC, product_id ASC LIMIT 4) EXCEPT (SELECT product_id FROM catalog_items ORDER BY price / weight DESC, product_id ASC LIMIT 4) ORDER BY product_id ASC",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT product_id, product_name, price, weight FROM catalog_items ORDER BY product_id",
+      "ordered": true
+    }
+  ]
+}
