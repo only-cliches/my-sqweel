@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "right_join_window_slot_alignment",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "shawlu95/Beyond-LeetCode-SQL",
+      "commit": "8ab7f0ad60b85ab9dff18da6fc760211335d0fb0",
+      "path": "LeetCode/others/618_Students_Report_By_Geography.sql",
+      "url": "https://github.com/shawlu95/Beyond-LeetCode-SQL/blob/8ab7f0ad60b85ab9dff18da6fc760211335d0fb0/LeetCode/others/618_Students_Report_By_Geography.sql",
+      "sha256": "4c95db116ce7f1ecf6eecb21195e02958d82ee8eacdb4bfea06b54ebef5ed753",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "LeetCode/others/618_Students_Report_By_Geography.sql:1-48 (category alignment query variants)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "Independent category lists are assigned stable ordinal positions and aligned with outer joins so rows from the preserved category remain visible when the other category is shorter.",
+      "mysql_mariadb_translation": "Reauthored as a regional catalog slot report. CTEs use ROW_NUMBER to assign deterministic slots to two region-specific item lists, then RIGHT JOIN preserves every item in the southern list and exposes NULL northern items for unmatched slots; the schema, data, labels, and reporting purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "cte",
+    "right-join",
+    "row-number-window",
+    "window-ordering",
+    "right-null-extension",
+    "null-preservation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The northern catalog has two alphabetized items while the southern catalog has three. Slots one and two align by ordinal position; southern slot three remains visible through the RIGHT JOIN with NULL northern columns.",
+  "determinism_notes": "Region labels, item IDs, item names, ROW_NUMBER ordering, join slots, and final slot ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE regional_catalog (item_id INT PRIMARY KEY, region_code CHAR(1) NOT NULL, item_name VARCHAR(32) NOT NULL)",
+    "INSERT INTO regional_catalog VALUES (101, 'N', 'Amber'), (102, 'N', 'Cedar'), (201, 'S', 'Birch'), (202, 'S', 'Elm'), (203, 'S', 'Fjord')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH northern AS (SELECT item_name, ROW_NUMBER() OVER (ORDER BY item_name, item_id) AS slot FROM regional_catalog WHERE region_code = 'N'), southern AS (SELECT item_name, ROW_NUMBER() OVER (ORDER BY item_name, item_id) AS slot FROM regional_catalog WHERE region_code = 'S') SELECT n.slot AS north_slot, n.item_name AS north_item, s.slot AS south_slot, s.item_name AS south_item FROM northern AS n RIGHT JOIN southern AS s ON n.slot = s.slot ORDER BY s.slot",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "WITH northern AS (SELECT item_name, ROW_NUMBER() OVER (ORDER BY item_name, item_id) AS slot FROM regional_catalog WHERE region_code = 'N'), southern AS (SELECT item_name, ROW_NUMBER() OVER (ORDER BY item_name, item_id) AS slot FROM regional_catalog WHERE region_code = 'S') SELECT n.slot AS north_slot, n.item_name AS north_item, s.slot AS south_slot, s.item_name AS south_item FROM northern AS n RIGHT JOIN southern AS s ON n.slot = s.slot ORDER BY s.slot",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT item_id, region_code, item_name FROM regional_catalog ORDER BY item_id",
+      "ordered": true
+    }
+  ]
+}
