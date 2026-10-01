@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "id": "recursive_object_depth_map",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "repository": "darwishdev/abc_pos",
+      "commit": "069b989ecf77710728f2e694177628d4f8685145",
+      "path": "abc_pos/abc_pos/sql/views.sql",
+      "url": "https://github.com/darwishdev/abc_pos/blob/069b989ecf77710728f2e694177628d4f8685145/abc_pos/abc_pos/sql/views.sql",
+      "sha256": "0cbfb4dcfa6f3fa0e931d7edc0e02a7b5ddb1c86a5ca1f8919b3dc484813fb79",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "abc_pos/abc_pos/sql/views.sql:46-95, 98-130",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "The source defines a recursive hierarchy CTE for menu groups and a grouped JSON_OBJECTAGG view for keyed operational metadata; both preserve relational hierarchy while producing structured report output.",
+      "mysql_mariadb_translation": "Reauthored as an organization deepest-node report. A recursive CTE expands each root's descendants, a grouped relation selects the deepest reachable node per root, and JSON_OBJECTAGG maps that node name to its depth. The source tables, names, identifiers, and restaurant-printing purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["recursive-cte", "recursive-join", "grouped-json-objectagg", "json-objectagg", "deepest-group-selection", "deterministic-order"],
+  "fixture_notes": "Root 801 reaches Charcoal at maximum depth 2, while root 804 reaches Oven at maximum depth 1. Each grouped JSON object intentionally has one member so object-member ordering is not part of this contract while recursive depth selection remains observable.",
+  "determinism_notes": "Node IDs, parent links, names, recursive depth, maximum-depth selection, grouping roots, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE org_nodes (node_id INT PRIMARY KEY, parent_id INT NULL, node_name VARCHAR(32) NOT NULL, FOREIGN KEY (parent_id) REFERENCES org_nodes(node_id))",
+    "INSERT INTO org_nodes VALUES (801, NULL, 'Mixer'), (802, 801, 'Grill'), (803, 802, 'Charcoal'), (804, NULL, 'Bakery'), (805, 804, 'Oven')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH RECURSIVE hierarchy (root_id, node_id, node_name, depth) AS (SELECT node_id, node_id, node_name, 0 FROM org_nodes WHERE parent_id IS NULL UNION ALL SELECT h.root_id, n.node_id, n.node_name, h.depth + 1 FROM hierarchy AS h INNER JOIN org_nodes AS n ON n.parent_id = h.node_id), deepest AS (SELECT root_id, MAX(depth) AS max_depth FROM hierarchy GROUP BY root_id) SELECT h.root_id, JSON_OBJECTAGG(h.node_name, h.depth) AS depth_map FROM hierarchy AS h INNER JOIN deepest AS d ON d.root_id = h.root_id AND d.max_depth = h.depth GROUP BY h.root_id ORDER BY h.root_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT node_id, parent_id, node_name FROM org_nodes ORDER BY node_id",
+      "ordered": true
+    }
+  ]
+}
