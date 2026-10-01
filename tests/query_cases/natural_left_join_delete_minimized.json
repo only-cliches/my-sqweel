@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "natural_left_join_delete_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "natural_left_join_delete",
+    "source": {
+      "kind": "github",
+      "repository": "GoesToEleven/postgresql-course",
+      "commit": "e50dc7cd80bd153eb04e7b57eafcbb5bbccaa507",
+      "path": "209/n17e2.sql",
+      "url": "https://github.com/GoesToEleven/postgresql-course/blob/e50dc7cd80bd153eb04e7b57eafcbb5bbccaa507/209/n17e2.sql",
+      "sha256": "1913d51e6c654e8852be80b89d0ccb1cbda72642bf4fc5e50354b4a3a73d307a",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "209/n17e2.sql:1-18",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A grouped NATURAL LEFT JOIN identifies parents at or below a child-count threshold for deletion.",
+      "mysql_mariadb_translation": "Minimized to one zero-activity account, one account with a single child, and one retained account with two children; the deletion uses a nested derived table around the grouped NATURAL LEFT JOIN."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "natural-left-join",
+    "grouped-aggregation",
+    "having-filter",
+    "delete-subquery"
+  ],
+  "fixture_notes": "The zero-activity and single-activity accounts are deleted; the two-activity account remains.",
+  "determinism_notes": "Fixed IDs, child rows, threshold, and ordered final-state checks are used; no clocks, randomness, sleeps, or concurrent schedules are involved.",
+  "setup": [
+    "CREATE TABLE activity_accounts (account_id INT PRIMARY KEY, account_name VARCHAR(64) NOT NULL)",
+    "CREATE TABLE activity_log (account_id INT NOT NULL, activity_id INT PRIMARY KEY, activity_kind VARCHAR(32) NOT NULL)",
+    "INSERT INTO activity_accounts VALUES (1151, 'Quiet account'), (1152, 'Active account'), (1153, 'Busy account')",
+    "INSERT INTO activity_log VALUES (1152, 2151, 'login'), (1153, 2152, 'login'), (1153, 2153, 'export')"
+  ],
+  "steps": [
+    {
+      "sql": "DELETE FROM activity_accounts WHERE account_id IN (SELECT eligible.account_id FROM (SELECT account_id FROM activity_accounts NATURAL LEFT JOIN activity_log GROUP BY account_id HAVING COUNT(activity_id) <= 1) AS eligible)",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT account_id, account_name FROM activity_accounts ORDER BY account_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT account_id, activity_id, activity_kind FROM activity_log ORDER BY account_id, activity_id",
+      "ordered": true
+    }
+  ]
+}

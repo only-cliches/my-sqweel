@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "id": "natural_left_join_delete",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "GoesToEleven/postgresql-course",
+      "commit": "e50dc7cd80bd153eb04e7b57eafcbb5bbccaa507",
+      "path": "209/n17e2.sql",
+      "url": "https://github.com/GoesToEleven/postgresql-course/blob/e50dc7cd80bd153eb04e7b57eafcbb5bbccaa507/209/n17e2.sql",
+      "sha256": "1913d51e6c654e8852be80b89d0ccb1cbda72642bf4fc5e50354b4a3a73d307a",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "209/n17e2.sql:1-18",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A grouped NATURAL LEFT JOIN counts child rows per parent, reports low-activity parents, and deletes those parents through a correlated aggregate condition.",
+      "mysql_mariadb_translation": "Reauthored with MariaDB-compatible NATURAL LEFT JOIN aggregation inside a nested derived table so the parent DELETE can remove accounts with at most one activity while preserving parents with two or more activities. The schema, rows, threshold, and names are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "natural-left-join",
+    "grouped-aggregation",
+    "having-filter",
+    "nested-derived-table",
+    "delete-subquery",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Accounts 1101 and 1102 have zero and one activity respectively and are deleted; account 1103 has two activities and remains. The NATURAL LEFT JOIN preserves the zero-activity account before the grouped HAVING filter.",
+  "determinism_notes": "Fixed IDs, activity rows, threshold, and ordered final-state checks are used; no clocks, randomness, sleeps, or concurrent schedules are involved.",
+  "setup": [
+    "CREATE TABLE activity_accounts (account_id INT PRIMARY KEY, account_name VARCHAR(64) NOT NULL)",
+    "CREATE TABLE activity_log (account_id INT NOT NULL, activity_id INT PRIMARY KEY, activity_kind VARCHAR(32) NOT NULL)",
+    "INSERT INTO activity_accounts VALUES (1101, 'Quiet account'), (1102, 'Single-use account'), (1103, 'Active account')",
+    "INSERT INTO activity_log VALUES (1102, 2101, 'login'), (1103, 2102, 'login'), (1103, 2103, 'export')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT account_id, COUNT(activity_id) AS activity_count FROM activity_accounts NATURAL LEFT JOIN activity_log GROUP BY account_id HAVING COUNT(activity_id) <= 1 ORDER BY account_id",
+      "ordered": true
+    },
+    {
+      "sql": "DELETE FROM activity_accounts WHERE account_id IN (SELECT eligible.account_id FROM (SELECT account_id FROM activity_accounts NATURAL LEFT JOIN activity_log GROUP BY account_id HAVING COUNT(activity_id) <= 1) AS eligible)",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT account_id, account_name FROM activity_accounts ORDER BY account_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT account_id, activity_id, activity_kind FROM activity_log ORDER BY account_id, activity_id",
+      "ordered": true
+    }
+  ]
+}
