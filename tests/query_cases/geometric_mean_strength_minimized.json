@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "geometric_mean_strength_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "octonion/basketball",
+      "commit": "2225e086247f19415316dc07bf75287467f32eb7",
+      "path": "ncaa/sos/division_ranking.sql",
+      "url": "https://github.com/octonion/basketball/blob/2225e086247f19415316dc07bf75287467f32eb7/ncaa/sos/division_ranking.sql",
+      "sha256": "15bd1f45c81dc0cfd37df44b26404c7d6c6e94260c4d4a30d8d16a5c47e0af09",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "ncaa/sos/division_ranking.sql:72-80",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A grouped strength-of-schedule report computes geometric means with EXP(AVG(LOG(metric))) and reverses the defensive metric with a negated aggregate before casting the rounded values to numeric.",
+      "mysql_mariadb_translation": "Reduced to one division with two positive metric rows while preserving the EXP(AVG(LOG(...))) expressions, unary-negative aggregate, grouping, rounding, and MariaDB DECIMAL casts."
+    },
+    "independently_authored": true
+  },
+  "features": ["exp", "natural-logarithm", "avg-aggregate", "grouping", "unary-negative-aggregate", "round", "decimal-cast", "deterministic-order"],
+  "fixture_notes": "The single division has strength values 2 and 8, offense values 4 and 16, and defense values 2 and 8. Every logarithm input is strictly positive.",
+  "determinism_notes": "All IDs and metric values are fixed and the final grouped read orders by division ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE division_strength (sample_id INT PRIMARY KEY, division_id INT NOT NULL, season_year INT NOT NULL, strength_metric DECIMAL(10,3) NOT NULL, offense_metric DECIMAL(10,3) NOT NULL, defense_metric DECIMAL(10,3) NOT NULL)",
+    "INSERT INTO division_strength VALUES (101, 10, 2024, 2, 4, 2), (102, 10, 2024, 8, 16, 8)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT division_id, season_year, CAST(ROUND(EXP(AVG(LOG(strength_metric))), 3) AS DECIMAL(10,3)) AS geometric_strength, CAST(ROUND(EXP(AVG(LOG(offense_metric))), 3) AS DECIMAL(10,3)) AS geometric_offense, CAST(ROUND(EXP(-AVG(LOG(defense_metric))), 3) AS DECIMAL(10,3)) AS inverse_geometric_defense FROM division_strength GROUP BY division_id, season_year ORDER BY division_id",
+      "ordered": true
+    }
+  ]
+}
