@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "id": "ranked_delete_dedup_events_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Shreya-leo/Shreya-DA",
+      "commit": "f1428930295a8c9b52ab831ab1239ae1f0d17985",
+      "path": "delete.sql",
+      "url": "https://github.com/Shreya-leo/Shreya-DA/blob/f1428930295a8c9b52ab831ab1239ae1f0d17985/delete.sql",
+      "sha256": "5cd31d13080829fe82a14f0ef7b32184d675d2301c8acb2e77ed7eaac5cffe17",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "delete.sql:1-18 (duplicate staging and cleanup sequence)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A staging relation assigns ROW_NUMBER within duplicate-key partitions, identifies rows with rank greater than one, and deletes those duplicate rows while retaining the deterministic first-ranked record.",
+      "mysql_mariadb_translation": "Reduced to two events in one account-day partition. A temporary ranked snapshot identifies the older event, the base log deletes it, and the newest event remains for the final check; all identifiers and labels are independently authored."
+    },
+    "independently_authored": true,
+    "focused_variant_of": "ranked_delete_dedup_events"
+  },
+  "features": [
+    "temporary-table",
+    "row-number-window",
+    "window-filter",
+    "delete",
+    "duplicate-deduplication",
+    "minimized-regression"
+  ],
+  "fixture_notes": "The two events share one account-day key; only the higher event ID must survive the ranked deletion.",
+  "determinism_notes": "Fixed event IDs and one partition define the rank and final ordering; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE inbound_events_mini (event_id INT PRIMARY KEY, account_code VARCHAR(16) NOT NULL, event_day DATE NOT NULL, event_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO inbound_events_mini VALUES (7101, 'acct-mini', '2026-05-01', 'queued'), (7102, 'acct-mini', '2026-05-01', 'accepted')"
+  ],
+  "steps": [
+    {
+      "sql": "CREATE TEMPORARY TABLE ranked_inbound_events_mini AS SELECT event_id, ROW_NUMBER() OVER (PARTITION BY account_code, event_day ORDER BY event_id DESC) AS duplicate_rank FROM inbound_events_mini",
+      "ordered": true
+    },
+    {
+      "sql": "DELETE FROM inbound_events_mini WHERE event_id IN (SELECT event_id FROM ranked_inbound_events_mini WHERE duplicate_rank > 1)",
+      "ordered": true
+    },
+    {
+      "sql": "DROP TEMPORARY TABLE ranked_inbound_events_mini",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT event_id, account_code, event_day, event_state FROM inbound_events_mini ORDER BY event_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT event_id, account_code, event_day, event_state FROM inbound_events_mini ORDER BY event_id",
+      "ordered": true
+    }
+  ]
+}

@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "id": "ranked_delete_dedup_events",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Shreya-leo/Shreya-DA",
+      "commit": "f1428930295a8c9b52ab831ab1239ae1f0d17985",
+      "path": "delete.sql",
+      "url": "https://github.com/Shreya-leo/Shreya-DA/blob/f1428930295a8c9b52ab831ab1239ae1f0d17985/delete.sql",
+      "sha256": "5cd31d13080829fe82a14f0ef7b32184d675d2301c8acb2e77ed7eaac5cffe17",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "delete.sql:1-18 (duplicate staging and cleanup sequence)",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A staging relation assigns ROW_NUMBER within duplicate-key partitions, identifies rows with rank greater than one, and deletes those duplicate rows while retaining the deterministic first-ranked record.",
+      "mysql_mariadb_translation": "Reauthored as an inbound-event deduplication workflow. A temporary ranked snapshot partitions events by account and event day, keeps the newest event ID in each partition, deletes older duplicates from the base log, and verifies the remaining event state; the source table, columns, rows, and operational context are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "temporary-table",
+    "row-number-window",
+    "partition-by",
+    "window-filter",
+    "delete",
+    "duplicate-deduplication",
+    "deterministic-order",
+    "final-state"
+  ],
+  "fixture_notes": "Accounts 41 and 43 each have two events for one day; the higher event ID is retained in each partition. Account 42 has one event and remains unchanged.",
+  "determinism_notes": "Event IDs, account keys, event days, partition ordering, deletion predicate, and final primary-key ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE inbound_events (event_id INT PRIMARY KEY, account_code VARCHAR(16) NOT NULL, event_day DATE NOT NULL, event_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO inbound_events VALUES (4101, 'acct-41', '2026-04-01', 'queued'), (4102, 'acct-41', '2026-04-01', 'accepted'), (4201, 'acct-42', '2026-04-02', 'accepted'), (4301, 'acct-43', '2026-04-03', 'queued'), (4302, 'acct-43', '2026-04-03', 'replayed')"
+  ],
+  "steps": [
+    {
+      "sql": "CREATE TEMPORARY TABLE ranked_inbound_events AS SELECT event_id, ROW_NUMBER() OVER (PARTITION BY account_code, event_day ORDER BY event_id DESC) AS duplicate_rank FROM inbound_events",
+      "ordered": true
+    },
+    {
+      "sql": "DELETE FROM inbound_events WHERE event_id IN (SELECT event_id FROM ranked_inbound_events WHERE duplicate_rank > 1)",
+      "ordered": true
+    },
+    {
+      "sql": "DROP TEMPORARY TABLE ranked_inbound_events",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT event_id, account_code, event_day, event_state FROM inbound_events ORDER BY event_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT event_id, account_code, event_day, event_state FROM inbound_events ORDER BY event_id",
+      "ordered": true
+    }
+  ]
+}
