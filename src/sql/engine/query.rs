@@ -1334,7 +1334,7 @@ impl RawEngine {
                     .map(|value| value.unwrap_or(Value::Null))
             }
             "COUNT" | "SUM" | "AVG" | "MIN" | "MAX" | "BIT_AND" | "BIT_OR" | "BIT_XOR"
-            | "STD" | "STDDEV" | "STDDEV_POP" | "STDDEV_SAMP" | "MEDIAN" => {
+            | "STD" | "STDDEV" | "STDDEV_POP" | "STDDEV_SAMP" | "VAR_POP" | "MEDIAN" => {
                 let mut aggregate_values = Vec::new();
                 for index in frame_rows {
                     let value = if arguments.is_empty()
@@ -1445,6 +1445,23 @@ impl RawEngine {
                             result ^= json_to_f64_lossy(&value)? as i64;
                         }
                         Ok(Value::Number(Number::from(result)))
+                    }
+                    "VAR_POP" => {
+                        if aggregate_values.is_empty() {
+                            Ok(Value::Null)
+                        } else {
+                            let numbers = aggregate_values
+                                .iter()
+                                .map(json_to_f64_lossy)
+                                .collect::<Result<Vec<_>>>()?;
+                            let mean = numbers.iter().sum::<f64>() / numbers.len() as f64;
+                            let variance = numbers
+                                .iter()
+                                .map(|value| (value - mean).powi(2))
+                                .sum::<f64>()
+                                / numbers.len() as f64;
+                            Ok(number_from_f64(variance))
+                        }
                     }
                     _ => unreachable!(),
                 }

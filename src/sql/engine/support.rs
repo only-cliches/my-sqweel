@@ -115,6 +115,7 @@ impl Visitor for SupportValidator {
                         | "STDDEV"
                         | "STDDEV_POP"
                         | "STDDEV_SAMP"
+                        | "VAR_POP"
                 ) {
                     ControlFlow::Continue(())
                 } else {

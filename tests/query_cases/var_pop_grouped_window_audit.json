@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "var_pop_grouped_window_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "felipebz/zpa",
+      "commit": "28e6ebb33ae8db2beea9fa2b33f67f7c98b1f165",
+      "path": "zpa-checks/src/integrationTest/resources/sources/oracle-database_26/sqlrf/VAR_POP-2.sql",
+      "url": "https://github.com/felipebz/zpa/blob/28e6ebb33ae8db2beea9fa2b33f67f7c98b1f165/zpa-checks/src/integrationTest/resources/sources/oracle-database_26/sqlrf/VAR_POP-2.sql",
+      "sha256": "8c9eab6cae153cb75c6cbcd3162a24374482fc84e18b5079cec234ad3a25d24f",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "zpa-checks/src/integrationTest/resources/sources/oracle-database_26/sqlrf/VAR_POP-2.sql:1-9",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "VAR_POP and VAR_SAMP compute analytic variance over grouped aggregate totals ordered by a reporting dimension.",
+      "mysql_mariadb_translation": "Reauthored as an independent regional shipment audit. Monthly SUM totals are grouped first, then VAR_POP computes each region's running population variance over those totals; source schemas and values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "var-pop-window",
+    "aggregate-over-window",
+    "grouped-window",
+    "window-partition",
+    "ordered-window-frame",
+    "running-variance",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Each region has three monthly groups so the first running variance is zero and later rows exercise grouped aggregate inputs over a growing frame.",
+  "determinism_notes": "All shipment rows, region codes, month numbers, grouping keys, frame ordering, and output ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE shipment_ledger (shipment_id INT PRIMARY KEY, region_code VARCHAR(16) NOT NULL, month_no INT NOT NULL, net_amount DECIMAL(10,2) NOT NULL)",
+    "INSERT INTO shipment_ledger VALUES (3101, 'NORTH', 1, 100.00), (3102, 'NORTH', 1, 40.00), (3103, 'NORTH', 2, 180.00), (3104, 'NORTH', 3, 220.00), (3201, 'SOUTH', 1, 75.00), (3202, 'SOUTH', 2, 125.00), (3203, 'SOUTH', 3, 225.00)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT region_code, month_no, SUM(net_amount) AS monthly_total, VAR_POP(SUM(net_amount)) OVER (PARTITION BY region_code ORDER BY month_no ROWS UNBOUNDED PRECEDING) AS running_variance FROM shipment_ledger GROUP BY region_code, month_no ORDER BY region_code, month_no",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
