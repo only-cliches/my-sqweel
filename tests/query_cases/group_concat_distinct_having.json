@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "id": "group_concat_distinct_having",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "infochimps-labs/big_data_for_chimps",
+      "commit": "9f26ae8962038eeee7f7c5e94b5f64406d1be548",
+      "path": "code/sports/baseball/20_parkinfo.sql",
+      "url": "https://github.com/infochimps-labs/big_data_for_chimps/blob/9f26ae8962038eeee7f7c5e94b5f64406d1be548/code/sports/baseball/20_parkinfo.sql",
+      "sha256": "1b594eb82ae07857b0b8d946305946155922a6ab9f7edb2d0fd2cd4f412bd3d3",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "code/sports/baseball/20_parkinfo.sql: grouped park-season team summary",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL aggregation groups records by location and year, concatenates distinct members in deterministic order, counts distinct members, and keeps only groups with more than one member through HAVING.",
+      "mysql_mariadb_translation": "Reauthored as a venue-season match summary. Played matches are grouped by venue and season, distinct home clubs are concatenated with an explicit separator and ordering, and single-club seasons are removed by a distinct-count HAVING threshold."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "group-concat",
+    "group-concat-distinct",
+    "ordered-group-concat",
+    "aggregate-having",
+    "count-distinct",
+    "grouped-having",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Venue 31 has repeated AFC matches plus BFC in 2023 and only AFC in 2024; venue 32 has BFC and CFC played matches plus one cancelled DFC match. HAVING keeps only seasons with multiple played home clubs.",
+  "determinism_notes": "Venue IDs, seasons, statuses, club codes, GROUP_CONCAT ordering, separator, grouping, and final ORDER BY are fixed; the fixture has no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE venue_matches (match_id INT PRIMARY KEY, venue_id INT NOT NULL, season_year INT NOT NULL, home_club_code VARCHAR(8) NOT NULL, match_status VARCHAR(16) NOT NULL)",
+    "INSERT INTO venue_matches VALUES (1, 31, 2023, 'AFC', 'played'), (2, 31, 2023, 'BFC', 'played'), (3, 31, 2023, 'AFC', 'played'), (4, 32, 2023, 'BFC', 'played'), (5, 32, 2023, 'CFC', 'played'), (6, 31, 2024, 'AFC', 'played'), (7, 32, 2023, 'DFC', 'cancelled')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT venue_id, season_year, GROUP_CONCAT(DISTINCT home_club_code ORDER BY home_club_code SEPARATOR '|') AS home_clubs, COUNT(*) AS played_matches, COUNT(DISTINCT home_club_code) AS club_count FROM venue_matches WHERE match_status = 'played' GROUP BY venue_id, season_year HAVING COUNT(DISTINCT home_club_code) > 1 ORDER BY season_year, venue_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT match_id, venue_id, season_year, home_club_code, match_status FROM venue_matches ORDER BY match_id",
+      "ordered": true
+    }
+  ]
+}
