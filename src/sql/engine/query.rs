@@ -1184,6 +1184,7 @@ impl RawEngine {
                         values[row_index] = self.window_function_value(
                             &function_name,
                             &arguments,
+                            &function.within_group,
                             partition,
                             position,
                             frame,
@@ -1219,6 +1220,7 @@ impl RawEngine {
         &self,
         function: &str,
         arguments: &[Option<Expr>],
+        within_group: &[OrderByExpr],
         partition: &[usize],
         position: usize,
         frame: Option<(usize, usize)>,
@@ -1334,7 +1336,8 @@ impl RawEngine {
                     .map(|value| value.unwrap_or(Value::Null))
             }
             "COUNT" | "SUM" | "AVG" | "MIN" | "MAX" | "BIT_AND" | "BIT_OR" | "BIT_XOR"
-            | "STD" | "STDDEV" | "STDDEV_POP" | "STDDEV_SAMP" | "VAR_POP" | "MEDIAN" => {
+            | "STD" | "STDDEV" | "STDDEV_POP" | "STDDEV_SAMP" | "VAR_POP" | "MEDIAN"
+            | "PERCENTILE_CONT" => {
                 let mut aggregate_values = Vec::new();
                 for index in frame_rows {
                     let value = if arguments.is_empty()
@@ -1380,6 +1383,66 @@ impl RawEngine {
                         .into_iter()
                         .max_by(compare_json_values)
                         .unwrap_or(Value::Null)),
+                    "PERCENTILE_CONT" => {
+                        let Some(order) = within_group.first() else {
+                            return Err(anyhow!(
+                                "PERCENTILE_CONT requires a WITHIN GROUP ordering expression"
+                            ));
+                        };
+                        let percentile = arguments
+                            .first()
+                            .ok_or_else(|| anyhow!("PERCENTILE_CONT requires a percentile"))?
+                            .as_ref()
+                            .map(|argument| {
+                                self.eval_expr_ctx(
+                                    argument,
+                                    &rows[partition[position]],
+                                    last_insert_id,
+                                )
+                            })
+                            .transpose()?
+                            .unwrap_or(Value::Null);
+                        if percentile == Value::Null {
+                            return Ok(Value::Null);
+                        }
+                        let percentile = json_to_f64_lossy(&percentile)?;
+                        if !(0.0..=1.0).contains(&percentile) {
+                            return Err(anyhow!(
+                                "PERCENTILE_CONT percentile must be between 0 and 1"
+                            ));
+                        }
+                        let mut numbers = frame_rows
+                            .iter()
+                            .map(|index| {
+                                self.eval_expr_ctx(
+                                    &order.expr,
+                                    &rows[*index],
+                                    last_insert_id,
+                                )
+                            })
+                            .collect::<Result<Vec<_>>>()?
+                            .into_iter()
+                            .filter(|value| *value != Value::Null)
+                            .map(|value| json_to_f64_lossy(&value))
+                            .collect::<Result<Vec<_>>>()?;
+                        if numbers.is_empty() {
+                            return Ok(Value::Null);
+                        }
+                        numbers.sort_by(|left, right| {
+                            let ordering = f64::total_cmp(left, right);
+                            if order.asc.unwrap_or(true) {
+                                ordering
+                            } else {
+                                ordering.reverse()
+                            }
+                        });
+                        let lower = rank.floor() as usize;
+                        let upper = rank.ceil() as usize;
+                        let fraction = rank - lower as f64;
+                        Ok(number_from_f64(
+                            numbers[lower] + (numbers[upper] - numbers[lower]) * fraction,
+                        ))
+                    }
                     "MEDIAN" => {
                         if aggregate_values.is_empty() {
                             Ok(Value::Null)
@@ -2210,7 +2273,7 @@ impl RawEngine {
                         }
                     }
                     "AVG" | "SUM" | "STD" | "STDDEV" | "STDDEV_POP" | "STDDEV_SAMP" | "VAR_POP"
-                    | "VAR_SAMP" | "VARIANCE" | "MEDIAN" => {
+                    | "VAR_SAMP" | "VARIANCE" | "MEDIAN" | "PERCENTILE_CONT" => {
                         let argument = function_arguments(function)
                             .ok()
                             .and_then(|arguments| arguments.into_iter().next().flatten())
@@ -2222,7 +2285,7 @@ impl RawEngine {
                                     first_row,
                                 )
                             });
-                        if name == "MEDIAN" {
+                        if matches!(name.as_str(), "MEDIAN" | "PERCENTILE_CONT") {
                             metadata.decimals = 10;
                             MysqlColumnType::Double
                         } else {

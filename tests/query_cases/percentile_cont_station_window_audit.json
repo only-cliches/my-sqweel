@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "percentile_cont_station_window_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "fivetran/dbt_fivetran_utils",
+      "commit": "f7567295c8f406946dfdbcdd761affad7d7bb535",
+      "path": "macros/percentile.sql",
+      "url": "https://github.com/fivetran/dbt_fivetran_utils/blob/f7567295c8f406946dfdbcdd761affad7d7bb535/macros/percentile.sql",
+      "sha256": "7076c54fa9e8fdb235f8c726a128cb593bab5b282d126285299ecad58f7790b8",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "macros/percentile.sql:9-17",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "PERCENTILE_CONT computes a continuous percentile with WITHIN GROUP ordering and partitions the result by a grouping field.",
+      "mysql_mariadb_translation": "Reauthored as an independent station response audit. PERCENTILE_CONT(0.5) computes partitioned median response time over deterministic sensor readings; source schemas, values, and macro code are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "percentile-cont-window",
+    "within-group-ordering",
+    "partitioned-median",
+    "continuous-percentile",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Each station has five response-time readings, including an even-sized partition, so continuous median interpolation is observable.",
+  "determinism_notes": "All response rows, station codes, reading numbers, percentile, partitioning, ordering, and output ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE station_responses (response_id INT PRIMARY KEY, station_code VARCHAR(16) NOT NULL, reading_no INT NOT NULL, response_ms DECIMAL(10,2) NOT NULL)",
+    "INSERT INTO station_responses VALUES (7101, 'ALPHA', 1, 18.00), (7102, 'ALPHA', 2, 42.00), (7103, 'ALPHA', 3, 27.00), (7104, 'ALPHA', 4, 63.00), (7105, 'ALPHA', 5, 35.00), (7201, 'BETA', 1, 11.00), (7202, 'BETA', 2, 29.00), (7203, 'BETA', 3, 17.00), (7204, 'BETA', 4, 45.00)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT station_code, reading_no, response_ms, PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY response_ms) OVER (PARTITION BY station_code) AS median_response_ms FROM station_responses ORDER BY station_code, reading_no",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}

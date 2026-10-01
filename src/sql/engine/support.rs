@@ -78,8 +78,14 @@ impl Visitor for SupportValidator {
             Expr::Function(function)
                 if function.filter.is_some()
                     || function.null_treatment.is_some()
-                    || !function.within_group.is_empty()
-                    || function.uses_odbc_syntax =>
+                    || function.uses_odbc_syntax
+                    || (!function.within_group.is_empty()
+                        && !(function.over.is_some()
+                            && function
+                                .name
+                                .0
+                                .last()
+                                .is_some_and(|name| name.value.eq_ignore_ascii_case("PERCENTILE_CONT")))) =>
             {
                 unsupported(format!("function modifier in `{function}`"))
             }
@@ -104,6 +110,7 @@ impl Visitor for SupportValidator {
                         | "LAST_VALUE"
                         | "NTH_VALUE"
                         | "MEDIAN"
+                        | "PERCENTILE_CONT"
                         | "COUNT"
                         | "SUM"
                         | "AVG"
