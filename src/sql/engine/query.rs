@@ -1950,23 +1950,68 @@ impl RawEngine {
                         }
                     }
                     "CONCAT" | "CONCAT_WS" => {
-                        let argument_types = function_arguments(function)
-                            .unwrap_or_default()
-                            .into_iter()
+                        let arguments = function_arguments(function).unwrap_or_default();
+                        let argument_types = arguments
+                            .iter()
                             .flatten()
                             .map(|argument| {
                                 self.expression_metadata(
                                     select,
-                                    &argument,
+                                    argument,
                                     String::new(),
                                     first_row,
                                 )
                                 .column_type
                             })
                             .collect::<Vec<_>>();
-                        if argument_types
+                        let has_case_argument = arguments
                             .iter()
-                            .any(|column_type| matches!(column_type, MysqlColumnType::LongBlob))
+                            .flatten()
+                            .any(|argument| matches!(argument, Expr::Case { .. }));
+                        let has_blob_case = arguments
+                            .iter()
+                            .flatten()
+                            .filter_map(|argument| match argument {
+                                Expr::Case {
+                                    results,
+                                    else_result,
+                                    ..
+                                } => Some(
+                                    results
+                                        .iter()
+                                        .chain(else_result.iter().map(|branch| branch.as_ref())),
+                                ),
+                                _ => None,
+                            })
+                            .flatten()
+                            .any(|branch| {
+                                matches!(
+                                    self.expression_metadata(
+                                        select,
+                                        branch,
+                                        String::new(),
+                                        first_row,
+                                    )
+                                    .column_type,
+                                    MysqlColumnType::Blob
+                                        | MysqlColumnType::MediumBlob
+                                        | MysqlColumnType::LongBlob
+                                        | MysqlColumnType::Json
+                                )
+                            });
+                        let has_blob_argument = argument_types.iter().any(|column_type| {
+                            matches!(
+                                column_type,
+                                MysqlColumnType::Blob
+                                    | MysqlColumnType::MediumBlob
+                                    | MysqlColumnType::Json
+                            )
+                        });
+                        if has_blob_case
+                            || (has_case_argument && has_blob_argument)
+                            || argument_types
+                                .iter()
+                                .any(|column_type| matches!(column_type, MysqlColumnType::LongBlob))
                         {
                             MysqlColumnType::LongBlob
                         } else if argument_types.iter().any(|column_type| {
@@ -1978,7 +2023,9 @@ impl RawEngine {
                             )
                         }) {
                             // MariaDB widens CONCAT results that consume a
-                            // GROUP_CONCAT BLOB to MEDIUM_BLOB.
+                            // GROUP_CONCAT BLOB to MEDIUM_BLOB, except when a
+                            // CASE branch carries that BLOB result through
+                            // the concatenation, which reports LONG_BLOB.
                             MysqlColumnType::MediumBlob
                         } else {
                             metadata.column_type

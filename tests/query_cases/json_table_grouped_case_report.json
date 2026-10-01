@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "json_table_grouped_case_report",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Ali-Nouman02/Danny-s-8-Week-SQL-Challenge",
+      "commit": "42adf897c199da5020a031ac2e5b6af342b6d584",
+      "path": "Case_study_2/pizza_runner.sql",
+      "url": "https://github.com/Ali-Nouman02/Danny-s-8-Week-SQL-Challenge/blob/42adf897c199da5020a031ac2e5b6af342b6d584/Case_study_2/pizza_runner.sql",
+      "sha256": "f2eb9cca2c2af070e76ab3a4074e97fbd800a8566d6f7ef2d88090dc7216d38f",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Case_study_2/pizza_runner.sql:374-425",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "Two JSON_TABLE expansions turn comma-separated include and exclude lists into relational rows, then grouped ordered GROUP_CONCAT values are conditionally combined into a report label.",
+      "mysql_mariadb_translation": "Reauthored as a component-bundle audit. Separate CTEs expand include and exclude code lists, resolve labels, aggregate each side with ordered GROUP_CONCAT, and use CASE/CONCAT to build one deterministic summary per bundle. The source schema, pizza workflow, identifiers, and values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["json-table", "multiple-json-table-expansions", "group-concat", "group-concat-distinct", "case-expression", "cte", "conditional-report", "deterministic-order"],
+  "fixture_notes": "Bundle 701 includes Copper and Glass and excludes Latex. Bundle 702 includes Foam and excludes Metal and Silicone. Bundle 703 has no component codes and must produce an empty summary.",
+  "determinism_notes": "Bundle IDs, component codes, labels, list order, ordered aggregation, conditional separators, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE component_catalog (component_code VARCHAR(16) PRIMARY KEY, component_label VARCHAR(32) NOT NULL)",
+    "CREATE TABLE component_bundles (bundle_id INT PRIMARY KEY, bundle_name VARCHAR(32) NOT NULL, include_codes VARCHAR(128) NOT NULL, exclude_codes VARCHAR(128) NOT NULL)",
+    "INSERT INTO component_catalog VALUES ('cu', 'Copper'), ('fo', 'Foam'), ('gl', 'Glass'), ('la', 'Latex'), ('me', 'Metal'), ('si', 'Silicone')",
+    "INSERT INTO component_bundles VALUES (701, 'starter', 'cu,gl', 'la'), (702, 'repair', 'fo', 'si,me'), (703, 'plain', '', '')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH included AS (SELECT b.bundle_id, GROUP_CONCAT(DISTINCT c.component_label ORDER BY c.component_label SEPARATOR ', ') AS included_labels FROM component_bundles AS b INNER JOIN JSON_TABLE(CONCAT('[\\\"', REPLACE(b.include_codes, ',', '\\\",\\\"'), '\\\"]'), '$[*]' COLUMNS (component_code VARCHAR(16) PATH '$')) AS j ON TRUE INNER JOIN component_catalog AS c ON c.component_code = j.component_code WHERE b.include_codes <> '' GROUP BY b.bundle_id), excluded AS (SELECT b.bundle_id, GROUP_CONCAT(DISTINCT c.component_label ORDER BY c.component_label SEPARATOR ', ') AS excluded_labels FROM component_bundles AS b INNER JOIN JSON_TABLE(CONCAT('[\\\"', REPLACE(b.exclude_codes, ',', '\\\",\\\"'), '\\\"]'), '$[*]' COLUMNS (component_code VARCHAR(16) PATH '$')) AS j ON TRUE INNER JOIN component_catalog AS c ON c.component_code = j.component_code WHERE b.exclude_codes <> '' GROUP BY b.bundle_id) SELECT b.bundle_id, b.bundle_name, CONCAT(CASE WHEN i.included_labels IS NULL THEN '' ELSE CONCAT('Include ', i.included_labels) END, CASE WHEN i.included_labels IS NOT NULL AND e.excluded_labels IS NOT NULL THEN ' - ' ELSE '' END, CASE WHEN e.excluded_labels IS NULL THEN '' ELSE CONCAT('Exclude ', e.excluded_labels) END) AS component_summary FROM component_bundles AS b LEFT JOIN included AS i ON i.bundle_id = b.bundle_id LEFT JOIN excluded AS e ON e.bundle_id = b.bundle_id ORDER BY b.bundle_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT bundle_id, bundle_name, include_codes, exclude_codes FROM component_bundles ORDER BY bundle_id",
+      "ordered": true
+    }
+  ]
+}
