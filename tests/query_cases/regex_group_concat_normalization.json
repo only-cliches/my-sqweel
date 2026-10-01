@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "regex_group_concat_normalization",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "yamjoram/MySQL",
+      "commit": "18acae80839e6997cd83c2e7a4e4892c02b4437c",
+      "path": "day_269.sql",
+      "url": "https://github.com/yamjoram/MySQL/blob/18acae80839e6997cd83c2e7a4e4892c02b4437c/day_269.sql",
+      "sha256": "3064e760c3f4f916e5a189c4022992e0e0c4df027ddde0661265349aedbadfaf",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "day_269.sql:27-45",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A CTE combines lower-cased text with GROUP_CONCAT, strips non-letters with REGEXP_REPLACE, and removes residual spaces with REPLACE before downstream character analysis.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored collection-normalization report with new table and column names, deterministic fragment ordering inside GROUP_CONCAT, and two collection groups; the character-counting sequence CTE is omitted while the text-normalization expression is preserved."
+    },
+    "independently_authored": true
+  },
+  "features": ["cte", "lower", "group-concat", "ordered-group-concat", "regexp-replace", "replace", "grouping", "deterministic-order"],
+  "fixture_notes": "Collection 10 concatenates 'Alpha, ' and 'BETA 42!' into 'alphabeta'; collection 20 concatenates 'Gamma?' and 'Delta-99' into 'gammadelta'. Fragment IDs make concatenation order explicit, and non-letter characters are deliberately present.",
+  "determinism_notes": "Collection IDs, fragment IDs, and text are fixed; GROUP_CONCAT orders by fragment ID and the grouped result orders by collection ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE text_fragments (fragment_id INT PRIMARY KEY, collection_id INT NOT NULL, fragment_text VARCHAR(100) NOT NULL)",
+    "INSERT INTO text_fragments VALUES (101, 10, 'Alpha, '), (102, 10, 'BETA 42!'), (201, 20, 'Gamma?'), (202, 20, 'Delta-99')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH normalized AS (SELECT collection_id, fragment_id, LOWER(fragment_text) AS text_fragment FROM text_fragments) SELECT collection_id, REPLACE(REGEXP_REPLACE(GROUP_CONCAT(text_fragment ORDER BY fragment_id SEPARATOR ''), '[^a-z]', ''), ' ', '') AS normalized_letters FROM normalized GROUP BY collection_id ORDER BY collection_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT fragment_id, collection_id, fragment_text FROM text_fragments ORDER BY fragment_id",
+      "ordered": true
+    }
+  ]
+}

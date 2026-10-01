@@ -2205,6 +2205,25 @@ impl RawEngine {
                             metadata.column_type
                         }
                     }
+                    "REPLACE" => {
+                        if let Some(argument) = function_argument(function, 0).map(|argument| {
+                            self.expression_metadata(
+                                select,
+                                argument,
+                                String::new(),
+                                first_row,
+                            )
+                        }) {
+                            metadata.nullable = argument.nullable;
+                            metadata.unsigned = argument.unsigned;
+                            metadata.decimals = argument.decimals;
+                            metadata.character_set = argument.character_set.clone();
+                            metadata.collation = argument.collation.clone();
+                            argument.column_type
+                        } else {
+                            metadata.column_type
+                        }
+                    }
                     "REPEAT" | "SPACE" => MysqlColumnType::LongBlob,
                     "GROUP_CONCAT" => MysqlColumnType::Blob,
                     "SUBSTRING_INDEX" => {
