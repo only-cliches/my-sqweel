@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "ranked_delete_returning_cleanup_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "ranked_delete_returning_cleanup",
+    "source": {
+      "kind": "github",
+      "repository": "bd878/sql",
+      "commit": "9917d9208b2ff9538d031a59c6e1bb83cdd6cc52",
+      "path": "delete-using.sql",
+      "url": "https://github.com/bd878/sql/blob/9917d9208b2ff9538d031a59c6e1bb83cdd6cc52/delete-using.sql",
+      "sha256": "4e545e6c745e3fb3c747b31085592969def53586c51fbf0b1b52e69d0bdfdea3",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "Minimized from ranked_delete_returning_cleanup",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A window-ranked CTE identifies a stale row for deletion and the DML statement returns that row.",
+      "mysql_mariadb_translation": "Reduced to one stream with one retained revision and one stale revision while retaining the nested CTE, ROW_NUMBER ordering, DELETE filter, and RETURNING projection."
+    },
+    "independently_authored": true,
+    "minimized_from": "ranked_delete_returning_cleanup"
+  },
+  "features": ["cte-delete", "delete-returning", "row-number-window", "ranked-cleanup", "dml-subquery", "minimized-regression", "deterministic-order"],
+  "fixture_notes": "Revision 2201 is stale behind revision 2202 in stream delta and must be deleted and returned; revision 2202 remains.",
+  "determinism_notes": "The two fixed revisions, stream key, timestamps, window ordering, returned columns, and final ordering are deterministic. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE mini_event_revisions (revision_id INT PRIMARY KEY, stream_code VARCHAR(16) NOT NULL, revision_no INT NOT NULL, observed_at DATETIME NOT NULL, payload VARCHAR(64) NOT NULL)",
+    "INSERT INTO mini_event_revisions VALUES (2201, 'delta', 1, '2026-05-01 08:00:00', 'delta-old'), (2202, 'delta', 2, '2026-05-01 09:00:00', 'delta-current')"
+  ],
+  "steps": [
+    {
+      "sql": "DELETE FROM mini_event_revisions WHERE revision_id IN (WITH ranked_revisions AS (SELECT revision_id, ROW_NUMBER() OVER (PARTITION BY stream_code ORDER BY observed_at DESC, revision_id DESC) AS revision_rank FROM mini_event_revisions) SELECT revision_id FROM ranked_revisions WHERE revision_rank > 1) RETURNING revision_id, stream_code, revision_no, payload",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT revision_id, stream_code, revision_no, payload FROM mini_event_revisions ORDER BY revision_id",
+      "ordered": true
+    }
+  ]
+}
