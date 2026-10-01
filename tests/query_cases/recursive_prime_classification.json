@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "id": "recursive_prime_classification",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "BEPb/hackerrank_sql",
+      "commit": "f47b9cb7d6fa11713c8c517e5eeced6fd9e70cca",
+      "path": "tasks/55.sql",
+      "url": "https://github.com/BEPb/hackerrank_sql/blob/f47b9cb7d6fa11713c8c517e5eeced6fd9e70cca/tasks/55.sql",
+      "sha256": "80a6552192801c418997aeaea445b89ab58e141c1ebe50eb044bee4311d37e1d",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "tasks/55.sql:1-16",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A recursive counter CTE is self-joined to enumerate candidate divisors, a grouped derived query uses MOD and HAVING MIN(remainder) to retain prime candidates, and an outer ordered GROUP_CONCAT renders the result.",
+      "mysql_mariadb_translation": "Reauthored as an independent number-range classification report. A recursive CTE reads a fixed upper bound, a divisor-remainder CTE classifies each candidate as prime or composite with grouped MIN(MOD(...)), and a grouped summary uses ordered GROUP_CONCAT before a derived outer projection. The schema, values, labels, and reporting purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "recursive-cte",
+    "union-all",
+    "self-join",
+    "modulo",
+    "aggregate-min",
+    "aggregate-having",
+    "grouping",
+    "group-concat",
+    "ordered-aggregate",
+    "derived-table",
+    "case",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The configured upper bound is 16. Candidate 2 is the explicit smallest prime seed; candidates 3 through 16 are classified by checking every smaller divisor. The report keeps separate prime and composite rows, counts each class, and concatenates candidates in numeric order.",
+  "determinism_notes": "The range bound, recursive seed, divisor join, grouping, aggregate ordering, class ordering, and final projection are fixed; there are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE number_ranges (range_id INT PRIMARY KEY, max_candidate INT NOT NULL)",
+    "INSERT INTO number_ranges VALUES (1, 16)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH RECURSIVE numbers AS (SELECT 2 AS candidate, max_candidate FROM number_ranges WHERE range_id = 1 UNION ALL SELECT candidate + 1, max_candidate FROM numbers WHERE candidate < max_candidate), divisor_remainders AS (SELECT candidates.candidate, divisors.candidate AS divisor, MOD(candidates.candidate, divisors.candidate) AS remainder FROM numbers AS candidates INNER JOIN numbers AS divisors ON divisors.candidate < candidates.candidate WHERE candidates.candidate > 2), classified_candidates AS (SELECT candidate, CASE WHEN MIN(remainder) > 0 THEN 'prime' ELSE 'composite' END AS class_name FROM divisor_remainders GROUP BY candidate UNION ALL SELECT 2, 'prime'), summary AS (SELECT class_name, COUNT(*) AS candidate_count, GROUP_CONCAT(candidate ORDER BY candidate ASC SEPARATOR '|') AS candidate_list FROM classified_candidates GROUP BY class_name) SELECT report.class_name, report.candidate_count, report.candidate_list FROM (SELECT class_name, candidate_count, candidate_list FROM summary) AS report ORDER BY CASE report.class_name WHEN 'prime' THEN 1 ELSE 2 END, report.class_name",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT range_id, max_candidate FROM number_ranges ORDER BY range_id",
+      "ordered": true
+    }
+  ]
+}

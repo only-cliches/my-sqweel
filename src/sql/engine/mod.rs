@@ -5136,9 +5136,9 @@ fn rewrite_mod_operator(sql: &str) -> String {
             continue;
         }
         if index + 3 <= characters.len()
-            && characters[index].to_ascii_uppercase() == 'M'
-            && characters[index + 1].to_ascii_uppercase() == 'O'
-            && characters[index + 2].to_ascii_uppercase() == 'D'
+            && characters[index].eq_ignore_ascii_case(&'M')
+            && characters[index + 1].eq_ignore_ascii_case(&'O')
+            && characters[index + 2].eq_ignore_ascii_case(&'D')
         {
             let is_boundary = |value: Option<&char>| {
                 value.is_none_or(|value| !value.is_ascii_alphanumeric() && *value != '_')
@@ -5148,6 +5148,7 @@ fn rewrite_mod_operator(sql: &str) -> String {
                     .checked_sub(1)
                     .and_then(|previous| characters.get(previous)),
             ) && is_boundary(characters.get(index + 3))
+                && characters.get(index + 3) != Some(&'(')
             {
                 rewritten.push('%');
                 index += 3;
