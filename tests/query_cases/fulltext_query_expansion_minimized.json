@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "fulltext_query_expansion_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "fulltext_query_expansion",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "query/full-text-search/mariadb.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/query/full-text-search/mariadb.sql",
+      "sha256": "c1619a4d1514e374f2a4b81d740bb7690061b91bcbf56f59350ce8e786690c9d",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "query/full-text-search/mariadb.sql: query expansion section",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB FULLTEXT query uses MATCH ... AGAINST with WITH QUERY EXPANSION to broaden a natural-language search from related indexed terms.",
+      "mysql_mariadb_translation": "Minimized from fulltext_query_expansion to three indexed field notes: two seed matches share beacon language and one related beacon note must be returned by query expansion."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "fulltext-index",
+    "match-against",
+    "query-expansion-fulltext",
+    "natural-language-search",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Notes 901 and 902 contain the lighthouse seed term and shared beacon language; note 903 contains only the shared beacon term and isolates query-expansion broadening.",
+  "determinism_notes": "Primary keys, indexed text, search term, and ORDER BY clauses are fixed; the fixture has no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE field_notes_minimized (note_id INT PRIMARY KEY, note_title VARCHAR(128) NOT NULL, note_body TEXT NOT NULL, FULLTEXT KEY ft_field_notes_minimized (note_title, note_body)) ENGINE=InnoDB",
+    "INSERT INTO field_notes_minimized VALUES (901, 'Lighthouse route', 'The lighthouse beacon guides vessels through the quartz reef.'), (902, 'Lighthouse repair', 'A beacon lens repair keeps the harbor channel visible.'), (903, 'Beacon inventory', 'Spare beacon lamps are stored beside the inland trail.')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT note_id, note_title FROM field_notes_minimized WHERE MATCH(note_title, note_body) AGAINST ('lighthouse' WITH QUERY EXPANSION) ORDER BY note_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT note_id, note_title FROM field_notes_minimized ORDER BY note_id",
+      "ordered": true
+    }
+  ]
+}

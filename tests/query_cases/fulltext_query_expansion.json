@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "fulltext_query_expansion",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "query/full-text-search/mariadb.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/query/full-text-search/mariadb.sql",
+      "sha256": "c1619a4d1514e374f2a4b81d740bb7690061b91bcbf56f59350ce8e786690c9d",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "query/full-text-search/mariadb.sql: query expansion section",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB FULLTEXT query uses MATCH ... AGAINST with WITH QUERY EXPANSION to broaden a natural-language search from related indexed terms.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored field-notes search. A two-column InnoDB FULLTEXT index searches lighthouse notes with query expansion, and the result projection contains only deterministic identifiers and titles. The source tables, rows, terms, and reporting context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "fulltext-index",
+    "match-against",
+    "query-expansion-fulltext",
+    "natural-language-search",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Notes 801 and 802 contain the lighthouse seed term and related beacon language, note 803 contains only beacon language, and note 804 is unrelated. The query-expansion result is compared by stable note ID and title rather than engine-specific relevance scores.",
+  "determinism_notes": "Primary keys, indexed text, search term, and ORDER BY clauses are fixed; the fixture has no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE field_notes (note_id INT PRIMARY KEY, note_title VARCHAR(128) NOT NULL, note_body TEXT NOT NULL, FULLTEXT KEY ft_field_notes (note_title, note_body)) ENGINE=InnoDB",
+    "INSERT INTO field_notes VALUES (801, 'Lighthouse route', 'The lighthouse beacon guides vessels through the quartz reef.'), (802, 'Lighthouse repair', 'A beacon lens repair keeps the harbor channel visible.'), (803, 'Beacon inventory', 'Spare beacon lamps are stored beside the inland trail.'), (804, 'Garden ledger', 'Seed packets and copper labels fill the greenhouse cabinet.')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT note_id, note_title FROM field_notes WHERE MATCH(note_title, note_body) AGAINST ('lighthouse' WITH QUERY EXPANSION) ORDER BY note_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT note_id, note_title FROM field_notes ORDER BY note_id",
+      "ordered": true
+    }
+  ]
+}

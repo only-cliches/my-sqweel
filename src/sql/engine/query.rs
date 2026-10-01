@@ -45,6 +45,139 @@ fn boolean_fulltext_match(haystack: &str, query: &str) -> bool {
     }
     has_positive
 }
+fn fulltext_tokens(text: &str) -> HashSet<String> {
+    text.split(|character: char| !character.is_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .map(|token| token.to_ascii_lowercase())
+        .collect()
+}
+fn fulltext_stopword(token: &str) -> bool {
+    matches!(
+        token,
+        "a" | "an"
+            | "and"
+            | "are"
+            | "as"
+            | "at"
+            | "be"
+            | "by"
+            | "for"
+            | "from"
+            | "has"
+            | "he"
+            | "in"
+            | "is"
+            | "it"
+            | "of"
+            | "on"
+            | "or"
+            | "that"
+            | "the"
+            | "this"
+            | "to"
+            | "was"
+            | "which"
+            | "with"
+    )
+}
+
+fn natural_fulltext_match(haystack: &str, query: &str) -> bool {
+    let tokens = fulltext_tokens(haystack);
+    query
+        .split_whitespace()
+        .map(|term| term.trim_matches(|character: char| !character.is_alphanumeric()))
+        .filter(|term| !term.is_empty())
+        .map(str::to_ascii_lowercase)
+        .filter(|term| !fulltext_stopword(term))
+        .any(|term| tokens.contains(&term))
+}
+
+fn fulltext_haystack(
+    data: &serde_json::Map<String, Value>,
+    columns: &[sqlparser::ast::Ident],
+) -> String {
+    columns
+        .iter()
+        .filter_map(|column| {
+            data.iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case(&column.value))
+                .map(|(_, value)| json_scalar_to_string(value))
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn query_expansion_fulltext_match(
+    engine: &RawEngine,
+    data: &serde_json::Map<String, Value>,
+    columns: &[sqlparser::ast::Ident],
+    query: &str,
+) -> bool {
+    let haystack = fulltext_haystack(data, columns);
+    if natural_fulltext_match(&haystack, query) {
+        return true;
+    }
+
+    let query_tokens = fulltext_tokens(query);
+    let mut expanded_counts = HashMap::new();
+    for table in engine.rows.iter() {
+        let Some(schema) = engine.schemas.get(table.key()) else {
+            continue;
+        };
+        if !columns.iter().all(|column| {
+            schema
+                .columns
+                .keys()
+                .any(|name| name.eq_ignore_ascii_case(&column.value))
+        }) {
+            continue;
+        }
+        for row in table.value().values() {
+            let row_haystack = fulltext_haystack(&row.data, columns);
+            if natural_fulltext_match(&row_haystack, query) {
+                for token in fulltext_tokens(&row_haystack) {
+                    if !query_tokens.contains(&token) && !fulltext_stopword(&token) {
+                        *expanded_counts.entry(token).or_insert(0_usize) += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    fulltext_tokens(&haystack)
+        .into_iter()
+        .filter(|token| !fulltext_stopword(token))
+        .any(|token| expanded_counts.get(&token).copied().unwrap_or(0) >= 2)
+}
+
+impl RawEngine {
+    fn fulltext_match(
+        &self,
+        data: &serde_json::Map<String, Value>,
+        columns: &[sqlparser::ast::Ident],
+        match_value: &sqlparser::ast::Value,
+        modifier: &str,
+    ) -> Result<Value> {
+        let search = match match_value {
+            SqlValue::SingleQuotedString(value) | SqlValue::DoubleQuotedString(value) => {
+                value.clone()
+            }
+            _ => match_value
+                .to_string()
+                .trim_matches(['\'', '"'])
+                .to_string(),
+        };
+        let haystack = fulltext_haystack(data, columns);
+        let matched = if modifier.contains("QUERY EXPANSION") {
+            query_expansion_fulltext_match(self, data, columns, &search)
+        } else if modifier.contains("BOOLEAN MODE") {
+            boolean_fulltext_match(&haystack, &search)
+        } else {
+            natural_fulltext_match(&haystack, &search)
+        };
+        Ok(Value::Number(Number::from(matched as u8)))
+    }
+}
 
 impl RawEngine {
     pub(super) fn select_query(&self, mut query: Query) -> Result<QueryResult> {
@@ -4195,32 +4328,12 @@ impl RawEngine {
                 match_value,
                 opt_search_modifier,
             } => {
-                let Some(sqlparser::ast::SearchModifier::InBooleanMode) =
-                    opt_search_modifier.as_ref()
-                else {
-                    return Err(anyhow!("full-text MATCH supports only IN BOOLEAN MODE"));
-                };
-                let search = match match_value {
-                    SqlValue::SingleQuotedString(value) | SqlValue::DoubleQuotedString(value) => {
-                        value.clone()
-                    }
-                    _ => match_value
-                        .to_string()
-                        .trim_matches(['\'', '"'])
-                        .to_string(),
-                };
-                let haystack = columns
-                    .iter()
-                    .filter_map(|column| {
-                        data.iter()
-                            .find(|(name, _)| name.eq_ignore_ascii_case(&column.value))
-                            .map(|(_, value)| json_scalar_to_string(value))
-                    })
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                Ok(Value::Number(Number::from(
-                    boolean_fulltext_match(&haystack, &search) as u8,
-                )))
+                let modifier = opt_search_modifier
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .unwrap_or_default()
+                    .to_ascii_uppercase();
+                self.fulltext_match(data, columns, match_value, &modifier)
             }
             Expr::Collate { expr, collation } => {
                 let value = self.eval_expr_ctx(expr, data, last_insert_id)?;
