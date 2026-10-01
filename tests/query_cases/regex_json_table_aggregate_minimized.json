@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "regex_json_table_aggregate_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "regex_json_table_aggregate",
+    "source": {
+      "kind": "github",
+      "repository": "snoyes/AoC",
+      "commit": "ab91a73fb5d28bb6ced2a33af69d177dbe22b2b3",
+      "path": "2024/day03/day03.sql",
+      "url": "https://github.com/snoyes/AoC/blob/ab91a73fb5d28bb6ced2a33af69d177dbe22b2b3/2024/day03/day03.sql",
+      "sha256": "51c1a1fff55f28e153c33eab10b0a365a68824daf35469c577f37448238abf9d",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from regex_json_table_aggregate",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "Layered REGEXP_REPLACE output is converted into a JSON array and expanded with JSON_TABLE before aggregation.",
+      "mysql_mariadb_translation": "Reduced to one batch with two mul tokens while retaining parenthesis normalization, separator normalization, JSON_TABLE pair projection, and grouped multiplication."
+    },
+    "independently_authored": true,
+    "minimized_from": "regex_json_table_aggregate"
+  },
+  "features": ["regexp-replace", "json-table", "json-table-array-projection", "grouped-aggregate", "cte", "minimized-regression", "deterministic-order"],
+  "fixture_notes": "Batch 601 contains 5*7 and 2*3 for total 41. The normalized JSON array must expand to exactly two operand rows.",
+  "determinism_notes": "The batch ID, token order, operands, replacement steps, grouped total, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE mini_expression_batches (batch_id INT PRIMARY KEY, token_text VARCHAR(128) NOT NULL)",
+    "INSERT INTO mini_expression_batches VALUES (601, 'mul(5,7)|mul(2,3)')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH normalized AS (SELECT batch_id, CONCAT('[', REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(token_text, 'mul\\\\(', '['), '\\\\)', ']'), '[|]', ','), ']') AS pairs_json FROM mini_expression_batches) SELECT n.batch_id, SUM(j.left_value * j.right_value) AS batch_total FROM normalized AS n INNER JOIN JSON_TABLE(n.pairs_json, '$[*]' COLUMNS (left_value INT PATH '$[0]', right_value INT PATH '$[1]')) AS j ON TRUE GROUP BY n.batch_id ORDER BY n.batch_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT batch_id, token_text FROM mini_expression_batches ORDER BY batch_id",
+      "ordered": true
+    }
+  ]
+}

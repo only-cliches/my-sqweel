@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "regex_json_table_aggregate",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "snoyes/AoC",
+      "commit": "ab91a73fb5d28bb6ced2a33af69d177dbe22b2b3",
+      "path": "2024/day03/day03.sql",
+      "url": "https://github.com/snoyes/AoC/blob/ab91a73fb5d28bb6ced2a33af69d177dbe22b2b3/2024/day03/day03.sql",
+      "sha256": "51c1a1fff55f28e153c33eab10b0a365a68824daf35469c577f37448238abf9d",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "2024/day03/day03.sql:11-32",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A text-normalization pipeline uses layered REGEXP_REPLACE calls to turn embedded function-like records into a JSON array, JSON_TABLE expands the pairs into columns, and an aggregate computes a total.",
+      "mysql_mariadb_translation": "Reauthored as a batch expression audit. Each batch stores pipe-delimited mul(a,b) tokens, a CTE normalizes parentheses and separators into nested JSON arrays with REGEXP_REPLACE, JSON_TABLE projects both operands, and SUM computes each batch total. The source input, puzzle semantics, table names, and values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["regexp-replace", "json-table", "json-table-array-projection", "grouped-aggregate", "cte", "text-normalization", "deterministic-order"],
+  "fixture_notes": "Batch 501 contains 4*6 and 3*5 for total 39. Batch 502 contains 8*2, 7*1, and 2*9 for total 41. Regex normalization must produce one JSON pair per token before JSON_TABLE expansion.",
+  "determinism_notes": "Batch IDs, token order, operands, replacement steps, grouped totals, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE expression_batches (batch_id INT PRIMARY KEY, token_text VARCHAR(128) NOT NULL)",
+    "INSERT INTO expression_batches VALUES (501, 'mul(4,6)|mul(3,5)'), (502, 'mul(8,2)|mul(7,1)|mul(2,9)')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH normalized AS (SELECT batch_id, CONCAT('[', REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(token_text, 'mul\\\\(', '['), '\\\\)', ']'), '[|]', ','), ']') AS pairs_json FROM expression_batches) SELECT n.batch_id, SUM(j.left_value * j.right_value) AS batch_total FROM normalized AS n INNER JOIN JSON_TABLE(n.pairs_json, '$[*]' COLUMNS (left_value INT PATH '$[0]', right_value INT PATH '$[1]')) AS j ON TRUE GROUP BY n.batch_id ORDER BY n.batch_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT batch_id, token_text FROM expression_batches ORDER BY batch_id",
+      "ordered": true
+    }
+  ]
+}
