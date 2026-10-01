@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "regional_grouped_cume_distribution",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "felipebz/zpa",
+      "commit": "28e6ebb33ae8db2beea9fa2b33f67f7c98b1f165",
+      "path": "zpa-checks/src/integrationTest/resources/sources/oracle-database_26/sqlrf/CUME_DIST-1.sql",
+      "url": "https://github.com/felipebz/zpa/blob/28e6ebb33ae8db2beea9fa2b33f67f7c98b1f165/zpa-checks/src/integrationTest/resources/sources/oracle-database_26/sqlrf/CUME_DIST-1.sql",
+      "sha256": "dff4b0b71b6b62dfef3aa1ffbe5bc62cf3403b7796f56c203bcb4fbc530ca605",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "zpa-checks/src/integrationTest/resources/sources/oracle-database_26/sqlrf/CUME_DIST-1.sql:1-5",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A partitioned CUME_DIST window ranks rows within each job group by salary and emits the cumulative distribution alongside ordered employee attributes.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored regional sales scorecard: a grouped CTE first totals fixed sales by region and agent, HAVING removes zero totals, and CUME_DIST ranks the grouped totals with a deterministic agent tie-breaker."
+    },
+    "independently_authored": true
+  },
+  "features": ["cume-dist-window", "partitioned-window", "grouped-cte", "having-threshold", "window-over-grouped-result", "peer-ties", "deterministic-order"],
+  "fixture_notes": "East agents total 100, 100, and 200, producing cumulative distributions 0.666667, 0.666667, and 1.000000; West agents total 50 and 150 produce 0.5 and 1.0. A zero-valued adjustment is excluded by HAVING.",
+  "determinism_notes": "Region, agent, sale IDs, amounts, grouped totals, and final region/total/agent ordering are fixed. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE regional_sales (sale_id INT PRIMARY KEY, region VARCHAR(16) NOT NULL, agent VARCHAR(16) NOT NULL, amount INT NOT NULL)",
+    "INSERT INTO regional_sales VALUES (1, 'east', 'ava', 40), (2, 'east', 'ava', 60), (3, 'east', 'bo', 100), (4, 'east', 'cy', 120), (5, 'east', 'cy', 80), (6, 'east', 'zero', 0), (7, 'west', 'di', 50), (8, 'west', 'eli', 100), (9, 'west', 'eli', 50)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH agent_totals AS (SELECT region, agent, SUM(amount) AS total_amount FROM regional_sales GROUP BY region, agent HAVING SUM(amount) > 0) SELECT region, agent, total_amount, CUME_DIST() OVER (PARTITION BY region ORDER BY total_amount) AS cumulative_distribution FROM agent_totals ORDER BY region, total_amount, agent",
+      "ordered": true
+    }
+  ]
+}
