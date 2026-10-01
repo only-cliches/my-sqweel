@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "asin_geodesic_distance_audit_minimized",
+  "provenance": {
+    "kind": "minimized-from-query-case",
+    "parent_case": "asin_geodesic_distance_audit",
+    "source": {
+      "kind": "github",
+      "repository": "OneSparse/OneSparse",
+      "commit": "c74b0a7b8087666552e728bec23682c5556bcc59",
+      "path": "demo/opensky.sql",
+      "url": "https://github.com/OneSparse/OneSparse/blob/c74b0a7b8087666552e728bec23682c5556bcc59/demo/opensky.sql",
+      "sha256": "32219f4c0d7e3ba9bcf4eb7d1a7d3efa42ea9e0d41ffe29d378f03313b7e8746",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "Minimized from demo/opensky.sql:21-34",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A spherical-distance expression maps latitude and longitude deltas through ASIN, SQRT, SIN, COS, and RADIANS.",
+      "mysql_mariadb_translation": "Reduced to newly authored equatorial and meridian pairs while retaining the inlined Haversine expression, six-decimal normalization, and deterministic ordering."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "asin",
+    "sqrt",
+    "sin",
+    "cos",
+    "radians",
+    "trigonometry",
+    "geodesic-distance",
+    "numeric-expression",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The reduced case retains one longitude-only span and one latitude-only span, both with valid coordinates and bounded Haversine inputs.",
+  "determinism_notes": "Point identifiers, coordinates, earth-diameter constant, arithmetic expression, six-decimal rounding, and output ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE mini_point_pairs (pair_id INT PRIMARY KEY, pair_name VARCHAR(32) NOT NULL, lat_a DECIMAL(8,4) NOT NULL, lon_a DECIMAL(8,4) NOT NULL, lat_b DECIMAL(8,4) NOT NULL, lon_b DECIMAL(8,4) NOT NULL)",
+    "INSERT INTO mini_point_pairs VALUES (1101, 'equatorial-span', 0.0000, 0.0000, 0.0000, 1.0000), (1102, 'meridian-span', 10.0000, 20.0000, 11.0000, 20.0000)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT pair_id, pair_name, ROUND(ASIN(SQRT(SIN(RADIANS((lat_b - lat_a) / 2)) * SIN(RADIANS((lat_b - lat_a) / 2)) + SIN(RADIANS((lon_b - lon_a) / 2)) * SIN(RADIANS((lon_b - lon_a) / 2)) * COS(RADIANS(lat_a)) * COS(RADIANS(lat_b)))) * 12742, 6) AS distance_km FROM mini_point_pairs ORDER BY pair_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}

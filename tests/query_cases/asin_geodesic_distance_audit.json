@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "id": "asin_geodesic_distance_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "OneSparse/OneSparse",
+      "commit": "c74b0a7b8087666552e728bec23682c5556bcc59",
+      "path": "demo/opensky.sql",
+      "url": "https://github.com/OneSparse/OneSparse/blob/c74b0a7b8087666552e728bec23682c5556bcc59/demo/opensky.sql",
+      "sha256": "32219f4c0d7e3ba9bcf4eb7d1a7d3efa42ea9e0d41ffe29d378f03313b7e8746",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "demo/opensky.sql:21-34",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A Haversine-style geodesic distance combines ASIN, SQRT, SIN, COS, and RADIANS over latitude and longitude deltas.",
+      "mysql_mariadb_translation": "Reauthored as a direct ordered SELECT over newly authored point pairs. The spherical-distance expression is inlined with fixed decimal coordinates and rounded to six decimal places, without copying the source function, loading commands, or schema."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "asin",
+    "sqrt",
+    "sin",
+    "cos",
+    "radians",
+    "trigonometry",
+    "geodesic-distance",
+    "numeric-expression",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Each pair contains valid latitude and longitude values with bounded Haversine inputs; the set includes an equatorial longitude span, a meridian span, and a diagonal span.",
+  "determinism_notes": "Point identifiers, coordinates, earth-diameter constant, arithmetic expression, six-decimal rounding, and output ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE point_pairs (pair_id INT PRIMARY KEY, pair_name VARCHAR(32) NOT NULL, lat_a DECIMAL(8,4) NOT NULL, lon_a DECIMAL(8,4) NOT NULL, lat_b DECIMAL(8,4) NOT NULL, lon_b DECIMAL(8,4) NOT NULL)",
+    "INSERT INTO point_pairs VALUES (1001, 'equatorial-span', 0.0000, 0.0000, 0.0000, 1.0000), (1002, 'meridian-span', 10.0000, 20.0000, 11.0000, 20.0000), (1003, 'diagonal-span', -33.9000, 151.2000, 35.7000, -78.6000)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT pair_id, pair_name, ROUND(ASIN(SQRT(SIN(RADIANS((lat_b - lat_a) / 2)) * SIN(RADIANS((lat_b - lat_a) / 2)) + SIN(RADIANS((lon_b - lon_a) / 2)) * SIN(RADIANS((lon_b - lon_a) / 2)) * COS(RADIANS(lat_a)) * COS(RADIANS(lat_b)))) * 12742, 6) AS distance_km FROM point_pairs ORDER BY pair_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
