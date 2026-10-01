@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "acos_vector_similarity_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "little-brother/sqlite-gui",
+      "commit": "dac333d1a9c0263b8b4726a7ef17b809a476de91",
+      "path": "resources/help.sql",
+      "url": "https://github.com/little-brother/sqlite-gui/blob/dac333d1a9c0263b8b4726a7ef17b809a476de91/resources/help.sql",
+      "sha256": "bc5acf81d48f785f1595dc41f800a24b6682240310da85e88128bf1661645613",
+      "source_dialect": "sqlite"
+    },
+    "inspiration": {
+      "source_location": "resources/help.sql:66",
+      "source_dialect": "sqlite",
+      "observed_pattern": "ACOS converts a bounded numeric input into an arc-cosine angle in radians.",
+      "mysql_mariadb_translation": "Reauthored as a vector-similarity audit. Fixed two-dimensional vectors produce a normalized dot product through arithmetic and SQRT, then ACOS projects the angular distance with deterministic ordering."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "acos",
+    "trigonometry",
+    "sqrt",
+    "numeric-normalization",
+    "numeric-expression",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Each vector pair is non-zero and yields a bounded cosine similarity, including aligned, orthogonal, and opposite directions.",
+  "determinism_notes": "Vector components, arithmetic expression, ACOS input range, and output ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE vector_pairs (pair_id INT PRIMARY KEY, pair_name VARCHAR(32) NOT NULL, ax DECIMAL(8,4) NOT NULL, ay DECIMAL(8,4) NOT NULL, bx DECIMAL(8,4) NOT NULL, b_y DECIMAL(8,4) NOT NULL)",
+    "INSERT INTO vector_pairs VALUES (801, 'aligned', 1.0000, 0.0000, 2.0000, 0.0000), (802, 'orthogonal', 1.0000, 0.0000, 0.0000, 3.0000), (803, 'opposite', 1.0000, 0.0000, -4.0000, 0.0000), (804, 'diagonal', 1.0000, 1.0000, 2.0000, 1.0000)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT pair_id, pair_name, ACOS((ax * bx + ay * b_y) / (SQRT(ax * ax + ay * ay) * SQRT(bx * bx + b_y * b_y))) AS angle_radians FROM vector_pairs ORDER BY pair_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}

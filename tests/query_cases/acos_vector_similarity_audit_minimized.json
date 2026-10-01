@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "acos_vector_similarity_audit_minimized",
+  "provenance": {
+    "kind": "minimized-from-query-case",
+    "parent_case": "acos_vector_similarity_audit",
+    "source": {
+      "kind": "github",
+      "repository": "little-brother/sqlite-gui",
+      "commit": "dac333d1a9c0263b8b4726a7ef17b809a476de91",
+      "path": "resources/help.sql",
+      "url": "https://github.com/little-brother/sqlite-gui/blob/dac333d1a9c0263b8b4726a7ef17b809a476de91/resources/help.sql",
+      "sha256": "bc5acf81d48f785f1595dc41f800a24b6682240310da85e88128bf1661645613",
+      "source_dialect": "sqlite"
+    },
+    "inspiration": {
+      "source_location": "Minimized from resources/help.sql:66",
+      "source_dialect": "sqlite",
+      "observed_pattern": "ACOS maps a bounded numeric expression to an angle in radians.",
+      "mysql_mariadb_translation": "Reduced to one aligned vector and one orthogonal vector, retaining normalized dot-product arithmetic, SQRT, ACOS, and deterministic ordering with newly authored values."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "acos",
+    "trigonometry",
+    "sqrt",
+    "numeric-normalization",
+    "numeric-expression",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The aligned pair produces zero radians and the orthogonal pair produces a right angle; both vectors are non-zero.",
+  "determinism_notes": "Vector components, arithmetic expression, ACOS input range, and output ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE mini_vector_pairs (pair_id INT PRIMARY KEY, pair_name VARCHAR(32) NOT NULL, ax DECIMAL(8,4) NOT NULL, ay DECIMAL(8,4) NOT NULL, bx DECIMAL(8,4) NOT NULL, b_y DECIMAL(8,4) NOT NULL)",
+    "INSERT INTO mini_vector_pairs VALUES (901, 'aligned', 1.0000, 0.0000, 2.0000, 0.0000), (902, 'orthogonal', 1.0000, 0.0000, 0.0000, 3.0000)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT pair_id, ACOS((ax * bx + ay * b_y) / (SQRT(ax * ax + ay * ay) * SQRT(bx * bx + b_y * b_y))) AS angle_radians FROM mini_vector_pairs ORDER BY pair_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
