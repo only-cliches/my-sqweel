@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "nvl2_ticket_status_audit_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "ReneNyffenegger/oracle-patterns",
+      "commit": "217fc9fea92138174f4a3e34113aafccb8598066",
+      "path": "SQL/functions/null_related/nvl2.sql",
+      "url": "https://github.com/ReneNyffenegger/oracle-patterns/blob/217fc9fea92138174f4a3e34113aafccb8598066/SQL/functions/null_related/nvl2.sql",
+      "sha256": "77b32546fab6f8c3701f7e819138354e85168d49603c69de5304d07c25608717",
+      "source_dialect": "oracle"
+    },
+    "inspiration": {
+      "source_location": "SQL/functions/null_related/nvl2.sql:1-13",
+      "source_dialect": "oracle",
+      "observed_pattern": "NVL2 maps a nullable expression to one result when non-NULL and another result when NULL.",
+      "mysql_mariadb_translation": "Reduced to one independently authored ticket pair so both nullable branches remain observable without copying source data or schema."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "nvl2",
+    "nullable-projection",
+    "null-branch-labeling",
+    "deterministic-order"
+  ],
+  "fixture_notes": "One unresolved and one resolved ticket exercise both NVL2 branches.",
+  "determinism_notes": "All ticket IDs, subjects, timestamps, NVL2 branches, and output ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE ticket_status (ticket_id INT PRIMARY KEY, subject VARCHAR(64) NOT NULL, resolved_at DATETIME NULL)",
+    "INSERT INTO ticket_status VALUES (201, 'quota alert', NULL), (202, 'login timeout', '2026-02-04 11:20:00')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT ticket_id, NVL2(resolved_at, 'RESOLVED', 'PENDING') AS lifecycle_label FROM ticket_status ORDER BY ticket_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
