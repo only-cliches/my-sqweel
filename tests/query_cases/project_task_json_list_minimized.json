@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "id": "project_task_json_list_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "DreamPWJ/jenkins-shared-library",
+      "commit": "c49b5b8fe9ad6b5087927c4ed8471e5190805c90",
+      "path": "_database/sql/snippet.sql",
+      "url": "https://github.com/DreamPWJ/jenkins-shared-library/blob/c49b5b8fe9ad6b5087927c4ed8471e5190805c90/_database/sql/snippet.sql",
+      "sha256": "62a6d0b4aff15668db476840168e4c88252eb3e78f1497cca3457f35ec0b4bff",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "_database/sql/snippet.sql:1-9",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped parent-child query serializes distinct child JSON_OBJECT values with GROUP_CONCAT, orders the objects by child identifier, and wraps the comma-separated text in JSON array brackets.",
+      "mysql_mariadb_translation": "Reauthored as a minimized project task export. A repeated task-label row duplicates one child during the join; GROUP_CONCAT(DISTINCT JSON_OBJECT(...)) removes that multiplication while preserving deterministic task order inside a JSON array-shaped string. The schema, values, aliases, and operational meaning are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "inner-join",
+    "left-join",
+    "group-concat",
+    "group-concat-distinct",
+    "ordered-aggregate",
+    "json-object",
+    "json-string-assembly",
+    "duplicate-join-rows",
+    "grouping",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Project 701 has two tasks, and the first task is repeated by two labels; DISTINCT must collapse the repeated JSON object while the task IDs retain ascending output order.",
+  "determinism_notes": "Project ID, task IDs, label IDs, GROUP_CONCAT task ordering, grouping columns, and final project ordering are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE projects (project_id INT PRIMARY KEY, project_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE project_tasks (task_id INT PRIMARY KEY, project_id INT NOT NULL, task_title VARCHAR(64) NOT NULL, task_state VARCHAR(16) NOT NULL)",
+    "CREATE TABLE task_labels (label_id INT PRIMARY KEY, task_id INT NOT NULL, label_name VARCHAR(32) NOT NULL)",
+    "INSERT INTO projects VALUES (701, 'Atlas')",
+    "INSERT INTO project_tasks VALUES (11, 701, 'Draft brief', 'open'), (12, 701, 'Review copy', 'done')",
+    "INSERT INTO task_labels VALUES (101, 11, 'writing'), (102, 11, 'priority'), (103, 12, 'review')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT p.project_id, p.project_name, CONCAT('[', GROUP_CONCAT(DISTINCT JSON_OBJECT('task_id', t.task_id, 'title', t.task_title, 'state', t.task_state) ORDER BY t.task_id SEPARATOR ','), ']') AS task_items FROM projects p INNER JOIN project_tasks t ON t.project_id = p.project_id LEFT JOIN task_labels l ON l.task_id = t.task_id GROUP BY p.project_id, p.project_name ORDER BY p.project_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT p.project_id, t.task_id, l.label_id FROM projects p INNER JOIN project_tasks t ON t.project_id = p.project_id LEFT JOIN task_labels l ON l.task_id = t.task_id ORDER BY p.project_id, t.task_id, l.label_id",
+      "ordered": true
+    }
+  ]
+}
