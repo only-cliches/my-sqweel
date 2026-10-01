@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "id": "partitioned_median_window_report",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "najirh/100_days_challenge_community",
+      "commit": "b97ba4345eeb63b39e20a4dcdb4605c9de4a3407",
+      "path": "32.sql",
+      "url": "https://github.com/najirh/100_days_challenge_community/blob/b97ba4345eeb63b39e20a4dcdb4605c9de4a3407/32.sql",
+      "sha256": "62f1296899a2ecdf52672183218f1b2a65c2782065689cc7ba86380f011637d1",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "32.sql:51-59",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A CTE assigns ascending and descending ROW_NUMBER values to ordered measurements, then an aggregate over the central rank slice calculates a median.",
+      "mysql_mariadb_translation": "Reauthored as an independent service-queue duration report. Each queue ranks fixed ticket durations in both directions with deterministic ticket tie-breakers; a grouped outer query averages rows whose opposing ranks differ by at most one, covering odd and even queue sizes. The schema, values, aliases, and operational meaning are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "cte",
+    "row-number",
+    "partitioned-window",
+    "dual-window-ordering",
+    "median",
+    "aggregate",
+    "grouping",
+    "derived-table",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Billing has four durations and yields the average of its two middle values. Support has five durations and yields its single middle value. Operations has three durations and exercises the odd-sized middle row independently.",
+  "determinism_notes": "Queue names, ticket IDs, durations, ascending and descending rank tie-breakers, rank filter, grouping, and final ordering are fixed; there are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE service_tickets (ticket_id INT PRIMARY KEY, queue_name VARCHAR(16) NOT NULL, duration_minutes INT NOT NULL)",
+    "INSERT INTO service_tickets VALUES (1, 'Billing', 10), (2, 'Billing', 20), (3, 'Billing', 30), (4, 'Billing', 40), (11, 'Support', 5), (12, 'Support', 15), (13, 'Support', 25), (14, 'Support', 35), (15, 'Support', 45), (21, 'Operations', 60), (22, 'Operations', 80), (23, 'Operations', 100)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH ranked_durations AS (SELECT queue_name, ticket_id, duration_minutes, ROW_NUMBER() OVER (PARTITION BY queue_name ORDER BY duration_minutes ASC, ticket_id ASC) AS ascending_rank, ROW_NUMBER() OVER (PARTITION BY queue_name ORDER BY duration_minutes DESC, ticket_id DESC) AS descending_rank FROM service_tickets), median_by_queue AS (SELECT queue_name, AVG(duration_minutes) AS median_minutes FROM ranked_durations WHERE ABS(ascending_rank - descending_rank) <= 1 GROUP BY queue_name) SELECT queue_name, median_minutes FROM median_by_queue ORDER BY queue_name",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT queue_name, ticket_id, duration_minutes FROM service_tickets ORDER BY queue_name, duration_minutes, ticket_id",
+      "ordered": true
+    }
+  ]
+}
