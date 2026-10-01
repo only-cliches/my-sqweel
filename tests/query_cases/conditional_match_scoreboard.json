@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "id": "conditional_match_scoreboard",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Victorgonbu/SQL",
+      "commit": "60f4b02f66072253286e66472f7ff75c29d960bd",
+      "path": "join.sql",
+      "url": "https://github.com/Victorgonbu/SQL/blob/60f4b02f66072253286e66472f7ff75c29d960bd/join.sql",
+      "sha256": "2424cdf60dfcea633d1145226b54aef303cf535b7afc5af1aac11c7824a1c189",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "join.sql:35-49",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped LEFT JOIN conditionally counts child events against each of two parent-side participant columns to compute two scores.",
+      "mysql_mariadb_translation": "Reauthored as a tournament scoreboard. Fixed matches are left joined to scoring events, and separate CASE aggregates count events for the home and away teams while preserving a scoreless match."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "left-join",
+    "conditional-aggregate",
+    "parent-column-comparison",
+    "zero-match-preservation",
+    "grouped-read",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Match 3101 has two home and one away score, match 3102 is scoreless and must remain with zero totals, and match 3103 has one away score.",
+  "determinism_notes": "Match, team, score-event identifiers, participant columns, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE tournament_matches (match_id INT PRIMARY KEY, match_day DATE NOT NULL, home_team_id INT NOT NULL, away_team_id INT NOT NULL)",
+    "CREATE TABLE tournament_scores (score_event_id INT PRIMARY KEY, match_id INT NOT NULL, scoring_team_id INT NOT NULL)",
+    "INSERT INTO tournament_matches VALUES (3101, '2026-10-04', 41, 42), (3102, '2026-10-05', 43, 44), (3103, '2026-10-06', 42, 43)",
+    "INSERT INTO tournament_scores VALUES (7101, 3101, 41), (7102, 3101, 42), (7103, 3101, 41), (7104, 3103, 43)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT m.match_id, m.match_day, m.home_team_id, SUM(CASE WHEN s.scoring_team_id = m.home_team_id THEN 1 ELSE 0 END) AS home_score, m.away_team_id, SUM(CASE WHEN s.scoring_team_id = m.away_team_id THEN 1 ELSE 0 END) AS away_score FROM tournament_matches AS m LEFT JOIN tournament_scores AS s ON s.match_id = m.match_id GROUP BY m.match_id, m.match_day, m.home_team_id, m.away_team_id ORDER BY m.match_day, m.match_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT match_id, match_day, home_team_id, away_team_id FROM tournament_matches ORDER BY match_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT score_event_id, match_id, scoring_team_id FROM tournament_scores ORDER BY score_event_id",
+      "ordered": true
+    }
+  ]
+}

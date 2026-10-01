@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "conditional_match_scoreboard_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "conditional_match_scoreboard",
+    "source": {
+      "kind": "github",
+      "repository": "Victorgonbu/SQL",
+      "commit": "60f4b02f66072253286e66472f7ff75c29d960bd",
+      "path": "join.sql",
+      "url": "https://github.com/Victorgonbu/SQL/blob/60f4b02f66072253286e66472f7ff75c29d960bd/join.sql",
+      "sha256": "2424cdf60dfcea633d1145226b54aef303cf535b7afc5af1aac11c7824a1c189",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "join.sql:35-49",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped LEFT JOIN conditionally counts child events against each of two parent-side participant columns to compute two scores.",
+      "mysql_mariadb_translation": "Minimized to one scored match and one scoreless match, retaining the two conditional aggregates and the zero-preserving LEFT JOIN."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "left-join",
+    "conditional-aggregate",
+    "parent-column-comparison",
+    "zero-match-preservation"
+  ],
+  "fixture_notes": "Match 3151 has one home score; match 3152 has no score events and must remain with two zero totals.",
+  "determinism_notes": "Match and score-event identifiers and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE tournament_matches (match_id INT PRIMARY KEY, match_day DATE NOT NULL, home_team_id INT NOT NULL, away_team_id INT NOT NULL)",
+    "CREATE TABLE tournament_scores (score_event_id INT PRIMARY KEY, match_id INT NOT NULL, scoring_team_id INT NOT NULL)",
+    "INSERT INTO tournament_matches VALUES (3151, '2026-11-01', 51, 52), (3152, '2026-11-02', 53, 54)",
+    "INSERT INTO tournament_scores VALUES (7151, 3151, 51)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT m.match_id, m.match_day, m.home_team_id, SUM(CASE WHEN s.scoring_team_id = m.home_team_id THEN 1 ELSE 0 END) AS home_score, m.away_team_id, SUM(CASE WHEN s.scoring_team_id = m.away_team_id THEN 1 ELSE 0 END) AS away_score FROM tournament_matches AS m LEFT JOIN tournament_scores AS s ON s.match_id = m.match_id GROUP BY m.match_id, m.match_day, m.home_team_id, m.away_team_id ORDER BY m.match_day, m.match_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT match_id, match_day, home_team_id, away_team_id FROM tournament_matches ORDER BY match_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT score_event_id, match_id, scoring_team_id FROM tournament_scores ORDER BY score_event_id",
+      "ordered": true
+    }
+  ]
+}
