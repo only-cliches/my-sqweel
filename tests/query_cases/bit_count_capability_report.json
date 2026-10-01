@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "bit_count_capability_report",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/2412.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/2412.sql",
+      "sha256": "2e46e3649ba3280da7fa087396fd2d55eb4935032fe86e060fd87fd188ca1b01",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/docker/fuzz_root/mysql_initlib/2412.sql:1-4",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "Bit masks are combined with bitwise AND and counted with BIT_COUNT to report how many requested capabilities are enabled.",
+      "mysql_mariadb_translation": "Reauthored as a capability audit. Each principal has a stored bit mask, the report intersects it with a fixed requested-capability mask, counts enabled bits with BIT_COUNT, and orders the audit deterministically. The source schema, identifiers, and values are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "bit-count",
+    "bitwise-and",
+    "bitmask-intersection",
+    "typed-integer-expression",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The requested mask 7 represents read, write, and export. Principals have zero, partial, and full overlaps; the report exposes both the intersected mask and its population count.",
+  "determinism_notes": "Fixed principal IDs, integer masks, requested mask, expression aliases, and final ordering; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE capability_principals (principal_id INT PRIMARY KEY, principal_name VARCHAR(32) NOT NULL, capability_mask INT NOT NULL)",
+    "INSERT INTO capability_principals VALUES (101, 'Ada', 0), (102, 'Bryn', 3), (103, 'Cyra', 7), (104, 'Dara', 12)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT principal_id, principal_name, capability_mask & 7 AS matched_mask, BIT_COUNT(capability_mask & 7) AS matched_capabilities FROM capability_principals ORDER BY principal_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT principal_id, principal_name, capability_mask & 7 AS matched_mask, BIT_COUNT(capability_mask & 7) AS matched_capabilities FROM capability_principals ORDER BY principal_id",
+      "ordered": true
+    }
+  ]
+}

@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "bit_count_capability_report_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "bit_count_capability_report",
+    "source": {
+      "kind": "github",
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/2412.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/2412.sql",
+      "sha256": "2e46e3649ba3280da7fa087396fd2d55eb4935032fe86e060fd87fd188ca1b01",
+      "source_dialect": "mysql-mariadb"
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "bit-count",
+    "bitwise-and",
+    "bitmask-intersection",
+    "minimized-regression"
+  ],
+  "fixture_notes": "The requested mask 7 is applied to one partial-overlap mask and one full-overlap mask, retaining both BIT_COUNT and bitwise intersection behavior.",
+  "determinism_notes": "Fixed principal IDs, integer masks, requested mask, expression aliases, and final ordering; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE mini_capability_principals (principal_id INT PRIMARY KEY, principal_name VARCHAR(32) NOT NULL, capability_mask INT NOT NULL)",
+    "INSERT INTO mini_capability_principals VALUES (201, 'Eli', 2), (202, 'Faye', 7)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT principal_id, principal_name, capability_mask & 7 AS matched_mask, BIT_COUNT(capability_mask & 7) AS matched_capabilities FROM mini_capability_principals ORDER BY principal_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT principal_id, principal_name, capability_mask & 7 AS matched_mask, BIT_COUNT(capability_mask & 7) AS matched_capabilities FROM mini_capability_principals ORDER BY principal_id",
+      "ordered": true
+    }
+  ]
+}
