@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "percentile_disc_queue_window_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "felipebz/zpa",
+      "commit": "28e6ebb33ae8db2beea9fa2b33f67f7c98b1f165",
+      "path": "zpa-checks/src/integrationTest/resources/sources/oracle-database_26/sqlrf/PERCENTILE_DISC-0.sql",
+      "url": "https://github.com/felipebz/zpa/blob/28e6ebb33ae8db2beea9fa2b33f67f7c98b1f165/zpa-checks/src/integrationTest/resources/sources/oracle-database_26/sqlrf/PERCENTILE_DISC-0.sql",
+      "sha256": "5a52a8bf84484f60a8a3290edef8cffead7a2ab57d9a25c990d7a9c5cefe0ad7",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "zpa-checks/src/integrationTest/resources/sources/oracle-database_26/sqlrf/PERCENTILE_DISC-0.sql:2-9",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "PERCENTILE_DISC selects a discrete ordered value per partition at a requested percentile, paired with an analytic distribution metric.",
+      "mysql_mariadb_translation": "Reauthored as an independent queue-priority audit. PERCENTILE_DISC(0.5) selects the upper-middle priority from each queue using descending priority order over a partition; source schemas and values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "percentile-disc-window",
+    "within-group-ordering",
+    "partitioned-discrete-percentile",
+    "descending-order",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Each queue has four or five priorities, exercising discrete upper-middle selection for both even and odd partition sizes.",
+  "determinism_notes": "All queue rows, priority values, percentile, partitioning, ordering, and output ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE queue_jobs (job_id INT PRIMARY KEY, queue_code VARCHAR(16) NOT NULL, job_no INT NOT NULL, priority_score INT NOT NULL)",
+    "INSERT INTO queue_jobs VALUES (9101, 'BLUE', 1, 12), (9102, 'BLUE', 2, 45), (9103, 'BLUE', 3, 28), (9104, 'BLUE', 4, 67), (9105, 'BLUE', 5, 33), (9201, 'GREEN', 1, 8), (9202, 'GREEN', 2, 52), (9203, 'GREEN', 3, 19), (9204, 'GREEN', 4, 41)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT queue_code, job_no, priority_score, PERCENTILE_DISC(0.5) WITHIN GROUP (ORDER BY priority_score DESC) OVER (PARTITION BY queue_code) AS median_priority FROM queue_jobs ORDER BY queue_code, job_no",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}

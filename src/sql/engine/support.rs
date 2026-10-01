@@ -85,7 +85,12 @@ impl Visitor for SupportValidator {
                                 .name
                                 .0
                                 .last()
-                                .is_some_and(|name| name.value.eq_ignore_ascii_case("PERCENTILE_CONT")))) =>
+                                .is_some_and(|name| {
+                                    matches!(
+                                        name.value.to_ascii_uppercase().as_str(),
+                                        "PERCENTILE_CONT" | "PERCENTILE_DISC"
+                                    )
+                                }))) =>
             {
                 unsupported(format!("function modifier in `{function}`"))
             }
@@ -111,7 +116,7 @@ impl Visitor for SupportValidator {
                         | "NTH_VALUE"
                         | "MEDIAN"
                         | "PERCENTILE_CONT"
-                        | "COUNT"
+                        | "PERCENTILE_DISC"
                         | "SUM"
                         | "AVG"
                         | "MIN"
