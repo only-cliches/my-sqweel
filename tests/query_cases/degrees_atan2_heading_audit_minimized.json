@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "degrees_atan2_heading_audit_minimized",
+  "provenance": {
+    "kind": "minimized-from-query-case",
+    "parent_case": "degrees_atan2_heading_audit",
+    "source": {
+      "kind": "github",
+      "repository": "postgis/postgis",
+      "commit": "ce378b4e246875c38d102756d96016465e532b31",
+      "path": "regress/core/azimuth.sql",
+      "url": "https://github.com/postgis/postgis/blob/ce378b4e246875c38d102756d96016465e532b31/regress/core/azimuth.sql",
+      "sha256": "222785e057e0b47bf4564d868951fb31567ec909479d31775c3c96a19b7bc1fb",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "Minimized from regress/core/azimuth.sql:38-46",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A signed azimuth is converted from radians into a rounded degree heading.",
+      "mysql_mariadb_translation": "Reduced to newly authored east and north Cartesian deltas while retaining ATAN2, DEGREES, rounding, and deterministic ordering without PostGIS geometry."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "degrees",
+    "atan2",
+    "trigonometry",
+    "directional-classification",
+    "numeric-expression",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The reduced case retains perpendicular positive-axis headings with non-zero deltas.",
+  "determinism_notes": "Direction identifiers, signed deltas, rounding scale, and output ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE mini_direction_samples (direction_id INT PRIMARY KEY, direction_name VARCHAR(32) NOT NULL, delta_x DECIMAL(8,4) NOT NULL, delta_y DECIMAL(8,4) NOT NULL)",
+    "INSERT INTO mini_direction_samples VALUES (1301, 'east', 10.0000, 0.0000), (1302, 'north', 0.0000, 10.0000)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT direction_id, direction_name, ROUND(DEGREES(ATAN2(delta_y, delta_x)), 3) AS heading_degrees FROM mini_direction_samples ORDER BY direction_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}

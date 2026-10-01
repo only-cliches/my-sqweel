@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "degrees_atan2_heading_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "postgis/postgis",
+      "commit": "ce378b4e246875c38d102756d96016465e532b31",
+      "path": "regress/core/azimuth.sql",
+      "url": "https://github.com/postgis/postgis/blob/ce378b4e246875c38d102756d96016465e532b31/regress/core/azimuth.sql",
+      "sha256": "222785e057e0b47bf4564d868951fb31567ec909479d31775c3c96a19b7bc1fb",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "regress/core/azimuth.sql:38-46",
+      "source_dialect": "postgresql",
+      "observed_pattern": "Azimuth values are converted from radians to rounded degrees for directional reporting.",
+      "mysql_mariadb_translation": "Reauthored as a direct ordered SELECT over newly authored Cartesian direction deltas. ATAN2 derives each signed heading and DEGREES converts it to rounded degree output, avoiding PostGIS geometry, casts, and source coordinates."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "degrees",
+    "atan2",
+    "trigonometry",
+    "directional-classification",
+    "numeric-expression",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The direction set includes all four axes plus a southeast diagonal so signed and diagonal headings are observable.",
+  "determinism_notes": "Direction identifiers, signed deltas, rounding scale, and output ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE direction_samples (direction_id INT PRIMARY KEY, direction_name VARCHAR(32) NOT NULL, delta_x DECIMAL(8,4) NOT NULL, delta_y DECIMAL(8,4) NOT NULL)",
+    "INSERT INTO direction_samples VALUES (1201, 'east', 10.0000, 0.0000), (1202, 'north', 0.0000, 10.0000), (1203, 'west', -10.0000, 0.0000), (1204, 'south', 0.0000, -10.0000), (1205, 'southeast', 7.0000, -7.0000)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT direction_id, direction_name, ROUND(DEGREES(ATAN2(delta_y, delta_x)), 3) AS heading_degrees FROM direction_samples ORDER BY direction_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
