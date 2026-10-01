@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "group_concat_window_region_summary_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "group_concat_window_region_summary",
+    "source": {
+      "kind": "github",
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/4890.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/4890.sql",
+      "sha256": "730aa44bd2d57646c8aa9aa18e967ffabc7b186836bc832fa6dcbb50f6937433",
+      "source_dialect": "mysql-mariadb"
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "group-concat",
+    "ordered-group-concat",
+    "window-aggregate",
+    "group-by",
+    "inner-join",
+    "minimized-regression"
+  ],
+  "fixture_notes": "Two regions provide one and two grouped rows. Ordered concatenation and a running maximum retain the paired grouped/window behavior with the smallest multi-group dataset.",
+  "determinism_notes": "Fixed region IDs, sale codes, join keys, GROUP_CONCAT ordering, window ordering, grouping, and final ordering; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE mini_sales_regions (region_id INT PRIMARY KEY, region_code VARCHAR(8) NOT NULL)",
+    "CREATE TABLE mini_region_sales (sale_id INT PRIMARY KEY, region_id INT NOT NULL, sale_code VARCHAR(16) NOT NULL)",
+    "INSERT INTO mini_sales_regions VALUES (8201, 'EAST'), (8202, 'SOUTH')",
+    "INSERT INTO mini_region_sales VALUES (9401, 8201, 'E-02'), (9501, 8202, 'S-01'), (9502, 8202, 'S-02')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT r.region_id, r.region_code, GROUP_CONCAT(s.sale_code ORDER BY s.sale_code SEPARATOR '|') AS sale_directory, MIN(r.region_id) OVER (ROWS UNBOUNDED PRECEDING) AS first_region_id, MAX(r.region_id) OVER (ORDER BY r.region_id ROWS UNBOUNDED PRECEDING) AS running_region_id FROM mini_sales_regions AS r INNER JOIN mini_region_sales AS s ON s.region_id = r.region_id GROUP BY r.region_id, r.region_code ORDER BY r.region_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT r.region_id, r.region_code, GROUP_CONCAT(s.sale_code ORDER BY s.sale_code SEPARATOR '|') AS sale_directory, MIN(r.region_id) OVER (ROWS UNBOUNDED PRECEDING) AS first_region_id, MAX(r.region_id) OVER (ORDER BY r.region_id ROWS UNBOUNDED PRECEDING) AS running_region_id FROM mini_sales_regions AS r INNER JOIN mini_region_sales AS s ON s.region_id = r.region_id GROUP BY r.region_id, r.region_code ORDER BY r.region_id",
+      "ordered": true
+    }
+  ]
+}
