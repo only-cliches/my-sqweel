@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "id": "member_badge_coverage",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "najirh/50_days_sql_challenge",
+      "commit": "960daf2811da97c5eb9aa7475e5f445ef02f3d44",
+      "path": "17.sql",
+      "url": "https://github.com/najirh/50_days_sql_challenge/blob/960daf2811da97c5eb9aa7475e5f445ef02f3d44/17.sql",
+      "sha256": "e1f4a6629e733fff8e96eb882d1598da02c3fedfa768c94856df03751ad12080",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "17.sql:45-62",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped customer-membership query uses COUNT(DISTINCT ...) in HAVING and compares that count with a scalar subquery counting the complete category set, implementing relational division.",
+      "mysql_mariadb_translation": "Reauthored as an independent report of members who earned every required badge. It joins members to badge awards, counts distinct required badges per member, and compares that count with a scalar COUNT(DISTINCT ...) over the required-badge table; all names, rows, and business context are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "count-distinct",
+    "scalar-aggregate-subquery",
+    "relational-division",
+    "having-aggregate-threshold",
+    "joined-grouped-filter",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Three required badges are defined. Member 701 earned all three, member 702 earned two, and member 703 earned all three with a duplicate award; only the complete members should qualify while COUNT(DISTINCT) suppresses the duplicate.",
+  "determinism_notes": "Fixed member IDs, badge codes, award rows, scalar category set, aliases, and final ordering; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE badge_catalog (badge_code VARCHAR(16) PRIMARY KEY, badge_label VARCHAR(32) NOT NULL)",
+    "CREATE TABLE badge_members (member_id INT PRIMARY KEY, member_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE badge_awards (member_id INT NOT NULL, badge_code VARCHAR(16) NOT NULL, award_seq INT NOT NULL, PRIMARY KEY (member_id, badge_code, award_seq))",
+    "INSERT INTO badge_catalog VALUES ('audit', 'Audit Ready'), ('deploy', 'Deployment Ready'), ('mentor', 'Mentor Ready')",
+    "INSERT INTO badge_members VALUES (701, 'Inez'), (702, 'Jules'), (703, 'Kato')",
+    "INSERT INTO badge_awards VALUES (701, 'audit', 1), (701, 'deploy', 2), (701, 'mentor', 3), (702, 'audit', 1), (702, 'deploy', 2), (703, 'audit', 1), (703, 'deploy', 2), (703, 'mentor', 3), (703, 'mentor', 4)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT m.member_id, m.member_name, COUNT(DISTINCT a.badge_code) AS earned_required_badges FROM badge_members AS m JOIN badge_awards AS a ON a.member_id = m.member_id JOIN badge_catalog AS b ON b.badge_code = a.badge_code GROUP BY m.member_id, m.member_name HAVING COUNT(DISTINCT a.badge_code) = (SELECT COUNT(DISTINCT badge_code) FROM badge_catalog) ORDER BY m.member_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT m.member_id, m.member_name, COUNT(DISTINCT a.badge_code) AS earned_required_badges FROM badge_members AS m JOIN badge_awards AS a ON a.member_id = m.member_id JOIN badge_catalog AS b ON b.badge_code = a.badge_code GROUP BY m.member_id, m.member_name HAVING COUNT(DISTINCT a.badge_code) = (SELECT COUNT(DISTINCT badge_code) FROM badge_catalog) ORDER BY m.member_id",
+      "ordered": true
+    }
+  ]
+}
