@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "id": "grouped_capacity_delete",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "cdeweyx/ds-career-resources",
+      "commit": "cffaa144b19532dc3c61888491041f9a9e4733da",
+      "path": "sql/sql_exercises3.sql",
+      "url": "https://github.com/cdeweyx/ds-career-resources/blob/cffaa144b19532dc3c61888491041f9a9e4733da/sql/sql_exercises3.sql",
+      "sha256": "caced93b7291f41c77e50e07e777ad9005703bdeb1608a4a689536b9adf4d7ed",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/sql_exercises3.sql:86-99",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A DELETE filters rows by a grouped join subquery whose HAVING clause compares the group count against a capacity column from the joined parent table.",
+      "mysql_mariadb_translation": "Reauthored as a deterministic storage cleanup. Units are deleted when their site is over capacity, using a grouped child-to-parent join and a parent capacity threshold; under-capacity and empty sites remain. The schema, rows, labels, and values are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "grouped-join-subquery",
+    "having-column-threshold",
+    "delete-in-subquery",
+    "capacity-comparison",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Site 1301 has capacity two and three units, so all its units are deleted. Site 1302 is exactly at capacity and remains. Site 1303 is empty and remains represented in the parent table.",
+  "determinism_notes": "Fixed site codes, capacities, unit rows, and ordered final-state checks are used; no clocks, randomness, sleeps, or concurrent schedules are involved.",
+  "setup": [
+    "CREATE TABLE storage_sites (site_code INT PRIMARY KEY, site_name VARCHAR(64) NOT NULL, capacity INT NOT NULL)",
+    "CREATE TABLE storage_units (unit_code VARCHAR(16) PRIMARY KEY, site_code INT NOT NULL, unit_label VARCHAR(64) NOT NULL, unit_value INT NOT NULL)",
+    "INSERT INTO storage_sites VALUES (1301, 'North depot', 2), (1302, 'Central depot', 2), (1303, 'Empty depot', 4)",
+    "INSERT INTO storage_units VALUES ('U1301A', 1301, 'alpha', 11), ('U1301B', 1301, 'bravo', 12), ('U1301C', 1301, 'charlie', 13), ('U1302A', 1302, 'delta', 21), ('U1302B', 1302, 'echo', 22)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT s.site_code, COUNT(u.unit_code) AS unit_count, s.capacity FROM storage_units AS u JOIN storage_sites AS s ON u.site_code = s.site_code GROUP BY s.site_code, s.capacity HAVING COUNT(u.unit_code) > s.capacity ORDER BY s.site_code",
+      "ordered": true
+    },
+    {
+      "sql": "DELETE FROM storage_units WHERE site_code IN (SELECT saturated.site_code FROM (SELECT s.site_code FROM storage_units AS u JOIN storage_sites AS s ON u.site_code = s.site_code GROUP BY s.site_code, s.capacity HAVING COUNT(*) > s.capacity) AS saturated)",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT site_code, site_name, capacity FROM storage_sites ORDER BY site_code",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT unit_code, site_code, unit_label, unit_value FROM storage_units ORDER BY unit_code",
+      "ordered": true
+    }
+  ]
+}

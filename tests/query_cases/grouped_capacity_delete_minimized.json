@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "grouped_capacity_delete_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "grouped_capacity_delete",
+    "source": {
+      "kind": "github",
+      "repository": "cdeweyx/ds-career-resources",
+      "commit": "cffaa144b19532dc3c61888491041f9a9e4733da",
+      "path": "sql/sql_exercises3.sql",
+      "url": "https://github.com/cdeweyx/ds-career-resources/blob/cffaa144b19532dc3c61888491041f9a9e4733da/sql/sql_exercises3.sql",
+      "sha256": "caced93b7291f41c77e50e07e777ad9005703bdeb1608a4a689536b9adf4d7ed",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/sql_exercises3.sql:86-99",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A DELETE uses a grouped child-parent join and HAVING count threshold to select over-capacity parents.",
+      "mysql_mariadb_translation": "Minimized to one over-capacity site and one site exactly at capacity, with a nested grouped subquery driving deletion of only the over-capacity site's units."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "grouped-join-subquery",
+    "having-column-threshold",
+    "delete-in-subquery",
+    "capacity-comparison"
+  ],
+  "fixture_notes": "Site 1351 exceeds capacity and loses both units; site 1352 is exactly at capacity and retains its unit.",
+  "determinism_notes": "Fixed site codes, capacities, unit rows, and ordered final-state checks are used; no clocks, randomness, sleeps, or concurrent schedules are involved.",
+  "setup": [
+    "CREATE TABLE storage_sites (site_code INT PRIMARY KEY, site_name VARCHAR(64) NOT NULL, capacity INT NOT NULL)",
+    "CREATE TABLE storage_units (unit_code VARCHAR(16) PRIMARY KEY, site_code INT NOT NULL, unit_label VARCHAR(64) NOT NULL, unit_value INT NOT NULL)",
+    "INSERT INTO storage_sites VALUES (1351, 'Overfull depot', 1), (1352, 'Balanced depot', 1)",
+    "INSERT INTO storage_units VALUES ('U1351A', 1351, 'alpha', 31), ('U1351B', 1351, 'bravo', 32), ('U1352A', 1352, 'charlie', 41)"
+  ],
+  "steps": [
+    {
+      "sql": "DELETE FROM storage_units WHERE site_code IN (SELECT saturated.site_code FROM (SELECT s.site_code FROM storage_units AS u JOIN storage_sites AS s ON u.site_code = s.site_code GROUP BY s.site_code, s.capacity HAVING COUNT(*) > s.capacity) AS saturated)",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT site_code, site_name, capacity FROM storage_sites ORDER BY site_code",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT unit_code, site_code, unit_label, unit_value FROM storage_units ORDER BY unit_code",
+      "ordered": true
+    }
+  ]
+}
