@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "id": "json_ordinal_update_join_minimized",
+  "provenance": {
+    "kind": "minimized-from-query-case",
+    "source": {
+      "kind": "github",
+      "repository": "open-metadata/OpenMetadata",
+      "commit": "ae0872162cc356cd481ab7dd8d0f55e2d143b773",
+      "path": "bootstrap/sql/migrations/native/2.0.0/mysql/postDataMigrationSQLScript.sql",
+      "url": "https://github.com/open-metadata/OpenMetadata/blob/ae0872162cc356cd481ab7dd8d0f55e2d143b773/bootstrap/sql/migrations/native/2.0.0/mysql/postDataMigrationSQLScript.sql",
+      "sha256": "37b704fd06918132be606efe944cd345b9c3bbf3fd10d672701faf7923dc54db",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "bootstrap/sql/migrations/native/2.0.0/mysql/postDataMigrationSQLScript.sql:319-339",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "An UPDATE JOIN uses JSON_TABLE's ordinal position to construct a dynamic JSON_SET path for one matching array element.",
+      "mysql_mariadb_translation": "Reduced to one independently authored sensitive tag document with the target recognizer in the second array position, followed by two identical updates so the dynamic ordinal path and idempotent filter remain observable."
+    },
+    "independently_authored": true,
+    "minimized_from": "json_ordinal_update_join"
+  },
+  "features": [
+    "json-column",
+    "json-table",
+    "json-table-ordinality",
+    "update-join",
+    "dynamic-json-path",
+    "json-set",
+    "idempotent-json-update"
+  ],
+  "fixture_notes": "The only target recognizer is the second item in a two-element array. The first update changes its pattern through a dynamically constructed zero-based path; the repeated update must be a no-op because the old token no longer matches.",
+  "determinism_notes": "The tag ID, JSON array order, recognizer names and patterns, update path, and final projection are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE ordinal_probe (probe_id INT PRIMARY KEY, document JSON NOT NULL)",
+    "INSERT INTO ordinal_probe VALUES (901, JSON_OBJECT('category', 'sensitive', 'recognizers', JSON_ARRAY(JSON_OBJECT('name', 'Words', 'pattern', '[A-Za-z]+'), JSON_OBJECT('name', 'Digits', 'pattern', 'digits-v1'))))"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE ordinal_probe AS target JOIN (SELECT source.probe_id, jt.rec_idx FROM ordinal_probe AS source, JSON_TABLE(source.document, '$.recognizers[*]' COLUMNS (rec_idx FOR ORDINALITY, rec_name VARCHAR(32) PATH '$.name', rec_pattern VARCHAR(128) PATH '$.pattern')) AS jt WHERE JSON_UNQUOTE(JSON_EXTRACT(source.document, '$.category')) = 'sensitive' AND jt.rec_name = 'Digits' AND jt.rec_pattern = 'digits-v1') AS matches ON matches.probe_id = target.probe_id SET target.document = JSON_SET(target.document, CONCAT('$.recognizers[', matches.rec_idx - 1, '].pattern'), 'digits-v2')",
+      "ordered": false
+    },
+    {
+      "sql": "UPDATE ordinal_probe AS target JOIN (SELECT source.probe_id, jt.rec_idx FROM ordinal_probe AS source, JSON_TABLE(source.document, '$.recognizers[*]' COLUMNS (rec_idx FOR ORDINALITY, rec_name VARCHAR(32) PATH '$.name', rec_pattern VARCHAR(128) PATH '$.pattern')) AS jt WHERE JSON_UNQUOTE(JSON_EXTRACT(source.document, '$.category')) = 'sensitive' AND jt.rec_name = 'Digits' AND jt.rec_pattern = 'digits-v1') AS matches ON matches.probe_id = target.probe_id SET target.document = JSON_SET(target.document, CONCAT('$.recognizers[', matches.rec_idx - 1, '].pattern'), 'digits-v2')",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT probe_id, JSON_UNQUOTE(JSON_EXTRACT(document, '$.recognizers[0].pattern')) AS first_pattern, JSON_UNQUOTE(JSON_EXTRACT(document, '$.recognizers[1].pattern')) AS second_pattern FROM ordinal_probe ORDER BY probe_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT probe_id, JSON_UNQUOTE(JSON_EXTRACT(document, '$.recognizers[0].pattern')) AS first_pattern, JSON_UNQUOTE(JSON_EXTRACT(document, '$.recognizers[1].pattern')) AS second_pattern FROM ordinal_probe ORDER BY probe_id",
+      "ordered": true
+    }
+  ]
+}

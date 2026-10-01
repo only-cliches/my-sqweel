@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "id": "json_ordinal_update_join",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "open-metadata/OpenMetadata",
+      "commit": "ae0872162cc356cd481ab7dd8d0f55e2d143b773",
+      "path": "bootstrap/sql/migrations/native/2.0.0/mysql/postDataMigrationSQLScript.sql",
+      "url": "https://github.com/open-metadata/OpenMetadata/blob/ae0872162cc356cd481ab7dd8d0f55e2d143b773/bootstrap/sql/migrations/native/2.0.0/mysql/postDataMigrationSQLScript.sql",
+      "sha256": "37b704fd06918132be606efe944cd345b9c3bbf3fd10d672701faf7923dc54db",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "bootstrap/sql/migrations/native/2.0.0/mysql/postDataMigrationSQLScript.sql:319-339",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "An UPDATE JOIN derives a JSON array element's identifier and ordinal position through JSON_TABLE, then uses the ordinal position to construct a dynamic JSON_SET path for the matching nested value.",
+      "mysql_mariadb_translation": "Reauthored as a recognizer-pattern refresh. A derived JSON_TABLE relation finds a named recognizer in sensitive tag documents, and the joined UPDATE rewrites only that recognizer's array element by converting its old pattern to a bounded pattern with a dynamically constructed zero-based path. New tables, documents, names, and values are independently authored."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "json-column",
+    "json-table",
+    "json-table-ordinality",
+    "update-join",
+    "derived-relation",
+    "dynamic-json-path",
+    "json-set",
+    "conditional-filter",
+    "idempotent-json-update",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Tag 201 has the target Digits recognizer at ordinal position two and must update only that nested pattern. Tag 202 has the same recognizer in a non-sensitive document, tag 203 has a different old pattern, and tag 204 has the target at ordinal position three; those controls verify category, pattern, and dynamic-index filtering. Repeating the update finds no old token and leaves the result unchanged.",
+  "determinism_notes": "Tag IDs, JSON array order, recognizer names and patterns, derived ordinals, update paths, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE tag_documents (tag_id INT PRIMARY KEY, tag_name VARCHAR(48) NOT NULL, document JSON NOT NULL)",
+    "INSERT INTO tag_documents VALUES (201, 'Sensitive labels', JSON_OBJECT('category', 'sensitive', 'recognizers', JSON_ARRAY(JSON_OBJECT('name', 'Words', 'pattern', '[A-Za-z]+'), JSON_OBJECT('name', 'Digits', 'pattern', 'digits-v1')))), (202, 'Ordinary labels', JSON_OBJECT('category', 'ordinary', 'recognizers', JSON_ARRAY(JSON_OBJECT('name', 'Digits', 'pattern', 'digits-v1')))), (203, 'Sensitive alternate', JSON_OBJECT('category', 'sensitive', 'recognizers', JSON_ARRAY(JSON_OBJECT('name', 'Digits', 'pattern', 'alternate-v1')))), (204, 'Sensitive tail', JSON_OBJECT('category', 'sensitive', 'recognizers', JSON_ARRAY(JSON_OBJECT('name', 'Words', 'pattern', '[A-Za-z]+'), JSON_OBJECT('name', 'Symbols', 'pattern', '[#@]+'), JSON_OBJECT('name', 'Digits', 'pattern', 'digits-v1'))))"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE tag_documents AS target JOIN (SELECT source.tag_id, jt.rec_idx FROM tag_documents AS source, JSON_TABLE(source.document, '$.recognizers[*]' COLUMNS (rec_idx FOR ORDINALITY, rec_name VARCHAR(32) PATH '$.name', rec_pattern VARCHAR(128) PATH '$.pattern')) AS jt WHERE JSON_UNQUOTE(JSON_EXTRACT(source.document, '$.category')) = 'sensitive' AND jt.rec_name = 'Digits' AND jt.rec_pattern = 'digits-v1') AS matches ON matches.tag_id = target.tag_id SET target.document = JSON_SET(target.document, CONCAT('$.recognizers[', matches.rec_idx - 1, '].pattern'), 'digits-v2')",
+      "ordered": false
+    },
+    {
+      "sql": "UPDATE tag_documents AS target JOIN (SELECT source.tag_id, jt.rec_idx FROM tag_documents AS source, JSON_TABLE(source.document, '$.recognizers[*]' COLUMNS (rec_idx FOR ORDINALITY, rec_name VARCHAR(32) PATH '$.name', rec_pattern VARCHAR(128) PATH '$.pattern')) AS jt WHERE JSON_UNQUOTE(JSON_EXTRACT(source.document, '$.category')) = 'sensitive' AND jt.rec_name = 'Digits' AND jt.rec_pattern = 'digits-v1') AS matches ON matches.tag_id = target.tag_id SET target.document = JSON_SET(target.document, CONCAT('$.recognizers[', matches.rec_idx - 1, '].pattern'), 'digits-v2')",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT tag_id, tag_name, JSON_UNQUOTE(JSON_EXTRACT(document, '$.category')) AS category, JSON_UNQUOTE(JSON_EXTRACT(document, '$.recognizers[0].pattern')) AS first_pattern, JSON_UNQUOTE(JSON_EXTRACT(document, '$.recognizers[1].pattern')) AS second_pattern, JSON_UNQUOTE(JSON_EXTRACT(document, '$.recognizers[2].pattern')) AS third_pattern FROM tag_documents ORDER BY tag_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT tag_id, tag_name, JSON_UNQUOTE(JSON_EXTRACT(document, '$.category')) AS category, JSON_UNQUOTE(JSON_EXTRACT(document, '$.recognizers[0].pattern')) AS first_pattern, JSON_UNQUOTE(JSON_EXTRACT(document, '$.recognizers[1].pattern')) AS second_pattern, JSON_UNQUOTE(JSON_EXTRACT(document, '$.recognizers[2].pattern')) AS third_pattern FROM tag_documents ORDER BY tag_id",
+      "ordered": true
+    }
+  ]
+}
