@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "id": "correlated_threshold_aggregates_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "xfg0218/MySQL2PG",
+      "commit": "55d53fbc058e09c9956098194356fd62e2f8a825",
+      "path": "scripts/mysql/create_view.sql",
+      "url": "https://github.com/xfg0218/MySQL2PG/blob/55d53fbc058e09c9956098194356fd62e2f8a825/scripts/mysql/create_view.sql",
+      "sha256": "97232a8dfaecc2679ee01c22b709fa7738312f9c1f7cdf40667f18f1bccd9a6d",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from scripts/mysql/create_view.sql:169-190",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "Two correlated scalar aggregates read one shared measurement stream with opposite threshold inequalities.",
+      "mysql_mariadb_translation": "Reduced to one active service, one filtered zero-threshold service, and three readings while retaining independent MAX-above and AVG-below correlation."
+    },
+    "independently_authored": true,
+    "minimized_from": "correlated_threshold_aggregates"
+  },
+  "features": [
+    "correlated-scalar-subqueries",
+    "multiple-correlated-aggregates",
+    "max-aggregate",
+    "avg-aggregate",
+    "inequality-correlation",
+    "decimal-thresholds",
+    "filtered-source-rows",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Service 991 uses threshold 10.00 against readings 5.00, 12.00, and 44.00; service 992 has a zero threshold and is filtered. MAX above and AVG below remain independently visible in the single report row.",
+  "determinism_notes": "Service IDs, thresholds, readings, predicates, aliases, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE mini_service_thresholds (service_id INT PRIMARY KEY, service_name VARCHAR(32) NOT NULL, trigger_level DECIMAL(8,2) NOT NULL)",
+    "CREATE TABLE mini_service_measurements (measurement_id INT PRIMARY KEY, reading DECIMAL(8,2) NOT NULL)",
+    "INSERT INTO mini_service_thresholds VALUES (991, 'solo', 10.00), (992, 'disabled', 0.00)",
+    "INSERT INTO mini_service_measurements VALUES (1, 5.00), (2, 12.00), (3, 44.00)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT s.service_id, s.service_name, (SELECT MAX(m.reading) FROM mini_service_measurements AS m WHERE m.reading > s.trigger_level) AS peak_above, (SELECT AVG(m.reading) FROM mini_service_measurements AS m WHERE m.reading < s.trigger_level) AS average_below FROM mini_service_thresholds AS s WHERE s.trigger_level > 0 ORDER BY s.service_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT service_id, service_name, trigger_level FROM mini_service_thresholds ORDER BY service_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT measurement_id, reading FROM mini_service_measurements ORDER BY measurement_id",
+      "ordered": true
+    }
+  ]
+}

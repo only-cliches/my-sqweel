@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "id": "correlated_threshold_aggregates",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "xfg0218/MySQL2PG",
+      "commit": "55d53fbc058e09c9956098194356fd62e2f8a825",
+      "path": "scripts/mysql/create_view.sql",
+      "url": "https://github.com/xfg0218/MySQL2PG/blob/55d53fbc058e09c9956098194356fd62e2f8a825/scripts/mysql/create_view.sql",
+      "sha256": "97232a8dfaecc2679ee01c22b709fa7738312f9c1f7cdf40667f18f1bccd9a6d",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "scripts/mysql/create_view.sql:169-190",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A row source projects two independent correlated scalar aggregate subqueries over one measurement table: MAX selects values above the current row threshold while AVG selects values below it.",
+      "mysql_mariadb_translation": "Reauthored as a service-threshold monitor. Each service receives the maximum observed reading above its threshold and the average reading below it through two correlated scalar aggregates; service names, readings, thresholds, and operational meaning are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "correlated-scalar-subqueries",
+    "multiple-correlated-aggregates",
+    "max-aggregate",
+    "avg-aggregate",
+    "inequality-correlation",
+    "decimal-thresholds",
+    "filtered-source-rows",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Services 901, 902, and 903 use thresholds 10.00, 20.00, and 30.00 against one shared measurement stream; service 904 has a zero threshold and is filtered. The above-threshold maximum and below-threshold average differ per service, making both correlated aggregates observable.",
+  "determinism_notes": "Service IDs, thresholds, measurement values, predicates, aliases, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE service_thresholds (service_id INT PRIMARY KEY, service_name VARCHAR(32) NOT NULL, trigger_level DECIMAL(8,2) NOT NULL)",
+    "CREATE TABLE service_measurements (measurement_id INT PRIMARY KEY, reading DECIMAL(8,2) NOT NULL)",
+    "INSERT INTO service_thresholds VALUES (901, 'alpha', 10.00), (902, 'beta', 20.00), (903, 'gamma', 30.00), (904, 'disabled', 0.00)",
+    "INSERT INTO service_measurements VALUES (1, 5.00), (2, 7.00), (3, 12.00), (4, 18.00), (5, 24.00), (6, 31.00), (7, 44.00)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT s.service_id, s.service_name, (SELECT MAX(m.reading) FROM service_measurements AS m WHERE m.reading > s.trigger_level) AS peak_above, (SELECT AVG(m.reading) FROM service_measurements AS m WHERE m.reading < s.trigger_level) AS average_below FROM service_thresholds AS s WHERE s.trigger_level > 0 ORDER BY s.service_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT service_id, service_name, trigger_level FROM service_thresholds ORDER BY service_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT measurement_id, reading FROM service_measurements ORDER BY measurement_id",
+      "ordered": true
+    }
+  ]
+}
