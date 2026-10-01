@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "id": "nested_order_bundle_json",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "JiveGroup/JiveDBApp",
+      "commit": "8bc3a21d721115ebf262dfae3c45a580494b5ace",
+      "path": "db/seeds/mysql/queries.sql",
+      "url": "https://github.com/JiveGroup/JiveDBApp/blob/8bc3a21d721115ebf262dfae3c45a580494b5ace/db/seeds/mysql/queries.sql",
+      "sha256": "42387d26d3b503ce4b1fb0957502778e50ed80cb9d43e43c48058175362e920b",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "db/seeds/mysql/queries.sql:285-304",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A derived, ordered, limited order relation is joined to users and projected as one nested JSON document: an outer JSON_ARRAYAGG of JSON_OBJECT order records contains a correlated JSON_ARRAYAGG of line-item objects and a correlated single-row JSON_OBJECT payment record.",
+      "mysql_mariadb_translation": "Reauthored as a shipment manifest report. Recently created paid or dispatched shipments are joined to recipients, each manifest contains ordered package objects and the earliest payment object, and the outer JSON array is explicitly ordered with newly authored tables, rows, identifiers, and business labels."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "nested-json-arrayagg",
+    "correlated-subquery",
+    "json-object",
+    "json-pretty",
+    "ordered-json-arrayagg",
+    "derived-order-limit",
+    "inner-join",
+    "conditional-filter",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The report includes the three newest eligible shipments, ordered newest first. Shipment 7003 has two packages and two payment rows, so the earliest payment is selected; shipment 7002 has no payment and therefore exposes a JSON null payment value; the cancelled shipment is excluded.",
+  "determinism_notes": "Sequence numbers, IDs, statuses, item ordering, payment ordering, derived LIMIT ordering, JSON object fields, and outer aggregation ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE manifest_recipients (recipient_id INT PRIMARY KEY, email VARCHAR(96) NOT NULL)",
+    "CREATE TABLE manifest_shipments (shipment_id INT PRIMARY KEY, recipient_id INT NOT NULL, shipment_state VARCHAR(16) NOT NULL, total_cents INT NOT NULL, created_seq INT NOT NULL)",
+    "CREATE TABLE manifest_products (product_id INT PRIMARY KEY, product_name VARCHAR(64) NOT NULL)",
+    "CREATE TABLE manifest_variants (variant_id INT PRIMARY KEY, product_id INT NOT NULL, shade VARCHAR(32) NOT NULL, pack_size VARCHAR(16) NOT NULL)",
+    "CREATE TABLE manifest_packages (package_id INT PRIMARY KEY, shipment_id INT NOT NULL, variant_id INT NOT NULL, quantity INT NOT NULL, unit_price_cents INT NOT NULL)",
+    "CREATE TABLE manifest_payments (payment_id INT PRIMARY KEY, shipment_id INT NOT NULL, payment_method VARCHAR(16) NOT NULL, payment_state VARCHAR(16) NOT NULL, amount_cents INT NOT NULL)",
+    "INSERT INTO manifest_recipients VALUES (41, 'ava@example.test'), (42, 'bo@example.test'), (43, 'cy@example.test'), (44, 'di@example.test')",
+    "INSERT INTO manifest_shipments VALUES (7001, 41, 'paid', 2400, 10), (7002, 42, 'dispatched', 1800, 30), (7003, 43, 'paid', 4200, 40), (7004, 44, 'cancelled', 9900, 50)",
+    "INSERT INTO manifest_products VALUES (301, 'Trail Mug'), (302, 'Field Lantern'), (303, 'Camp Blanket')",
+    "INSERT INTO manifest_variants VALUES (501, 301, 'blue', 'small'), (502, 302, 'amber', 'standard'), (503, 303, 'green', 'large')",
+    "INSERT INTO manifest_packages VALUES (8101, 7001, 501, 2, 600), (8102, 7002, 502, 1, 1800), (8103, 7003, 501, 1, 1200), (8104, 7003, 503, 2, 1500), (8105, 7004, 502, 9, 1100)",
+    "INSERT INTO manifest_payments VALUES (9101, 7001, 'card', 'settled', 2400), (9102, 7002, 'bank', 'pending', 1800), (9103, 7003, 'card', 'authorized', 4200), (9104, 7003, 'wallet', 'settled', 4200)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT JSON_PRETTY(JSON_ARRAYAGG(JSON_OBJECT('shipment_id', selected.shipment_id, 'state', selected.shipment_state, 'total_cents', selected.total_cents, 'email', recipient.email, 'packages', (SELECT JSON_ARRAYAGG(JSON_OBJECT('product', product.product_name, 'shade', variant.shade, 'pack', variant.pack_size, 'quantity', package.quantity, 'unit_price_cents', package.unit_price_cents) ORDER BY package.package_id) FROM manifest_packages AS package JOIN manifest_variants AS variant ON variant.variant_id = package.variant_id JOIN manifest_products AS product ON product.product_id = variant.product_id WHERE package.shipment_id = selected.shipment_id), 'payment', (SELECT JSON_OBJECT('method', payment.payment_method, 'state', payment.payment_state, 'amount_cents', payment.amount_cents) FROM manifest_payments AS payment WHERE payment.shipment_id = selected.shipment_id ORDER BY payment.payment_id LIMIT 1)) ORDER BY selected.created_seq DESC)) AS shipment_manifest FROM (SELECT shipment_id, recipient_id, shipment_state, total_cents, created_seq FROM manifest_shipments WHERE shipment_state IN ('paid', 'dispatched') ORDER BY created_seq DESC LIMIT 3) AS selected JOIN manifest_recipients AS recipient ON recipient.recipient_id = selected.recipient_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT shipment_id, shipment_state, created_seq FROM manifest_shipments ORDER BY shipment_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT shipment_id, shipment_state, created_seq FROM manifest_shipments ORDER BY shipment_id",
+      "ordered": true
+    }
+  ]
+}

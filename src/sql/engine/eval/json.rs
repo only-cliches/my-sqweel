@@ -293,19 +293,30 @@ pub(super) fn eval_json_object(
     data: &Map<String, Value>,
     last_insert_id: u64,
 ) -> Result<Value> {
+    let values = args
+        .iter()
+        .map(|arg| eval_scalar_text(arg, data, last_insert_id))
+        .collect::<Result<Vec<_>>>()?;
+    eval_json_object_values(&values)
+}
+
+pub(super) fn eval_json_object_values(values: &[Value]) -> Result<Value> {
     let mut object = Map::new();
-    for pair in args.chunks(2) {
-        let key = eval_scalar_text(&pair[0], data, last_insert_id)?;
-        if key == Value::Null {
+    for pair in values.chunks(2) {
+        let key = pair
+            .first()
+            .map(json_scalar_to_string)
+            .unwrap_or_default();
+        if pair.first().is_some_and(Value::is_null) {
             return Ok(Value::Null);
         }
-        let value = if let Some(value_arg) = pair.get(1) {
-            eval_scalar_text(value_arg, data, last_insert_id)?
-        } else {
-            Value::Null
-        };
+        let value = pair
+            .get(1)
+            .cloned()
+            .map(normalize_json_object_value)
+            .unwrap_or(Value::Null);
         object.insert(
-            json_scalar_to_string(&key),
+            key,
             if value == Value::Null {
                 json_null_value()
             } else {
@@ -316,6 +327,17 @@ pub(super) fn eval_json_object(
     Ok(Value::Object(object))
 }
 
+fn normalize_json_object_value(value: Value) -> Value {
+    let Value::String(text) = &value else {
+        return value;
+    };
+    let Some(json_text) = text.strip_prefix(JSON_AGGREGATE_TEXT_SENTINEL) else {
+        return value;
+    };
+    serde_json::from_str(json_text)
+        .map(mark_json_nulls)
+        .unwrap_or(value)
+}
 pub(super) fn eval_json_array(
     args: &[String],
     data: &Map<String, Value>,

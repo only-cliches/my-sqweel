@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "id": "nested_order_bundle_json_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "nested_order_bundle_json",
+    "source": {
+      "kind": "github",
+      "repository": "JiveGroup/JiveDBApp",
+      "commit": "8bc3a21d721115ebf262dfae3c45a580494b5ace",
+      "path": "db/seeds/mysql/queries.sql",
+      "url": "https://github.com/JiveGroup/JiveDBApp/blob/8bc3a21d721115ebf262dfae3c45a580494b5ace/db/seeds/mysql/queries.sql",
+      "sha256": "42387d26d3b503ce4b1fb0957502778e50ed80cb9d43e43c48058175362e920b",
+      "source_dialect": "mysql-mariadb"
+    },
+    "source_location": "db/seeds/mysql/queries.sql:285-304",
+    "source_dialect": "mysql-mariadb",
+    "observed_pattern": "A limited parent relation is rendered as nested JSON with correlated line-item and payment subqueries.",
+    "mysql_mariadb_translation": "Reduced to one eligible shipment with one package and one payment, plus one cancelled shipment, preserving the nested JSON_ARRAYAGG, correlated JSON_OBJECT, derived LIMIT, and explicit ordering with newly authored data.",
+    "independently_authored": true,
+    "minimized_from": "nested_order_bundle_json"
+  },
+  "features": [
+    "nested-json-arrayagg",
+    "correlated-subquery",
+    "json-object",
+    "json-pretty",
+    "derived-order-limit",
+    "minimized-regression",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Only shipment 8001 is eligible; it has one package and one payment, while shipment 8002 is cancelled and excluded.",
+  "determinism_notes": "All IDs, statuses, sequence values, nested ordering, and derived LIMIT ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE manifest_recipients (recipient_id INT PRIMARY KEY, email VARCHAR(96) NOT NULL)",
+    "CREATE TABLE manifest_shipments (shipment_id INT PRIMARY KEY, recipient_id INT NOT NULL, shipment_state VARCHAR(16) NOT NULL, total_cents INT NOT NULL, created_seq INT NOT NULL)",
+    "CREATE TABLE manifest_products (product_id INT PRIMARY KEY, product_name VARCHAR(64) NOT NULL)",
+    "CREATE TABLE manifest_variants (variant_id INT PRIMARY KEY, product_id INT NOT NULL, shade VARCHAR(32) NOT NULL, pack_size VARCHAR(16) NOT NULL)",
+    "CREATE TABLE manifest_packages (package_id INT PRIMARY KEY, shipment_id INT NOT NULL, variant_id INT NOT NULL, quantity INT NOT NULL, unit_price_cents INT NOT NULL)",
+    "CREATE TABLE manifest_payments (payment_id INT PRIMARY KEY, shipment_id INT NOT NULL, payment_method VARCHAR(16) NOT NULL, payment_state VARCHAR(16) NOT NULL, amount_cents INT NOT NULL)",
+    "INSERT INTO manifest_recipients VALUES (51, 'eli@example.test'), (52, 'fox@example.test')",
+    "INSERT INTO manifest_shipments VALUES (8001, 51, 'paid', 1600, 20), (8002, 52, 'cancelled', 900, 30)",
+    "INSERT INTO manifest_products VALUES (401, 'Desk Lamp')",
+    "INSERT INTO manifest_variants VALUES (601, 401, 'white', 'standard')",
+    "INSERT INTO manifest_packages VALUES (8201, 8001, 601, 1, 1600), (8202, 8002, 601, 1, 900)",
+    "INSERT INTO manifest_payments VALUES (9201, 8001, 'card', 'settled', 1600)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT JSON_PRETTY(JSON_ARRAYAGG(JSON_OBJECT('shipment_id', selected.shipment_id, 'state', selected.shipment_state, 'total_cents', selected.total_cents, 'email', recipient.email, 'packages', (SELECT JSON_ARRAYAGG(JSON_OBJECT('product', product.product_name, 'shade', variant.shade, 'pack', variant.pack_size, 'quantity', package.quantity, 'unit_price_cents', package.unit_price_cents) ORDER BY package.package_id) FROM manifest_packages AS package JOIN manifest_variants AS variant ON variant.variant_id = package.variant_id JOIN manifest_products AS product ON product.product_id = variant.product_id WHERE package.shipment_id = selected.shipment_id), 'payment', (SELECT JSON_OBJECT('method', payment.payment_method, 'state', payment.payment_state, 'amount_cents', payment.amount_cents) FROM manifest_payments AS payment WHERE payment.shipment_id = selected.shipment_id ORDER BY payment.payment_id LIMIT 1)) ORDER BY selected.created_seq DESC)) AS shipment_manifest FROM (SELECT shipment_id, recipient_id, shipment_state, total_cents, created_seq FROM manifest_shipments WHERE shipment_state IN ('paid', 'dispatched') ORDER BY created_seq DESC LIMIT 1) AS selected JOIN manifest_recipients AS recipient ON recipient.recipient_id = selected.recipient_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT shipment_id, shipment_state, created_seq FROM manifest_shipments ORDER BY shipment_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT shipment_id, shipment_state, created_seq FROM manifest_shipments ORDER BY shipment_id",
+      "ordered": true
+    }
+  ]
+}

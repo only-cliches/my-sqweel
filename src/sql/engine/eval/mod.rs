@@ -3907,6 +3907,10 @@ where
             }
             Ok(Value::String(out))
         })()),
+        "JSON_OBJECT" => Some((|| {
+            let values = args.iter().map(eval_arg).collect::<Result<Vec<_>>>()?;
+            eval_json_object_values(&values)
+        })()),
         "COALESCE" => Some((|| {
             for arg in args.iter() {
                 let value = eval_arg(arg)?;
