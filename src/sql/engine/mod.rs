@@ -661,7 +661,9 @@ fn declared_type_scale(upper: &str) -> u8 {
 }
 
 fn mysql_column_type_from_declared(upper: &str) -> MysqlColumnType {
-    if upper.starts_with("TINYINT") || upper.starts_with("BOOL") {
+    if upper.starts_with("SIGNED") || upper.starts_with("UNSIGNED") {
+        MysqlColumnType::BigInt
+    } else if upper.starts_with("TINYINT") || upper.starts_with("BOOL") {
         MysqlColumnType::TinyInt
     } else if upper.starts_with("SMALLINT") {
         MysqlColumnType::SmallInt

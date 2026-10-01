@@ -2590,7 +2590,7 @@ impl RawEngine {
                             });
                         match argument {
                             Some(MysqlColumnType::Json | MysqlColumnType::LongBlob) => {
-                                MysqlColumnType::LongBlob
+                                MysqlColumnType::Blob
                             }
                             Some(MysqlColumnType::Blob | MysqlColumnType::MediumBlob) => {
                                 MysqlColumnType::MediumBlob

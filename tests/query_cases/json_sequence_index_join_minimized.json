@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "json_sequence_index_join_minimized",
+  "provenance": {
+    "kind": "minimized-from-query-case",
+    "source_case": "json_sequence_index_join",
+    "minimized_from": "json_sequence_index_join",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "scenarios/json-flatten/mariadb.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/scenarios/json-flatten/mariadb.sql",
+      "sha256": "1c52315cd8260fb0f3fecb8fbd81d28bec102bdddfd8492a0ef76b794eda8361",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "scenarios/json-flatten/mariadb.sql:66-76",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A reusable integer sequence joins each JSON document up to JSON_LENGTH and builds an array-element path for JSON_EXTRACT from the sequence value.",
+      "mysql_mariadb_translation": "Reduced to one two-element order array and two sequence values so the bounded join and zero-based dynamic JSON paths remain observable."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "json-extract",
+    "json-length",
+    "dynamic-json-path",
+    "sequence-table-join",
+    "array-expansion",
+    "deterministic-order"
+  ],
+  "fixture_notes": "One order has two items and the sequence has two values, producing both indexed rows.",
+  "determinism_notes": "Sequence values, JSON array order, path construction, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE order_payloads (order_id INT PRIMARY KEY, payload JSON NOT NULL)",
+    "CREATE TABLE item_sequence (seq_no INT PRIMARY KEY)",
+    "INSERT INTO order_payloads VALUES (901, '{\"items\":[{\"sku\":\"AX-1\",\"qty\":2},{\"sku\":\"BY-4\",\"qty\":1}]}')",
+    "INSERT INTO item_sequence VALUES (1), (2)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT o.order_id, s.seq_no, JSON_UNQUOTE(JSON_EXTRACT(o.payload, CONCAT('$.items[', s.seq_no - 1, '].sku'))) AS sku, CAST(JSON_UNQUOTE(JSON_EXTRACT(o.payload, CONCAT('$.items[', s.seq_no - 1, '].qty'))) AS UNSIGNED) AS quantity FROM order_payloads AS o JOIN item_sequence AS s ON s.seq_no <= JSON_LENGTH(o.payload, '$.items') ORDER BY o.order_id, s.seq_no",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
