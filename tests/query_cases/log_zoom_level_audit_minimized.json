@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "id": "log_zoom_level_audit_minimized",
+  "provenance": {
+    "kind": "minimized-from-query-case",
+    "parent_case": "log_zoom_level_audit",
+    "source": {
+      "kind": "github",
+      "repository": "mapbox/postgis-vt-util",
+      "commit": "61d3892107b603d535c9223c1c67dc500249b599",
+      "path": "src/Z.sql",
+      "url": "https://github.com/mapbox/postgis-vt-util/blob/61d3892107b603d535c9223c1c67dc500249b599/src/Z.sql",
+      "sha256": "5b27345bd9933c6050a7d1c472c127155f8449dddf06dfe58acd2c632a4f8b7c",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "Minimized from src/Z.sql:30-35",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A CASE guard surrounds a base-2 LOG, ROUND, and integer CAST for a scale-derived level.",
+      "mysql_mariadb_translation": "Reduced to one guarded boundary row and one exact base-scale row with newly authored identifiers, retaining the CASE, LOG, ROUND, CAST, and deterministic ordering."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "log",
+    "base-2-logarithm",
+    "case-expression",
+    "round",
+    "cast",
+    "boundary-guard",
+    "numeric-expression",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The reduced case retains both the high-denominator NULL guard and the exact base-scale zero level.",
+  "determinism_notes": "Scale identifiers, fixed denominators, logarithm base, guard thresholds, rounding, casting, and output ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE mini_map_scales (scale_id INT PRIMARY KEY, scale_name VARCHAR(32) NOT NULL, scale_denominator DECIMAL(14,3) NOT NULL)",
+    "INSERT INTO mini_map_scales VALUES (1701, 'guarded-large', 600000001.000), (1702, 'base-scale', 559082264.028)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT scale_id, scale_name, CASE WHEN scale_denominator > 600000000 OR scale_denominator = 0 THEN NULL ELSE CAST(ROUND(LOG(2, 559082264.028 / scale_denominator)) AS SIGNED) END AS zoom_level FROM mini_map_scales ORDER BY scale_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}

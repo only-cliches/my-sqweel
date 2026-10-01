@@ -1923,18 +1923,30 @@ impl RawEngine {
                         first_row,
                     ));
                 }
-                if !branch_metadata.is_empty()
-                    && branch_metadata
+                let branch_is_null = results
+                    .iter()
+                    .map(|result| matches!(result, Expr::Value(SqlValue::Null)))
+                    .chain(else_result.iter().map(|result| {
+                        matches!(result.as_ref(), Expr::Value(SqlValue::Null))
+                    }))
+                    .collect::<Vec<_>>();
+                let non_null_branch_metadata = branch_metadata
+                    .iter()
+                    .zip(branch_is_null.iter())
+                    .filter_map(|(branch, is_null)| (!*is_null).then_some(branch))
+                    .collect::<Vec<_>>();
+                if !non_null_branch_metadata.is_empty()
+                    && non_null_branch_metadata
                         .iter()
                         .all(|branch| numeric_type_rank(branch.column_type) > 0)
                 {
-                    let rank = branch_metadata
+                    let rank = non_null_branch_metadata
                         .iter()
                         .map(|branch| numeric_type_rank(branch.column_type))
                         .max()
                         .unwrap_or_default();
                     metadata.column_type = match rank {
-                        1 if branch_metadata
+                        1 if non_null_branch_metadata
                             .iter()
                             .any(|branch| branch.column_type == MysqlColumnType::BigInt) =>
                         {
@@ -1946,7 +1958,7 @@ impl RawEngine {
                         _ => metadata.column_type,
                     };
                     if metadata.column_type == MysqlColumnType::Decimal {
-                        metadata.decimals = branch_metadata
+                        metadata.decimals = non_null_branch_metadata
                             .iter()
                             .map(|branch| branch.decimals)
                             .max()

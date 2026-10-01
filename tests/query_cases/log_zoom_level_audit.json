@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "log_zoom_level_audit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "mapbox/postgis-vt-util",
+      "commit": "61d3892107b603d535c9223c1c67dc500249b599",
+      "path": "src/Z.sql",
+      "url": "https://github.com/mapbox/postgis-vt-util/blob/61d3892107b603d535c9223c1c67dc500249b599/src/Z.sql",
+      "sha256": "5b27345bd9933c6050a7d1c472c127155f8449dddf06dfe58acd2c632a4f8b7c",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "src/Z.sql:30-35",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A scale denominator is converted into an integer base-2 zoom level with a CASE guard, LOG, ROUND, and CAST.",
+      "mysql_mariadb_translation": "Reauthored as a direct ordered SELECT over newly authored map-scale rows. The base-2 logarithm and integer conversion retain the source boundary semantics while avoiding the source function definition, placeholders, and SQL dollar quoting."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "log",
+    "base-2-logarithm",
+    "case-expression",
+    "round",
+    "cast",
+    "boundary-guard",
+    "numeric-expression",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Rows cover the guarded high-scale boundary, zero, the base constant, and two exact power-of-two reductions.",
+  "determinism_notes": "Scale identifiers, fixed denominators, logarithm base, guard thresholds, rounding, casting, and output ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE map_scales (scale_id INT PRIMARY KEY, scale_name VARCHAR(32) NOT NULL, scale_denominator DECIMAL(14,3) NOT NULL)",
+    "INSERT INTO map_scales VALUES (1601, 'guarded-large', 600000001.000), (1602, 'zero-boundary', 0.000), (1603, 'base-scale', 559082264.028), (1604, 'half-scale', 279541132.014), (1605, 'quarter-scale', 139770566.007)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT scale_id, scale_name, CASE WHEN scale_denominator > 600000000 OR scale_denominator = 0 THEN NULL ELSE CAST(ROUND(LOG(2, 559082264.028 / scale_denominator)) AS SIGNED) END AS zoom_level FROM map_scales ORDER BY scale_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
