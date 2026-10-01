@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "id": "json_table_regex_directory_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "mysql/mysql-shell-plugins",
+      "commit": "79aec063d691559d653c1af95f4f78a7cef12b61",
+      "path": "mrs_plugin/db_schema/mrs.msm.project/development/sections/150-10_views.sql",
+      "url": "https://github.com/mysql/mysql-shell-plugins/blob/79aec063d691559d653c1af95f4f78a7cef12b61/mrs_plugin/db_schema/mrs.msm.project/development/sections/150-10_views.sql",
+      "sha256": "9582d55c1efe20a7506a4e93a977cec1754d9146028f894071cc67651feb1525",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "150-10_views.sql:74-77",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A correlated JSON_TABLE expansion feeds an ordered GROUP_CONCAT; REGEXP selects identifier-safe values while QUOTE renders values containing other characters as SQL-safe literals.",
+      "mysql_mariadb_translation": "Reauthored as a minimized service developer-directory report. A JSON array with one duplicate identifier and one spaced name is expanded, regex-filtered, quoted when needed, and concatenated in deterministic order. The schema, values, aliases, and operational meaning are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "correlated-table-function",
+    "json-table",
+    "json-array-input",
+    "group-concat",
+    "ordered-aggregate",
+    "regexp-filter",
+    "quote-sql-literal",
+    "duplicate-preservation",
+    "json-string-transformation",
+    "deterministic-order"
+  ],
+"fixture_notes": "Active services 801 and 802 expand duplicate safe identifiers plus spaced and hyphenated names through a correlated JSON_TABLE CROSS JOIN; grouped ordered output preserves duplicates and conditionally applies QUOTE.",
+  "determinism_notes": "Service ID, JSON array order, regex pattern, QUOTE transformation, GROUP_CONCAT ordering, active filter, and final service ordering are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE service_catalog (service_id INT PRIMARY KEY, service_name VARCHAR(32) NOT NULL, developer_names JSON NOT NULL, active TINYINT NOT NULL)",
+    "INSERT INTO service_catalog VALUES (801, 'Payments', '[\"alice\", \"Build Team\", \"alice\"]', 1), (802, 'Search', '[\"zoe\", \"qa-team\", \"root\", \"qa-team\"]', 1)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT s.service_id, s.service_name, GROUP_CONCAT(IF(jt.item REGEXP '^[A-Za-z0-9_]+$', jt.item, QUOTE(jt.item)) ORDER BY jt.item SEPARATOR '|') AS developer_directory FROM service_catalog s CROSS JOIN JSON_TABLE(s.developer_names, '$[*]' COLUMNS (item VARCHAR(64) PATH '$')) AS jt WHERE s.active = 1 GROUP BY s.service_id, s.service_name ORDER BY s.service_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT service_id, service_name, active FROM service_catalog ORDER BY service_id",
+      "ordered": true
+    }
+  ]
+}
