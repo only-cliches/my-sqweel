@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "id": "json_table_union_skill_matrix",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "faitusjelinej/SQL",
+      "commit": "c098273ee197393dd3e0c9be4cb15103f5e1d09c",
+      "path": "JSON_TABLE.sql",
+      "url": "https://github.com/faitusjelinej/SQL/blob/c098273ee197393dd3e0c9be4cb15103f5e1d09c/JSON_TABLE.sql",
+      "sha256": "ccbb73079fe6858031b84696a1ea8991d66cdcbbf5efce1714062cce3220edc4",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "JSON_TABLE.sql",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A JSON_TABLE projection is normalized into one row per named property through a CTE and repeated UNION ALL branches, then null properties are filtered and ordered.",
+      "mysql_mariadb_translation": "Reauthored as a skills matrix. Employee JSON documents expose four skill-year properties, a CTE materializes those columns, and a second CTE converts the sparse object into technology rows while dropping absent skills. The source schema, identifiers, and values are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "json-table",
+    "json-object-path",
+    "json-table-property-columns",
+    "cte",
+    "union-all",
+    "null-filter",
+    "normalized-rows",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Employees 6101 and 6102 have sparse skill objects. JSON_TABLE emits NULL for absent properties, and the normalization query removes those properties while retaining each present skill exactly once.",
+  "determinism_notes": "Employee IDs, JSON properties, skill years, UNION ALL branches, null filtering, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE skill_employees (employee_id INT PRIMARY KEY, skills JSON NOT NULL)",
+    "INSERT INTO skill_employees VALUES (6101, '{\"Python\": 2018, \"Java\": 2019, \"Spark\": 2020}'), (6102, '{\"Python\": 2021, \"Azure\": 2022}')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH employee_skills AS (SELECT e.employee_id, jt.spark_year, jt.java_year, jt.python_year, jt.azure_year FROM skill_employees AS e, JSON_TABLE(e.skills, '$' COLUMNS (spark_year INT PATH '$.Spark', java_year INT PATH '$.Java', python_year INT PATH '$.Python', azure_year INT PATH '$.Azure')) AS jt), normalized_skills AS (SELECT employee_id, 'Spark' AS technology, spark_year AS release_year FROM employee_skills UNION ALL SELECT employee_id, 'Java' AS technology, java_year AS release_year FROM employee_skills UNION ALL SELECT employee_id, 'Python' AS technology, python_year AS release_year FROM employee_skills UNION ALL SELECT employee_id, 'Azure' AS technology, azure_year AS release_year FROM employee_skills) SELECT employee_id, technology, release_year FROM normalized_skills WHERE release_year IS NOT NULL ORDER BY employee_id, technology",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "WITH employee_skills AS (SELECT e.employee_id, jt.spark_year, jt.java_year, jt.python_year, jt.azure_year FROM skill_employees AS e, JSON_TABLE(e.skills, '$' COLUMNS (spark_year INT PATH '$.Spark', java_year INT PATH '$.Java', python_year INT PATH '$.Python', azure_year INT PATH '$.Azure')) AS jt), normalized_skills AS (SELECT employee_id, 'Spark' AS technology, spark_year AS release_year FROM employee_skills UNION ALL SELECT employee_id, 'Java' AS technology, java_year AS release_year FROM employee_skills UNION ALL SELECT employee_id, 'Python' AS technology, python_year AS release_year FROM employee_skills UNION ALL SELECT employee_id, 'Azure' AS technology, azure_year AS release_year FROM employee_skills) SELECT employee_id, technology, release_year FROM normalized_skills WHERE release_year IS NOT NULL ORDER BY employee_id, technology",
+      "ordered": true
+    }
+  ]
+}

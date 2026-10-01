@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "json_table_union_skill_matrix_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "json_table_union_skill_matrix",
+    "source": {
+      "kind": "github",
+      "repository": "faitusjelinej/SQL",
+      "commit": "c098273ee197393dd3e0c9be4cb15103f5e1d09c",
+      "path": "JSON_TABLE.sql",
+      "url": "https://github.com/faitusjelinej/SQL/blob/c098273ee197393dd3e0c9be4cb15103f5e1d09c/JSON_TABLE.sql",
+      "sha256": "ccbb73079fe6858031b84696a1ea8991d66cdcbbf5efce1714062cce3220edc4",
+      "source_dialect": "mysql-mariadb"
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "json-table",
+    "json-object-path",
+    "json-table-property-columns",
+    "cte",
+    "union-all",
+    "null-filter",
+    "minimized-regression"
+  ],
+  "fixture_notes": "One employee has two present skill properties and two absent properties. JSON_TABLE null extension and UNION ALL normalization remain observable with the smallest retained object.",
+  "determinism_notes": "Fixed employee ID, JSON properties, skill years, UNION ALL branches, and null filtering; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE mini_skill_employees (employee_id INT PRIMARY KEY, skills JSON NOT NULL)",
+    "INSERT INTO mini_skill_employees VALUES (6201, '{\"Python\": 2023, \"Azure\": 2024}')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH employee_skills AS (SELECT e.employee_id, jt.spark_year, jt.java_year, jt.python_year, jt.azure_year FROM mini_skill_employees AS e, JSON_TABLE(e.skills, '$' COLUMNS (spark_year INT PATH '$.Spark', java_year INT PATH '$.Java', python_year INT PATH '$.Python', azure_year INT PATH '$.Azure')) AS jt), normalized_skills AS (SELECT employee_id, 'Spark' AS technology, spark_year AS release_year FROM employee_skills UNION ALL SELECT employee_id, 'Java' AS technology, java_year AS release_year FROM employee_skills UNION ALL SELECT employee_id, 'Python' AS technology, python_year AS release_year FROM employee_skills UNION ALL SELECT employee_id, 'Azure' AS technology, azure_year AS release_year FROM employee_skills) SELECT employee_id, technology, release_year FROM normalized_skills WHERE release_year IS NOT NULL ORDER BY employee_id, technology",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "WITH employee_skills AS (SELECT e.employee_id, jt.spark_year, jt.java_year, jt.python_year, jt.azure_year FROM mini_skill_employees AS e, JSON_TABLE(e.skills, '$' COLUMNS (spark_year INT PATH '$.Spark', java_year INT PATH '$.Java', python_year INT PATH '$.Python', azure_year INT PATH '$.Azure')) AS jt), normalized_skills AS (SELECT employee_id, 'Spark' AS technology, spark_year AS release_year FROM employee_skills UNION ALL SELECT employee_id, 'Java' AS technology, java_year AS release_year FROM employee_skills UNION ALL SELECT employee_id, 'Python' AS technology, python_year AS release_year FROM employee_skills UNION ALL SELECT employee_id, 'Azure' AS technology, azure_year AS release_year FROM employee_skills) SELECT employee_id, technology, release_year FROM normalized_skills WHERE release_year IS NOT NULL ORDER BY employee_id, technology",
+      "ordered": true
+    }
+  ]
+}
