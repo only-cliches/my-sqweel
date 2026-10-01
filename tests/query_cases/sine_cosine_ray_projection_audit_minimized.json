@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "sine_cosine_ray_projection_audit_minimized",
+  "provenance": {
+    "kind": "minimized-from-query-case",
+    "parent_case": "sine_cosine_ray_projection_audit",
+    "source": {
+      "kind": "github",
+      "repository": "cedardb/DOOMQL",
+      "commit": "8d6c2fc7e9548df1800a6618b205aad37fe5db20",
+      "path": "renderer.sql",
+      "url": "https://github.com/cedardb/DOOMQL/blob/8d6c2fc7e9548df1800a6618b205aad37fe5db20/renderer.sql",
+      "sha256": "3fe33544b428b3cd343ff072bc2898e2bbe32707a4331f756fd75e595ed07bae",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from renderer.sql:14-18,31-33,45-49",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "Paired COS and SIN projections turn a distance and heading-relative angle into Cartesian ray offsets.",
+      "mysql_mariadb_translation": "Reduced to one axis-aligned and one diagonal ray with newly authored values, retaining PI, COS, SIN, anchor translation, and deterministic ordering."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "sin",
+    "cos",
+    "pi",
+    "trigonometry",
+    "numeric-expression",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The reduced case retains an eastward axis ray and a diagonal ray, both with non-zero distance and fixed anchors.",
+  "determinism_notes": "Ray identifiers, anchor coordinates, distances, turn fractions, expressions, and output ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE mini_ray_samples (ray_id INT PRIMARY KEY, ray_name VARCHAR(32) NOT NULL, origin_x DECIMAL(8,4) NOT NULL, origin_y DECIMAL(8,4) NOT NULL, distance DECIMAL(8,4) NOT NULL, turn_fraction DECIMAL(8,4) NOT NULL)",
+    "INSERT INTO mini_ray_samples VALUES (801, 'east', 2.0000, 3.0000, 4.0000, 0.0000), (802, 'diagonal', -1.5000, 7.2500, 6.0000, 0.1250)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT ray_id, ray_name, ROUND(origin_x + distance * COS(2 * PI() * turn_fraction), 6) AS projected_x, ROUND(origin_y + distance * SIN(2 * PI() * turn_fraction), 6) AS projected_y FROM mini_ray_samples ORDER BY ray_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
