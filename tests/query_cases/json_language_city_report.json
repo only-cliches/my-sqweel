@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "id": "json_language_city_report",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "RodrigoRiveraRico/bases_de_datos_fc",
+      "commit": "04a6bc427d14dba14afbbda8f28bac0c6657f027",
+      "path": "AY20_inner_join_Baruch.sql",
+      "url": "https://github.com/RodrigoRiveraRico/bases_de_datos_fc/blob/04a6bc427d14dba14afbbda8f28bac0c6657f027/AY20_inner_join_Baruch.sql",
+      "sha256": "f23f0e6f2675097d9ceb52c3fcbbbc5a21e3a21ec393151ccb7a60f90ee8a48b",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "AY20_inner_join_Baruch.sql:228-263",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped report filters parent keys by an exact count of official child rows, joins a second grouped JSON_OBJECTAGG relation, and combines it with a JSON_ARRAYAGG of parent-associated rows.",
+      "mysql_mariadb_translation": "Reauthored as a regional language-and-city report. Regions with exactly two official languages are selected, their language flags become a JSON object, and their city names become a JSON array; regions with other official-language counts are excluded."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "json-objectagg",
+    "json-arrayagg",
+    "grouped-derived-table",
+    "exact-count-having",
+    "in-subquery",
+    "multi-join",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Regions 61 and 63 have exactly two official languages and appear with language objects and city arrays; region 62 has three official languages and is excluded.",
+  "determinism_notes": "Region codes, language rows, city rows, and final region ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE report_regions (region_code INT PRIMARY KEY, region_name VARCHAR(64) NOT NULL, zone_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE report_languages (language_id INT PRIMARY KEY, region_code INT NOT NULL, language_name VARCHAR(32) NOT NULL, is_official CHAR(1) NOT NULL)",
+    "CREATE TABLE report_cities (city_id INT PRIMARY KEY, region_code INT NOT NULL, city_name VARCHAR(64) NOT NULL)",
+    "INSERT INTO report_regions VALUES (61, 'Northstar', 'Aurora'), (62, 'Southport', 'Meridian'), (63, 'Eastvale', 'Coast')",
+    "INSERT INTO report_languages VALUES (6101, 61, 'Aster', 'Y'), (6102, 61, 'Boreal', 'Y'), (6103, 61, 'Coastal', 'N'), (6201, 62, 'Aster', 'Y'), (6202, 62, 'Boreal', 'Y'), (6203, 62, 'Coastal', 'Y'), (6301, 63, 'Dune', 'Y'), (6302, 63, 'Estuary', 'Y')",
+    "INSERT INTO report_cities VALUES (61001, 61, 'Aurora City'), (61002, 61, 'Boreal Bay'), (62001, 62, 'Meridian'), (63001, 63, 'Cedar Point'), (63002, 63, 'Delta Reach')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT r.region_name, JSON_ARRAYAGG(c.city_name) AS city_array, languages.language_object FROM (SELECT region_code FROM report_languages WHERE is_official = 'Y' GROUP BY region_code HAVING COUNT(*) = 2) AS qualifying JOIN report_regions AS r ON qualifying.region_code = r.region_code JOIN report_cities AS c ON qualifying.region_code = c.region_code JOIN (SELECT region_code, JSON_OBJECTAGG(language_name, is_official) AS language_object FROM report_languages WHERE region_code IN (SELECT region_code FROM report_languages WHERE is_official = 'Y' GROUP BY region_code HAVING COUNT(*) = 2) GROUP BY region_code) AS languages ON qualifying.region_code = languages.region_code GROUP BY r.region_code, r.region_name, languages.language_object ORDER BY r.region_code",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT region_code, region_name, zone_name FROM report_regions ORDER BY region_code",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT language_id, region_code, language_name, is_official FROM report_languages ORDER BY language_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT city_id, region_code, city_name FROM report_cities ORDER BY city_id",
+      "ordered": true
+    }
+  ]
+}
