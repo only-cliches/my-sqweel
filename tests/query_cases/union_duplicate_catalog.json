@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "union_duplicate_catalog",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "en-wl/wordlist",
+      "commit": "1e5b7d3a72f47a71da5d28686c1dd4b397178485",
+      "path": "libscowl/scowl.sql",
+      "url": "https://github.com/en-wl/wordlist/blob/1e5b7d3a72f47a71da5d28686c1dd4b397178485/libscowl/scowl.sql",
+      "sha256": "054ca49438e5d475c23cafac884c9b2279cc86db78b803de1d41380a1684ca2a",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "libscowl/scowl.sql:3-9,60-70",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "The public SQL aligns two UNION ALL branches with NULL placeholders, then uses a CTE grouped by a business value with COUNT(DISTINCT ...) and HAVING to identify duplicates before a final report.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored catalog audit merging base and override labels with typed NULL ID columns, identifying labels present in both sources, and joining the shared CTE back for deterministic source counts and maximum weights."
+    },
+    "independently_authored": true
+  },
+  "features": ["union-all", "union-null-alignment", "cte-reuse", "grouped-distinct-count", "having-threshold", "typed-null-cast", "deterministic-order"],
+  "fixture_notes": "Labels alpha, alpha, and gamma appear in both catalog sources and are reported with source counts and maximum weights; singleton labels remain outside the duplicate CTE. Full data includes two independent topics and a source-only label in each direction.",
+  "determinism_notes": "All IDs, labels, topic IDs, weights, and source literals are fixed. The final report orders by topic ID then label; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE catalog_base_labels (base_id INT PRIMARY KEY, topic_id INT NOT NULL, label VARCHAR(32) NOT NULL, weight INT NOT NULL)",
+    "CREATE TABLE catalog_override_labels (override_id INT PRIMARY KEY, topic_id INT NOT NULL, label VARCHAR(32) NOT NULL, weight INT NOT NULL)",
+    "INSERT INTO catalog_base_labels VALUES (1, 501, 'alpha', 10), (2, 501, 'beta', 20), (3, 502, 'alpha', 5), (4, 503, 'gamma', 7), (5, 504, 'orphan', 9)",
+    "INSERT INTO catalog_override_labels VALUES (101, 501, 'alpha', 15), (102, 501, 'delta', 30), (103, 502, 'alpha', 8), (104, 503, 'gamma', 6), (105, 505, 'only_override', 12)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH merged AS (SELECT topic_id, label, weight, base_id, CAST(NULL AS SIGNED) AS override_id, 'base' AS source_kind FROM catalog_base_labels UNION ALL SELECT topic_id, label, weight, CAST(NULL AS SIGNED) AS base_id, override_id, 'override' AS source_kind FROM catalog_override_labels), duplicates AS (SELECT topic_id, label FROM merged GROUP BY topic_id, label HAVING COUNT(DISTINCT source_kind) > 1) SELECT d.topic_id, d.label, COUNT(*) AS observations, COUNT(DISTINCT m.source_kind) AS source_count, MAX(m.weight) AS max_weight FROM duplicates d JOIN merged m ON m.topic_id = d.topic_id AND m.label = d.label GROUP BY d.topic_id, d.label ORDER BY d.topic_id, d.label",
+      "ordered": true
+    }
+  ]
+}
