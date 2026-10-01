@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "id": "customer_rfm_quartile_segmentation",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {"kind": "github", "repository": "JiveGroup/JiveDBApp", "commit": "8bc3a21d721115ebf262dfae3c45a580494b5ace", "path": "db/seeds/mysql/queries.sql", "url": "https://github.com/JiveGroup/JiveDBApp/blob/8bc3a21d721115ebf262dfae3c45a580494b5ace/db/seeds/mysql/queries.sql", "sha256": "42387d26d3b503ce4b1fb0957502778e50ed80cb9d43e43c48058175362e920b", "source_dialect": "mysql-mariadb"},
+    "inspiration": {"source_location": "db/seeds/mysql/queries.sql:159-189", "source_dialect": "mysql-mariadb", "observed_pattern": "A grouped customer-metrics CTE feeds independent NTILE quartiles for recency, frequency, and monetary value, then a CASE expression assigns a customer segment.", "mysql_mariadb_translation": "Rewritten as an independently authored purchase-frequency report with new customer and purchase tables, fixed dates and amounts, deterministic tie-breakers for all three NTILE orderings, and explicit segment labels."},
+    "independently_authored": true
+  },
+  "features": ["cte", "grouped-aggregate", "max-date", "count", "coalesce-sum", "multiple-ntile-windows", "case-segmentation", "date-format", "deterministic-tie-order", "wildcard-cte-projection"],
+  "fixture_notes": "Eight customers have fixed non-cancelled purchases; cancelled purchases are excluded before the RFM metrics are bucketed. The scored CTE deliberately projects its metric row with m.* while adding three NTILE windows. The segment CASE exercises champion, loyal, at-risk, and fallback labels.",
+  "determinism_notes": "Customer IDs are final tie-breakers for each NTILE ordering and the report orders by customer ID. Dates and amounts are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE rfm_customers (customer_id INT PRIMARY KEY, email VARCHAR(64) NOT NULL)",
+    "CREATE TABLE rfm_purchases (purchase_id INT PRIMARY KEY, customer_id INT NOT NULL, ordered_at DATETIME NOT NULL, amount DECIMAL(8,2) NOT NULL, status VARCHAR(16) NOT NULL)",
+    "INSERT INTO rfm_customers VALUES (101, 'ada@example.test'), (102, 'bo@example.test'), (103, 'cy@example.test'), (104, 'dee@example.test'), (105, 'eli@example.test'), (106, 'fox@example.test'), (107, 'gus@example.test'), (108, 'hal@example.test')",
+    "INSERT INTO rfm_purchases VALUES (1001, 101, '2026-09-20 10:00:00', 120.00, 'paid'), (1002, 101, '2026-09-12 10:00:00', 90.00, 'paid'), (1003, 101, '2026-09-02 10:00:00', 75.00, 'paid'), (1004, 102, '2026-09-18 10:00:00', 240.00, 'paid'), (1005, 102, '2026-09-08 10:00:00', 180.00, 'paid'), (1006, 102, '2026-08-28 10:00:00', 160.00, 'paid'), (1007, 103, '2026-09-15 10:00:00', 65.00, 'paid'), (1008, 103, '2026-08-25 10:00:00', 55.00, 'paid'), (1009, 104, '2026-09-10 10:00:00', 30.00, 'paid'), (1010, 105, '2026-09-05 10:00:00', 210.00, 'paid'), (1011, 105, '2026-08-15 10:00:00', 195.00, 'paid'), (1012, 106, '2026-08-31 10:00:00', 25.00, 'paid'), (1013, 107, '2026-08-20 10:00:00', 80.00, 'paid'), (1014, 108, '2026-08-01 10:00:00', 20.00, 'paid'), (1015, 108, '2026-07-20 10:00:00', 15.00, 'cancelled')"
+  ],
+  "steps": [{"sql": "WITH customer_metrics AS (SELECT c.customer_id, c.email, MAX(p.ordered_at) AS last_order, COUNT(p.purchase_id) AS frequency, COALESCE(SUM(p.amount), 0) AS monetary FROM rfm_customers c JOIN rfm_purchases p ON p.customer_id = c.customer_id AND p.status <> 'cancelled' GROUP BY c.customer_id, c.email), scored AS (SELECT m.*, NTILE(4) OVER (ORDER BY m.last_order DESC, m.customer_id ASC) AS r_score, NTILE(4) OVER (ORDER BY m.frequency DESC, m.customer_id ASC) AS f_score, NTILE(4) OVER (ORDER BY m.monetary DESC, m.customer_id ASC) AS m_score FROM customer_metrics m) SELECT customer_id, email, DATE_FORMAT(last_order, '%Y-%m-%d') AS last_order, frequency, monetary, r_score, f_score, m_score, CASE WHEN r_score = 1 AND f_score <= 2 AND m_score <= 2 THEN 'Champions' WHEN r_score <= 2 AND f_score <= 2 THEN 'Loyal' WHEN r_score >= 3 AND f_score >= 3 THEN 'At risk' ELSE 'Others' END AS segment FROM scored ORDER BY customer_id", "ordered": true}]
+}

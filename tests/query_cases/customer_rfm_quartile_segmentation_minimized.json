@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "customer_rfm_quartile_segmentation_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "JiveGroup/JiveDBApp",
+      "commit": "8bc3a21d721115ebf262dfae3c45a580494b5ace",
+      "path": "db/seeds/mysql/queries.sql",
+      "url": "https://github.com/JiveGroup/JiveDBApp/blob/8bc3a21d721115ebf262dfae3c45a580494b5ace/db/seeds/mysql/queries.sql",
+      "sha256": "42387d26d3b503ce4b1fb0957502778e50ed80cb9d43e43c48058175362e920b",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "db/seeds/mysql/queries.sql:159-189",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped customer-metrics CTE feeds independent NTILE quartiles for recency, frequency, and monetary value, then a CASE expression assigns a customer segment.",
+      "mysql_mariadb_translation": "Minimized independently authored purchase report preserving grouped metrics, three NTILE windows, deterministic customer ordering, and segment classification over four fixed customers while retaining the wildcard CTE projection."
+    },
+    "independently_authored": true
+  },
+  "features": ["cte", "grouped-aggregate", "multiple-ntile-windows", "case-segmentation", "date-format", "deterministic-tie-order", "wildcard-cte-projection"],
+  "fixture_notes": "Four customers with one non-cancelled purchase each preserve the three independent quartile windows, wildcard metric projection, and CASE output while minimizing the full report.",
+  "determinism_notes": "Customer IDs are final tie-breakers for each NTILE ordering and the report orders by customer ID. Dates and amounts are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE rfm_customers (customer_id INT PRIMARY KEY, email VARCHAR(64) NOT NULL)",
+    "CREATE TABLE rfm_purchases (purchase_id INT PRIMARY KEY, customer_id INT NOT NULL, ordered_at DATETIME NOT NULL, amount DECIMAL(8,2) NOT NULL, status VARCHAR(16) NOT NULL)",
+    "INSERT INTO rfm_customers VALUES (101, 'ada@example.test'), (102, 'bo@example.test'), (103, 'cy@example.test'), (104, 'dee@example.test')",
+    "INSERT INTO rfm_purchases VALUES (1001, 101, '2026-09-20 10:00:00', 120.00, 'paid'), (1002, 102, '2026-09-15 10:00:00', 90.00, 'paid'), (1003, 103, '2026-09-10 10:00:00', 60.00, 'paid'), (1004, 104, '2026-09-05 10:00:00', 30.00, 'paid')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH customer_metrics AS (SELECT c.customer_id, c.email, MAX(p.ordered_at) AS last_order, COUNT(p.purchase_id) AS frequency, COALESCE(SUM(p.amount), 0) AS monetary FROM rfm_customers c JOIN rfm_purchases p ON p.customer_id = c.customer_id AND p.status <> 'cancelled' GROUP BY c.customer_id, c.email), scored AS (SELECT m.*, NTILE(4) OVER (ORDER BY last_order DESC, customer_id ASC) AS r_score, NTILE(4) OVER (ORDER BY frequency DESC, customer_id ASC) AS f_score, NTILE(4) OVER (ORDER BY monetary DESC, customer_id ASC) AS m_score FROM customer_metrics m) SELECT customer_id, email, DATE_FORMAT(last_order, '%Y-%m-%d') AS last_order, frequency, monetary, r_score, f_score, m_score, CASE WHEN r_score = 1 AND f_score <= 2 AND m_score <= 2 THEN 'Champions' WHEN r_score <= 2 AND f_score <= 2 THEN 'Loyal' WHEN r_score >= 3 AND f_score >= 3 THEN 'At risk' ELSE 'Others' END AS segment FROM scored ORDER BY customer_id",
+      "ordered": true
+    }
+  ]
+}

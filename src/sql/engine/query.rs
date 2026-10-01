@@ -1685,6 +1685,22 @@ impl RawEngine {
             }
             return;
         }
+        if let TableFactor::Derived {
+            subquery, alias, ..
+        } = factor
+        {
+            if qualifier.is_none()
+                || alias.as_ref().is_some_and(|alias| {
+                    qualifier
+                        .is_some_and(|qualifier| qualifier.eq_ignore_ascii_case(&alias.name.value))
+                })
+            {
+                if let SetExpr::Select(inner) = &*subquery.body {
+                    columns.extend(self.select_result_columns(inner, None));
+                }
+            }
+            return;
+        }
         let TableFactor::Table { name, alias, .. } = factor else {
             return;
         };
@@ -1702,8 +1718,8 @@ impl RawEngine {
         if let Some(schema) = self.schemas.get(&table) {
             columns.extend(ordered_schema_columns(&schema));
         }
-    }
 
+    }
     fn select_result_metadata(
         &self,
         select: &Select,
@@ -3346,6 +3362,9 @@ impl RawEngine {
                         ]),
                         None => Expr::Identifier(sqlparser::ast::Ident::new(column)),
                     };
+                    if let Some(metadata) = self.derived_column_metadata(inner, &expression, None) {
+                        return Some(metadata);
+                    }
                     let (table, hint) = self.resolve_expression_column(inner, &expression)?;
                     return Some(ColumnMetadata::from_declared(column, table, &hint));
                 }
