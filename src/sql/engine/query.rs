@@ -1333,8 +1333,8 @@ impl RawEngine {
                     .transpose()
                     .map(|value| value.unwrap_or(Value::Null))
             }
-            "COUNT" | "SUM" | "AVG" | "MIN" | "MAX" | "BIT_AND" | "BIT_XOR" | "STD"
-            | "STDDEV" | "STDDEV_POP" | "STDDEV_SAMP" | "MEDIAN" => {
+            "COUNT" | "SUM" | "AVG" | "MIN" | "MAX" | "BIT_AND" | "BIT_OR" | "BIT_XOR"
+            | "STD" | "STDDEV" | "STDDEV_POP" | "STDDEV_SAMP" | "MEDIAN" => {
                 let mut aggregate_values = Vec::new();
                 for index in frame_rows {
                     let value = if arguments.is_empty()
@@ -1429,6 +1429,13 @@ impl RawEngine {
                         let mut result = -1_i64;
                         for value in aggregate_values {
                             result &= json_to_f64_lossy(&value)? as i64;
+                        }
+                        Ok(Value::Number(Number::from(result)))
+                    }
+                    "BIT_OR" => {
+                        let mut result = 0_i64;
+                        for value in aggregate_values {
+                            result |= json_to_f64_lossy(&value)? as i64;
                         }
                         Ok(Value::Number(Number::from(result)))
                     }
@@ -1922,7 +1929,7 @@ impl RawEngine {
                         metadata.unsigned = true;
                         MysqlColumnType::BigInt
                     }
-                    "BIT_AND" | "BIT_XOR" => MysqlColumnType::BigInt,
+                    "BIT_AND" | "BIT_OR" | "BIT_XOR" => MysqlColumnType::BigInt,
                     "GET_LOCK" | "RELEASE_LOCK" | "IS_FREE_LOCK" | "COERCIBILITY" => {
                         MysqlColumnType::Integer
                     }

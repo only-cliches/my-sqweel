@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "bit_or_window_audit_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/4860.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/4860.sql",
+      "sha256": "62c360987c5676b04ed02a8eb76592d5e28e35fe89b53cd4e4b6831b12d87dea",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/docker/fuzz_root/mysql_initlib/4860.sql:3,8-10",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "BIT_OR operates as a numeric window aggregate over ordered bounded preceding-row frames, including ascending and descending frame orderings.",
+      "mysql_mariadb_translation": "Reduced to one independently authored cohort with four ordered masks so singleton, growing, and sliding bounded unions remain observable without copying source data."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "bit-or-window",
+    "window-partition",
+    "ordered-window-frame",
+    "bounded-preceding-frame",
+    "rolling-bitmask",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Four events expose the transition from a singleton mask to a full three-row union and then a sliding frame.",
+  "determinism_notes": "All cohort labels, event IDs, mask values, frame bounds, and output ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE capability_events (event_id INT PRIMARY KEY, cohort VARCHAR(16) NOT NULL, mask_value INT NOT NULL)",
+    "INSERT INTO capability_events VALUES (2301, 'GAMMA', 1), (2302, 'GAMMA', 2), (2303, 'GAMMA', 4), (2304, 'GAMMA', 8)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT event_id, cohort, mask_value, BIT_OR(mask_value) OVER (PARTITION BY cohort ORDER BY event_id ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) AS running_mask FROM capability_events ORDER BY cohort, event_id",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
