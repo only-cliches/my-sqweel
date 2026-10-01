@@ -1068,6 +1068,7 @@ pub(super) fn eval_str_to_date(
     }
     let input = json_scalar_to_string(&date);
     let format = json_scalar_to_string(&format)
+        .replace("%M", "%B")
         .replace("%i", "%M")
         .replace("%s", "%S")
         .replace("%#", "%f");

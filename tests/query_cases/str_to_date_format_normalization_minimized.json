@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "str_to_date_format_normalization_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Piterom911/sql_mongo",
+      "commit": "331ffc95ce9407cfd6721338705a26258923df26",
+      "path": "ls_13_date_time.sql",
+      "url": "https://github.com/Piterom911/sql_mongo/blob/331ffc95ce9407cfd6721338705a26258923df26/ls_13_date_time.sql",
+      "sha256": "49996a31f0bf5646b30fd166621a28949a03766ba0fc0bc3b6b930afb8dc1f95",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "ls_13_date_time.sql:628-635",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A named-month date string is parsed with STR_TO_DATE and rendered again with DATE_FORMAT in normalized forms.",
+      "mysql_mariadb_translation": "Reduced to one February token while preserving dynamic STR_TO_DATE format input, ISO DATE_FORMAT output, weekday formatting, and deterministic ordering."
+    },
+    "independently_authored": true
+  },
+  "features": ["str-to-date", "date-format", "date-parse", "named-month", "weekday-format", "deterministic-order"],
+  "fixture_notes": "The token parses February 20 2025 using '%M %d %Y' and emits its ISO date and weekday name.",
+  "determinism_notes": "Token ID, input string, format string, and output formats are fixed; the final report orders by token ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE date_tokens (token_id INT PRIMARY KEY, raw_text VARCHAR(64) NOT NULL, raw_format VARCHAR(32) NOT NULL)",
+    "INSERT INTO date_tokens VALUES (101, 'February 20 2025', '%M %d %Y')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT token_id, DATE_FORMAT(STR_TO_DATE(raw_text, raw_format), '%Y-%m-%d') AS normalized_date, DATE_FORMAT(STR_TO_DATE(raw_text, raw_format), '%W') AS weekday_name FROM date_tokens ORDER BY token_id",
+      "ordered": true
+    }
+  ]
+}
