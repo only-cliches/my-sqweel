@@ -3628,14 +3628,27 @@ impl RawEngine {
         root: &TableWithJoins,
         selection: Option<&Expr>,
     ) -> Result<Vec<Map<String, Value>>> {
-        let left = self.rows_for_table_factor(&root.relation)?;
+        self.joined_table_factor_rows_with_context(root, selection, &Map::new())
+    }
+
+    fn joined_table_factor_rows_with_context(
+        &self,
+        root: &TableWithJoins,
+        selection: Option<&Expr>,
+        outer_context: &Map<String, Value>,
+    ) -> Result<Vec<Map<String, Value>>> {
+        let left = self.rows_for_table_factor_with_context(&root.relation, outer_context)?;
         let mut current = left.rows;
         let mut current_nulls = left.nulls;
 
         for join in &root.joins {
             if matches!(join.relation, TableFactor::JsonTable { .. }) {
-                let (joined, right_nulls) =
-                    self.join_correlated_json_table(&current, &join.relation, &join.join_operator)?;
+                let (joined, right_nulls) = self.join_correlated_json_table(
+                    &current,
+                    &join.relation,
+                    &join.join_operator,
+                    outer_context,
+                )?;
                 current = joined;
                 current_nulls = merge_join_rows(&current_nulls, &right_nulls);
                 continue;
@@ -3727,10 +3740,16 @@ impl RawEngine {
 
         current
             .into_iter()
-            .filter_map(|row| match self.matches_selection_ctx(selection, &row, 0) {
-                Ok(true) => Some(Ok(row)),
-                Ok(false) => None,
-                Err(error) => Some(Err(error)),
+            .filter_map(|row| {
+                let mut context = row;
+                for (key, value) in outer_context {
+                    context.entry(key.clone()).or_insert_with(|| value.clone());
+                }
+                match self.matches_selection_ctx(selection, &context, 0) {
+                    Ok(true) => Some(Ok(context)),
+                    Ok(false) => None,
+                    Err(error) => Some(Err(error)),
+                }
             })
             .collect()
     }
@@ -3739,11 +3758,16 @@ impl RawEngine {
         current: &[Map<String, Value>],
         relation: &TableFactor,
         operator: &JoinOperator,
+        outer_context: &Map<String, Value>,
     ) -> Result<(Vec<Map<String, Value>>, Map<String, Value>)> {
         let mut next = Vec::new();
         let mut right_nulls = Map::new();
         for candidate in current {
-            let right = self.rows_for_table_factor_with_context(relation, candidate)?;
+            let mut context = candidate.clone();
+            for (key, value) in outer_context {
+                context.entry(key.clone()).or_insert_with(|| value.clone());
+            }
+            let right = self.rows_for_table_factor_with_context(relation, &context)?;
             if right_nulls.is_empty() {
                 right_nulls = right.nulls.clone();
             }
@@ -4768,7 +4792,7 @@ impl RawEngine {
             return Ok(QueryResult::default());
         };
         let mut rows = self
-            .joined_table_factor_rows(root, None)?
+            .joined_table_factor_rows_with_context(root, None, outer)?
             .into_iter()
             .filter_map(|inner| {
                 let mut context = inner;

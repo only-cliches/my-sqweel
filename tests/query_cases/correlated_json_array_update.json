@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "id": "correlated_json_array_update",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "mateaix/mateclaw",
+      "commit": "a1f1a6f841b198c70f658a5bbf9e5849d2ffcb6b",
+      "path": "docs/fix-duplicate-raws.sql",
+      "url": "https://github.com/mateaix/mateclaw/blob/a1f1a6f841b198c70f658a5bbf9e5849d2ffcb6b/docs/fix-duplicate-raws.sql",
+      "sha256": "bb0d49e67a8b82e2554977a900b1d3d17c71f839e8a0b824931a63ab9a53ca25",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "docs/fix-duplicate-raws.sql: correlated UPDATE with JSON_TABLE and JSON_ARRAYAGG",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL update rewrites a JSON array through a correlated JSON_TABLE expansion and JSON_ARRAYAGG, removing stale members only from rows that contain a stale identifier.",
+      "mysql_mariadb_translation": "Reauthored as an archive-document cleanup. A correlated update removes retired raw IDs from JSON arrays, preserves array order through aggregate ordering, skips one-element and unaffected documents, and leaves a document unchanged when no retired ID is present."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "json-table",
+    "correlated-json-table",
+    "json-arrayagg",
+    "json-update",
+    "json-filter",
+    "json-contains",
+    "not-in",
+    "correlated-subquery",
+    "update-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Document 1101 loses retired raw ID 42 while retaining 41 and 43; document 1102 is skipped because it has one element; document 1103 has no retired ID; document 1104 has only active IDs.",
+  "determinism_notes": "Document IDs, JSON arrays, retired IDs, JSON_TABLE paths, aggregate ordering, predicates, and final ordering are fixed; the fixture has no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE archive_documents (document_id INT PRIMARY KEY, raw_id_list JSON NOT NULL)",
+    "INSERT INTO archive_documents VALUES (1101, '[41,42,43]'), (1102, '[51]'), (1103, '[61,62]'), (1104, '[71,72]')",
+    "CREATE TABLE retired_raw_ids (raw_id BIGINT PRIMARY KEY)",
+    "INSERT INTO retired_raw_ids VALUES (42), (99)"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE archive_documents AS d SET raw_id_list = (SELECT JSON_ARRAYAGG(jt.raw_id ORDER BY jt.raw_id) FROM JSON_TABLE(d.raw_id_list, '$[*]' COLUMNS (raw_id BIGINT PATH '$')) AS jt WHERE jt.raw_id NOT IN (SELECT r.raw_id FROM retired_raw_ids AS r)) WHERE JSON_LENGTH(d.raw_id_list) > 1 AND EXISTS (SELECT 1 FROM retired_raw_ids AS r WHERE JSON_CONTAINS(d.raw_id_list, CAST(r.raw_id AS CHAR), '$'))",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT document_id, raw_id_list FROM archive_documents ORDER BY document_id",
+      "ordered": true
+    }
+  ]
+}

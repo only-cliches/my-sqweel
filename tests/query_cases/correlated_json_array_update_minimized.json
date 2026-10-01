@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "id": "correlated_json_array_update_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "correlated_json_array_update",
+    "source": {
+      "kind": "github",
+      "repository": "mateaix/mateclaw",
+      "commit": "a1f1a6f841b198c70f658a5bbf9e5849d2ffcb6b",
+      "path": "docs/fix-duplicate-raws.sql",
+      "url": "https://github.com/mateaix/mateclaw/blob/a1f1a6f841b198c70f658a5bbf9e5849d2ffcb6b/docs/fix-duplicate-raws.sql",
+      "sha256": "bb0d49e67a8b82e2554977a900b1d3d17c71f839e8a0b824931a63ab9a53ca25",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "docs/fix-duplicate-raws.sql: correlated UPDATE with JSON_TABLE and JSON_ARRAYAGG",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A correlated UPDATE rebuilds one JSON array through JSON_TABLE and JSON_ARRAYAGG while filtering one stale member.",
+      "mysql_mariadb_translation": "Reduced to one archive document and one retired raw ID so the correlated JSON_TABLE update and final JSON array are isolated from unrelated rows."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "json-table",
+    "correlated-json-table",
+    "json-arrayagg",
+    "json-update",
+    "json-filter",
+    "json-contains",
+    "not-in",
+    "correlated-subquery",
+    "update-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Document 2101 starts with raw IDs 81, 82, and 83; retired ID 82 is removed while 81 and 83 remain in ordered JSON.",
+  "determinism_notes": "The document ID, JSON array, retired ID, JSON_TABLE path, aggregate ordering, predicates, and final ordering are fixed; there are no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE mini_archive_documents (document_id INT PRIMARY KEY, raw_id_list JSON NOT NULL)",
+    "INSERT INTO mini_archive_documents VALUES (2101, '[81,82,83]')",
+    "CREATE TABLE mini_retired_raw_ids (raw_id BIGINT PRIMARY KEY)",
+    "INSERT INTO mini_retired_raw_ids VALUES (82)"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE mini_archive_documents AS d SET raw_id_list = (SELECT JSON_ARRAYAGG(jt.raw_id ORDER BY jt.raw_id) FROM JSON_TABLE(d.raw_id_list, '$[*]' COLUMNS (raw_id BIGINT PATH '$')) AS jt WHERE jt.raw_id NOT IN (SELECT r.raw_id FROM mini_retired_raw_ids AS r)) WHERE JSON_LENGTH(d.raw_id_list) > 1 AND EXISTS (SELECT 1 FROM mini_retired_raw_ids AS r WHERE JSON_CONTAINS(d.raw_id_list, CAST(r.raw_id AS CHAR), '$'))",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT document_id, raw_id_list FROM mini_archive_documents ORDER BY document_id",
+      "ordered": true
+    }
+  ]
+}
