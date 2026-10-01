@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "id": "json_table_ordinality_upsert",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "box/Anemometer",
+      "commit": "929f3385e4ecb539890e4d33e8b6aff052688318",
+      "path": "mysql56-save_history.sql",
+      "url": "https://github.com/box/Anemometer/blob/929f3385e4ecb539890e4d33e8b6aff052688318/mysql56-save_history.sql",
+      "sha256": "c10aa2b222a6963a91c70bdee6350736e09f9aafc44008f87527f56cd6175e59",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "mysql56-save_history.sql: JSON-derived INSERT ... SELECT and ON DUPLICATE KEY UPDATE section",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL migration expands JSON-derived rows into an INSERT SELECT and uses ON DUPLICATE KEY UPDATE to make repeated materialization idempotent.",
+      "mysql_mariadb_translation": "Reauthored as a device-preference loader. JSON_TABLE extracts each preference and its FOR ORDINALITY position from per-device payloads; an INSERT SELECT updates one existing preference, inserts new preferences, and leaves an unrelated device untouched."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "json-table",
+    "json-ordinality",
+    "insert-select",
+    "on-duplicate-key-update",
+    "upsert",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Device 1201 has a legacy theme preference that is updated from JSON and receives a new ordered timezone preference; device 1202 receives a new preference; unrelated device 1203 remains unchanged.",
+  "determinism_notes": "Device IDs, JSON arrays, preference keys, ordinality values, primary keys, and ORDER BY clauses are fixed; the fixture has no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE device_preference_payloads (device_id INT PRIMARY KEY, payload JSON NOT NULL)",
+    "INSERT INTO device_preference_payloads VALUES (1201, '{\"preferences\":[{\"key\":\"theme\",\"value\":\"dark\"},{\"key\":\"timezone\",\"value\":\"UTC\"}]}'), (1202, '{\"preferences\":[{\"key\":\"language\",\"value\":\"fr\"}]}')",
+    "CREATE TABLE device_preferences (device_id INT NOT NULL, preference_key VARCHAR(32) NOT NULL, preference_value VARCHAR(64) NOT NULL, preference_position INT NOT NULL, PRIMARY KEY (device_id, preference_key))",
+    "INSERT INTO device_preferences VALUES (1201, 'theme', 'legacy', 99), (1203, 'stale', 'retain', 7)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO device_preferences (device_id, preference_key, preference_value, preference_position) SELECT p.device_id, jt.preference_key, jt.preference_value, jt.preference_position FROM device_preference_payloads AS p CROSS JOIN JSON_TABLE(p.payload, '$.preferences[*]' COLUMNS (preference_position FOR ORDINALITY, preference_key VARCHAR(32) PATH '$.key', preference_value VARCHAR(64) PATH '$.value')) AS jt ORDER BY p.device_id, jt.preference_position ON DUPLICATE KEY UPDATE preference_value = VALUES(preference_value), preference_position = VALUES(preference_position)",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT device_id, preference_key, preference_value, preference_position FROM device_preferences ORDER BY device_id, preference_position, preference_key",
+      "ordered": true
+    }
+  ]
+}
