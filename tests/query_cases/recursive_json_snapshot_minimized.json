@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "recursive_json_snapshot_minimized",
+  "provenance": {
+    "kind": "minimized-from-public-query-case",
+    "parent_case": "recursive_json_snapshot",
+    "source": {
+      "repository": "ShayanAbbas1/dbdelve",
+      "commit": "ea8cad24b74c530ef22adf8cc2f190e51bd817a7",
+      "path": "dev/mysql/init/001-dbdelve-demo.sql",
+      "url": "https://github.com/ShayanAbbas1/dbdelve/blob/ea8cad24b74c530ef22adf8cc2f190e51bd817a7/dev/mysql/init/001-dbdelve-demo.sql",
+      "sha256": "287c86a81c9b83f170ced40dfd7a038ab9f3ff664d39d8ad438d498ad4854bff",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from recursive_json_snapshot",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A single INSERT uses a recursive CTE after INSERT INTO and aggregates the generated rows as ordered JSON objects inside a JSON array.",
+      "mysql_mariadb_translation": "Reduced to one three-step rollout snapshot while retaining the recursive INSERT, relational total, JSON_OBJECT elements, and ordered JSON_ARRAYAGG."
+    },
+    "independently_authored": true,
+    "minimized_from": "recursive_json_snapshot"
+  },
+  "features": ["insert-select", "recursive-cte", "recursive-insert", "json-arrayagg", "json-object", "minimized-regression", "deterministic-final-state"],
+  "fixture_notes": "Snapshot 701 generates steps 1 through 3 with budgets 5, 10, and 15. The stored total is 30 and the JSON array contains exactly three ordered step objects.",
+  "determinism_notes": "The snapshot ID, recursive bound, generated budgets, JSON keys, aggregate order, and final order are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE mini_rollout_snapshots (snapshot_id INT PRIMARY KEY, total_budget INT NOT NULL, snapshot_json JSON NOT NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO mini_rollout_snapshots (snapshot_id, total_budget, snapshot_json) WITH RECURSIVE rollout_steps (step_no) AS (SELECT 1 UNION ALL SELECT step_no + 1 FROM rollout_steps WHERE step_no < 3) SELECT 701, SUM(step_no * 5), JSON_ARRAYAGG(JSON_OBJECT('step', step_no, 'budget', step_no * 5) ORDER BY step_no) FROM rollout_steps",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT snapshot_id, total_budget, JSON_LENGTH(snapshot_json) AS step_count, JSON_UNQUOTE(JSON_EXTRACT(snapshot_json, '$[0].budget')) AS first_budget FROM mini_rollout_snapshots ORDER BY snapshot_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT snapshot_id, snapshot_json FROM mini_rollout_snapshots ORDER BY snapshot_id",
+      "ordered": true
+    }
+  ]
+}

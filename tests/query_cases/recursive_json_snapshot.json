@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "recursive_json_snapshot",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "repository": "ShayanAbbas1/dbdelve",
+      "commit": "ea8cad24b74c530ef22adf8cc2f190e51bd817a7",
+      "path": "dev/mysql/init/001-dbdelve-demo.sql",
+      "url": "https://github.com/ShayanAbbas1/dbdelve/blob/ea8cad24b74c530ef22adf8cc2f190e51bd817a7/dev/mysql/init/001-dbdelve-demo.sql",
+      "sha256": "287c86a81c9b83f170ced40dfd7a038ab9f3ff664d39d8ad438d498ad4854bff",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "dev/mysql/init/001-dbdelve-demo.sql:142-159",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "An INSERT ... SELECT places a recursive CTE after INSERT INTO, generates a bounded sequence, and folds the sequence into a JSON_ARRAYAGG(JSON_OBJECT(...)) payload.",
+      "mysql_mariadb_translation": "Reauthored as a rollout snapshot writer. Each INSERT uses a bounded recursive step sequence after INSERT INTO, computes a deterministic total in a relational column, and stores ordered per-step JSON objects in a JSON array. The source schema, values, and database-inspection purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["insert-select", "recursive-cte", "recursive-insert", "json-arrayagg", "json-object", "ordered-json-aggregate", "deterministic-final-state"],
+  "fixture_notes": "Snapshot 601 generates four rollout steps with budgets 10, 20, 30, and 40, while snapshot 602 generates two steps with budgets 7 and 14. Each inserted row stores the generated step objects in sequence order and the matching relational total.",
+  "determinism_notes": "Snapshot IDs, recursive bounds, generated budgets, JSON keys, aggregate ordering, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE rollout_snapshots (snapshot_id INT PRIMARY KEY, snapshot_label VARCHAR(32) NOT NULL, total_budget INT NOT NULL, snapshot_json JSON NOT NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO rollout_snapshots (snapshot_id, snapshot_label, total_budget, snapshot_json) WITH RECURSIVE rollout_steps (step_no) AS (SELECT 1 UNION ALL SELECT step_no + 1 FROM rollout_steps WHERE step_no < 4) SELECT 601, 'alpha', SUM(step_no * 10), JSON_ARRAYAGG(JSON_OBJECT('step', step_no, 'budget', step_no * 10) ORDER BY step_no) FROM rollout_steps",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO rollout_snapshots (snapshot_id, snapshot_label, total_budget, snapshot_json) WITH RECURSIVE rollout_steps (step_no) AS (SELECT 1 UNION ALL SELECT step_no + 1 FROM rollout_steps WHERE step_no < 2) SELECT 602, 'beta', SUM(step_no * 7), JSON_ARRAYAGG(JSON_OBJECT('step', step_no, 'budget', step_no * 7) ORDER BY step_no) FROM rollout_steps",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT snapshot_id, snapshot_label, total_budget, JSON_LENGTH(snapshot_json) AS step_count, JSON_UNQUOTE(JSON_EXTRACT(snapshot_json, '$[0].budget')) AS first_budget FROM rollout_snapshots ORDER BY snapshot_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT snapshot_id, snapshot_json FROM rollout_snapshots ORDER BY snapshot_id",
+      "ordered": true
+    }
+  ]
+}
