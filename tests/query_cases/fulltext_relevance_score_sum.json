@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "id": "fulltext_relevance_score_sum",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "dani31v/Intro_BD",
+      "commit": "4d42550f7984e32cada1161b67101fa06d4dd69f",
+      "path": "match.sql",
+      "url": "https://github.com/dani31v/Intro_BD/blob/4d42550f7984e32cada1161b67101fa06d4dd69f/match.sql",
+      "sha256": "e922ab66e121e844070418cea995d7d1b6416e96b92126e6b212c386e7c7d070",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "match.sql:5-24",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL FULLTEXT report computes independent MATCH ... AGAINST scores for two indexed text fields, combines the scores per product through a derived-table join, filters on the combined score, and orders the remaining products by relevance.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored catalog search. Separate natural-language FULLTEXT scores for item names and descriptions are combined in a derived table; only positive combined matches are returned with stable ID ordering so relevance magnitude remains an internal filter rather than a cross-engine output contract. The schema, rows, terms, and labels are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "fulltext-index",
+    "match-against",
+    "natural-language-search",
+    "derived-table",
+    "score-arithmetic",
+    "positive-score-filter",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Items 901 and 902 match the harbor beacon terms in one indexed field each; item 903 matches across both fields; item 904 is unrelated. The derived score sum filters the unrelated item, while the final ID ordering avoids exposing engine-specific relevance magnitudes.",
+  "determinism_notes": "Fixed IDs, text, search terms, derived aliases, and final ordering are used; no clocks, randomness, sleeps, or concurrent schedules are involved.",
+  "setup": [
+    "CREATE TABLE catalog_items (item_id INT PRIMARY KEY, item_name VARCHAR(128) NOT NULL, item_description TEXT NOT NULL, FULLTEXT KEY ft_catalog_item_names (item_name), FULLTEXT KEY ft_catalog_item_descriptions (item_description)) ENGINE=InnoDB",
+    "INSERT INTO catalog_items VALUES (901, 'Harbor beacon', 'A quiet maintenance log for the west pier.'), (902, 'Pier ledger', 'Harbor beacon inspections keep the channel clear.'), (903, 'Beacon harbor guide', 'The harbor beacon guides ferries past the reef.'), (904, 'Orchard inventory', 'Copper labels mark the spring seedlings.')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT scored.item_id, scored.item_name FROM (SELECT item_id, item_name, MATCH(item_name) AGAINST ('harbor beacon') AS name_score, MATCH(item_description) AGAINST ('harbor beacon') AS description_score FROM catalog_items) AS scored WHERE scored.name_score + scored.description_score > 0 ORDER BY scored.item_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT item_id, item_name, item_description FROM catalog_items ORDER BY item_id",
+      "ordered": true
+    }
+  ]
+}

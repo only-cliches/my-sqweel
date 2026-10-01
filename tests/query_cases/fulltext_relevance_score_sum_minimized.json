@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "fulltext_relevance_score_sum_minimized",
+  "provenance": {
+    "kind": "derived-minimized-regression",
+    "source_case": "fulltext_relevance_score_sum",
+    "source_dialect": "mysql-mariadb",
+    "observed_pattern": "A derived table combines independent MATCH ... AGAINST scores from two indexed text fields before an outer positive-score filter.",
+    "mysql_mariadb_translation": "The minimized case keeps two catalog rows, one matching in each indexed field, and verifies that the derived score sum retains both rows while excluding a non-match."
+  },
+  "features": [
+    "fulltext-index",
+    "match-against",
+    "derived-table",
+    "score-arithmetic",
+    "positive-score-filter"
+  ],
+  "fixture_notes": "The two retained rows exercise separate name and description matches; the third row is the negative control.",
+  "determinism_notes": "Fixed IDs, indexed text, search terms, and final ordering are used; no clocks, randomness, sleeps, or concurrent schedules are involved.",
+  "setup": [
+    "CREATE TABLE catalog_items (item_id INT PRIMARY KEY, item_name VARCHAR(128) NOT NULL, item_description TEXT NOT NULL, FULLTEXT KEY ft_catalog_item_names (item_name), FULLTEXT KEY ft_catalog_item_descriptions (item_description)) ENGINE=InnoDB",
+    "INSERT INTO catalog_items VALUES (951, 'Harbor beacon', 'West pier maintenance.'), (952, 'Pier ledger', 'Harbor beacon inspection.'), (953, 'Orchard inventory', 'Copper seedlings.')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT scored.item_id FROM (SELECT item_id, MATCH(item_name) AGAINST ('harbor beacon') AS name_score, MATCH(item_description) AGAINST ('harbor beacon') AS description_score FROM catalog_items) AS scored WHERE scored.name_score + scored.description_score > 0 ORDER BY scored.item_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT item_id, item_name, item_description FROM catalog_items ORDER BY item_id",
+      "ordered": true
+    }
+  ]
+}
