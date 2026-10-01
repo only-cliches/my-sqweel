@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "singleton_group_count",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "najirh/30-Days-SQL-Challenge",
+      "commit": "2efab59af8cba54b0a6e5056beb8847fbad73109",
+      "path": "19.sql",
+      "url": "https://github.com/najirh/30-Days-SQL-Challenge/blob/2efab59af8cba54b0a6e5056beb8847fbad73109/19.sql",
+      "sha256": "f5a486d2d47b4d5bf22d584210d596562bd980424536961c04ad8d25edcc9ce1",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "19.sql:23-39",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A derived query groups rows, filters groups with HAVING COUNT(name) = 1, and an outer COUNT(*) counts the qualifying groups.",
+      "mysql_mariadb_translation": "Reauthored as an independent queue-health metric counting queues with exactly one event. The grouped inner relation, event data, names, and operational context are new; the outer aggregate preserves the source's nested aggregate shape."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "derived-aggregate",
+    "nested-aggregate",
+    "grouped-count",
+    "having-aggregate-threshold",
+    "derived-table",
+    "deterministic-select"
+  ],
+  "fixture_notes": "Four queues contain one, two, one, and three events respectively, so the outer count must return two singleton queues.",
+  "determinism_notes": "Fixed event IDs, queue codes, statuses, grouping key, threshold, and scalar result; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE queue_events (event_id INT PRIMARY KEY, queue_code VARCHAR(16) NOT NULL, event_status VARCHAR(16) NOT NULL)",
+    "INSERT INTO queue_events VALUES (901, 'alpha', 'open'), (902, 'beta', 'open'), (903, 'beta', 'closed'), (904, 'gamma', 'open'), (905, 'delta', 'open'), (906, 'delta', 'closed'), (907, 'delta', 'open')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT COUNT(*) AS singleton_queue_count FROM (SELECT queue_code, COUNT(queue_code) AS event_count FROM queue_events GROUP BY queue_code HAVING COUNT(queue_code) = 1) AS singleton_queues",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT COUNT(*) AS singleton_queue_count FROM (SELECT queue_code, COUNT(queue_code) AS event_count FROM queue_events GROUP BY queue_code HAVING COUNT(queue_code) = 1) AS singleton_queues",
+      "ordered": true
+    }
+  ]
+}
