@@ -528,6 +528,7 @@ pub(super) fn aggregate_select_result(
                 base,
                 last_insert_id,
                 &order_hint_map,
+                &aggregate_group.nullified_group_exprs,
                 eval,
                 &mut row,
             )?;
@@ -838,6 +839,7 @@ pub(super) fn expr_has_window(expr: &Expr) -> bool {
 struct AggregateGroup {
     rows: Vec<Map<String, Value>>,
     base: Map<String, Value>,
+    nullified_group_exprs: HashSet<String>,
 }
 
 fn group_rows(
@@ -849,7 +851,11 @@ fn group_rows(
 ) -> Result<Vec<AggregateGroup>> {
     if group_by.is_empty() && !rollup {
         let base = rows.first().cloned().unwrap_or_default();
-        return Ok(vec![AggregateGroup { rows, base }]);
+        return Ok(vec![AggregateGroup {
+            rows,
+            base,
+            nullified_group_exprs: HashSet::new(),
+        }]);
     }
 
     let mut positions = HashMap::<String, usize>::new();
@@ -884,7 +890,11 @@ fn group_rows(
             .into_iter()
             .map(|(_, rows)| {
                 let base = rows.first().cloned().unwrap_or_default();
-                AggregateGroup { rows, base }
+                AggregateGroup {
+                    rows,
+                    base,
+                    nullified_group_exprs: HashSet::new(),
+                }
             })
             .collect());
     }
@@ -919,7 +929,15 @@ fn group_rows(
             for expr in &group_by[level..] {
                 nullify_group_expr_columns(&mut base, expr);
             }
-            output.push(AggregateGroup { rows, base });
+            let nullified_group_exprs = group_by[level..]
+                .iter()
+                .map(ToString::to_string)
+                .collect();
+            output.push(AggregateGroup {
+                rows,
+                base,
+                nullified_group_exprs,
+            });
         }
     }
     Ok(output)
@@ -974,6 +992,7 @@ pub(super) fn project_aggregate_item(
     base: &Map<String, Value>,
     last_insert_id: u64,
     order_hints: &BTreeMap<String, ColumnHint>,
+    nullified_group_exprs: &HashSet<String>,
     eval: &dyn Fn(&Expr, &Map<String, Value>, u64) -> Result<Value>,
     out: &mut Map<String, Value>,
 ) -> Result<()> {
@@ -993,8 +1012,11 @@ pub(super) fn project_aggregate_item(
             if expr_has_window(expr) {
                 return Ok(());
             }
-            let value =
-                aggregate_or_eval_expr(expr, group, base, last_insert_id, order_hints, eval)?;
+            let value = if nullified_group_exprs.contains(&expr.to_string()) {
+                Value::Null
+            } else {
+                aggregate_or_eval_expr(expr, group, base, last_insert_id, order_hints, eval)?
+            };
             out.insert(
                 key.expect("expression item carries an output key")
                     .to_string(),
@@ -1005,8 +1027,11 @@ pub(super) fn project_aggregate_item(
             if expr_has_window(expr) {
                 return Ok(());
             }
-            let value =
-                aggregate_or_eval_expr(expr, group, base, last_insert_id, order_hints, eval)?;
+            let value = if nullified_group_exprs.contains(&expr.to_string()) {
+                Value::Null
+            } else {
+                aggregate_or_eval_expr(expr, group, base, last_insert_id, order_hints, eval)?
+            };
             if aggregate_call(expr).is_some() {
                 out.insert(projection_expr_column_name(expr), value.clone());
             }

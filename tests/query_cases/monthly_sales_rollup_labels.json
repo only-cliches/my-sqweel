@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "monthly_sales_rollup_labels",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "dongxuyang1985/thinking_in_sql",
+      "commit": "5c26dcb9eeb0d95edaea337c543206a7ef6f9b32",
+      "path": "20/answer.sql",
+      "url": "https://github.com/dongxuyang1985/thinking_in_sql/blob/5c26dcb9eeb0d95edaea337c543206a7ef6f9b32/20/answer.sql",
+      "sha256": "c49784b79856d77699a564ab3013594efc917ae1e355b80c2237e353bcbffdeb",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "20/answer.sql:8-15",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL report buckets dates with DATE_FORMAT, labels rollup NULLs through COALESCE, and aggregates by month, product, and channel with WITH ROLLUP.",
+      "mysql_mariadb_translation": "Reauthored as an independent monthly service-revenue report. It labels month, service, and route subtotals with COALESCE around DATE_FORMAT and grouped dimensions, then computes SUM totals through WITH ROLLUP; all schema, rows, labels, and business context are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "date-format-bucketing",
+    "coalesce-rollup-labels",
+    "with-rollup",
+    "grouped-sum",
+    "multi-level-subtotals",
+    "deterministic-order"
+  ],
+  "fixture_notes": "January and February each contain two services across two routes. The query must emit service-route details, service subtotals, monthly subtotals, and a grand total using explicit labels instead of NULL rollup markers.",
+  "determinism_notes": "Fixed timestamps, service codes, route codes, amounts, label literals, derived aliases, and final ordering; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE service_revenue (revenue_id INT PRIMARY KEY, billed_at DATETIME NOT NULL, service_code VARCHAR(16) NOT NULL, route_code VARCHAR(16) NOT NULL, amount INT NOT NULL)",
+    "INSERT INTO service_revenue VALUES (1501, '2024-01-05 10:00:00', 'API', 'North', 120), (1502, '2024-01-07 11:00:00', 'API', 'South', 80), (1503, '2024-01-08 12:00:00', 'WEB', 'North', 90), (1504, '2024-02-03 09:00:00', 'API', 'North', 110), (1505, '2024-02-06 13:00:00', 'WEB', 'South', 70), (1506, '2024-02-09 14:00:00', 'WEB', 'North', 60)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT month_label, service_label, route_label, total_amount FROM (SELECT COALESCE(DATE_FORMAT(billed_at, '%Y-%m'), 'ALL MONTHS') AS month_label, COALESCE(service_code, 'ALL SERVICES') AS service_label, COALESCE(route_code, 'ALL ROUTES') AS route_label, SUM(amount) AS total_amount FROM service_revenue GROUP BY COALESCE(DATE_FORMAT(billed_at, '%Y-%m'), 'ALL MONTHS'), service_code, route_code WITH ROLLUP) AS rollup_report ORDER BY month_label, service_label, route_label",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT month_label, service_label, route_label, total_amount FROM (SELECT COALESCE(DATE_FORMAT(billed_at, '%Y-%m'), 'ALL MONTHS') AS month_label, COALESCE(service_code, 'ALL SERVICES') AS service_label, COALESCE(route_code, 'ALL ROUTES') AS route_label, SUM(amount) AS total_amount FROM service_revenue GROUP BY COALESCE(DATE_FORMAT(billed_at, '%Y-%m'), 'ALL MONTHS'), service_code, route_code WITH ROLLUP) AS rollup_report ORDER BY month_label, service_label, route_label",
+      "ordered": true
+    }
+  ]
+}

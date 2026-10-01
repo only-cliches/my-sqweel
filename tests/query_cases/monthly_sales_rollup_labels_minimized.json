@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "monthly_sales_rollup_labels_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "monthly_sales_rollup_labels",
+    "source": {
+      "kind": "github",
+      "repository": "dongxuyang1985/thinking_in_sql",
+      "commit": "5c26dcb9eeb0d95edaea337c543206a7ef6f9b32",
+      "path": "20/answer.sql",
+      "url": "https://github.com/dongxuyang1985/thinking_in_sql/blob/5c26dcb9eeb0d95edaea337c543206a7ef6f9b32/20/answer.sql",
+      "sha256": "c49784b79856d77699a564ab3013594efc917ae1e355b80c2237e353bcbffdeb",
+      "source_dialect": "mysql-mariadb"
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "date-format-bucketing",
+    "coalesce-rollup-labels",
+    "with-rollup",
+    "grouped-sum",
+    "minimized-regression"
+  ],
+  "fixture_notes": "Two dated service rows retain one detail row and one grand-total row, isolating the rollup NULL label passed through COALESCE.",
+  "determinism_notes": "Fixed dates, service codes, amounts, label literals, derived aliases, and final ordering; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE mini_service_revenue (revenue_id INT PRIMARY KEY, billed_at DATETIME NOT NULL, service_code VARCHAR(16) NOT NULL, amount INT NOT NULL)",
+    "INSERT INTO mini_service_revenue VALUES (1601, '2024-01-05 10:00:00', 'API', 120), (1602, '2024-02-03 09:00:00', 'WEB', 70)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT month_label, service_label, total_amount FROM (SELECT COALESCE(DATE_FORMAT(billed_at, '%Y-%m'), 'ALL MONTHS') AS month_label, COALESCE(service_code, 'ALL SERVICES') AS service_label, SUM(amount) AS total_amount FROM mini_service_revenue GROUP BY COALESCE(DATE_FORMAT(billed_at, '%Y-%m'), 'ALL MONTHS'), service_code WITH ROLLUP) AS rollup_report ORDER BY month_label, service_label",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT month_label, service_label, total_amount FROM (SELECT COALESCE(DATE_FORMAT(billed_at, '%Y-%m'), 'ALL MONTHS') AS month_label, COALESCE(service_code, 'ALL SERVICES') AS service_label, SUM(amount) AS total_amount FROM mini_service_revenue GROUP BY COALESCE(DATE_FORMAT(billed_at, '%Y-%m'), 'ALL MONTHS'), service_code WITH ROLLUP) AS rollup_report ORDER BY month_label, service_label",
+      "ordered": true
+    }
+  ]
+}
