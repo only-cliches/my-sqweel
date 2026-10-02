@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "update_join_grouped_latest_owner_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "onkar0127/real-estate-Databse-analytics",
+      "commit": "fae8ee7a63c9cbdac0f0d0c5ccfacb06e2425be5",
+      "path": "update.sql",
+      "url": "https://github.com/onkar0127/real-estate-Databse-analytics/blob/fae8ee7a63c9cbdac0f0d0c5ccfacb06e2425be5/update.sql",
+      "sha256": "f1a2f85cc50c5016f848698cda168aedaf6423732d6e6a7d123e684d4dd4a126",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "update.sql:5-18",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL UPDATE JOIN derives one latest related record per entity through a grouped MAX date subquery and writes the resulting owner into the entity table.",
+      "mysql_mariadb_translation": "Reduced to one unit with two owner events and one unit with no event. The grouped latest-owner join updates only the unit with an event."
+    },
+    "independently_authored": true
+  },
+  "features": ["update-join", "group-by", "aggregate-max", "derived-table", "latest-per-group", "joined-update", "null-preserving-update", "dml-final-state", "deterministic-order", "minimized-regression"],
+  "fixture_notes": "Unit 3101 receives owner 52 from its latest event; unit 3102 retains its NULL owner because it has no event.",
+  "determinism_notes": "The single unit has one event on its maximum day. All IDs, dates, and owners are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE asset_units_min (unit_id INT PRIMARY KEY, unit_name VARCHAR(32) NOT NULL, owner_id INT NULL)",
+    "CREATE TABLE asset_owner_events_min (event_id INT PRIMARY KEY, unit_id INT NOT NULL, owner_id INT NOT NULL, event_day INT NOT NULL)",
+    "INSERT INTO asset_units_min VALUES (3101, 'north bay', NULL), (3102, 'south bay', NULL)",
+    "INSERT INTO asset_owner_events_min VALUES (11, 3101, 51, 20240501), (12, 3101, 52, 20240601)"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE asset_units_min AS u JOIN (SELECT e.unit_id, e.owner_id FROM asset_owner_events_min AS e JOIN (SELECT unit_id, MAX(event_day) AS latest_day FROM asset_owner_events_min GROUP BY unit_id) AS latest ON e.unit_id = latest.unit_id AND e.event_day = latest.latest_day) AS latest_owner ON u.unit_id = latest_owner.unit_id SET u.owner_id = latest_owner.owner_id",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT unit_id, unit_name, owner_id FROM asset_units_min ORDER BY unit_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT event_id, unit_id, owner_id, event_day FROM asset_owner_events_min ORDER BY event_id",
+      "ordered": true
+    }
+  ]
+}
