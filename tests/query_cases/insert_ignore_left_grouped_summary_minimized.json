@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "id": "insert_ignore_left_grouped_summary_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Ensembl/ensembl-compara",
+      "commit": "a2878288f951e76f6441e3d78703941f15540c64",
+      "path": "sql/tree-stats-as-stn_tags.sql",
+      "url": "https://github.com/Ensembl/ensembl-compara/blob/a2878288f951e76f6441e3d78703941f15540c64/sql/tree-stats-as-stn_tags.sql",
+      "sha256": "f398dba9eb3746102764d0447b293cf46fc8b05f70bb7f232982758e56940081",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/tree-stats-as-stn_tags.sql:58-91,123-124",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL statistics load aggregates related rows by entity, uses a LEFT JOIN to zero-fill entities without statistics, and seeds missing destination keys with INSERT IGNORE.",
+      "mysql_mariadb_translation": "Reduced to one conflicting summary and one unit without events. INSERT IGNORE preserves the conflict and inserts a zero-filled grouped summary for the unit without events."
+    },
+    "independently_authored": true
+  },
+  "features": ["insert-ignore", "left-join", "group-by", "aggregate-count", "aggregate-sum", "zero-fill", "primary-key-conflict", "grouped-summary-load", "dml-final-state", "deterministic-order", "minimized-regression"],
+  "fixture_notes": "Unit 6201 keeps its pre-existing summary and unit 6202 is inserted with zero count and total.",
+  "determinism_notes": "Unit IDs and event values are fixed; grouping is by primary unit ID and all final reads are ordered by unit ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE event_units_min (unit_id INT PRIMARY KEY, unit_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE unit_events_min (event_id INT PRIMARY KEY, unit_id INT NOT NULL, points INT NOT NULL)",
+    "CREATE TABLE unit_summaries_min (unit_id INT PRIMARY KEY, event_count INT NOT NULL, total_points INT NOT NULL)",
+    "INSERT INTO event_units_min VALUES (6201, 'delta'), (6202, 'echo')",
+    "INSERT INTO unit_events_min VALUES (11, 6201, 8)",
+    "INSERT INTO unit_summaries_min VALUES (6201, 77, 770)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT IGNORE INTO unit_summaries_min (unit_id, event_count, total_points) SELECT u.unit_id, COUNT(e.event_id), COALESCE(SUM(e.points), 0) FROM event_units_min AS u LEFT JOIN unit_events_min AS e ON e.unit_id = u.unit_id GROUP BY u.unit_id",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT unit_id, event_count, total_points FROM unit_summaries_min ORDER BY unit_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT event_id, unit_id, points FROM unit_events_min ORDER BY event_id",
+      "ordered": true
+    }
+  ]
+}

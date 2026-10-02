@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "id": "insert_ignore_left_grouped_summary",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Ensembl/ensembl-compara",
+      "commit": "a2878288f951e76f6441e3d78703941f15540c64",
+      "path": "sql/tree-stats-as-stn_tags.sql",
+      "url": "https://github.com/Ensembl/ensembl-compara/blob/a2878288f951e76f6441e3d78703941f15540c64/sql/tree-stats-as-stn_tags.sql",
+      "sha256": "f398dba9eb3746102764d0447b293cf46fc8b05f70bb7f232982758e56940081",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/tree-stats-as-stn_tags.sql:58-91,123-124",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL statistics load aggregates related rows by entity, uses a LEFT JOIN to zero-fill entities without statistics, and seeds missing destination keys with INSERT IGNORE.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored unit-event summary load. INSERT IGNORE selects grouped event counts and totals through a LEFT JOIN, preserves a pre-existing summary row, inserts new units, and records zeroes for a unit without events."
+    },
+    "independently_authored": true
+  },
+  "features": ["insert-ignore", "left-join", "group-by", "aggregate-count", "aggregate-sum", "zero-fill", "primary-key-conflict", "grouped-summary-load", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "Unit 6101 has a pre-existing summary that INSERT IGNORE preserves; units 6102 and 6103 are inserted, with unit 6103 receiving zero count and total through the LEFT JOIN.",
+  "determinism_notes": "Unit IDs and event values are fixed; grouping is by primary unit ID and all final reads are ordered by unit ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE event_units (unit_id INT PRIMARY KEY, unit_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE unit_events (event_id INT PRIMARY KEY, unit_id INT NOT NULL, points INT NOT NULL)",
+    "CREATE TABLE unit_summaries (unit_id INT PRIMARY KEY, event_count INT NOT NULL, total_points INT NOT NULL)",
+    "INSERT INTO event_units VALUES (6101, 'alpha'), (6102, 'beta'), (6103, 'gamma')",
+    "INSERT INTO unit_events VALUES (1, 6101, 4), (2, 6101, 6), (3, 6102, 9)",
+    "INSERT INTO unit_summaries VALUES (6101, 99, 999)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT IGNORE INTO unit_summaries (unit_id, event_count, total_points) SELECT u.unit_id, COUNT(e.event_id), COALESCE(SUM(e.points), 0) FROM event_units AS u LEFT JOIN unit_events AS e ON e.unit_id = u.unit_id GROUP BY u.unit_id",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT unit_id, event_count, total_points FROM unit_summaries ORDER BY unit_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT event_id, unit_id, points FROM unit_events ORDER BY event_id",
+      "ordered": true
+    }
+  ]
+}
