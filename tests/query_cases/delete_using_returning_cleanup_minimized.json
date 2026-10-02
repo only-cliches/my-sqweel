@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "delete_using_returning_cleanup_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "boringcollege/postgres-by-example",
+      "commit": "ffde0d358722498e37982b57bdbd711871a61c43",
+      "path": "source/delete.sql",
+      "url": "https://github.com/boringcollege/postgres-by-example/blob/ffde0d358722498e37982b57bdbd711871a61c43/source/delete.sql",
+      "sha256": "9c572a26ca7dff1883a00d5c75c6f3aa074575a5e001982a4c6d233ff0b34fee",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "source/delete.sql:10-18",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A cleanup script demonstrates DELETE ... RETURNING for removed rows and DELETE ... USING to select target rows through a joined keep table as separate cleanup operations.",
+      "mysql_mariadb_translation": "Reduced to one independently authored purge-listed shipment and one expired shipment. DELETE ... USING and DELETE ... RETURNING isolate joined target selection, returned deleted columns, and deterministic final state without copying the source fixture."
+    },
+    "independently_authored": true
+  },
+  "features": ["delete-using", "delete-returning", "joined-delete", "multi-step-dml", "dml-final-state", "deterministic-order", "minimized-regression"],
+  "fixture_notes": "Shipment 8101 is removed through the purge list, shipment 8102 is removed and returned by the expired-row delete, and the archive is empty afterward.",
+  "determinism_notes": "Shipment IDs, states, and purge-list membership are fixed; returned and final reads are ordered by shipment ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE shipment_archive_min (shipment_id INT PRIMARY KEY, route_code VARCHAR(16) NOT NULL, shipment_state VARCHAR(16) NOT NULL)",
+    "CREATE TABLE shipment_purge_min (shipment_id INT PRIMARY KEY)",
+    "INSERT INTO shipment_archive_min VALUES (8101, 'WEST', 'cancelled'), (8102, 'CENTRAL', 'expired')",
+    "INSERT INTO shipment_purge_min VALUES (8101)"
+  ],
+  "steps": [
+    {
+      "sql": "DELETE FROM a USING shipment_archive_min AS a, shipment_purge_min AS p WHERE a.shipment_id = p.shipment_id",
+      "ordered": false
+    },
+    {
+      "sql": "DELETE FROM shipment_archive_min WHERE shipment_state = 'expired' RETURNING shipment_id, route_code, shipment_state",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT shipment_id, route_code, shipment_state FROM shipment_archive_min ORDER BY shipment_id",
+      "ordered": true
+    }
+  ]
+}

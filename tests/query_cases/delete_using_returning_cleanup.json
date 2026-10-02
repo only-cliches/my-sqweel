@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "delete_using_returning_cleanup",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "boringcollege/postgres-by-example",
+      "commit": "ffde0d358722498e37982b57bdbd711871a61c43",
+      "path": "source/delete.sql",
+      "url": "https://github.com/boringcollege/postgres-by-example/blob/ffde0d358722498e37982b57bdbd711871a61c43/source/delete.sql",
+      "sha256": "9c572a26ca7dff1883a00d5c75c6f3aa074575a5e001982a4c6d233ff0b34fee",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "source/delete.sql:10-18",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A cleanup script demonstrates DELETE ... RETURNING for removed rows and DELETE ... USING to select target rows through a joined keep table as separate cleanup operations.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored two-stage shipment-retention cleanup. DELETE ... USING removes purge-listed archive rows, then DELETE ... RETURNING exposes a second expired row before a final read verifies the retained archive; the source tables, values, and application purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["delete-using", "delete-returning", "joined-delete", "multi-step-dml", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "Shipment 7001 is removed through the purge list, shipment 7003 is removed by a direct expired-row delete and returned, and active shipment 7002 remains.",
+  "determinism_notes": "Shipment IDs, states, and purge-list membership are fixed; returned and final reads are ordered by shipment ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE shipment_archive (shipment_id INT PRIMARY KEY, route_code VARCHAR(16) NOT NULL, shipment_state VARCHAR(16) NOT NULL)",
+    "CREATE TABLE shipment_purge (shipment_id INT PRIMARY KEY)",
+    "INSERT INTO shipment_archive VALUES (7001, 'NORTH', 'cancelled'), (7002, 'SOUTH', 'active'), (7003, 'EAST', 'expired')",
+    "INSERT INTO shipment_purge VALUES (7001)"
+  ],
+  "steps": [
+    {
+      "sql": "DELETE FROM a USING shipment_archive AS a, shipment_purge AS p WHERE a.shipment_id = p.shipment_id",
+      "ordered": false
+    },
+    {
+      "sql": "DELETE FROM shipment_archive WHERE shipment_state = 'expired' RETURNING shipment_id, route_code, shipment_state",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT shipment_id, route_code, shipment_state FROM shipment_archive ORDER BY shipment_id",
+      "ordered": true
+    }
+  ]
+}
