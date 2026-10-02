@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "id": "insert_ignore_left_join_coalesce",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "chenditc/investment_data",
+      "commit": "b8c129b4b9d838f050eac8b1135111b3b79fc894",
+      "path": "tushare/regular_update.sql",
+      "url": "https://github.com/chenditc/investment_data/blob/b8c129b4b9d838f050eac8b1135111b3b79fc894/tushare/regular_update.sql",
+      "sha256": "7f20840bb2b1ea9623a1281cfaf4e36bed0d241e2aabd3bae7972e2544d725ae",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "tushare/regular_update.sql:32-43",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL loading script inserts rows selected from a raw source through a LEFT JOIN mapping table, derives target values from the optional mapping, and uses INSERT IGNORE so already-loaded destination keys are left unchanged.",
+      "mysql_mariadb_translation": "Reauthored as a daily quote loader. Raw quotes LEFT JOIN optional symbol aliases, COALESCE supplies the raw symbol and a unit scale when no alias exists, and INSERT IGNORE keeps an existing day/symbol snapshot while adding new mapped and unmapped symbols.",
+      "independently_authored": true
+    }
+  },
+  "features": [
+    "insert-ignore-left-join-coalesce",
+    "insert-ignore-select",
+    "left-join-null-fallback",
+    "derived-numeric-expression",
+    "duplicate-key-ignore",
+    "deterministic-final-state"
+  ],
+  "fixture_notes": "The existing ALPHA snapshot is ignored, BETA is mapped and scaled through the alias row, the unmapped GAMMA quote falls back to its raw symbol and unit scale, and a later BETA day is inserted.",
+  "determinism_notes": "Quote days, symbols, mapping rows, scale factors, duplicate keys, and final ordering are fixed; each source row maps to one destination key; there are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE raw_quotes (quote_id INT PRIMARY KEY, quote_day INT NOT NULL, source_symbol VARCHAR(16) NOT NULL, close_price DECIMAL(10, 2) NOT NULL, volume INT NOT NULL)",
+    "CREATE TABLE symbol_aliases (source_symbol VARCHAR(16) PRIMARY KEY, canonical_symbol VARCHAR(16) NOT NULL, scale_factor DECIMAL(10, 2) NOT NULL)",
+    "CREATE TABLE daily_quotes (quote_day INT NOT NULL, canonical_symbol VARCHAR(16) NOT NULL, close_price DECIMAL(10, 2) NOT NULL, volume INT NOT NULL, PRIMARY KEY (quote_day, canonical_symbol))",
+    "INSERT INTO raw_quotes VALUES (1, 20240701, 'ALPHA_RAW', 101.00, 1100), (2, 20240701, 'BETA_RAW', 55.00, 2200), (3, 20240701, 'GAMMA_RAW', 77.00, 3300), (4, 20240702, 'BETA_RAW', 56.00, 2300)",
+    "INSERT INTO symbol_aliases VALUES ('ALPHA_RAW', 'ALPHA', 1.00), ('BETA_RAW', 'BETA', 0.50)",
+    "INSERT INTO daily_quotes VALUES (20240701, 'ALPHA', 100.00, 1000)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT IGNORE INTO daily_quotes (quote_day, canonical_symbol, close_price, volume) SELECT r.quote_day, COALESCE(a.canonical_symbol, r.source_symbol), ROUND(r.close_price * COALESCE(a.scale_factor, 1.00), 2), r.volume FROM raw_quotes AS r LEFT JOIN symbol_aliases AS a ON a.source_symbol = r.source_symbol WHERE r.quote_day >= 20240701",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT quote_day, canonical_symbol, close_price, volume FROM daily_quotes ORDER BY quote_day, canonical_symbol",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT quote_day, canonical_symbol, close_price, volume FROM daily_quotes ORDER BY quote_day, canonical_symbol",
+      "ordered": true
+    }
+  ]
+}

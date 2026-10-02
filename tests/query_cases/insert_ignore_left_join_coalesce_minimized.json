@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "id": "insert_ignore_left_join_coalesce_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "chenditc/investment_data",
+      "commit": "b8c129b4b9d838f050eac8b1135111b3b79fc894",
+      "path": "tushare/regular_update.sql",
+      "url": "https://github.com/chenditc/investment_data/blob/b8c129b4b9d838f050eac8b1135111b3b79fc894/tushare/regular_update.sql",
+      "sha256": "7f20840bb2b1ea9623a1281cfaf4e36bed0d241e2aabd3bae7972e2544d725ae",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "tushare/regular_update.sql:32-43",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL loading script inserts rows selected from a raw source through a LEFT JOIN mapping table, derives target values from the optional mapping, and uses INSERT IGNORE so already-loaded destination keys are left unchanged.",
+      "mysql_mariadb_translation": "Reauthored as a compact daily quote loader. One raw quote is mapped and scaled, one unmapped quote uses COALESCE fallbacks, and a duplicate destination key is ignored without overwriting its stored snapshot.",
+      "independently_authored": true
+    }
+  },
+  "features": [
+    "insert-ignore-left-join-coalesce",
+    "insert-ignore-select",
+    "left-join-null-fallback",
+    "derived-numeric-expression",
+    "duplicate-key-ignore",
+    "deterministic-final-state"
+  ],
+  "fixture_notes": "The existing DELTA snapshot is ignored, EPSILON is mapped and scaled through the alias row, and unmapped ZETA falls back to its raw symbol and unit scale.",
+  "determinism_notes": "Quote days, symbols, mapping rows, scale factors, duplicate keys, and final ordering are fixed; each source row maps to one destination key; there are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE raw_quotes (quote_id INT PRIMARY KEY, quote_day INT NOT NULL, source_symbol VARCHAR(16) NOT NULL, close_price DECIMAL(10, 2) NOT NULL, volume INT NOT NULL)",
+    "CREATE TABLE symbol_aliases (source_symbol VARCHAR(16) PRIMARY KEY, canonical_symbol VARCHAR(16) NOT NULL, scale_factor DECIMAL(10, 2) NOT NULL)",
+    "CREATE TABLE daily_quotes (quote_day INT NOT NULL, canonical_symbol VARCHAR(16) NOT NULL, close_price DECIMAL(10, 2) NOT NULL, volume INT NOT NULL, PRIMARY KEY (quote_day, canonical_symbol))",
+    "INSERT INTO raw_quotes VALUES (11, 20240801, 'DELTA_RAW', 81.00, 4100), (12, 20240801, 'EPSILON_RAW', 44.00, 4200), (13, 20240801, 'ZETA_RAW', 33.00, 4300)",
+    "INSERT INTO symbol_aliases VALUES ('DELTA_RAW', 'DELTA', 1.00), ('EPSILON_RAW', 'EPSILON', 0.25)",
+    "INSERT INTO daily_quotes VALUES (20240801, 'DELTA', 80.00, 4000)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT IGNORE INTO daily_quotes (quote_day, canonical_symbol, close_price, volume) SELECT r.quote_day, COALESCE(a.canonical_symbol, r.source_symbol), ROUND(r.close_price * COALESCE(a.scale_factor, 1.00), 2), r.volume FROM raw_quotes AS r LEFT JOIN symbol_aliases AS a ON a.source_symbol = r.source_symbol WHERE r.quote_day >= 20240801",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT quote_day, canonical_symbol, close_price, volume FROM daily_quotes ORDER BY quote_day, canonical_symbol",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT quote_day, canonical_symbol, close_price, volume FROM daily_quotes ORDER BY quote_day, canonical_symbol",
+      "ordered": true
+    }
+  ]
+}
