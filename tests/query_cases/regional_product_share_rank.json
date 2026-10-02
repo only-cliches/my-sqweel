@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "id": "regional_product_share_rank",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "scenarios/window-analytics/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/scenarios/window-analytics/mysql.sql",
+      "sha256": "cfe5bd07baa23d84ab54915477310fee678124ea795371c0f5dc4de108ffdd18",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "scenarios/window-analytics/mysql.sql:58-69",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL report groups sales by region and product, then divides each grouped total by a nested aggregate window over the regional total to calculate a percentage share.",
+      "mysql_mariadb_translation": "Reauthored as a regional shipment mix report. Posted shipment units are aggregated by region and item, each item receives a rounded percentage of its regional total through SUM(SUM(...)) OVER, and a partitioned RANK orders items within each region. The source schema, rows, labels, and sales context are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "cte",
+    "grouping",
+    "nested-aggregate-window",
+    "partitioned-window",
+    "rank-window",
+    "percentage-of-total",
+    "rounded-decimal",
+    "status-filter",
+    "deterministic-order"
+  ],
+  "fixture_notes": "North has two active items tied for first share and one excluded cancelled shipment; South has one dominant item and one smaller item. Percentages are computed within each region and rank ties are preserved.",
+  "determinism_notes": "Shipment IDs, regions, item names, units, status filtering, rank ordering, percentage rounding, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE shipment_lines (line_id INT PRIMARY KEY, region_code VARCHAR(16) NOT NULL, item_name VARCHAR(32) NOT NULL, units DECIMAL(10,2) NOT NULL, line_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO shipment_lines VALUES (1, 'North', 'anchor', 40.00, 'posted'), (2, 'North', 'beacon', 40.00, 'posted'), (3, 'North', 'cancelled-kit', 999.00, 'cancelled'), (4, 'South', 'anchor', 75.00, 'posted'), (5, 'South', 'beacon', 25.00, 'posted')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH item_totals AS (SELECT region_code, item_name, SUM(units) AS item_units FROM shipment_lines WHERE line_state = 'posted' GROUP BY region_code, item_name) SELECT region_code, item_name, item_units, ROUND(item_units / SUM(item_units) OVER (PARTITION BY region_code) * 100, 2) AS regional_share_percent, RANK() OVER (PARTITION BY region_code ORDER BY item_units DESC) AS regional_rank FROM item_totals ORDER BY region_code, regional_rank, item_name",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT line_id, region_code, item_name, units, line_state FROM shipment_lines ORDER BY line_id",
+      "ordered": true
+    },
+    {
+      "sql": "WITH item_totals AS (SELECT region_code, item_name, SUM(units) AS item_units FROM shipment_lines WHERE line_state = 'posted' GROUP BY region_code, item_name) SELECT region_code, item_name, item_units, ROUND(item_units / SUM(item_units) OVER (PARTITION BY region_code) * 100, 2) AS regional_share_percent, RANK() OVER (PARTITION BY region_code ORDER BY item_units DESC) AS regional_rank FROM item_totals ORDER BY region_code, regional_rank, item_name",
+      "ordered": true
+    }
+  ]
+}

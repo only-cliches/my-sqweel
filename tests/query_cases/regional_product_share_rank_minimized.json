@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "id": "regional_product_share_rank_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "scenarios/window-analytics/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/scenarios/window-analytics/mysql.sql",
+      "sha256": "cfe5bd07baa23d84ab54915477310fee678124ea795371c0f5dc4de108ffdd18",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "scenarios/window-analytics/mysql.sql:58-69",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "Grouped item totals feed a nested aggregate window that divides each item by its regional total.",
+      "mysql_mariadb_translation": "Minimized to two posted items in one region, with a tied total that exercises both percentage-of-total arithmetic and tied partitioned ranking. The CTE, nested aggregate window, rounding, and deterministic order remain while unrelated regions and statuses are removed."
+    },
+    "independently_authored": true,
+    "minimized_from": "regional_product_share_rank"
+  },
+  "features": ["cte", "grouping", "nested-aggregate-window", "partitioned-window", "rank-window", "percentage-of-total", "rounded-decimal", "status-filter", "deterministic-order"],
+  "fixture_notes": "Central has two posted items tied at 30 units each and one cancelled item excluded before aggregation; both posted items receive a 50.00 percent share and rank 1.",
+  "determinism_notes": "Shipment IDs, region, item names, units, status filtering, rank ordering, percentage rounding, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE shipment_lines (line_id INT PRIMARY KEY, region_code VARCHAR(16) NOT NULL, item_name VARCHAR(32) NOT NULL, units DECIMAL(10,2) NOT NULL, line_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO shipment_lines VALUES (1, 'Central', 'alpha', 30.00, 'posted'), (2, 'Central', 'beta', 30.00, 'posted'), (3, 'Central', 'cancelled', 400.00, 'cancelled')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH item_totals AS (SELECT region_code, item_name, SUM(units) AS item_units FROM shipment_lines WHERE line_state = 'posted' GROUP BY region_code, item_name) SELECT region_code, item_name, item_units, ROUND(item_units / SUM(item_units) OVER (PARTITION BY region_code) * 100, 2) AS regional_share_percent, RANK() OVER (PARTITION BY region_code ORDER BY item_units DESC) AS regional_rank FROM item_totals ORDER BY region_code, regional_rank, item_name",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT line_id, region_code, item_name, units, line_state FROM shipment_lines ORDER BY line_id",
+      "ordered": true
+    },
+    {
+      "sql": "WITH item_totals AS (SELECT region_code, item_name, SUM(units) AS item_units FROM shipment_lines WHERE line_state = 'posted' GROUP BY region_code, item_name) SELECT region_code, item_name, item_units, ROUND(item_units / SUM(item_units) OVER (PARTITION BY region_code) * 100, 2) AS regional_share_percent, RANK() OVER (PARTITION BY region_code ORDER BY item_units DESC) AS regional_rank FROM item_totals ORDER BY region_code, regional_rank, item_name",
+      "ordered": true
+    }
+  ]
+}
