@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "update_correlated_latest_scalars",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "fujiwara/isucon14-exam",
+      "commit": "e94a6e866c179138f188115a4489ae763249795f",
+      "path": "sql/5.sql",
+      "url": "https://github.com/fujiwara/isucon14-exam/blob/e94a6e866c179138f188115a4489ae763249795f/sql/5.sql",
+      "sha256": "d53c70e4597867b1869adf7a34d893ff81aa57468b899d07fa1247f5f838172b",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/5.sql:18-21",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL migration updates each parent row from the latest matching child row using multiple correlated scalar subqueries, each ordered by descending child timestamp and limited to one row.",
+      "mysql_mariadb_translation": "Reauthored as a project dashboard refresh. Each project receives the newest event's note, severity, and event time through independent correlated scalar subqueries with deterministic timestamp and ID ordering; projects without events remain unchanged through the outer WHERE filter.",
+      "independently_authored": true
+    }
+  },
+  "features": [
+    "update-correlated-latest-scalars",
+    "multiple-correlated-subqueries",
+    "scalar-subquery-order-limit",
+    "latest-child-projection",
+    "deterministic-final-state"
+  ],
+  "fixture_notes": "Projects 2101 and 2102 are refreshed from their newest events, with event ID breaking a timestamp tie for project 2101; project 2103 has no events and is excluded from the update.",
+  "determinism_notes": "Project IDs, event timestamps, tie-break IDs, update predicates, and final ordering are fixed; each scalar subquery has a deterministic single-row result; there are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE projects (project_id INT PRIMARY KEY, latest_note VARCHAR(64) NOT NULL, latest_severity INT NOT NULL, latest_event_at INT NOT NULL)",
+    "CREATE TABLE project_events (event_id INT PRIMARY KEY, project_id INT NOT NULL, event_note VARCHAR(64) NOT NULL, severity INT NOT NULL, event_at INT NOT NULL)",
+    "INSERT INTO projects VALUES (2101, 'old alpha', 1, 90), (2102, 'old beta', 2, 80), (2103, 'untouched', 0, 0)",
+    "INSERT INTO project_events VALUES (3101, 2101, 'alpha earlier', 3, 100), (3102, 2101, 'alpha latest low', 4, 120), (3103, 2101, 'alpha latest high', 9, 120), (3201, 2102, 'beta latest', 7, 110)"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE projects SET latest_note = (SELECT event_note FROM project_events WHERE project_events.project_id = projects.project_id ORDER BY event_at DESC, event_id DESC LIMIT 1), latest_severity = (SELECT severity FROM project_events WHERE project_events.project_id = projects.project_id ORDER BY event_at DESC, event_id DESC LIMIT 1), latest_event_at = (SELECT event_at FROM project_events WHERE project_events.project_id = projects.project_id ORDER BY event_at DESC, event_id DESC LIMIT 1) WHERE project_id IN (SELECT project_id FROM project_events)",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT project_id, latest_note, latest_severity, latest_event_at FROM projects ORDER BY project_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT project_id, latest_note, latest_severity, latest_event_at FROM projects ORDER BY project_id",
+      "ordered": true
+    }
+  ]
+}
