@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "id": "insert_distinct_ordered_topn",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "knizhnik/imcs",
+      "commit": "940964df4f3d03ea67ebe868691a17b41c89218b",
+      "path": "example.sql",
+      "url": "https://github.com/knizhnik/imcs/blob/940964df4f3d03ea67ebe868691a17b41c89218b/example.sql",
+      "sha256": "8f8a35df745e78c89d267e325aef51d082dd3f888470b3dd1f2e1102cb30f2df",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "example.sql:12-15,79-84",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A SQL workload deduplicates symbols from a quote table into a directory and separately returns top symbols through grouped ordering with LIMIT.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored bounded directory load. INSERT ... SELECT DISTINCT orders fixed market labels by descending quote value with a symbol tie-breaker and LIMIT, loading each selected label once while leaving lower-ranked labels out."
+    },
+    "independently_authored": true
+  },
+  "features": ["insert-select", "distinct", "order-by-limit", "deduplicated-source", "bounded-load", "primary-key-target", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "The source contains a duplicate NORTH row and ties EAST and WEST at 180. LIMIT 3 loads NORTH, EAST, and WEST once each; SOUTH remains outside the bounded load.",
+  "determinism_notes": "Quote value descending plus symbol ascending defines the selected distinct rows. All source values are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE market_quotes (symbol VARCHAR(16) NOT NULL, quote_value INT NOT NULL)",
+    "CREATE TABLE featured_symbols (symbol VARCHAR(16) PRIMARY KEY, quote_value INT NOT NULL)",
+    "INSERT INTO market_quotes VALUES ('NORTH', 190), ('NORTH', 190), ('EAST', 180), ('WEST', 180), ('SOUTH', 170)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO featured_symbols (symbol, quote_value) SELECT DISTINCT symbol, quote_value FROM market_quotes ORDER BY quote_value DESC, symbol LIMIT 3",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT symbol, quote_value FROM featured_symbols ORDER BY symbol",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT symbol, quote_value FROM market_quotes ORDER BY symbol, quote_value",
+      "ordered": true
+    }
+  ]
+}
