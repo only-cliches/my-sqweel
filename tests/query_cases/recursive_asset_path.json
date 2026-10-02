@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "recursive_asset_path",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "FilenCloudDienste/filen-rs",
+      "commit": "06b563b75dd4dfef0f1c94613cfb2daa1ab52a44",
+      "path": "filen-mobile-native-cache/sql/recursive_select_path_from_uuid.sql",
+      "url": "https://github.com/FilenCloudDienste/filen-rs/blob/06b563b75dd4dfef0f1c94613cfb2daa1ab52a44/filen-mobile-native-cache/sql/recursive_select_path_from_uuid.sql",
+      "sha256": "455a52516799d6d52e4e95c5bbd8d49073554541276e0d040e031274f96dcfe0",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "recursive_select_path_from_uuid.sql:1-29",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A recursive CTE walks parent links upward while resolving each item name through two optional metadata tables and a fallback expression, then orders the path from root to leaf before concatenating names with a separator.",
+      "mysql_mariadb_translation": "Rewritten as an original asset-cache path lookup using integer IDs, folder and file metadata tables, COALESCE fallback names, a recursive parent walk from a selected leaf, and MariaDB GROUP_CONCAT ORDER BY ... SEPARATOR syntax in place of the source's separator form."
+    },
+    "independently_authored": true
+  },
+  "features": ["recursive-path", "recursive-parent-walk", "multiple-left-joins", "coalesce-fallback", "ordered-group-concat", "separator-aggregation", "cte", "deterministic-order"],
+  "fixture_notes": "The selected leaf crosses folder metadata, a missing metadata row that exercises the asset-ID fallback, and file metadata; an orphan asset is disconnected from the selected path.",
+  "determinism_notes": "Integer asset IDs, parent links, metadata names, recursion depth, and aggregate ordering are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE cached_assets (asset_id INT PRIMARY KEY, parent_id INT NULL, asset_kind VARCHAR(16) NOT NULL)",
+    "CREATE TABLE cached_file_meta (asset_id INT PRIMARY KEY, file_name VARCHAR(64) NOT NULL)",
+    "CREATE TABLE cached_folder_meta (asset_id INT PRIMARY KEY, folder_name VARCHAR(64) NOT NULL)",
+    "INSERT INTO cached_assets VALUES (1, NULL, 'folder'), (2, 1, 'folder'), (4, 2, 'unknown'), (7, 4, 'file'), (8, 1, 'file'), (99, 500, 'orphan')",
+    "INSERT INTO cached_file_meta VALUES (7, 'readme.md'), (8, 'overview.md')",
+    "INSERT INTO cached_folder_meta VALUES (1, 'Workspace'), (2, 'Docs')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH RECURSIVE asset_path (asset_id, asset_name, parent_id, depth) AS (SELECT a.asset_id, COALESCE(f.file_name, d.folder_name, CONCAT('asset-', a.asset_id)), a.parent_id, 0 FROM cached_assets a LEFT JOIN cached_file_meta f ON a.asset_id = f.asset_id LEFT JOIN cached_folder_meta d ON a.asset_id = d.asset_id WHERE a.asset_id = 7 UNION ALL SELECT a.asset_id, COALESCE(f.file_name, d.folder_name, CONCAT('asset-', a.asset_id)), a.parent_id, p.depth + 1 FROM cached_assets a INNER JOIN asset_path p ON a.asset_id = p.parent_id LEFT JOIN cached_file_meta f ON a.asset_id = f.asset_id LEFT JOIN cached_folder_meta d ON a.asset_id = d.asset_id), ordered_path AS (SELECT asset_name, depth FROM asset_path WHERE asset_name <> '') SELECT CASE WHEN COUNT(*) = 0 THEN NULL ELSE GROUP_CONCAT(asset_name ORDER BY depth DESC SEPARATOR '/') END AS full_path FROM ordered_path",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT asset_id, parent_id FROM cached_assets ORDER BY asset_id",
+      "ordered": true
+    }
+  ]
+}
