@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "id": "bulk_case_update_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "shockerli/Notes",
+      "commit": "ab692c415b98da64528d57ba6856add8d78dc3cd",
+      "path": "MySQLCodeSnippets.sql",
+      "url": "https://github.com/shockerli/Notes/blob/ab692c415b98da64528d57ba6856add8d78dc3cd/MySQLCodeSnippets.sql",
+      "sha256": "91cc4903911c62862d0d6ec2399ebec8042b56f220ad57500556d4a4fe7612cd",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQLCodeSnippets.sql:1-12",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL batch update maps several primary-key values through CASE expressions, assigns more than one column in one UPDATE, and preserves non-target rows with an ELSE branch.",
+      "mysql_mariadb_translation": "Reauthored as a two-item catalog curation update. One UPDATE assigns shelf positions and publication labels by item ID, while an unrelated archived item proves the WHERE predicate does not widen; the source schema, identifiers, values, and tutorial data are not copied.",
+      "independently_authored": true
+    }
+  },
+  "features": [
+    "single-table-case-update",
+    "multiple-case-assignments",
+    "in-predicate",
+    "case-else-preservation",
+    "deterministic-final-state"
+  ],
+  "fixture_notes": "Only catalog items 501 and 502 are targeted. Their two CASE assignments take different branches; item 503 remains unchanged because it is absent from the IN predicate.",
+  "determinism_notes": "The target IDs are unique primary keys, every CASE expression has an explicit ELSE branch, and the final read orders by item ID; there are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE catalog_items (item_id INT PRIMARY KEY, item_title VARCHAR(32) NOT NULL, shelf_position INT NOT NULL, publication_label VARCHAR(16) NOT NULL, item_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO catalog_items VALUES (501, 'Silver Map', 6, 'draft', 'active'), (502, 'Blue Orchard', 5, 'draft', 'active'), (503, 'Retired Lane', 2, 'legacy', 'archived')"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE catalog_items SET shelf_position = CASE item_id WHEN 501 THEN 2 WHEN 502 THEN 1 ELSE shelf_position END, publication_label = CASE item_id WHEN 501 THEN 'featured' WHEN 502 THEN 'standard' ELSE publication_label END WHERE item_id IN (501, 502)",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT item_id, item_title, shelf_position, publication_label, item_state FROM catalog_items ORDER BY item_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT item_id, item_title, shelf_position, publication_label, item_state FROM catalog_items ORDER BY item_id",
+      "ordered": true
+    }
+  ]
+}
