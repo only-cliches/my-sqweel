@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "rollup_left_join_having_summary",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "RangeshPandianPT/SQL_Mastery",
+      "commit": "5ec948347ba0cba77ab7e32cd34aec78a50f7166",
+      "path": "08_GROUP_BY_HAVING.sql",
+      "url": "https://github.com/RangeshPandianPT/SQL_Mastery/blob/5ec948347ba0cba77ab7e32cd34aec78a50f7166/08_GROUP_BY_HAVING.sql",
+      "sha256": "e0bed4570c3d940615a474e3da04cfba463126532ab96fe0e98dec3f6570a96d",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "08_GROUP_BY_HAVING.sql:276-290,315-331",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL reporting workload uses GROUP BY WITH ROLLUP for totals, LEFT JOIN for optional related rows, and HAVING to retain aggregate-qualified groups.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored department bonus report. A LEFT JOIN preserves departments without bonus events, WITH ROLLUP adds a grand total, and HAVING keeps departments meeting a bonus threshold together with the grand-total row."
+    },
+    "independently_authored": true
+  },
+  "features": ["with-rollup", "left-join", "having", "group-by", "aggregate-sum", "null-preservation", "grand-total", "aggregate-threshold", "deterministic-final-state"],
+  "fixture_notes": "North has 125 bonus points and remains, East has 50 and is filtered, West has no events and is preserved only by the LEFT JOIN before HAVING, and the rollup grand total remains.",
+  "determinism_notes": "Department IDs, event values, grouping columns, and threshold are fixed. The rollup query is compared unordered because SQL does not guarantee subtotal row order without an ORDER BY, and no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE bonus_departments (department_id INT PRIMARY KEY, department_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE bonus_events (event_id INT PRIMARY KEY, department_id INT NOT NULL, points INT NOT NULL)",
+    "INSERT INTO bonus_departments VALUES (5101, 'North'), (5102, 'East'), (5103, 'West')",
+    "INSERT INTO bonus_events VALUES (1, 5101, 80), (2, 5101, 45), (3, 5102, 50)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT d.department_id, SUM(COALESCE(e.points, 0)) AS total_points FROM bonus_departments AS d LEFT JOIN bonus_events AS e ON e.department_id = d.department_id GROUP BY d.department_id WITH ROLLUP HAVING SUM(COALESCE(e.points, 0)) >= 100 OR d.department_id IS NULL",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT department_id, department_name FROM bonus_departments ORDER BY department_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT event_id, department_id, points FROM bonus_events ORDER BY event_id",
+      "ordered": true
+    }
+  ]
+}
