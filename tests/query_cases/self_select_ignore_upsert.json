@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "id": "self_select_ignore_upsert",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/661.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/661.sql",
+      "sha256": "007611bec8a34d3ecc9dd6204f2bbb444518bdf9e52a5b10566cdfb4a26525db",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/docker/fuzz_root/mysql_initlib/661.sql:1-12",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL INSERT IGNORE reads keys from the same table and combines that self-select with ON DUPLICATE KEY UPDATE to mutate each conflicting row while tolerating duplicate input.",
+      "mysql_mariadb_translation": "Reauthored as a retry-counter refresh. A self-selected snapshot of fixed task counters is inserted back with INSERT IGNORE and each duplicate task increments its retry count through ON DUPLICATE KEY UPDATE; a separate new task proves that the same shape can insert a non-conflicting row. The source schema, engine choice, rows, and test sequence are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "self-referential-insert-select",
+    "insert-ignore",
+    "on-duplicate-key-update",
+    "duplicate-update",
+    "multi-row-select-source",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Existing tasks 11, 12, and 13 are read from the ledger and each duplicate increments retry_count once; a second self-select adds task 99 with a fixed retry count while leaving the existing tasks unchanged by its non-conflicting insert.",
+  "determinism_notes": "Task IDs, retry counts, source projection, update increment, statement order, and final ordering are fixed. One connection executes no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE task_retries (task_id INT PRIMARY KEY, retry_count INT NOT NULL, task_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO task_retries VALUES (11, 2, 'queued'), (12, 4, 'running'), (13, 1, 'queued')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT IGNORE INTO task_retries (task_id, retry_count, task_state) SELECT source.task_id, source.retry_count, source.task_state FROM task_retries AS source ORDER BY source.task_id ON DUPLICATE KEY UPDATE retry_count = task_retries.retry_count + 1",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT IGNORE INTO task_retries (task_id, retry_count, task_state) SELECT 99, 0, 'queued' FROM task_retries AS source WHERE source.task_id = 11",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT task_id, retry_count, task_state FROM task_retries ORDER BY task_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT task_id, retry_count, task_state FROM task_retries ORDER BY task_id",
+      "ordered": true
+    }
+  ]
+}
