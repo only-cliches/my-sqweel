@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "employee_management_chain_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "sarthakmandal237/SQL-AdventureWorks-Database",
+      "commit": "9f3fc33a429b70bbdbd634422e5d4e5b260c256a",
+      "path": "Week3.sql",
+      "url": "https://github.com/sarthakmandal237/SQL-AdventureWorks-Database/blob/9f3fc33a429b70bbdbd634422e5d4e5b260c256a/Week3.sql",
+      "sha256": "e121f27996268c83a3019e0f356d20bc9176e0f347af437883e954234d8015b9",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Week3.sql:189-204",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A staff row is enriched by three independent LEFT JOINs back to the same employee table for lead, senior, and direct manager roles, preserving employees whose optional manager references are absent.",
+      "mysql_mariadb_translation": "Minimized to one fully assigned employee, one employee with a missing direct manager, and the three role rows while retaining the independent self-joins, COALESCE fallback, active filter, and deterministic ordering."
+    },
+    "independently_authored": true,
+    "minimized_from": "employee_management_chain"
+  },
+  "features": ["multiple-self-joins", "left-join", "null-preservation", "coalesce", "role-aliases", "filtered-read", "deterministic-order"],
+  "fixture_notes": "The minimized directory keeps one complete role mapping, one NULL manager mapping, and the three referenced role rows.",
+  "determinism_notes": "The read-only statement orders by the unique employee_id. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE mini_staff_directory (employee_id INT PRIMARY KEY, employee_name VARCHAR(32) NOT NULL, active TINYINT NOT NULL, lead_id INT, senior_id INT, manager_id INT)",
+    "INSERT INTO mini_staff_directory VALUES (201, 'Nico', 1, 290, 280, 270), (202, 'Orla', 1, 290, 280, NULL), (270, 'Parker', 1, NULL, NULL, NULL), (280, 'Reese', 1, NULL, NULL, NULL), (290, 'Sawyer', 1, NULL, NULL, NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT e.employee_id, e.employee_name, lm.employee_name AS lead_name, sm.employee_name AS senior_name, m.employee_name AS manager_name, COALESCE(lm.employee_name, sm.employee_name, m.employee_name, 'Unassigned') AS first_available_leader FROM mini_staff_directory e LEFT JOIN mini_staff_directory lm ON e.lead_id = lm.employee_id LEFT JOIN mini_staff_directory sm ON e.senior_id = sm.employee_id LEFT JOIN mini_staff_directory m ON e.manager_id = m.employee_id WHERE e.active = 1 ORDER BY e.employee_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT employee_id, active FROM mini_staff_directory ORDER BY employee_id",
+      "ordered": true
+    }
+  ]
+}

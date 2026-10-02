@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "employee_management_chain",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "sarthakmandal237/SQL-AdventureWorks-Database",
+      "commit": "9f3fc33a429b70bbdbd634422e5d4e5b260c256a",
+      "path": "Week3.sql",
+      "url": "https://github.com/sarthakmandal237/SQL-AdventureWorks-Database/blob/9f3fc33a429b70bbdbd634422e5d4e5b260c256a/Week3.sql",
+      "sha256": "e121f27996268c83a3019e0f356d20bc9176e0f347af437883e954234d8015b9",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Week3.sql:189-204",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A staff row is enriched by three independent LEFT JOINs back to the same employee table for lead, senior, and direct manager roles, preserving employees whose optional manager references are absent.",
+      "mysql_mariadb_translation": "Rewritten as an original staff-directory scenario with concrete role IDs, active-row filtering, COALESCE fallback labeling, and deterministic employee ordering; the self-joins and nullable role lookups remain standard MySQL/MariaDB LEFT JOIN semantics."
+    },
+    "independently_authored": true
+  },
+  "features": ["multiple-self-joins", "left-join", "null-preservation", "coalesce", "role-aliases", "filtered-read", "deterministic-order"],
+  "fixture_notes": "Active employees cover a complete leadership chain, a partially assigned chain, and an unassigned employee; an inactive row verifies the filtered read without affecting the role joins.",
+  "determinism_notes": "The read-only statement orders by the unique employee_id. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE staff_directory (employee_id INT PRIMARY KEY, employee_name VARCHAR(32) NOT NULL, active TINYINT NOT NULL, lead_id INT, senior_id INT, manager_id INT)",
+    "INSERT INTO staff_directory VALUES (100, 'Avery', 1, 900, 800, 700), (101, 'Blair', 1, 900, 800, NULL), (102, 'Casey', 1, NULL, NULL, NULL), (700, 'Morgan', 1, NULL, NULL, NULL), (800, 'Riley', 1, NULL, NULL, NULL), (900, 'Quinn', 1, NULL, NULL, NULL), (999, 'Retired', 0, 900, 800, 700)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT e.employee_id, e.employee_name, lm.employee_name AS lead_name, sm.employee_name AS senior_name, m.employee_name AS manager_name, COALESCE(lm.employee_name, sm.employee_name, m.employee_name, 'Unassigned') AS first_available_leader FROM staff_directory e LEFT JOIN staff_directory lm ON e.lead_id = lm.employee_id LEFT JOIN staff_directory sm ON e.senior_id = sm.employee_id LEFT JOIN staff_directory m ON e.manager_id = m.employee_id WHERE e.active = 1 ORDER BY e.employee_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT employee_id, active FROM staff_directory ORDER BY employee_id",
+      "ordered": true
+    }
+  ]
+}
