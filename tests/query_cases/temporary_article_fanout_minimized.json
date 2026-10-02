@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "id": "temporary_article_fanout_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "WinnowTag/winnowTag",
+      "commit": "2f1f9f5e644cf961eb9691bb42c82dbb428ae8a0",
+      "path": "db/refresh_items.sql",
+      "url": "https://github.com/WinnowTag/winnowTag/blob/2f1f9f5e644cf961eb9691bb42c82dbb428ae8a0/db/refresh_items.sql",
+      "sha256": "6d4a200bdb87668e9513d5f67dbabe68f48bbfa3a439e7dd3283bca38ccf82b8",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "db/refresh_items.sql:1-7",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A transaction clones a permanent table into a temporary staging table, loads a filtered source batch, then fans the staged keys into distinct related rows and duplicate-tolerant destination tables with INSERT ... SELECT joins.",
+      "mysql_mariadb_translation": "Minimized to one existing article and one new article while retaining the transaction, temporary LIKE clone, filtered stage, DISTINCT label fan-out, duplicate-tolerant media load, and final INSERT IGNORE catalog merge."
+    },
+    "independently_authored": true,
+    "minimized_from": "temporary_article_fanout"
+  },
+  "features": ["transaction", "temporary-table-like", "temporary-staging", "multi-stage-insert", "insert-select", "insert-select-distinct", "insert-ignore", "joined-source", "duplicate-key-suppression", "deterministic-final-state"],
+  "fixture_notes": "Article 601 already exists and article 602 is new. Both are staged; duplicate labels collapse through DISTINCT and an existing cover media key is preserved by INSERT IGNORE.",
+  "determinism_notes": "Article IDs, states, sizes, labels, media keys, stage filter, and final ordering are fixed. One connection executes a single explicit transaction without clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE mini_article_catalog (article_id INT PRIMARY KEY, article_slug VARCHAR(32) NOT NULL, body_size INT NOT NULL, article_state VARCHAR(16) NOT NULL)",
+    "CREATE TABLE mini_article_labels (article_id INT NOT NULL, label VARCHAR(32) NOT NULL, PRIMARY KEY (article_id, label))",
+    "CREATE TABLE mini_article_media (article_id INT NOT NULL, media_kind VARCHAR(16) NOT NULL, media_ref VARCHAR(64) NOT NULL, PRIMARY KEY (article_id, media_kind))",
+    "CREATE TABLE mini_incoming_articles (article_id INT PRIMARY KEY, article_slug VARCHAR(32) NOT NULL, body_size INT NOT NULL, article_state VARCHAR(16) NOT NULL)",
+    "CREATE TABLE mini_incoming_labels (label_id INT PRIMARY KEY, article_id INT NOT NULL, label VARCHAR(32) NOT NULL)",
+    "CREATE TABLE mini_incoming_media (media_id INT PRIMARY KEY, article_id INT NOT NULL, media_kind VARCHAR(16) NOT NULL, media_ref VARCHAR(64) NOT NULL)",
+    "INSERT INTO mini_article_catalog VALUES (601, 'lake-log', 500, 'published')",
+    "INSERT INTO mini_article_media VALUES (601, 'cover', 'old-lake.png')",
+    "INSERT INTO mini_incoming_articles VALUES (601, 'lake-log', 700, 'ready'), (602, 'ridge-log', 710, 'ready')",
+    "INSERT INTO mini_incoming_labels VALUES (1, 601, 'water'), (2, 601, 'water'), (3, 602, 'ridge')",
+    "INSERT INTO mini_incoming_media VALUES (11, 601, 'cover', 'new-lake.png'), (12, 602, 'cover', 'ridge-cover.png')"
+  ],
+  "steps": [
+    {"sql": "CREATE TEMPORARY TABLE mini_article_stage LIKE mini_article_catalog", "ordered": false},
+    {"sql": "START TRANSACTION", "ordered": false},
+    {"sql": "INSERT INTO mini_article_stage SELECT article_id, article_slug, body_size, article_state FROM mini_incoming_articles WHERE body_size >= 700 AND article_state = 'ready' ORDER BY article_id", "ordered": true},
+    {"sql": "INSERT INTO mini_article_labels (article_id, label) SELECT DISTINCT l.article_id, l.label FROM mini_incoming_labels AS l INNER JOIN mini_article_stage AS s ON s.article_id = l.article_id ORDER BY l.article_id, l.label", "ordered": true},
+    {"sql": "INSERT IGNORE INTO mini_article_media (article_id, media_kind, media_ref) SELECT m.article_id, m.media_kind, m.media_ref FROM mini_incoming_media AS m INNER JOIN mini_article_stage AS s ON s.article_id = m.article_id ORDER BY m.media_id", "ordered": true},
+    {"sql": "INSERT IGNORE INTO mini_article_catalog SELECT article_id, article_slug, body_size, article_state FROM mini_article_stage ORDER BY article_id", "ordered": true},
+    {"sql": "COMMIT", "ordered": false},
+    {"sql": "SELECT article_id, article_slug, body_size, article_state FROM mini_article_stage ORDER BY article_id", "ordered": true},
+    {"sql": "DROP TEMPORARY TABLE mini_article_stage", "ordered": true}
+  ],
+  "checks": [
+    {"sql": "SELECT article_id, article_slug, body_size, article_state FROM mini_article_catalog ORDER BY article_id", "ordered": true},
+    {"sql": "SELECT article_id, label FROM mini_article_labels ORDER BY article_id, label", "ordered": true},
+    {"sql": "SELECT article_id, media_kind, media_ref FROM mini_article_media ORDER BY article_id, media_kind", "ordered": true},
+    {"sql": "SELECT article_id, article_slug, body_size, article_state FROM mini_incoming_articles ORDER BY article_id", "ordered": true}
+  ]
+}

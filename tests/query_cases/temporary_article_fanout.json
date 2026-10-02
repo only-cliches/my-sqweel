@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "id": "temporary_article_fanout",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "WinnowTag/winnowTag",
+      "commit": "2f1f9f5e644cf961eb9691bb42c82dbb428ae8a0",
+      "path": "db/refresh_items.sql",
+      "url": "https://github.com/WinnowTag/winnowTag/blob/2f1f9f5e644cf961eb9691bb42c82dbb428ae8a0/db/refresh_items.sql",
+      "sha256": "6d4a200bdb87668e9513d5f67dbabe68f48bbfa3a439e7dd3283bca38ccf82b8",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "db/refresh_items.sql:1-7",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A transaction clones a permanent table into a temporary staging table, loads a filtered source batch, then fans the staged keys into distinct related rows and duplicate-tolerant destination tables with INSERT ... SELECT joins.",
+      "mysql_mariadb_translation": "Reauthored as an article refresh transaction. A temporary LIKE clone stages ready large articles, a DISTINCT label insert and duplicate-tolerant media insert fan out related rows, and a final INSERT IGNORE preserves an existing catalog row while adding new articles; all source tables, names, values, and domain semantics are original."
+    },
+    "independently_authored": true
+  },
+  "features": ["transaction", "temporary-table-like", "temporary-staging", "multi-stage-insert", "insert-select", "insert-select-distinct", "insert-ignore", "joined-source", "duplicate-key-suppression", "deterministic-final-state"],
+  "fixture_notes": "Ready articles 501 and 502 are staged while draft article 503 is filtered out. Article 501 already exists in the catalog, so INSERT IGNORE preserves its catalog row; its new label and media are still fanned out, while duplicate media is suppressed.",
+  "determinism_notes": "Article IDs, states, sizes, labels, media keys, stage filter, and final ordering are fixed. One connection executes a single explicit transaction without clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE article_catalog (article_id INT PRIMARY KEY, article_slug VARCHAR(32) NOT NULL, body_size INT NOT NULL, article_state VARCHAR(16) NOT NULL)",
+    "CREATE TABLE article_labels (article_id INT NOT NULL, label VARCHAR(32) NOT NULL, PRIMARY KEY (article_id, label))",
+    "CREATE TABLE article_media (article_id INT NOT NULL, media_kind VARCHAR(16) NOT NULL, media_ref VARCHAR(64) NOT NULL, PRIMARY KEY (article_id, media_kind))",
+    "CREATE TABLE incoming_articles (article_id INT PRIMARY KEY, article_slug VARCHAR(32) NOT NULL, body_size INT NOT NULL, article_state VARCHAR(16) NOT NULL)",
+    "CREATE TABLE incoming_labels (label_id INT PRIMARY KEY, article_id INT NOT NULL, label VARCHAR(32) NOT NULL)",
+    "CREATE TABLE incoming_media (media_id INT PRIMARY KEY, article_id INT NOT NULL, media_kind VARCHAR(16) NOT NULL, media_ref VARCHAR(64) NOT NULL)",
+    "INSERT INTO article_catalog VALUES (501, 'harbor-notes', 640, 'published')",
+    "INSERT INTO article_media VALUES (501, 'cover', 'old-cover.png')",
+    "INSERT INTO incoming_articles VALUES (501, 'harbor-notes', 700, 'ready'), (502, 'trail-guide', 920, 'ready'), (503, 'draft-plan', 880, 'draft')",
+    "INSERT INTO incoming_labels VALUES (1, 501, 'field'), (2, 501, 'field'), (3, 501, 'maps'), (4, 502, 'hiking'), (5, 502, 'hiking')",
+    "INSERT INTO incoming_media VALUES (11, 501, 'cover', 'new-cover.png'), (12, 501, 'thumb', 'harbor-thumb.png'), (13, 502, 'cover', 'trail-cover.png'), (14, 503, 'cover', 'draft-cover.png')"
+  ],
+  "steps": [
+    {"sql": "DROP TEMPORARY TABLE IF EXISTS article_stage", "ordered": true},
+    {"sql": "CREATE TEMPORARY TABLE article_stage LIKE article_catalog", "ordered": false},
+    {"sql": "START TRANSACTION", "ordered": false},
+    {"sql": "INSERT INTO article_stage SELECT article_id, article_slug, body_size, article_state FROM incoming_articles WHERE body_size >= 700 AND article_state = 'ready' ORDER BY article_id", "ordered": true},
+    {"sql": "INSERT INTO article_labels (article_id, label) SELECT DISTINCT l.article_id, l.label FROM incoming_labels AS l INNER JOIN article_stage AS s ON s.article_id = l.article_id ORDER BY l.article_id, l.label", "ordered": true},
+    {"sql": "INSERT IGNORE INTO article_media (article_id, media_kind, media_ref) SELECT m.article_id, m.media_kind, m.media_ref FROM incoming_media AS m INNER JOIN article_stage AS s ON s.article_id = m.article_id ORDER BY m.media_id", "ordered": true},
+    {"sql": "INSERT IGNORE INTO article_catalog SELECT article_id, article_slug, body_size, article_state FROM article_stage ORDER BY article_id", "ordered": true},
+    {"sql": "COMMIT", "ordered": false},
+    {"sql": "SELECT article_id, article_slug, body_size, article_state FROM article_stage ORDER BY article_id", "ordered": true},
+    {"sql": "DROP TEMPORARY TABLE article_stage", "ordered": true}
+  ],
+  "checks": [
+    {"sql": "SELECT article_id, article_slug, body_size, article_state FROM article_catalog ORDER BY article_id", "ordered": true},
+    {"sql": "SELECT article_id, label FROM article_labels ORDER BY article_id, label", "ordered": true},
+    {"sql": "SELECT article_id, media_kind, media_ref FROM article_media ORDER BY article_id, media_kind", "ordered": true},
+    {"sql": "SELECT article_id, article_slug, body_size, article_state FROM incoming_articles ORDER BY article_id", "ordered": true}
+  ]
+}
