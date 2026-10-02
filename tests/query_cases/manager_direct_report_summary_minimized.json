@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "manager_direct_report_summary_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Pravin7639/SQL",
+      "commit": "55b55e16f730677602d696c7e6e92ee2780fd170",
+      "path": "13_Self Join.sql",
+      "url": "https://github.com/Pravin7639/SQL/blob/55b55e16f730677602d696c7e6e92ee2780fd170/13_Self%20Join.sql",
+      "sha256": "e23e9cf82c347a59fc31a1473536e3cd7af2891bdb83a502aa6e1be6dae1261c",
+      "source_dialect": "transact-sql"
+    },
+    "inspiration": {
+      "source_location": "13_Self Join.sql:19-29",
+      "source_dialect": "transact-sql",
+      "observed_pattern": "An employee table is joined to itself by ManagerId so each employee can be displayed beside the corresponding manager, with an INNER JOIN and a NULL-preserving LEFT JOIN variant.",
+      "mysql_mariadb_translation": "Minimized to two active managers, one active report, one leave-status report, and one manager with no reports while retaining self-join grouping, conditional counts, NULL-preserving aggregation, and deterministic ordering."
+    },
+    "independently_authored": true,
+    "minimized_from": "manager_direct_report_summary"
+  },
+  "features": ["self-join", "left-join", "conditional-aggregation", "null-preservation", "coalesce", "grouping", "filtered-read", "deterministic-order"],
+  "fixture_notes": "The minimized directory keeps active and leave report branches plus a manager with no direct reports.",
+  "determinism_notes": "The grouped result orders by the unique manager employee_id. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE mini_manager_staff (employee_id INT PRIMARY KEY, employee_name VARCHAR(32) NOT NULL, manager_id INT, employment_status VARCHAR(16) NOT NULL, hire_year INT NOT NULL, active TINYINT NOT NULL)",
+    "INSERT INTO mini_manager_staff VALUES (201, 'Iris', NULL, 'active', 2018, 1), (202, 'Jules', 201, 'active', 2020, 1), (203, 'Kato', 201, 'leave', 2021, 1), (204, 'Lina', NULL, 'active', 2019, 1)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT m.employee_id, m.employee_name, COUNT(r.employee_id) AS direct_report_count, SUM(CASE WHEN r.employment_status = 'active' THEN 1 ELSE 0 END) AS active_report_count, SUM(CASE WHEN r.employment_status = 'leave' THEN 1 ELSE 0 END) AS leave_report_count, COALESCE(MAX(r.hire_year), 0) AS latest_report_year FROM mini_manager_staff m LEFT JOIN mini_manager_staff r ON r.manager_id = m.employee_id AND r.active = 1 WHERE m.active = 1 GROUP BY m.employee_id, m.employee_name ORDER BY m.employee_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT employee_id, active FROM mini_manager_staff ORDER BY employee_id",
+      "ordered": true
+    }
+  ]
+}
