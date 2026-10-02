@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "id": "delete_nested_aggregate_filter",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "davidB/forum-migration",
+      "commit": "1ced26384595db5928a026f1cf13fa54da951f85",
+      "path": "purge.sql",
+      "url": "https://github.com/davidB/forum-migration/blob/1ced26384595db5928a026f1cf13fa54da951f85/purge.sql",
+      "sha256": "a187d31cfc6cf8ad720d0eaed85e6cad9ae97246fb4b7abf7a04d25c033630a2",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "purge.sql:5-6",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL cleanup deletes parent rows selected by a nested grouped subquery whose HAVING comparison equates a filtered child count with a separate scalar count of all children.",
+      "mysql_mariadb_translation": "Reauthored as an audit-project purge. Projects are deleted only when every ticket is rejected, using an inner grouped candidate query and a correlated scalar total-ticket count; mixed, empty, and approved projects remain. The source forum schema, identifiers, rows, and migration data are not copied.",
+      "independently_authored": true
+    }
+  },
+  "features": [
+    "delete-nested-aggregate-filter",
+    "correlated-scalar-aggregate",
+    "grouped-having-equality",
+    "derived-delete-source",
+    "all-children-predicate",
+    "deterministic-final-state"
+  ],
+  "fixture_notes": "Project 701 has only rejected tickets and is deleted. Project 702 has one rejected and one approved ticket and remains; project 703 has no tickets and remains; project 704 has only an approved ticket and remains.",
+  "determinism_notes": "Project and ticket IDs, states, grouped keys, scalar counts, and final primary-key ordering are fixed; there are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE audit_projects (project_id INT PRIMARY KEY, project_name VARCHAR(32) NOT NULL, project_state VARCHAR(16) NOT NULL)",
+    "CREATE TABLE audit_tickets (ticket_id INT PRIMARY KEY, project_id INT NOT NULL, ticket_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO audit_projects VALUES (701, 'Atlas', 'open'), (702, 'Beryl', 'open'), (703, 'Cinder', 'empty'), (704, 'Dune', 'open')",
+    "INSERT INTO audit_tickets VALUES (8001, 701, 'rejected'), (8002, 701, 'rejected'), (8003, 702, 'rejected'), (8004, 702, 'approved'), (8005, 704, 'approved')"
+  ],
+  "steps": [
+    {
+      "sql": "DELETE FROM audit_projects WHERE project_id IN (SELECT doomed.project_id FROM (SELECT p.project_id, COUNT(*) AS rejected_count, (SELECT COUNT(*) FROM audit_tickets AS all_tickets WHERE all_tickets.project_id = p.project_id) AS ticket_count FROM audit_projects AS p INNER JOIN audit_tickets AS rejected ON rejected.project_id = p.project_id AND rejected.ticket_state = 'rejected' GROUP BY p.project_id HAVING rejected_count = ticket_count) AS doomed)",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT project_id, project_name, project_state FROM audit_projects ORDER BY project_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT ticket_id, project_id, ticket_state FROM audit_tickets ORDER BY ticket_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT project_id, project_name, project_state FROM audit_projects ORDER BY project_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT ticket_id, project_id, ticket_state FROM audit_tickets ORDER BY ticket_id",
+      "ordered": true
+    }
+  ]
+}
