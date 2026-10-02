@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "replace_union_select_refresh",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "simoncos/lola",
+      "commit": "cfe7efca9d1c65a69402ed12d3dc4004d2ce8691",
+      "path": "sqlite_merge.sql",
+      "url": "https://github.com/simoncos/lola/blob/cfe7efca9d1c65a69402ed12d3dc4004d2ce8691/sqlite_merge.sql",
+      "sha256": "ebe09ed9481c71f837d6299080cc62d7ff830625771e3cd4eb00c5dff20beea9",
+      "source_dialect": "sqlite"
+    },
+    "inspiration": {
+      "source_location": "sqlite_merge.sql:6-29",
+      "source_dialect": "sqlite",
+      "observed_pattern": "A SQLite merge script combines rows from multiple database snapshots with a DISTINCT UNION and replaces destination rows through INSERT OR REPLACE.",
+      "mysql_mariadb_translation": "Translated to independently authored MariaDB REPLACE INTO ... SELECT ... UNION refreshes. Three fixed source snapshots contribute duplicate and new leaderboard rows; UNION removes duplicate source rows, REPLACE refreshes an existing key, inserts new keys, and preserves an unrelated destination row."
+    },
+    "independently_authored": true
+  },
+  "features": ["replace-into", "replace-into-select", "union-distinct", "multi-source-merge", "replacement-semantics", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "Leaderboard row 101 is refreshed from the snapshots, rows 102, 103, and 105 are inserted once despite duplicate source contributions, and unrelated row 104 remains.",
+  "determinism_notes": "Player IDs, tags, scores, and snapshot membership are fixed; the final read is ordered by player ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE league_scores (player_id INT PRIMARY KEY, gamer_tag VARCHAR(16) NOT NULL, points INT NOT NULL)",
+    "CREATE TABLE score_snapshot_a (player_id INT PRIMARY KEY, gamer_tag VARCHAR(16) NOT NULL, points INT NOT NULL)",
+    "CREATE TABLE score_snapshot_b (player_id INT PRIMARY KEY, gamer_tag VARCHAR(16) NOT NULL, points INT NOT NULL)",
+    "CREATE TABLE score_snapshot_c (player_id INT PRIMARY KEY, gamer_tag VARCHAR(16) NOT NULL, points INT NOT NULL)",
+    "INSERT INTO league_scores VALUES (101, 'stale-nova', 40), (104, 'keep-me', 9)",
+    "INSERT INTO score_snapshot_a VALUES (101, 'nova', 55), (102, 'lyra', 30)",
+    "INSERT INTO score_snapshot_b VALUES (102, 'lyra', 30), (103, 'orion', 44)",
+    "INSERT INTO score_snapshot_c VALUES (101, 'nova', 55), (105, 'sable', 18)"
+  ],
+  "steps": [
+    {
+      "sql": "REPLACE INTO league_scores (player_id, gamer_tag, points) SELECT player_id, gamer_tag, points FROM score_snapshot_a UNION SELECT player_id, gamer_tag, points FROM score_snapshot_b UNION SELECT player_id, gamer_tag, points FROM score_snapshot_c",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT player_id, gamer_tag, points FROM league_scores ORDER BY player_id",
+      "ordered": true
+    }
+  ]
+}

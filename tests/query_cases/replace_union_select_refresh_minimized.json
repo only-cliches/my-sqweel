@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "replace_union_select_refresh_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "simoncos/lola",
+      "commit": "cfe7efca9d1c65a69402ed12d3dc4004d2ce8691",
+      "path": "sqlite_merge.sql",
+      "url": "https://github.com/simoncos/lola/blob/cfe7efca9d1c65a69402ed12d3dc4004d2ce8691/sqlite_merge.sql",
+      "sha256": "ebe09ed9481c71f837d6299080cc62d7ff830625771e3cd4eb00c5dff20beea9",
+      "source_dialect": "sqlite"
+    },
+    "inspiration": {
+      "source_location": "sqlite_merge.sql:6-29",
+      "source_dialect": "sqlite",
+      "observed_pattern": "A SQLite merge script combines rows from multiple database snapshots with a DISTINCT UNION and replaces destination rows through INSERT OR REPLACE.",
+      "mysql_mariadb_translation": "Reduced to two independently authored snapshots. MariaDB REPLACE INTO ... SELECT ... UNION refreshes one existing leaderboard row and inserts one new row while UNION removes a duplicate contribution."
+    },
+    "independently_authored": true
+  },
+  "features": ["replace-into", "replace-into-select", "union-distinct", "multi-source-merge", "replacement-semantics", "dml-final-state", "deterministic-order", "minimized-regression"],
+  "fixture_notes": "Leaderboard row 201 is refreshed, row 202 is inserted once despite duplicate snapshot contributions, and unrelated row 203 remains.",
+  "determinism_notes": "Player IDs, tags, scores, and snapshot membership are fixed; the final read is ordered by player ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE league_scores_min (player_id INT PRIMARY KEY, gamer_tag VARCHAR(16) NOT NULL, points INT NOT NULL)",
+    "CREATE TABLE score_snapshot_a_min (player_id INT PRIMARY KEY, gamer_tag VARCHAR(16) NOT NULL, points INT NOT NULL)",
+    "CREATE TABLE score_snapshot_b_min (player_id INT PRIMARY KEY, gamer_tag VARCHAR(16) NOT NULL, points INT NOT NULL)",
+    "INSERT INTO league_scores_min VALUES (201, 'old-iris', 12), (203, 'keep-me', 7)",
+    "INSERT INTO score_snapshot_a_min VALUES (201, 'iris', 25), (202, 'juno', 19)",
+    "INSERT INTO score_snapshot_b_min VALUES (202, 'juno', 19)"
+  ],
+  "steps": [
+    {
+      "sql": "REPLACE INTO league_scores_min (player_id, gamer_tag, points) SELECT player_id, gamer_tag, points FROM score_snapshot_a_min UNION SELECT player_id, gamer_tag, points FROM score_snapshot_b_min",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT player_id, gamer_tag, points FROM league_scores_min ORDER BY player_id",
+      "ordered": true
+    }
+  ]
+}
