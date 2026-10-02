@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "id": "replace_join_aggregate_rollup_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "USEPA/EPA_MOVES_Model",
+      "commit": "25dc6c833dd8c88198f82cee93ca30be1456df8b",
+      "path": "database/PreAggDAY.sql",
+      "url": "https://github.com/USEPA/EPA_MOVES_Model/blob/25dc6c833dd8c88198f82cee93ca30be1456df8b/database/PreAggDAY.sql",
+      "sha256": "1fe543828acee31dd3714242c5b732db7a5dd062a4c3db489120cdc523d15f52",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "database/PreAggDAY.sql:137-141,285-294",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL data refresh replaces rows from a SELECT source, including grouped aggregate output, so existing keys are refreshed and newly produced keys are inserted in one statement.",
+      "mysql_mariadb_translation": "Reauthored as a two-segment daily activity rollup. Counted events join a segment dictionary, aggregate units by day and segment, and REPLACE one stale summary row while inserting one missing row; the source tables, identifiers, values, and transportation model data are not copied.",
+      "independently_authored": true
+    }
+  },
+  "features": [
+    "replace-select-join",
+    "grouped-aggregate-replacement",
+    "grouped-join",
+    "multi-row-replace",
+    "replacement-semantics",
+    "deterministic-final-state"
+  ],
+  "fixture_notes": "Existing summary row 2026-12-01/21 is replaced with its counted aggregate, row 2026-12-01/22 is inserted, and unrelated 2026-12-02/23 remains unchanged.",
+  "determinism_notes": "Segment IDs map to one dictionary row, counted events have fixed dates and units, the grouped source has unique output keys, and final reads order by day and segment; there are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE activity_segments (segment_id INT PRIMARY KEY, segment_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE activity_events (event_id INT PRIMARY KEY, activity_day DATE NOT NULL, segment_id INT NOT NULL, units INT NOT NULL, event_state VARCHAR(16) NOT NULL)",
+    "CREATE TABLE daily_segment_totals (activity_day DATE NOT NULL, segment_id INT NOT NULL, segment_name VARCHAR(32) NOT NULL, total_units INT NOT NULL, PRIMARY KEY (activity_day, segment_id))",
+    "INSERT INTO activity_segments VALUES (21, 'red-route'), (22, 'blue-route'), (23, 'green-route')",
+    "INSERT INTO activity_events VALUES (2001, '2026-12-01', 21, 2, 'counted'), (2002, '2026-12-01', 21, 3, 'counted'), (2003, '2026-12-01', 22, 4, 'counted'), (2004, '2026-12-01', 22, 6, 'pending')",
+    "INSERT INTO daily_segment_totals VALUES ('2026-12-01', 21, 'old-red', 50), ('2026-12-02', 23, 'keep-green', 8)"
+  ],
+  "steps": [
+    {
+      "sql": "REPLACE INTO daily_segment_totals (activity_day, segment_id, segment_name, total_units) SELECT e.activity_day, e.segment_id, s.segment_name, SUM(e.units) FROM activity_events e INNER JOIN activity_segments s ON s.segment_id = e.segment_id WHERE e.event_state = 'counted' GROUP BY e.activity_day, e.segment_id, s.segment_name ORDER BY e.activity_day, e.segment_id",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT activity_day, segment_id, segment_name, total_units FROM daily_segment_totals ORDER BY activity_day, segment_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT activity_day, segment_id, segment_name, total_units FROM daily_segment_totals ORDER BY activity_day, segment_id",
+      "ordered": true
+    }
+  ]
+}
