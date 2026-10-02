@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "id": "partial_settings_upsert",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "phylogeography/spread",
+      "commit": "bf6ccf538df5c766a5c21da2f0029a28e236d832",
+      "path": "resources/sql/analysis.sql",
+      "url": "https://github.com/phylogeography/spread/blob/bf6ccf538df5c766a5c21da2f0029a28e236d832/resources/sql/analysis.sql",
+      "sha256": "b4828f8954ab67afb89bbfa0ecf891795ded929b15b5248f9b78256f95a7c9c6",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "resources/sql/analysis.sql:4-20",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL upsert treats each incoming nullable field as a partial patch: IF(non-null incoming value, incoming value, existing column) preserves omitted values on duplicate keys while still inserting complete new rows.",
+      "mysql_mariadb_translation": "Reauthored as a settings registry. One multi-row upsert applies a partial timezone and notification patch to an existing profile, preserves fields represented by NULL, leaves an all-NULL duplicate unchanged, and inserts a new profile; the source schema, identifiers, parameters, and analysis data are not copied.",
+      "independently_authored": true
+    }
+  },
+  "features": [
+    "partial-patch-upsert",
+    "if-null-preserving-upsert",
+    "multi-row-upsert",
+    "nullable-upsert-fields",
+    "duplicate-key-field-selection",
+    "deterministic-final-state"
+  ],
+  "fixture_notes": "Profile 601 receives a timezone and notification patch while its NULL fields preserve existing values. Profile 602 receives an all-NULL duplicate and remains unchanged. Profile 603 is inserted by the same multi-row upsert.",
+  "determinism_notes": "Profile IDs, nullable patch values, existing defaults, and final primary-key ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE profile_settings (profile_id INT PRIMARY KEY, display_name VARCHAR(32) NULL, timezone_name VARCHAR(32) NULL, digest_frequency VARCHAR(16) NULL, notifications_enabled TINYINT NULL)",
+    "INSERT INTO profile_settings VALUES (601, 'Aster', 'UTC', 'daily', 1), (602, 'Briar', 'UTC', 'weekly', 0)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO profile_settings (profile_id, display_name, timezone_name, digest_frequency, notifications_enabled) VALUES (601, NULL, 'America/Denver', NULL, 0), (602, NULL, NULL, NULL, NULL), (603, 'Cedar', 'Europe/Paris', 'monthly', 1) ON DUPLICATE KEY UPDATE display_name = IF(VALUES(display_name) IS NOT NULL, VALUES(display_name), profile_settings.display_name), timezone_name = IF(VALUES(timezone_name) IS NOT NULL, VALUES(timezone_name), profile_settings.timezone_name), digest_frequency = IF(VALUES(digest_frequency) IS NOT NULL, VALUES(digest_frequency), profile_settings.digest_frequency), notifications_enabled = IF(VALUES(notifications_enabled) IS NOT NULL, VALUES(notifications_enabled), profile_settings.notifications_enabled)",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT profile_id, display_name, timezone_name, digest_frequency, notifications_enabled FROM profile_settings ORDER BY profile_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT profile_id, display_name, timezone_name, digest_frequency, notifications_enabled FROM profile_settings ORDER BY profile_id",
+      "ordered": true
+    }
+  ]
+}
