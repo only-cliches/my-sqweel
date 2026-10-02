@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "id": "insert_select_left_coalesce_upsert",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "mensbeam/Arsse",
+      "commit": "7e2779646492f525168c264bbb5abe55d7410458",
+      "path": "sql/MySQL/7.sql",
+      "url": "https://github.com/mensbeam/Arsse/blob/7e2779646492f525168c264bbb5abe55d7410458/sql/MySQL/7.sql",
+      "sha256": "041a769681c8727ea72a0b64e566fe036d3adfbecd1643086cc977d19c26b277",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/MySQL/7.sql:47-74",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL migration populates a target table from joined source rows with LEFT JOIN and COALESCE fallbacks, then uses ON DUPLICATE KEY UPDATE to refresh existing target keys in place.",
+      "mysql_mariadb_translation": "Reauthored as a catalog assignment refresh. Active catalog items join account assignments and optional item overrides; COALESCE supplies a default note, and INSERT ... SELECT ... ON DUPLICATE KEY UPDATE refreshes existing assignment rows while inserting a new assignment. The source schema, identifiers, values, and article-migration data are not copied.",
+      "independently_authored": true
+    }
+  },
+  "features": [
+    "insert-select-left-join-coalesce-upsert",
+    "joined-source-upsert",
+    "coalesce-source-fallback",
+    "multi-row-upsert",
+    "duplicate-key-refresh",
+    "deterministic-final-state"
+  ],
+  "fixture_notes": "Assignment 901 is refreshed from a newer catalog title and keeps the default note because no override exists. Assignment 902 receives its override note. Assignment 903 is inserted from the same SELECT source; inactive item 804 is excluded.",
+  "determinism_notes": "Catalog, assignment, override, active-state, and final ordering data are fixed; each active item maps to one assignment and at most one override; there are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE catalog_items (item_id INT PRIMARY KEY, item_title VARCHAR(32) NOT NULL, item_state VARCHAR(16) NOT NULL)",
+    "CREATE TABLE account_assignments (assignment_id INT PRIMARY KEY, account_id INT NOT NULL, item_id INT NOT NULL, assigned_note VARCHAR(64) NULL, UNIQUE KEY account_item (account_id, item_id))",
+    "CREATE TABLE item_overrides (override_id INT PRIMARY KEY, account_id INT NOT NULL, item_id INT NOT NULL, override_note VARCHAR(64) NOT NULL, UNIQUE KEY account_item_override (account_id, item_id))",
+    "INSERT INTO catalog_items VALUES (801, 'Atlas Kit', 'active'), (802, 'Beacon Kit', 'active'), (803, 'Cedar Kit', 'active'), (804, 'Dormant Kit', 'inactive')",
+    "INSERT INTO account_assignments VALUES (901, 41, 801, NULL), (902, 41, 802, 'old note')",
+    "INSERT INTO item_overrides VALUES (7001, 41, 802, 'priority override')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO account_assignments (assignment_id, account_id, item_id, assigned_note) SELECT CASE c.item_id WHEN 801 THEN 901 WHEN 802 THEN 902 WHEN 803 THEN 903 END, 41, c.item_id, COALESCE(o.override_note, 'catalog default') FROM catalog_items AS c LEFT JOIN item_overrides AS o ON o.account_id = 41 AND o.item_id = c.item_id WHERE c.item_state = 'active' ON DUPLICATE KEY UPDATE item_id = VALUES(item_id), assigned_note = VALUES(assigned_note)",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT assignment_id, account_id, item_id, assigned_note FROM account_assignments ORDER BY assignment_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT assignment_id, account_id, item_id, assigned_note FROM account_assignments ORDER BY assignment_id",
+      "ordered": true
+    }
+  ]
+}
