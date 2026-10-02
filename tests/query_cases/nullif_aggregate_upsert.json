@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "id": "nullif_aggregate_upsert",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "qzue/yunlan_data",
+      "commit": "3d8111191e50e1f7813fe0cbed2c3b6a6eb2c2cb",
+      "path": "sql/10_demo_data.sql",
+      "url": "https://github.com/qzue/yunlan_data/blob/3d8111191e50e1f7813fe0cbed2c3b6a6eb2c2cb/sql/10_demo_data.sql",
+      "sha256": "f4fbe3c9ca82999e4aa58dbda8d11e409e3bb76b1443c8293cfc0835ef2bcd1d",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/10_demo_data.sql:181-198,258-265",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL/MariaDB daily summary computes ratios with IFNULL and NULLIF-protected aggregate denominators, then refreshes summary rows through an INSERT ... SELECT upsert.",
+      "mysql_mariadb_translation": "Reauthored as a daily service-quality snapshot. Fixed service measurements are grouped by report day, success and refund rates use NULLIF guards with zero fallbacks, and an existing day is refreshed through ON DUPLICATE KEY UPDATE while a new day is inserted. The source schema, rows, metrics, and business domain are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "grouped-insert-select",
+    "sum-aggregate",
+    "nullif-zero-guard",
+    "ifnull-fallback",
+    "on-duplicate-key-update",
+    "aggregate-upsert",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "2026-09-01 has successful and failed checks with a nonzero denominator and refreshes an existing snapshot; 2026-09-02 has no successful checks and a zero refund denominator, exercising both guarded zero fallbacks; 2026-09-03 inserts a new snapshot with a nonzero denominator.",
+  "determinism_notes": "Report dates, counts, amounts, statuses, ratio expressions, refresh increment, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE service_measurements (measurement_id INT PRIMARY KEY, report_day DATE NOT NULL, passed_checks INT NOT NULL, total_checks INT NOT NULL, refund_amount DECIMAL(10,2) NOT NULL, billed_amount DECIMAL(10,2) NOT NULL)",
+    "CREATE TABLE service_snapshots (report_day DATE PRIMARY KEY, success_rate DECIMAL(10,4) NOT NULL, refund_rate DECIMAL(10,4) NOT NULL, refresh_count INT NOT NULL)",
+    "INSERT INTO service_measurements VALUES (1, '2026-09-01', 8, 10, 2.00, 100.00), (2, '2026-09-01', 0, 5, 1.00, 50.00), (3, '2026-09-02', 0, 0, 5.00, 0.00), (4, '2026-09-03', 3, 4, 0.00, 80.00)",
+    "INSERT INTO service_snapshots VALUES ('2026-09-01', 0.0000, 0.0000, 4)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO service_snapshots (report_day, success_rate, refund_rate, refresh_count) SELECT report_day, IFNULL(SUM(passed_checks) / NULLIF(SUM(total_checks), 0), 0), IFNULL(SUM(refund_amount) / NULLIF(SUM(billed_amount), 0), 0), 1 FROM service_measurements GROUP BY report_day ORDER BY report_day ON DUPLICATE KEY UPDATE success_rate = VALUES(success_rate), refund_rate = VALUES(refund_rate), refresh_count = refresh_count + 1",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT report_day, success_rate, refund_rate, refresh_count FROM service_snapshots ORDER BY report_day",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT measurement_id, report_day, passed_checks, total_checks, refund_amount, billed_amount FROM service_measurements ORDER BY measurement_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT report_day, success_rate, refund_rate, refresh_count FROM service_snapshots ORDER BY report_day",
+      "ordered": true
+    }
+  ]
+}
