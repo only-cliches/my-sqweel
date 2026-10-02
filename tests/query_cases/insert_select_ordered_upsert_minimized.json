@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "insert_select_ordered_upsert_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "BlockHorizons/BlockPets",
+      "commit": "5107264fcf8e034530d6217aafe4aa540c3aa1ab",
+      "path": "resources/database_stmts/mysql.sql",
+      "url": "https://github.com/BlockHorizons/BlockPets/blob/5107264fcf8e034530d6217aafe4aa540c3aa1ab/resources/database_stmts/mysql.sql",
+      "sha256": "332194f7c223f56d4b5d18d528731f58ba79d79f7acd16c783d5c0cb223cde51",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "resources/database_stmts/mysql.sql:60-85,95-105",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL application upserts keyed records with ON DUPLICATE KEY UPDATE and separately reads a deterministic, ordered, limited leaderboard page.",
+      "mysql_mariadb_translation": "Reduced to one existing score and two staged scores. A deterministic ORDER BY with LIMIT 2 selects the existing row and one new row for an INSERT ... SELECT upsert; the lower-ranked staged row is not applied."
+    },
+    "independently_authored": true
+  },
+  "features": ["insert-select", "on-duplicate-key-update", "order-by-limit", "ordered-source-upsert", "bounded-upsert", "primary-key-conflict", "dml-final-state", "deterministic-order", "minimized-regression"],
+  "fixture_notes": "Entry 8101 is refreshed, entry 8102 is inserted, and entry 8103 remains absent because LIMIT 2 selects the first two ordered rows.",
+  "determinism_notes": "Points descending plus entry ID ascending defines the selected source subset. All keys and values are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE score_board_min (entry_id INT PRIMARY KEY, player_name VARCHAR(32) NOT NULL, points INT NOT NULL, tier VARCHAR(16) NOT NULL)",
+    "CREATE TABLE score_refresh_min (batch_id INT NOT NULL, entry_id INT NOT NULL, player_name VARCHAR(32) NOT NULL, points INT NOT NULL, tier VARCHAR(16) NOT NULL, PRIMARY KEY (batch_id, entry_id))",
+    "INSERT INTO score_board_min VALUES (8101, 'old-ivy', 5, 'bronze')",
+    "INSERT INTO score_refresh_min VALUES (3, 8101, 'ivy', 70, 'gold'), (3, 8102, 'jo', 80, 'gold'), (3, 8103, 'kai', 60, 'silver')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO score_board_min (entry_id, player_name, points, tier) SELECT entry_id, player_name, points, tier FROM score_refresh_min WHERE batch_id = 3 ORDER BY points DESC, entry_id LIMIT 2 ON DUPLICATE KEY UPDATE player_name = VALUES(player_name), points = VALUES(points), tier = VALUES(tier)",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT entry_id, player_name, points, tier FROM score_board_min ORDER BY entry_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT batch_id, entry_id, player_name, points, tier FROM score_refresh_min ORDER BY batch_id, entry_id",
+      "ordered": true
+    }
+  ]
+}

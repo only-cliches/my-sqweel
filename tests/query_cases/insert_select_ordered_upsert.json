@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "insert_select_ordered_upsert",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "BlockHorizons/BlockPets",
+      "commit": "5107264fcf8e034530d6217aafe4aa540c3aa1ab",
+      "path": "resources/database_stmts/mysql.sql",
+      "url": "https://github.com/BlockHorizons/BlockPets/blob/5107264fcf8e034530d6217aafe4aa540c3aa1ab/resources/database_stmts/mysql.sql",
+      "sha256": "332194f7c223f56d4b5d18d528731f58ba79d79f7acd16c783d5c0cb223cde51",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "resources/database_stmts/mysql.sql:60-85,95-105",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL application upserts keyed records with ON DUPLICATE KEY UPDATE and separately reads a deterministic, ordered, limited leaderboard page.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored bounded leaderboard refresh. INSERT ... SELECT applies a fixed ORDER BY and LIMIT to a staging batch before upserting the selected rows, so one existing key is refreshed and one new key is inserted while lower-ranked rows remain untouched."
+    },
+    "independently_authored": true
+  },
+  "features": ["insert-select", "on-duplicate-key-update", "order-by-limit", "ordered-source-upsert", "bounded-upsert", "primary-key-conflict", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "The refresh batch ranks entries 7002, 7001, 7003, and 7004. LIMIT 3 refreshes existing entry 7001, inserts 7002 and 7003, and leaves lower-ranked entry 7004 absent.",
+  "determinism_notes": "Points descending plus entry ID ascending defines the selected source subset. All keys and values are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE score_board (entry_id INT PRIMARY KEY, player_name VARCHAR(32) NOT NULL, points INT NOT NULL, tier VARCHAR(16) NOT NULL)",
+    "CREATE TABLE score_refresh (batch_id INT NOT NULL, entry_id INT NOT NULL, player_name VARCHAR(32) NOT NULL, points INT NOT NULL, tier VARCHAR(16) NOT NULL, PRIMARY KEY (batch_id, entry_id))",
+    "INSERT INTO score_board VALUES (7001, 'old-alex', 10, 'bronze')",
+    "INSERT INTO score_refresh VALUES (12, 7001, 'alex', 90, 'gold'), (12, 7002, 'bryn', 95, 'gold'), (12, 7003, 'casey', 90, 'silver'), (12, 7004, 'drew', 80, 'silver'), (11, 7099, 'older', 100, 'gold')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO score_board (entry_id, player_name, points, tier) SELECT entry_id, player_name, points, tier FROM score_refresh WHERE batch_id = 12 ORDER BY points DESC, entry_id LIMIT 3 ON DUPLICATE KEY UPDATE player_name = VALUES(player_name), points = VALUES(points), tier = VALUES(tier)",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT entry_id, player_name, points, tier FROM score_board ORDER BY entry_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT batch_id, entry_id, player_name, points, tier FROM score_refresh ORDER BY batch_id, entry_id",
+      "ordered": true
+    }
+  ]
+}
