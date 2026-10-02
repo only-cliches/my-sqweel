@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "delete_orphan_not_exists_exceptions",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "openlcb/uniqueidregistry",
+      "commit": "9386220923787500bee8a03896d0b2d06a61a48c",
+      "path": "patch.sql",
+      "url": "https://github.com/openlcb/uniqueidregistry/blob/9386220923787500bee8a03896d0b2d06a61a48c/patch.sql",
+      "sha256": "085a403642f9e6c64bedb239275d9ed9947a33f558139ac7810537d2ea3d3efa",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "patch.sql:8-11",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL migration deletes parent rows that have no matching child row through a correlated NOT EXISTS predicate while retaining explicitly excepted parent identifiers with NOT IN.",
+      "mysql_mariadb_translation": "Reauthored as cleanup of a customer directory. Accounts without any current membership are deleted unless their identifiers are protected by an explicit NOT IN exception list; accounts with memberships and protected orphan accounts remain.",
+      "independently_authored": true
+    }
+  },
+  "features": [
+    "delete-correlated-not-exists",
+    "delete-not-in-exceptions",
+    "delete-orphan-cleanup",
+    "correlated-subquery",
+    "deterministic-final-state"
+  ],
+  "fixture_notes": "Accounts 1102 and 1105 are unprotected orphans and are deleted. Account 1101 has a membership, while protected orphan 1104 remains despite lacking a membership.",
+  "determinism_notes": "Account identifiers, membership rows, protected identifiers, and final ordering are fixed; there are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE customer_accounts (account_id INT PRIMARY KEY, account_name VARCHAR(32) NOT NULL, account_state VARCHAR(16) NOT NULL)",
+    "CREATE TABLE account_memberships (membership_id INT PRIMARY KEY, account_id INT NOT NULL, program_code VARCHAR(16) NOT NULL)",
+    "INSERT INTO customer_accounts VALUES (1101, 'Northstar', 'active'), (1102, 'Orchid', 'pending'), (1104, 'Protected', 'hold'), (1105, 'Quartz', 'active')",
+    "INSERT INTO account_memberships VALUES (8101, 1101, 'CORE')"
+  ],
+  "steps": [
+    {
+      "sql": "DELETE FROM customer_accounts WHERE NOT EXISTS (SELECT 0 FROM account_memberships WHERE account_memberships.account_id = customer_accounts.account_id) AND customer_accounts.account_id NOT IN (1104)",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT account_id, account_name, account_state FROM customer_accounts ORDER BY account_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT account_id, account_name, account_state FROM customer_accounts ORDER BY account_id",
+      "ordered": true
+    }
+  ]
+}
