@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "cte_insert_union_left_join_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "credativ/omdb-postgresql",
+      "commit": "a42544c4eaa40dde3948573235dff11bc39686e6",
+      "path": "20-import.sql",
+      "url": "https://github.com/credativ/omdb-postgresql/blob/a42544c4eaa40dde3948573235dff11bc39686e6/20-import.sql",
+      "sha256": "908e3ad89931e3ee67513d1284aded4cbf92ef5007ef239fde21872da192903c",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "20-import.sql:19-36",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A PostgreSQL import builds a typed common-table expression from several UNION ALL source tables, inserts the normalized rows, and LEFT JOINs optional metadata during projection.",
+      "mysql_mariadb_translation": "Reduced to two independently authored catalog source tables. MariaDB WITH ... INSERT SELECT normalizes both through UNION ALL, preserves a missing metadata row through LEFT JOIN, and verifies the compact final state."
+    },
+    "independently_authored": true
+  },
+  "features": ["cte-insert-select", "insert-select", "union-all", "left-join", "null-preservation", "multi-source-merge", "dml-final-state", "deterministic-order", "minimized-regression"],
+  "fixture_notes": "Catalog item 601 has metadata while item 602 does not; both source rows are inserted and the unrelated item 699 remains.",
+  "determinism_notes": "IDs, names, metadata, and source membership are fixed; the final read is ordered by item ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE catalog_items_min (item_id INT PRIMARY KEY, item_name VARCHAR(32) NOT NULL, parent_id INT NULL, series_id INT NULL, item_kind VARCHAR(16) NOT NULL, weight DECIMAL(6,2) NULL, price DECIMAL(8,2) NULL)",
+    "CREATE TABLE raw_books_min (item_id INT PRIMARY KEY, item_name VARCHAR(32) NOT NULL, parent_id INT NULL)",
+    "CREATE TABLE raw_series_min (item_id INT PRIMARY KEY, item_name VARCHAR(32) NOT NULL, parent_id INT NULL)",
+    "CREATE TABLE item_metadata_min (item_id INT PRIMARY KEY, weight DECIMAL(6,2) NULL, price DECIMAL(8,2) NULL)",
+    "INSERT INTO catalog_items_min VALUES (699, 'existing', NULL, NULL, 'legacy', 1.00, 2.00)",
+    "INSERT INTO raw_books_min VALUES (601, 'atlas', NULL)",
+    "INSERT INTO raw_series_min VALUES (602, 'collection', NULL)",
+    "INSERT INTO item_metadata_min VALUES (601, 2.50, 19.99)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO catalog_items_min (item_id, item_name, parent_id, series_id, item_kind, weight, price) WITH import_items AS (SELECT item_id, item_name, parent_id, NULL AS series_id, 'book' AS item_kind FROM raw_books_min UNION ALL SELECT item_id, item_name, parent_id, NULL AS series_id, 'series' AS item_kind FROM raw_series_min) SELECT i.item_id, i.item_name, i.parent_id, i.series_id, i.item_kind, m.weight, m.price FROM import_items AS i LEFT JOIN item_metadata_min AS m ON i.item_id = m.item_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT item_id, item_name, parent_id, series_id, item_kind, weight, price FROM catalog_items_min ORDER BY item_id",
+      "ordered": true
+    }
+  ]
+}

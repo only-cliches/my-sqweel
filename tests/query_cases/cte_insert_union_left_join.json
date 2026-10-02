@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "id": "cte_insert_union_left_join",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "credativ/omdb-postgresql",
+      "commit": "a42544c4eaa40dde3948573235dff11bc39686e6",
+      "path": "20-import.sql",
+      "url": "https://github.com/credativ/omdb-postgresql/blob/a42544c4eaa40dde3948573235dff11bc39686e6/20-import.sql",
+      "sha256": "908e3ad89931e3ee67513d1284aded4cbf92ef5007ef239fde21872da192903c",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "20-import.sql:19-36",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A PostgreSQL import builds a typed common-table expression from several UNION ALL source tables, inserts the normalized rows, and LEFT JOINs optional metadata during projection.",
+      "mysql_mariadb_translation": "Translated to independently authored MariaDB WITH ... INSERT SELECT coverage. Three fixed catalog source tables are normalized through UNION ALL, PostgreSQL casts are replaced by MariaDB-compatible literals, optional metadata is preserved through a LEFT JOIN, and the final catalog state verifies rows with and without metadata."
+    },
+    "independently_authored": true
+  },
+  "features": ["cte-insert-select", "insert-select", "union-all", "left-join", "null-preservation", "multi-source-merge", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "Catalog items from books, series, and bundles are normalized into one destination; metadata is present for items 301 and 401 but absent for item 302, so its optional columns remain NULL.",
+  "determinism_notes": "IDs, names, parent references, metadata, and source membership are fixed; the final read is ordered by item ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE catalog_items (item_id INT PRIMARY KEY, item_name VARCHAR(32) NOT NULL, parent_id INT NULL, series_id INT NULL, item_kind VARCHAR(16) NOT NULL, weight DECIMAL(6,2) NULL, price DECIMAL(8,2) NULL)",
+    "CREATE TABLE raw_books (item_id INT PRIMARY KEY, item_name VARCHAR(32) NOT NULL, parent_id INT NULL)",
+    "CREATE TABLE raw_series (item_id INT PRIMARY KEY, item_name VARCHAR(32) NOT NULL, parent_id INT NULL)",
+    "CREATE TABLE raw_bundles (item_id INT PRIMARY KEY, item_name VARCHAR(32) NOT NULL, parent_id INT NULL, series_id INT NULL)",
+    "CREATE TABLE item_metadata (item_id INT PRIMARY KEY, weight DECIMAL(6,2) NULL, price DECIMAL(8,2) NULL)",
+    "INSERT INTO catalog_items VALUES (999, 'existing', NULL, NULL, 'legacy', 1.00, 2.00)",
+    "INSERT INTO raw_books VALUES (301, 'atlas', NULL), (302, 'guide', 900)",
+    "INSERT INTO raw_series VALUES (401, 'collection', NULL)",
+    "INSERT INTO raw_bundles VALUES (501, 'starter-pack', NULL, 401)",
+    "INSERT INTO item_metadata VALUES (301, 2.50, 19.99), (401, 7.00, 49.50), (501, 3.25, 29.00)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO catalog_items (item_id, item_name, parent_id, series_id, item_kind, weight, price) WITH import_items AS (SELECT item_id, item_name, parent_id, NULL AS series_id, 'book' AS item_kind FROM raw_books UNION ALL SELECT item_id, item_name, parent_id, NULL AS series_id, 'series' AS item_kind FROM raw_series UNION ALL SELECT item_id, item_name, parent_id, series_id, 'bundle' AS item_kind FROM raw_bundles) SELECT i.item_id, i.item_name, i.parent_id, i.series_id, i.item_kind, m.weight, m.price FROM import_items AS i LEFT JOIN item_metadata AS m ON i.item_id = m.item_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT item_id, item_name, parent_id, series_id, item_kind, weight, price FROM catalog_items ORDER BY item_id",
+      "ordered": true
+    }
+  ]
+}
