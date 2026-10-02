@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "transactional_upsert_marker_cleanup_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "cns-iu/SDB-Generic-Parser",
+      "commit": "2d2c9cd52d90e0aab2da50b6bbb93adb60925862",
+      "path": "ct_template.sql",
+      "url": "https://github.com/cns-iu/SDB-Generic-Parser/blob/2d2c9cd52d90e0aab2da50b6bbb93adb60925862/ct_template.sql",
+      "sha256": "1b43294c6eb50d84a642c94d2451e8459c144809e59cba82c6d46cd037ed398e",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "ct_template.sql:1-7",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A transaction upserts a key with a marker, deletes the marked row, then continues with canonical data writes before committing.",
+      "mysql_mariadb_translation": "Minimized to one marked existing configuration and one canonical replacement while retaining the transaction, duplicate-key marker update, conditional delete, reinsertion, and commit."
+    },
+    "independently_authored": true,
+    "minimized_from": "transactional_upsert_marker_cleanup"
+  },
+  "features": ["transaction", "insert-on-duplicate-key-update", "marker-cleanup", "conditional-delete", "same-key-replacement", "commit", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "The existing delta configuration is marked, deleted, and reinserted with its canonical value.",
+  "determinism_notes": "Configuration keys, marker values, replacement payloads, statement order, and final ordering are fixed. One connection executes a single transaction without clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE mini_app_config (config_id INT PRIMARY KEY, config_key VARCHAR(32) NOT NULL UNIQUE, config_value VARCHAR(64) NOT NULL, replacement_marker INT NOT NULL)",
+    "INSERT INTO mini_app_config VALUES (61, 'delta', 'old-delta', 0)"
+  ],
+  "steps": [
+    {"sql": "START TRANSACTION", "ordered": false},
+    {"sql": "INSERT INTO mini_app_config (config_id, config_key, config_value, replacement_marker) VALUES (99, 'delta', 'replacement-marker', 1) ON DUPLICATE KEY UPDATE replacement_marker = 1", "ordered": true},
+    {"sql": "DELETE FROM mini_app_config WHERE config_key = 'delta' AND replacement_marker = 1", "ordered": true},
+    {"sql": "INSERT INTO mini_app_config VALUES (62, 'delta', 'canonical-delta', 0)", "ordered": true},
+    {"sql": "COMMIT", "ordered": false},
+    {"sql": "SELECT config_id, config_key, config_value, replacement_marker FROM mini_app_config ORDER BY config_id", "ordered": true}
+  ],
+  "checks": [
+    {"sql": "SELECT config_id, config_key, config_value, replacement_marker FROM mini_app_config ORDER BY config_id", "ordered": true}
+  ]
+}

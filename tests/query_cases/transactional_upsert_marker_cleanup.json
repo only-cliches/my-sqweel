@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "id": "transactional_upsert_marker_cleanup",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "cns-iu/SDB-Generic-Parser",
+      "commit": "2d2c9cd52d90e0aab2da50b6bbb93adb60925862",
+      "path": "ct_template.sql",
+      "url": "https://github.com/cns-iu/SDB-Generic-Parser/blob/2d2c9cd52d90e0aab2da50b6bbb93adb60925862/ct_template.sql",
+      "sha256": "1b43294c6eb50d84a642c94d2451e8459c144809e59cba82c6d46cd037ed398e",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "ct_template.sql:1-7",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A transaction upserts a key with a marker, deletes the marked row, then continues with canonical data writes before committing.",
+      "mysql_mariadb_translation": "Reauthored as an independent configuration refresh. A transaction marks an existing configuration key through INSERT ... ON DUPLICATE KEY UPDATE, removes only the marked replacement row, inserts the canonical configuration set, and commits the replacement atomically; source placeholders, schema, identifiers, and clinical-trial context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["transaction", "insert-on-duplicate-key-update", "marker-cleanup", "conditional-delete", "same-key-replacement", "commit", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "The existing alpha configuration is marked for replacement, deleted by its marker, and reinserted with canonical values; beta is inserted as a new canonical row. An unrelated gamma row remains untouched.",
+  "determinism_notes": "Configuration keys, marker values, replacement payloads, statement order, and final ordering are fixed. One connection executes a single transaction without clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE app_config (config_id INT PRIMARY KEY, config_key VARCHAR(32) NOT NULL UNIQUE, config_value VARCHAR(64) NOT NULL, replacement_marker INT NOT NULL)",
+    "INSERT INTO app_config VALUES (41, 'alpha', 'legacy-alpha', 0), (42, 'gamma', 'keep-gamma', 0)"
+  ],
+  "steps": [
+    {"sql": "START TRANSACTION", "ordered": false},
+    {"sql": "INSERT INTO app_config (config_id, config_key, config_value, replacement_marker) VALUES (99, 'alpha', 'replacement-marker', 1) ON DUPLICATE KEY UPDATE replacement_marker = 1", "ordered": true},
+    {"sql": "DELETE FROM app_config WHERE config_key = 'alpha' AND replacement_marker = 1", "ordered": true},
+    {"sql": "INSERT INTO app_config VALUES (43, 'alpha', 'canonical-alpha', 0), (44, 'beta', 'canonical-beta', 0)", "ordered": true},
+    {"sql": "COMMIT", "ordered": false},
+    {"sql": "SELECT config_id, config_key, config_value, replacement_marker FROM app_config ORDER BY config_id", "ordered": true}
+  ],
+  "checks": [
+    {"sql": "SELECT config_id, config_key, config_value, replacement_marker FROM app_config ORDER BY config_id", "ordered": true}
+  ]
+}
