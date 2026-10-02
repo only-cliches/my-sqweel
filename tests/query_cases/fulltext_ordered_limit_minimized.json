@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "fulltext_ordered_limit_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "RobinNixon/lpmj6",
+      "commit": "5812e2d23322b0ad3e39f3b6e7248fe9a67b41dc",
+      "path": "08/24.sql",
+      "url": "https://github.com/RobinNixon/lpmj6/blob/5812e2d23322b0ad3e39f3b6e7248fe9a67b41dc/08/24.sql",
+      "sha256": "f1779cd57c2050e85d0474c29bbbaea56679c65d1f3df15595f4b98d0a04f216",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "08/24.sql:1-3",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL natural-language FULLTEXT query filters indexed text columns with MATCH ... AGAINST.",
+      "mysql_mariadb_translation": "Reduced to two independently authored matching notes and one unrelated note. MATCH ... AGAINST, stable ordering, and LIMIT isolate bounded full-text pagination."
+    },
+    "independently_authored": true
+  },
+  "features": ["fulltext-index", "match-against", "natural-language-search", "order-by-limit", "bounded-search", "deterministic-order", "minimized-regression"],
+  "fixture_notes": "Two notes match and one does not; the bounded query returns both matching note IDs.",
+  "determinism_notes": "Note IDs, text, search terms, ORDER BY, and LIMIT are fixed; the fixture has no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE harbor_search_min (note_id INT PRIMARY KEY, note_title VARCHAR(128) NOT NULL, note_body TEXT NOT NULL, FULLTEXT KEY ft_harbor_search_min (note_title, note_body)) ENGINE=InnoDB",
+    "INSERT INTO harbor_search_min VALUES (901, 'Beacon ledger', 'Harbor beacon marks the north channel.'), (902, 'Garden log', 'Copper labels mark seedlings behind the greenhouse.'), (903, 'Beacon repair', 'Harbor beacon needs a new lens.')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT note_id, note_title FROM harbor_search_min WHERE MATCH(note_title, note_body) AGAINST ('harbor beacon') ORDER BY note_id LIMIT 2",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT note_id, note_title FROM harbor_search_min ORDER BY note_id",
+      "ordered": true
+    }
+  ]
+}
