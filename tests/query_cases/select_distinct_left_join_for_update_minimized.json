@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "id": "select_distinct_left_join_for_update_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "openbadgefactory/salava",
+      "commit": "97f05992406e4dcbe3c4bff75c04378d19606b61",
+      "path": "resources/sql/factory/queries.sql",
+      "url": "https://github.com/openbadgefactory/salava/blob/97f05992406e4dcbe3c4bff75c04378d19606b61/resources/sql/factory/queries.sql",
+      "sha256": "a54bc2fad713f49cba408624b4c8aaf30d714b9fc6428418079906d8a4f4edda",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "resources/sql/factory/queries.sql:10-15",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL worker query selects DISTINCT pending items through an INNER JOIN to verified user data and a LEFT JOIN to optional completed records, filters unmatched rows with IS NULL, and locks the eligible result with FOR UPDATE.",
+      "mysql_mariadb_translation": "Reauthored as a compact badge-delivery queue lookup. A duplicated pending token collapses through DISTINCT, its completed counterpart is excluded by the LEFT JOIN NULL check, and the remaining verified token is read inside a transaction with FOR UPDATE before rollback.",
+      "independently_authored": true
+    }
+  },
+  "features": [
+    "select-distinct-left-join-for-update",
+    "joined-for-update",
+    "distinct-null-preserving-join",
+    "transactional-locking-read",
+    "is-null-anti-join",
+    "deterministic-final-state"
+  ],
+  "fixture_notes": "The pending token is duplicated and appears once after DISTINCT. The completed token is excluded by the LEFT JOIN NULL check.",
+  "determinism_notes": "Pending IDs, recipient verification, completion rows, transaction boundaries, and final ordering are fixed; there are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE pending_deliveries (pending_id INT PRIMARY KEY, user_id INT NOT NULL, email VARCHAR(64) NOT NULL, assertion_token VARCHAR(64) NULL)",
+    "CREATE TABLE recipient_emails (recipient_id INT PRIMARY KEY, user_id INT NOT NULL, email VARCHAR(64) NOT NULL, verified TINYINT NOT NULL)",
+    "CREATE TABLE completed_deliveries (delivery_id INT PRIMARY KEY, user_id INT NOT NULL, assertion_token VARCHAR(64) NOT NULL, deleted TINYINT NOT NULL)",
+    "INSERT INTO pending_deliveries VALUES (11, 601, 'member@example.test', 'TOKEN-X'), (12, 601, 'member@example.test', 'TOKEN-X'), (13, 601, 'member@example.test', 'TOKEN-Y')",
+    "INSERT INTO recipient_emails VALUES (201, 601, 'member@example.test', 1)",
+    "INSERT INTO completed_deliveries VALUES (9101, 601, 'TOKEN-Y', 0)"
+  ],
+  "steps": [
+    {
+      "sql": "START TRANSACTION",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT DISTINCT p.assertion_token, p.email FROM pending_deliveries AS p INNER JOIN recipient_emails AS r ON p.email = r.email LEFT JOIN completed_deliveries AS c ON (r.user_id = c.user_id AND p.assertion_token = c.assertion_token AND c.deleted = 0) WHERE p.assertion_token IS NOT NULL AND r.user_id = 601 AND r.verified = 1 AND c.delivery_id IS NULL FOR UPDATE",
+      "ordered": true
+    },
+    {
+      "sql": "ROLLBACK",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT pending_id, user_id, email, assertion_token FROM pending_deliveries ORDER BY pending_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT delivery_id, user_id, assertion_token, deleted FROM completed_deliveries ORDER BY delivery_id",
+      "ordered": true
+    }
+  ]
+}
