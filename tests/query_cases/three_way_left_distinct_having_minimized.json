@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "id": "three_way_left_distinct_having_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/1813.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/1813.sql",
+      "sha256": "e27ecddc1074e27e548902bfb72ced5d78ae6e70abd58e1d31126c3a86f70393",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/docker/fuzz_root/mysql_initlib/1813.sql:1-35",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "Three-way left joins feed grouped COUNT(DISTINCT ...) metrics with a HAVING threshold over a dimension attribute.",
+      "mysql_mariadb_translation": "Minimized to two branches in one city, two catalog titles, and duplicate lending links. The three-way left joins, distinct counts, grouped city output, HAVING threshold, and deterministic order remain while the excluded cities and unrelated titles are removed."
+    },
+    "independently_authored": true,
+    "minimized_from": "three_way_left_distinct_having"
+  },
+  "features": ["three-way-left-join", "count-distinct", "grouping", "having-distinct-threshold", "null-preserving-join", "deterministic-order"],
+  "fixture_notes": "Metro has two branches and two distinct titles with a duplicate lending link; the query keeps the city because two branches satisfy the distinct threshold.",
+  "determinism_notes": "Branch IDs, title IDs, lending links, city name, threshold, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE media_titles (title_id INT PRIMARY KEY, title_name VARCHAR(64) NOT NULL)",
+    "CREATE TABLE lending_links (title_id INT NOT NULL, branch_id INT NOT NULL, copies INT NOT NULL, PRIMARY KEY (title_id, branch_id))",
+    "CREATE TABLE library_branches (branch_id INT PRIMARY KEY, branch_name VARCHAR(64) NOT NULL, city_name VARCHAR(32) NOT NULL)",
+    "INSERT INTO media_titles VALUES (201, 'Amber Circuit'), (202, 'Blue Current')",
+    "INSERT INTO library_branches VALUES (11, 'Metro North', 'Metro'), (12, 'Metro South', 'Metro')",
+    "INSERT INTO lending_links VALUES (201, 11, 2), (201, 12, 1), (202, 11, 3), (202, 12, 2)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT b.city_name, COUNT(DISTINCT b.branch_id) AS active_branch_count, COUNT(DISTINCT t.title_id) AS distinct_title_count, SUM(COALESCE(l.copies, 0)) AS listed_copies FROM library_branches AS b LEFT JOIN lending_links AS l ON l.branch_id = b.branch_id LEFT JOIN media_titles AS t ON t.title_id = l.title_id GROUP BY b.city_name HAVING COUNT(DISTINCT b.branch_id) >= 2 ORDER BY b.city_name",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT city_name, COUNT(*) AS branch_count FROM library_branches GROUP BY city_name ORDER BY city_name",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT b.city_name, COUNT(DISTINCT b.branch_id) AS active_branch_count, COUNT(DISTINCT t.title_id) AS distinct_title_count, SUM(COALESCE(l.copies, 0)) AS listed_copies FROM library_branches AS b LEFT JOIN lending_links AS l ON l.branch_id = b.branch_id LEFT JOIN media_titles AS t ON t.title_id = l.title_id GROUP BY b.city_name HAVING COUNT(DISTINCT b.branch_id) >= 2 ORDER BY b.city_name",
+      "ordered": true
+    }
+  ]
+}
