@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "delete_join_grouped_having",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "naamavitman/databases",
+      "commit": "43ca8e08f6b408661c686536234021f40b6d66db",
+      "path": "delete.sql",
+      "url": "https://github.com/naamavitman/databases/blob/43ca8e08f6b408661c686536234021f40b6d66db/delete.sql",
+      "sha256": "07c223c7f945729659b1de2c10e95100b191de4bf26aebd19d6b7024b65cd43a",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "delete.sql:1-7,12-23",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL cleanup joins a related contribution table to identify deletion targets and separately uses GROUP BY with HAVING to select low-count contributors for deletion.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored dormant-account cleanup. A grouped HAVING subquery counts failed delivery attempts, and a joined DELETE removes only dormant accounts meeting the threshold while preserving active, high-count, and no-attempt accounts."
+    },
+    "independently_authored": true
+  },
+  "features": ["delete", "inner-join", "group-by", "having", "derived-table", "joined-delete", "aggregate-count", "threshold-filter", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "Dormant account 4401 has two failed attempts and is deleted. Active account 4402, high-count dormant account 4403, and no-attempt dormant account 4404 remain.",
+  "determinism_notes": "Account IDs and attempt results are fixed; the grouped count threshold is deterministic and all final rows are ordered by account ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE subscriber_accounts (account_id INT PRIMARY KEY, account_name VARCHAR(32) NOT NULL, account_state VARCHAR(16) NOT NULL)",
+    "CREATE TABLE delivery_attempts (attempt_id INT PRIMARY KEY, account_id INT NOT NULL, attempt_result VARCHAR(16) NOT NULL)",
+    "INSERT INTO subscriber_accounts VALUES (4401, 'amber', 'dormant'), (4402, 'bravo', 'active'), (4403, 'cobalt', 'dormant'), (4404, 'delta', 'dormant')",
+    "INSERT INTO delivery_attempts VALUES (1, 4401, 'failed'), (2, 4401, 'failed'), (3, 4402, 'failed'), (4, 4402, 'failed'), (5, 4403, 'failed'), (6, 4403, 'failed'), (7, 4403, 'failed')"
+  ],
+  "steps": [
+    {
+      "sql": "DELETE a FROM subscriber_accounts AS a INNER JOIN (SELECT account_id FROM delivery_attempts WHERE attempt_result = 'failed' GROUP BY account_id HAVING COUNT(*) <= 2) AS sparse ON sparse.account_id = a.account_id WHERE a.account_state = 'dormant'",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT account_id, account_name, account_state FROM subscriber_accounts ORDER BY account_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT attempt_id, account_id, attempt_result FROM delivery_attempts ORDER BY attempt_id",
+      "ordered": true
+    }
+  ]
+}
