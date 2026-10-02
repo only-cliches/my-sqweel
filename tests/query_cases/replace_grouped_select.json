@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "id": "replace_grouped_select",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "jpalanco/alienvault-ossim",
+      "commit": "a1a449d0cf487f9eafe6e907d1acd55a85973523",
+      "path": "os-sim/include/upgrades/5.4.3_mysql.sql",
+      "url": "https://github.com/jpalanco/alienvault-ossim/blob/a1a449d0cf487f9eafe6e907d1acd55a85973523/os-sim/include/upgrades/5.4.3_mysql.sql",
+      "sha256": "6b5f9219ca2aee343b217c38391462e733765ea96d2efcb6ffb2035ce0232833",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "os-sim/include/upgrades/5.4.3_mysql.sql:7-11",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL migration uses REPLACE INTO with a grouped SELECT to generate one canonical constant row per tenant context, replacing any existing row with the same composite key while preserving other keys.",
+      "mysql_mariadb_translation": "Reauthored as a tenant alert-rule refresh. Duplicate context rows are grouped by tenant, REPLACE INTO writes the same digest rule for every tenant, stale digest rows are replaced, and unrelated alert rules remain present.",
+      "independently_authored": true
+    }
+  },
+  "features": [
+    "replace-grouped-select",
+    "replace-into-grouped-source",
+    "replace-composite-key",
+    "grouped-constant-projection",
+    "replacement-semantics",
+    "deterministic-final-state"
+  ],
+  "fixture_notes": "Tenants 701 and 702 each have duplicate context rows. The digest rule for 701 is replaced with canonical values, a digest rule is inserted for 702, and 701's unrelated weekly rule survives.",
+  "determinism_notes": "Tenant contexts, composite keys, grouped source rows, replacement values, and final ordering are fixed; grouping emits one row per tenant; there are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE tenant_contexts (context_id INT PRIMARY KEY, tenant_id INT NOT NULL, context_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE tenant_alert_rules (tenant_id INT NOT NULL, rule_code VARCHAR(32) NOT NULL, enabled TINYINT NOT NULL, rule_label VARCHAR(64) NOT NULL, severity INT NOT NULL, PRIMARY KEY (tenant_id, rule_code))",
+    "INSERT INTO tenant_contexts VALUES (8101, 701, 'primary'), (8102, 701, 'secondary'), (8201, 702, 'primary'), (8202, 702, 'backup')",
+    "INSERT INTO tenant_alert_rules VALUES (701, 'digest', 0, 'old digest', 9), (701, 'weekly', 1, 'Weekly summary', 3)"
+  ],
+  "steps": [
+    {
+      "sql": "REPLACE INTO tenant_alert_rules (tenant_id, rule_code, enabled, rule_label, severity) SELECT tenant_id, 'digest', 1, 'Daily digest', 2 FROM tenant_contexts GROUP BY tenant_id",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT tenant_id, rule_code, enabled, rule_label, severity FROM tenant_alert_rules ORDER BY tenant_id, rule_code",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT tenant_id, rule_code, enabled, rule_label, severity FROM tenant_alert_rules ORDER BY tenant_id, rule_code",
+      "ordered": true
+    }
+  ]
+}
