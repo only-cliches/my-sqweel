@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "id": "cte_left_join_order_limit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "rt1011/iamRoles",
+      "commit": "f4b18c551322f0a436b6acaa7c4377bf7bff6a77",
+      "path": "join.sql",
+      "url": "https://github.com/rt1011/iamRoles/blob/f4b18c551322f0a436b6acaa7c4377bf7bff6a77/join.sql",
+      "sha256": "10f75a09e85771187c429af79dae567076e24991a5b4476ff4ff367580a7de35",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "join.sql:1-46",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL query builds two filtered event streams with CTEs, left joins the action stream to optional session context, orders the combined result by event time, and applies a deterministic top-N limit.",
+      "mysql_mariadb_translation": "Reauthored as an audit dashboard query. Role-change events and prior login sessions are filtered in separate CTEs, role changes LEFT JOIN optional sessions by actor and time, and the newest three actions are returned with a stable tie-breaker; an action without a prior session remains visible with NULL session context.",
+      "independently_authored": true
+    }
+  },
+  "features": [
+    "cte-left-join-order-limit",
+    "multiple-filtered-ctes",
+    "cte-null-preserving-join",
+    "ordered-top-n",
+    "deterministic-final-state"
+  ],
+  "fixture_notes": "The newest three role changes are returned. Actor 304 has no prior login and therefore exercises NULL-preserving LEFT JOIN output; the oldest role change is excluded by LIMIT.",
+  "determinism_notes": "Event times, actor IDs, session rows, ordering tie-breakers, and LIMIT are fixed; each actor has at most one qualifying prior session; there are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE audit_events (event_id INT PRIMARY KEY, actor_id INT NOT NULL, event_kind VARCHAR(24) NOT NULL, action_name VARCHAR(32) NOT NULL, action_at INT NOT NULL)",
+    "CREATE TABLE login_sessions (session_id INT PRIMARY KEY, actor_id INT NOT NULL, session_started INT NOT NULL, region VARCHAR(16) NOT NULL)",
+    "INSERT INTO audit_events VALUES (5001, 301, 'role_change', 'grant_reader', 1000), (5002, 302, 'role_change', 'revoke_writer', 1040), (5003, 303, 'password_reset', 'reset_password', 1050), (5004, 304, 'role_change', 'grant_admin', 1060), (5005, 305, 'role_change', 'grant_reader', 1070), (5006, 306, 'role_change', 'revoke_reader', 990)",
+    "INSERT INTO login_sessions VALUES (9001, 301, 970, 'west'), (9002, 302, 1030, 'east'), (9003, 305, 1065, 'north')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH role_actions AS (SELECT event_id, actor_id, action_name, action_at FROM audit_events WHERE event_kind = 'role_change' AND action_at >= 990), prior_sessions AS (SELECT actor_id, session_started, region FROM login_sessions WHERE session_started >= 900) SELECT ra.event_id, ra.actor_id, ra.action_name, ra.action_at, ps.region FROM role_actions AS ra LEFT JOIN prior_sessions AS ps ON ps.actor_id = ra.actor_id AND ps.session_started < ra.action_at ORDER BY ra.action_at DESC, ra.event_id DESC LIMIT 3",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "WITH role_actions AS (SELECT event_id, actor_id, action_name, action_at FROM audit_events WHERE event_kind = 'role_change' AND action_at >= 990), prior_sessions AS (SELECT actor_id, session_started, region FROM login_sessions WHERE session_started >= 900) SELECT ra.event_id, ra.actor_id, ra.action_name, ra.action_at, ps.region FROM role_actions AS ra LEFT JOIN prior_sessions AS ps ON ps.actor_id = ra.actor_id AND ps.session_started < ra.action_at ORDER BY ra.action_at DESC, ra.event_id DESC LIMIT 3",
+      "ordered": true
+    }
+  ]
+}
