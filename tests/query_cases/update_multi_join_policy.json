@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "id": "update_multi_join_policy",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "learning-mysql-2nd/learning-mysql-2nd",
+      "commit": "11eeb0229eae77fec564d2485e976aaf7a94c027",
+      "path": "ch07/snippets.sql",
+      "url": "https://github.com/learning-mysql-2nd/learning-mysql-2nd/blob/11eeb0229eae77fec564d2485e976aaf7a94c027/ch07/snippets.sql",
+      "sha256": "f4e7b3218f17492216afa8bd508a5f10b48fe28698704a5237b1607da04d176a",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "ch07/snippets.sql:275-289",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL multi-table UPDATE joins a target table through a link table and a classification table, then changes only target rows whose joined classification matches a predicate.",
+      "mysql_mariadb_translation": "Reauthored as a catalog-policy refresh. A three-table joined UPDATE copies a matched policy lifecycle into linked catalog items, while nonmatching policies and items without the target policy remain unchanged."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "multi-table-update",
+    "two-join-update",
+    "join-through-link-table",
+    "joined-filter",
+    "mapped-assignment",
+    "preserved-nonmatching-rows",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Item 4101 links to the retire policy and changes from listed to retired; item 4103 already has the retire lifecycle, item 4102 links to a hold policy and remains listed, and item 4104 has no policy link and remains listed.",
+  "determinism_notes": "All IDs, policy names, lifecycle values, join keys, and final reads are fixed and ordered. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE catalog_items (item_id INT PRIMARY KEY, item_name VARCHAR(32) NOT NULL, lifecycle VARCHAR(16) NOT NULL)",
+    "CREATE TABLE item_policy_links (item_id INT PRIMARY KEY, policy_id INT NOT NULL)",
+    "CREATE TABLE lifecycle_policies (policy_id INT PRIMARY KEY, policy_name VARCHAR(16) NOT NULL, target_lifecycle VARCHAR(16) NOT NULL)",
+    "INSERT INTO catalog_items VALUES (4101, 'aurora', 'listed'), (4102, 'bravo', 'listed'), (4103, 'cygnus', 'retired'), (4104, 'drift', 'listed')",
+    "INSERT INTO item_policy_links VALUES (4101, 21), (4102, 22), (4103, 21)",
+    "INSERT INTO lifecycle_policies VALUES (21, 'retire', 'retired'), (22, 'hold', 'review')"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE catalog_items AS i JOIN item_policy_links AS l ON l.item_id = i.item_id JOIN lifecycle_policies AS p ON p.policy_id = l.policy_id SET i.lifecycle = p.target_lifecycle WHERE p.policy_name = 'retire'",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT item_id, item_name, lifecycle FROM catalog_items ORDER BY item_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT item_id, policy_id FROM item_policy_links ORDER BY item_id",
+      "ordered": true
+    }
+  ]
+}

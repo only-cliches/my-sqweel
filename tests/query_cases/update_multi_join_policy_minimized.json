@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "id": "update_multi_join_policy_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "learning-mysql-2nd/learning-mysql-2nd",
+      "commit": "11eeb0229eae77fec564d2485e976aaf7a94c027",
+      "path": "ch07/snippets.sql",
+      "url": "https://github.com/learning-mysql-2nd/learning-mysql-2nd/blob/11eeb0229eae77fec564d2485e976aaf7a94c027/ch07/snippets.sql",
+      "sha256": "f4e7b3218f17492216afa8bd508a5f10b48fe28698704a5237b1607da04d176a",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "ch07/snippets.sql:275-289",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL multi-table UPDATE joins a target table through a link table and a classification table, then changes only target rows whose joined classification matches a predicate.",
+      "mysql_mariadb_translation": "Reduced to one target that matches the policy and one target linked to a different policy; the joined UPDATE changes only the matching lifecycle."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "multi-table-update",
+    "two-join-update",
+    "join-through-link-table",
+    "joined-filter",
+    "mapped-assignment",
+    "preserved-nonmatching-rows",
+    "dml-final-state",
+    "deterministic-order",
+    "minimized-regression"
+  ],
+  "fixture_notes": "Item 4201 changes from listed to retired through policy 31; item 4202 links to hold policy 32 and remains listed.",
+  "determinism_notes": "All IDs and final reads are fixed and ordered. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE catalog_items_min (item_id INT PRIMARY KEY, lifecycle VARCHAR(16) NOT NULL)",
+    "CREATE TABLE item_policy_links_min (item_id INT PRIMARY KEY, policy_id INT NOT NULL)",
+    "CREATE TABLE lifecycle_policies_min (policy_id INT PRIMARY KEY, policy_name VARCHAR(16) NOT NULL, target_lifecycle VARCHAR(16) NOT NULL)",
+    "INSERT INTO catalog_items_min VALUES (4201, 'listed'), (4202, 'listed')",
+    "INSERT INTO item_policy_links_min VALUES (4201, 31), (4202, 32)",
+    "INSERT INTO lifecycle_policies_min VALUES (31, 'retire', 'retired'), (32, 'hold', 'review')"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE catalog_items_min AS i JOIN item_policy_links_min AS l ON l.item_id = i.item_id JOIN lifecycle_policies_min AS p ON p.policy_id = l.policy_id SET i.lifecycle = p.target_lifecycle WHERE p.policy_name = 'retire'",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT item_id, lifecycle FROM catalog_items_min ORDER BY item_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT item_id, policy_id FROM item_policy_links_min ORDER BY item_id",
+      "ordered": true
+    }
+  ]
+}
