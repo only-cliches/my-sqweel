@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "nearest_sensor_reading_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "NUSCRIPT/carpediem_v1.9",
+      "commit": "2a7c818616c79e3c7296c10ebc1f9848a874511f",
+      "path": "00_daily_labs.sql",
+      "url": "https://github.com/NUSCRIPT/carpediem_v1.9/blob/2a7c818616c79e3c7296c10ebc1f9848a874511f/00_daily_labs.sql",
+      "sha256": "5b778be52efdd78b5a1a0f30690810ae838722dfe996c3b1821a2605bf0c8601",
+      "source_dialect": "transact-sql"
+    },
+    "inspiration": {
+      "source_location": "00_daily_labs.sql:404-429",
+      "source_dialect": "transact-sql",
+      "observed_pattern": "Candidate measurements are ranked within each encounter by the absolute minute distance from a target timestamp, with ROW_NUMBER selecting the nearest measurement and a stable rank-1 filter retaining one row per target.",
+      "mysql_mariadb_translation": "Minimized to two calibration checkpoints on one sensor and three readings, retaining the absolute TIMESTAMPDIFF ordering, deterministic reading_id tie-break, CTE, and rank-one filter."
+    },
+    "independently_authored": true,
+    "minimized_from": "nearest_sensor_reading"
+  },
+  "features": ["nearest-per-group", "row-number", "absolute-distance", "timestampdiff-minute", "window-order-expression", "cte", "deterministic-tie-break", "join"],
+  "fixture_notes": "Two checkpoints choose the closest reading from a small shared reading stream; reading_id resolves the equal-distance first-checkpoint tie.",
+  "determinism_notes": "Checkpoint IDs, reading IDs, timestamps, sensor IDs, and the secondary reading_id window order are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE mini_calibration_checkpoints (checkpoint_id INT PRIMARY KEY, sensor_id INT NOT NULL, target_at DATETIME NOT NULL)",
+    "CREATE TABLE mini_sensor_readings (reading_id INT PRIMARY KEY, sensor_id INT NOT NULL, recorded_at DATETIME NOT NULL, reading_value DECIMAL(8,2) NOT NULL)",
+    "INSERT INTO mini_calibration_checkpoints VALUES (11, 91, '2025-02-01 08:00:00'), (12, 91, '2025-02-01 08:30:00')",
+    "INSERT INTO mini_sensor_readings VALUES (901, 91, '2025-02-01 07:55:00', 10.00), (902, 91, '2025-02-01 08:05:00', 12.00), (903, 91, '2025-02-01 08:21:00', 14.00), (904, 91, '2025-02-01 08:38:00', 16.00)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH ranked_readings AS (SELECT c.checkpoint_id, c.target_at, r.reading_id, r.recorded_at, r.reading_value, ROW_NUMBER() OVER (PARTITION BY c.checkpoint_id ORDER BY ABS(TIMESTAMPDIFF(MINUTE, r.recorded_at, c.target_at)), r.reading_id) AS proximity_rank FROM mini_calibration_checkpoints c JOIN mini_sensor_readings r ON r.sensor_id = c.sensor_id) SELECT checkpoint_id, reading_id, recorded_at, reading_value, ABS(TIMESTAMPDIFF(MINUTE, recorded_at, target_at)) AS distance_minutes FROM ranked_readings WHERE proximity_rank = 1 ORDER BY checkpoint_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT checkpoint_id, sensor_id FROM mini_calibration_checkpoints ORDER BY checkpoint_id",
+      "ordered": true
+    }
+  ]
+}
