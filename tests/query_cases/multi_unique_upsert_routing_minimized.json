@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "id": "multi_unique_upsert_routing_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/2684.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/2684.sql",
+      "sha256": "fad8a59329ca4a52b8d7db39f66af477732a022a29918c3aef2300601b622a1e",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/docker/fuzz_root/mysql_initlib/2684.sql:1-17",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A table with two independent unique keys receives successive INSERT ... ON DUPLICATE KEY UPDATE statements whose conflicts route to different existing rows and increment a stored measure.",
+      "mysql_mariadb_translation": "Minimized to two seeded aliases plus one insert and two single-key conflicts, retaining independent unique-key routing and revision increments without copying the source schema or values."
+    },
+    "independently_authored": true,
+    "minimized_from": "multi_unique_upsert_routing"
+  },
+  "features": ["multi-unique-key", "insert-on-duplicate-key-update", "unique-conflict-routing", "sequential-upsert", "revision-increment", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "The minimized registry has one external-key conflict and one owner-key conflict after inserting a new alias.",
+  "determinism_notes": "Alias IDs, unique key values, revision increments, statement order, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE mini_alias_registry (alias_id INT PRIMARY KEY, external_code VARCHAR(16) NOT NULL, owner_code VARCHAR(16) NOT NULL, revision INT NOT NULL, UNIQUE KEY uq_mini_external (external_code), UNIQUE KEY uq_mini_owner (owner_code))",
+    "INSERT INTO mini_alias_registry VALUES (201, 'red', 'one', 4), (202, 'blue', 'two', 8)"
+  ],
+  "steps": [
+    {"sql": "INSERT INTO mini_alias_registry VALUES (203, 'green', 'three', 2) ON DUPLICATE KEY UPDATE revision = revision + 20", "ordered": true},
+    {"sql": "INSERT INTO mini_alias_registry VALUES (204, 'red', 'four', 3) ON DUPLICATE KEY UPDATE revision = revision + 30", "ordered": true},
+    {"sql": "INSERT INTO mini_alias_registry VALUES (205, 'yellow', 'two', 5) ON DUPLICATE KEY UPDATE revision = revision + 40", "ordered": true},
+    {"sql": "SELECT alias_id, external_code, owner_code, revision FROM mini_alias_registry ORDER BY alias_id", "ordered": true}
+  ],
+  "checks": [
+    {"sql": "SELECT alias_id, external_code, owner_code, revision FROM mini_alias_registry ORDER BY alias_id", "ordered": true}
+  ]
+}

@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "id": "multi_unique_upsert_routing",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/2684.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/2684.sql",
+      "sha256": "fad8a59329ca4a52b8d7db39f66af477732a022a29918c3aef2300601b622a1e",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/docker/fuzz_root/mysql_initlib/2684.sql:1-17",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A table with two independent unique keys receives successive INSERT ... ON DUPLICATE KEY UPDATE statements whose conflicts route to different existing rows and increment a stored measure.",
+      "mysql_mariadb_translation": "Reauthored as an alias registry with independent external-code and owner-code uniqueness. New aliases insert normally; later upserts conflict first on each distinct unique key and increment only the matched row's revision, while the source fuzz schema, identifiers, values, and diagnostic statements are omitted."
+    },
+    "independently_authored": true
+  },
+  "features": ["multi-unique-key", "insert-on-duplicate-key-update", "unique-conflict-routing", "multi-row-upsert", "sequential-upsert", "revision-increment", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "The registry begins with separate external and owner keys. One upsert inserts a new alias, one conflicts on the external key, one conflicts on the owner key, and a final multi-row upsert exercises both an insertion and a secondary-key conflict.",
+  "determinism_notes": "Alias IDs, unique key values, revision increments, statement order, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE alias_registry (alias_id INT PRIMARY KEY, external_code VARCHAR(16) NOT NULL, owner_code VARCHAR(16) NOT NULL, revision INT NOT NULL, UNIQUE KEY uq_alias_external (external_code), UNIQUE KEY uq_alias_owner (owner_code))",
+    "INSERT INTO alias_registry VALUES (101, 'north', 'alpha', 10), (102, 'south', 'beta', 20)"
+  ],
+  "steps": [
+    {"sql": "INSERT INTO alias_registry VALUES (103, 'east', 'gamma', 30) ON DUPLICATE KEY UPDATE revision = revision + 100", "ordered": true},
+    {"sql": "INSERT INTO alias_registry VALUES (104, 'north', 'delta', 40) ON DUPLICATE KEY UPDATE revision = revision + 100", "ordered": true},
+    {"sql": "INSERT INTO alias_registry VALUES (105, 'west', 'beta', 50) ON DUPLICATE KEY UPDATE revision = revision + 200", "ordered": true},
+    {"sql": "INSERT INTO alias_registry VALUES (106, 'harbor', 'theta', 5), (107, 'south', 'iota', 6) ON DUPLICATE KEY UPDATE revision = revision + 10", "ordered": true},
+    {"sql": "SELECT alias_id, external_code, owner_code, revision FROM alias_registry ORDER BY alias_id", "ordered": true}
+  ],
+  "checks": [
+    {"sql": "SELECT alias_id, external_code, owner_code, revision FROM alias_registry ORDER BY alias_id", "ordered": true}
+  ]
+}
