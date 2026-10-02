@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "id": "group_concat_join_upsert_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "apache/cloudstack",
+      "commit": "1a48a87587c03472feefb081cfac71b2ebd0f407",
+      "path": "engine/schema/src/main/resources/META-INF/db/schema-41610to41700.sql",
+      "url": "https://github.com/apache/cloudstack/blob/1a48a87587c03472feefb081cfac71b2ebd0f407/engine/schema/src/main/resources/META-INF/db/schema-41610to41700.sql",
+      "sha256": "c7856dc1abdebc8c76dc30c5692a71ff7c27c47d4040ab2cfbdac8ee67cdbc9c",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "schema-41610to41700.sql:102-108, 178-184, 544-545",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "Joined rows feed DISTINCT GROUP_CONCAT projections while INSERT ... SELECT uses ON DUPLICATE KEY UPDATE to preserve or refresh a summary row.",
+      "mysql_mariadb_translation": "Minimized to one existing shelf summary and one new grouped shelf. A dictionary join, duplicate-label elimination, aggregate-local ordering, custom separator, HAVING threshold, and duplicate-key refresh remain while unrelated shelves and labels are removed."
+    },
+    "independently_authored": true,
+    "minimized_from": "group_concat_join_upsert"
+  },
+  "features": ["inner-join", "group-concat-distinct", "aggregate-local-order", "custom-separator", "having-filter", "grouped-insert-select", "on-duplicate-key-update", "upsert", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "Shelf 801 refreshes an existing summary from two active entries with one duplicate label; shelf 802 inserts a new summary from two active entries, one of which has a NULL label.",
+  "determinism_notes": "Shelf IDs, dictionary labels, active flags, aggregate ordering, separator, threshold, update assignments, and final ordering are fixed. One connection executes deterministic statements without clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE shelf_entries (entry_id INT PRIMARY KEY, shelf_id INT NOT NULL, label_id INT NOT NULL, active TINYINT NOT NULL)",
+    "CREATE TABLE label_dictionary (label_id INT PRIMARY KEY, label_text VARCHAR(32) NULL)",
+    "CREATE TABLE shelf_summaries (shelf_id INT PRIMARY KEY, active_entry_count INT NOT NULL, distinct_labels VARCHAR(255) NULL, refresh_count INT NOT NULL)",
+    "INSERT INTO label_dictionary VALUES (11, 'OMEGA'), (12, 'SIGMA'), (13, NULL)",
+    "INSERT INTO shelf_entries VALUES (1, 801, 11, 1), (2, 801, 11, 1), (3, 802, 13, 1), (4, 802, 12, 1)",
+    "INSERT INTO shelf_summaries VALUES (801, 1, 'OLD', 2)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO shelf_summaries (shelf_id, active_entry_count, distinct_labels, refresh_count) SELECT e.shelf_id, COUNT(*), GROUP_CONCAT(DISTINCT d.label_text ORDER BY d.label_text DESC SEPARATOR '|'), 1 FROM shelf_entries e JOIN label_dictionary d ON d.label_id = e.label_id WHERE e.active = 1 GROUP BY e.shelf_id HAVING COUNT(*) >= 2 ORDER BY e.shelf_id ON DUPLICATE KEY UPDATE active_entry_count = VALUES(active_entry_count), distinct_labels = VALUES(distinct_labels), refresh_count = refresh_count + 1",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT shelf_id, active_entry_count, distinct_labels, refresh_count FROM shelf_summaries ORDER BY shelf_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT shelf_id, active_entry_count, distinct_labels, refresh_count FROM shelf_summaries ORDER BY shelf_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT e.shelf_id, COUNT(*) AS active_entry_count, GROUP_CONCAT(DISTINCT d.label_text ORDER BY d.label_text DESC SEPARATOR '|') AS distinct_labels FROM shelf_entries e JOIN label_dictionary d ON d.label_id = e.label_id WHERE e.active = 1 GROUP BY e.shelf_id HAVING COUNT(*) >= 2 ORDER BY e.shelf_id",
+      "ordered": true
+    }
+  ]
+}
