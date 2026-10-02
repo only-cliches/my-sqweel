@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "id": "insert_select_not_exists_guard_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Rodney-Smith/RaspberryPints",
+      "commit": "262d20b3f422769e8146fb0234b7825d2dd7b50a",
+      "path": "sql/update.sql",
+      "url": "https://github.com/Rodney-Smith/RaspberryPints/blob/262d20b3f422769e8146fb0234b7825d2dd7b50a/sql/update.sql",
+      "sha256": "2dd572f8c2bdc896ce6cb2f3b87265880827955042950f29091dba3abcbedab3",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/update.sql:148-150",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL migration inserts one constant row selected from DUAL only when a correlated NOT EXISTS check finds no row with the target configuration key.",
+      "mysql_mariadb_translation": "Reauthored as a compact preferences initializer. One missing preference is generated from DUAL and inserted only when its key is absent; repeating the guarded insert is a no-op and preserves the existing row.",
+      "independently_authored": true
+    }
+  },
+  "features": [
+    "insert-select-not-exists-guard",
+    "insert-select-from-dual",
+    "correlated-existence-check",
+    "idempotent-configuration-insert",
+    "deterministic-final-state"
+  ],
+  "fixture_notes": "The missing digest-mode preference is inserted once, and the repeated guarded insert leaves it unchanged; the unrelated language preference is preserved.",
+  "determinism_notes": "Preference keys, constant values, repeated statements, and final ordering are fixed; there are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE app_preferences (preference_key VARCHAR(32) PRIMARY KEY, preference_value VARCHAR(32) NOT NULL, display_label VARCHAR(64) NOT NULL, is_visible TINYINT NOT NULL)",
+    "INSERT INTO app_preferences VALUES ('language', 'en', 'Language', 1)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO app_preferences (preference_key, preference_value, display_label, is_visible) SELECT 'digest_mode', 'weekly', 'Digest mode', 1 FROM DUAL WHERE NOT EXISTS (SELECT preference_key FROM app_preferences WHERE preference_key = 'digest_mode')",
+      "ordered": false
+    },
+    {
+      "sql": "INSERT INTO app_preferences (preference_key, preference_value, display_label, is_visible) SELECT 'digest_mode', 'weekly', 'Digest mode', 1 FROM DUAL WHERE NOT EXISTS (SELECT preference_key FROM app_preferences WHERE preference_key = 'digest_mode')",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT preference_key, preference_value, display_label, is_visible FROM app_preferences ORDER BY preference_key",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT preference_key, preference_value, display_label, is_visible FROM app_preferences ORDER BY preference_key",
+      "ordered": true
+    }
+  ]
+}
