@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "insert_delayed_select_upsert",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "aliostad/deep-learning-lang-detection",
+      "commit": "d6b031f3ebc690cf2ffd0ae1b08ffa8fb3b38a62",
+      "path": "data/train/sql/0fa97e49496294b348b33c381e03fc65ec32e7f3update_concat.sql",
+      "url": "https://github.com/aliostad/deep-learning-lang-detection/blob/d6b031f3ebc690cf2ffd0ae1b08ffa8fb3b38a62/data/train/sql/0fa97e49496294b348b33c381e03fc65ec32e7f3update_concat.sql",
+      "sha256": "3fb44933aa9ee92549703f0f39c707c9a5968357433d1e57cfc507b73828074d",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "data/train/sql/0fa97e49496294b348b33c381e03fc65ec32e7f3update_concat.sql:6-8",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL INSERT DELAYED statement copies rows from a SELECT source and resolves destination key conflicts with ON DUPLICATE KEY UPDATE assignments.",
+      "mysql_mariadb_translation": "Rewritten as an independently authored beacon-ingest merge. INSERT DELAYED ... SELECT imports one fixed staging batch, updates an existing archive key from incoming values, inserts a new key, and verifies both paths; the source schema, columns, values, and application purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["insert-delayed", "insert-select", "on-duplicate-key-update", "multi-row-upsert", "ordered-source", "dml-final-state", "deterministic-order"],
+  "fixture_notes": "Archive beacon 4201 already exists and is refreshed from batch 9; beacon 4202 is inserted from the same batch, while a different batch remains excluded.",
+  "determinism_notes": "Beacon IDs, batch IDs, states, and signal strengths are fixed; the source and final reads are ordered by beacon ID. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE beacon_archive (beacon_id INT PRIMARY KEY, site_code VARCHAR(16) NOT NULL, beacon_state VARCHAR(16) NOT NULL, signal_strength INT NOT NULL) ENGINE=MyISAM",
+    "CREATE TABLE beacon_staging (batch_id INT NOT NULL, beacon_id INT NOT NULL, site_code VARCHAR(16) NOT NULL, beacon_state VARCHAR(16) NOT NULL, signal_strength INT NOT NULL, PRIMARY KEY (batch_id, beacon_id)) ENGINE=MyISAM",
+    "INSERT INTO beacon_archive VALUES (4201, 'NORTH', 'quiet', -80)",
+    "INSERT INTO beacon_staging VALUES (9, 4201, 'NORTH', 'active', -55), (9, 4202, 'SOUTH', 'active', -63), (8, 4299, 'WEST', 'stale', -91)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT DELAYED INTO beacon_archive (beacon_id, site_code, beacon_state, signal_strength) SELECT beacon_id, site_code, beacon_state, signal_strength FROM beacon_staging WHERE batch_id = 9 ORDER BY beacon_id ON DUPLICATE KEY UPDATE site_code = VALUES(site_code), beacon_state = VALUES(beacon_state), signal_strength = VALUES(signal_strength)",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT beacon_id, site_code, beacon_state, signal_strength FROM beacon_archive ORDER BY beacon_id",
+      "ordered": true
+    }
+  ]
+}
