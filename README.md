@@ -29,8 +29,8 @@ listeners. You can start and stop endpoints while the engine keeps running.
 | MySqweel 0.5.0, RocksDB | 51.4 ms | 22.9 MiB |
 | MySqweel 0.5.0, in memory | 27.2 ms | 21.5 MiB |
 
-Measured over five starts from fresh, empty data directories on one x86-64
-Xeon E5-2690 v2 host, using release MySqweel binaries and `/tmp` (tmpfs).
+Measured over five starts from fresh, empty data directories on one Linux host,
+using release MySqweel binaries and `/tmp` (tmpfs).
 Startup timing includes MariaDB's data-directory initialization and MySqweel's
 RocksDB directory creation; in-memory mode has no data directory. Each server
 accepted `SELECT 1`; RSS was sampled after five idle seconds. RSS (resident set
