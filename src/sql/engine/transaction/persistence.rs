@@ -1,7 +1,6 @@
-//! Incremental RocksDB storage. SQL isolation is in-memory; commits use atomic
-//! RocksDB write batches.
+//! Incremental RocksDB storage. Committed row data remains in RocksDB.
 use super::*;
-use crate::storage::{RocksDbStore, StorageWrite};
+use crate::storage::{RocksDbSnapshot, RocksDbStore, StorageWrite};
 use serde::de::DeserializeOwned;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -82,6 +81,68 @@ impl Persistence {
         self.poisoned.load(Ordering::Acquire)
     }
 
+    pub(super) fn native_snapshot(&self) -> Option<RocksDbSnapshot> {
+        self.store.as_ref().map(RocksDbStore::snapshot)
+    }
+
+    pub(super) fn is_native(&self) -> bool {
+        self.store.is_some()
+    }
+
+    pub(super) fn hydrate_tables(
+        &self,
+        raw: &RawEngine,
+        tables: impl IntoIterator<Item = String>,
+        snapshot: Option<&RocksDbSnapshot>,
+    ) -> Result<()> {
+        let Some(store) = &self.store else {
+            return Ok(());
+        };
+        let row_key = key(&raw.database_name, "rows");
+        for table in tables {
+            if raw.rows.contains_key(&table)
+                || raw
+                    .schemas
+                    .get(&table)
+                    .is_some_and(|schema| schema.temporary)
+            {
+                continue;
+            }
+            let prefix = format!("{row_key}\0[{},", serde_json::to_string(&table)?);
+            let entries = match snapshot {
+                Some(snapshot) => snapshot.scan_prefix(&prefix)?,
+                None => store.scan_prefix(&prefix)?,
+            };
+            let rows = entries
+                .into_iter()
+                .map(|(field, value)| {
+                    let field = field
+                        .strip_prefix(&format!("{row_key}\0"))
+                        .ok_or_else(|| anyhow!("invalid RocksDB row key"))?;
+                    let (name, pk): (String, String) = serde_json::from_str(field)?;
+                    ensure!(name == table, "invalid RocksDB row table");
+                    Ok((pk, serde_json::from_str(&value)?))
+                })
+                .collect::<Result<BTreeMap<String, StoredRow>>>()?;
+            let rows: SharedTable<StoredRow> = rows.into();
+            raw.baseline_rows.insert(table.clone(), rows.clone());
+            raw.rows.insert(table.clone(), rows);
+            raw.rebuild_indexes(&table);
+        }
+        Ok(())
+    }
+
+    pub(super) fn hydrate_all(&self, raw: &RawEngine) -> Result<()> {
+        self.hydrate_tables(
+            raw,
+            raw.schemas
+                .iter()
+                .map(|item| item.key().clone())
+                .collect::<Vec<_>>(),
+            None,
+        )
+    }
+
     pub(super) fn load(&self, cfg: &EngineConfig) -> Result<Option<Committed>> {
         if let Some((storage, runtime)) = &self.custom {
             let storage = storage.0.clone();
@@ -102,18 +163,11 @@ impl Persistence {
         )?;
         let mut databases = BTreeMap::new();
         for name in names {
-            let mut rows: BTreeMap<String, BTreeMap<String, StoredRow>> = BTreeMap::new();
-            for (field, value) in self.store.as_ref().unwrap().hgetall(&key(&name, "rows"))? {
-                let (table, pk): (String, String) = serde_json::from_str(&field)?;
-                rows.entry(table)
-                    .or_default()
-                    .insert(pk, serde_json::from_str(&value)?);
-            }
             let snapshot = Snapshot {
                 version: 1,
                 created_at: Utc::now().to_rfc3339(),
                 schemas: self.load_map(&name, "schemas")?,
-                rows,
+                rows: BTreeMap::new(),
                 auto_inc: self.load_map(&name, "auto_inc")?,
                 views: self.load_map(&name, "views")?,
                 index_comments: self.load_map(&name, "index_comments")?,
@@ -143,11 +197,15 @@ impl Persistence {
             .collect()
     }
 
-    pub(super) fn commit(&self, before: &Committed, after: &Committed) -> Result<()> {
+    pub(super) fn commit(
+        &self,
+        before: &Committed,
+        after: &Committed,
+    ) -> Result<(Committed, Committed)> {
         if let Some((storage, runtime)) = &self.custom {
-            let before = image(before)?;
-            let after = image(after)?;
-            let mut batch = crate::storage::delta::storage_batch(&before, &after);
+            let before_image = image(before)?;
+            let after_image = image(after)?;
+            let mut batch = crate::storage::delta::storage_batch(&before_image, &after_image);
             if !batch
                 .metadata
                 .iter()
@@ -156,7 +214,7 @@ impl Persistence {
                 batch.metadata.insert(
                     0,
                     crate::storage::MetadataMutation::PutCatalog(
-                        crate::storage::delta::storage_catalog(&after),
+                        crate::storage::delta::storage_catalog(&after_image),
                     ),
                 );
             }
@@ -165,16 +223,75 @@ impl Persistence {
             if result.is_err() {
                 self.poisoned.store(true, Ordering::Release);
             }
-            return result;
+            result?;
+            return Ok((before.clone(), after.clone()));
         }
-        let writes = changes(before, after)?;
+        let mut loaded_before = before.clone();
+        let mut changed_after = after.clone();
+        for (database, previous) in &before.databases {
+            if after
+                .databases
+                .get(database)
+                .is_some_and(|next| Arc::ptr_eq(previous, next))
+            {
+                continue;
+            }
+            let old = previous.fork()?;
+            match after.databases.get(database) {
+                None => {
+                    self.hydrate_all(&old)?;
+                }
+                Some(next) => {
+                    let next = next.fork()?;
+                    for table in next
+                        .rows
+                        .iter()
+                        .map(|item| item.key().clone())
+                        .collect::<Vec<_>>()
+                    {
+                        let baseline = next.baseline_rows.get(&table).map(|rows| rows.clone());
+                        let current = next.rows.get(&table).expect("loaded table exists");
+                        if baseline
+                            .as_ref()
+                            .is_some_and(|rows| rows == current.value())
+                        {
+                            drop(current);
+                            next.rows.remove(&table);
+                            continue;
+                        }
+                        drop(current);
+                        if let Some(baseline) = baseline {
+                            old.rows.insert(table, baseline);
+                        } else if previous.schemas.contains_key(&table) {
+                            self.hydrate_tables(&old, [table], None)?;
+                        }
+                    }
+                    for table in previous.schemas.iter().map(|item| item.key().clone()) {
+                        if !next.schemas.contains_key(&table) && !old.rows.contains_key(&table) {
+                            if let Some(baseline) = next.baseline_rows.get(&table) {
+                                old.rows.insert(table, baseline.clone());
+                            } else {
+                                self.hydrate_tables(&old, [table], None)?;
+                            }
+                        }
+                    }
+                    changed_after
+                        .databases
+                        .insert(database.clone(), Arc::new(next));
+                }
+            }
+            loaded_before
+                .databases
+                .insert(database.clone(), Arc::new(old));
+        }
+        let writes = changes(&loaded_before, &changed_after)?;
         // Keep the previous SQL state visible and refuse further work after a
         // failed RocksDB batch.
         if let Err(error) = self.store.as_ref().unwrap().write_batch(writes) {
             self.poisoned.store(true, Ordering::Release);
             return Err(error);
         }
-        Ok(())
+        Ok((loaded_before, changed_after))
     }
 }
 
@@ -318,6 +435,175 @@ fn changes(before: &Committed, after: &Committed) -> Result<Vec<StorageWrite>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_rows_are_loaded_for_queries_but_not_retained_by_the_engine() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("db");
+        let engine = Engine::open(
+            EngineConfig::default(),
+            crate::Storage::RocksDb(path.clone()),
+        )
+        .unwrap();
+        engine
+            .execute_sql("CREATE TABLE items(id INT PRIMARY KEY, value TEXT); INSERT INTO items VALUES(1,'one'),(2,'two')")
+            .unwrap();
+        {
+            let state = engine.shared.committed.lock();
+            assert!(state.databases["app"].rows.is_empty());
+            assert!(state.databases["app"].indexes.is_empty());
+        }
+        assert_eq!(
+            engine
+                .execute_sql("SELECT value FROM items WHERE id=2")
+                .unwrap()[0]
+                .rows[0]["value"],
+            "two"
+        );
+        assert!(
+            engine.shared.committed.lock().databases["app"]
+                .rows
+                .is_empty()
+        );
+        engine
+            .execute_sql("UPDATE items SET value='updated' WHERE id=1")
+            .unwrap();
+        drop(engine);
+
+        let reopened =
+            Engine::open(EngineConfig::default(), crate::Storage::RocksDb(path)).unwrap();
+        assert!(
+            reopened.shared.committed.lock().databases["app"]
+                .rows
+                .is_empty()
+        );
+        assert_eq!(
+            reopened
+                .execute_sql("SELECT value FROM items WHERE id=1")
+                .unwrap()[0]
+                .rows[0]["value"],
+            "updated"
+        );
+        reopened
+            .execute_sql("DELETE FROM items WHERE id=2")
+            .unwrap();
+        assert_eq!(
+            reopened
+                .execute_sql("SELECT COUNT(*) AS n FROM items")
+                .unwrap()[0]
+                .rows[0]["n"],
+            1
+        );
+        assert!(
+            reopened.shared.committed.lock().databases["app"]
+                .rows
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn native_transaction_reads_from_a_stable_rocksdb_snapshot() {
+        let directory = tempfile::tempdir().unwrap();
+        let engine = Engine::open(
+            EngineConfig::default(),
+            crate::Storage::RocksDb(directory.path().join("db")),
+        )
+        .unwrap();
+        engine.execute_sql("CREATE TABLE a(id INT PRIMARY KEY, value INT); CREATE TABLE b(id INT PRIMARY KEY, value INT); INSERT INTO a VALUES(1,1); INSERT INTO b VALUES(1,1)").unwrap();
+        let mut reader = engine.session();
+        reader.execute_sql("BEGIN").unwrap();
+        assert_eq!(
+            reader.execute_sql("SELECT value FROM a").unwrap()[0].rows[0]["value"],
+            1
+        );
+        assert!(
+            reader
+                .inner
+                .lock()
+                .transaction
+                .as_ref()
+                .unwrap()
+                .1
+                .databases["app"]
+                .rows
+                .is_empty()
+        );
+        engine.execute_sql("UPDATE b SET value=2").unwrap();
+        assert_eq!(
+            reader.execute_sql("SELECT value FROM b").unwrap()[0].rows[0]["value"],
+            1
+        );
+        reader.execute_sql("ROLLBACK").unwrap();
+        assert_eq!(
+            engine.execute_sql("SELECT value FROM b").unwrap()[0].rows[0]["value"],
+            2
+        );
+
+        let mut writer = engine.session();
+        writer.execute_sql("BEGIN").unwrap();
+        assert_eq!(
+            writer.execute_sql("SELECT value FROM a").unwrap()[0].rows[0]["value"],
+            1
+        );
+        engine.execute_sql("UPDATE b SET value=3").unwrap();
+        writer.execute_sql("UPDATE a SET value=4").unwrap();
+        writer.execute_sql("COMMIT").unwrap();
+        assert_eq!(
+            engine.execute_sql("SELECT value FROM a").unwrap()[0].rows[0]["value"],
+            4
+        );
+        assert_eq!(
+            engine.execute_sql("SELECT value FROM b").unwrap()[0].rows[0]["value"],
+            3
+        );
+    }
+
+    #[test]
+    fn native_views_cascades_and_maintenance_read_rows_from_disk() {
+        let directory = tempfile::tempdir().unwrap();
+        let engine = Engine::open(
+            EngineConfig::default(),
+            crate::Storage::RocksDb(directory.path().join("db")),
+        )
+        .unwrap();
+        engine.execute_sql("CREATE TABLE parent(id INT PRIMARY KEY); CREATE TABLE child(id INT PRIMARY KEY, parent_id INT, FOREIGN KEY(parent_id) REFERENCES parent(id) ON UPDATE CASCADE); CREATE VIEW child_view AS SELECT parent_id FROM child; INSERT INTO parent VALUES(1); INSERT INTO child VALUES(1,1)").unwrap();
+        assert_eq!(
+            engine
+                .execute_sql("SELECT parent_id FROM child_view")
+                .unwrap()[0]
+                .rows[0]["parent_id"],
+            1
+        );
+        engine.execute_sql("UPDATE parent SET id=2").unwrap();
+        assert_eq!(
+            engine
+                .execute_sql("SELECT parent_id FROM child_view")
+                .unwrap()[0]
+                .rows[0]["parent_id"],
+            2
+        );
+        let saved = engine.snapshot();
+        assert_eq!(saved.rows["child"].len(), 1);
+        engine.reset_table_rows("child").unwrap();
+        assert!(
+            engine.execute_sql("SELECT * FROM child").unwrap()[0]
+                .rows
+                .is_empty()
+        );
+        engine.restore_snapshot(saved).unwrap();
+        assert_eq!(
+            engine
+                .execute_sql("SELECT parent_id FROM child_view")
+                .unwrap()[0]
+                .rows[0]["parent_id"],
+            2
+        );
+        assert!(
+            engine.shared.committed.lock().databases["app"]
+                .rows
+                .is_empty()
+        );
+    }
 
     #[test]
     fn deltas_only_contain_changed_rows_and_schemas() {

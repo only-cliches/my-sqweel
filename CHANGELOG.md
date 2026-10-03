@@ -4,6 +4,7 @@ All notable changes to MySqweel will be documented in this file.
 
 ## 0.5.0 Unreleased
 
+- RocksDB now loads only database and table metadata at startup and retains no committed rows in the engine. Queries fetch referenced tables into temporary working memory; transaction reads use RocksDB snapshots, and writes still commit complete rows atomically.
 - Unified embedded sync/async queries, custom async storage and SQL endpoints behind one cloneable `Engine`. Choose `Storage::Memory`, `Storage::RocksDb(path)` or `Storage::custom(backend)`; retain connection state with an explicit `EngineSession`.
 - Added owned SQL endpoints with explicit authentication, intersected database/table scope ceilings, scoped DDL and shutdown that disconnects clients and rolls back open transactions. SQL endpoint creation no longer starts debug HTTP.
 - Shared query/result filters across all query paths with immutable identity/session context. Commits become visible only after storage succeeds; cancelling an async caller does not cancel an accepted commit.

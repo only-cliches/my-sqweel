@@ -22,6 +22,9 @@ production MariaDB durability, availability, or replication setup.
 `Snapshot` is serializable and includes table schemas, stored rows,
 auto-increment counters, views, and index comments.
 
+With RocksDB, `engine.try_snapshot()` reports storage read errors; the
+`snapshot()` convenience method expects the read to succeed.
+
 ```rust,no_run
 use my_sqweel::sql::engine::Engine;
 

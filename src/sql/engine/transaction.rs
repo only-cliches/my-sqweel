@@ -69,6 +69,7 @@ pub(crate) struct SessionState {
     identity: Identity,
     client_host: String,
     transaction: Option<(Option<WriterLease>, Committed)>,
+    native_snapshot: Option<crate::storage::RocksDbSnapshot>,
     transaction_read: bool,
     transaction_read_only: bool,
     observed_tables: Option<BTreeSet<String>>,
@@ -223,21 +224,35 @@ impl Engine {
         self.shared.committed.lock().databases["app"].subscribe_query_events(options)
     }
     pub fn snapshot(&self) -> Snapshot {
-        self.shared.committed.lock().databases["app"].snapshot()
+        self.try_snapshot()
+            .expect("could not read RocksDB rows for snapshot")
+    }
+    pub fn try_snapshot(&self) -> Result<Snapshot> {
+        let _publication = self.shared.publication.lock();
+        let raw = self.shared.committed.lock().databases["app"].fork()?;
+        if let Some(persistence) = &self.shared.persistence {
+            persistence.hydrate_all(&raw)?;
+        }
+        Ok(raw.snapshot())
     }
 
     /// Export every database together with its catalog for an external
     /// storage backend.  The result is intended to be committed as one unit.
     pub fn export_state(&self) -> Result<EngineState> {
+        let _publication = self.shared.publication.lock();
         let state = self.shared.committed.lock();
+        let mut databases = BTreeMap::new();
+        for (name, raw) in &state.databases {
+            let raw = raw.fork()?;
+            if let Some(persistence) = &self.shared.persistence {
+                persistence.hydrate_all(&raw)?;
+            }
+            databases.insert(name.clone(), raw.snapshot());
+        }
         Ok(EngineState {
             version: 1,
             metadata: serde_json::to_value(&state.catalog)?,
-            databases: state
-                .databases
-                .iter()
-                .map(|(name, raw)| (name.clone(), raw.snapshot()))
-                .collect(),
+            databases,
         })
     }
 
@@ -287,7 +302,16 @@ impl Engine {
         })
     }
     pub fn drift_report(&self) -> Value {
-        self.shared.committed.lock().databases["app"].drift_report()
+        let _publication = self.shared.publication.lock();
+        let raw = self.shared.committed.lock().databases["app"]
+            .fork()
+            .expect("could not copy database metadata");
+        if let Some(persistence) = &self.shared.persistence {
+            persistence
+                .hydrate_all(&raw)
+                .expect("could not read RocksDB rows for drift report");
+        }
+        raw.drift_report()
     }
     pub fn rebuild_indexes_for_table(&self, table: &str) -> Result<()> {
         self.mutate(|raw| raw.rebuild_indexes_for_table(table))
@@ -345,6 +369,9 @@ impl Engine {
         let _lease = self.shared.acquire_database("app")?;
         let mut state = self.shared.committed.lock().clone();
         let raw = state.databases["app"].fork()?;
+        if let Some(persistence) = &self.shared.persistence {
+            persistence.hydrate_all(&raw)?;
+        }
         let value = operation(&raw)?;
         state.databases.insert("app".into(), Arc::new(raw));
         self.shared
@@ -438,13 +465,39 @@ impl Coordinator {
     }
     fn publish_locked(&self, state: Committed, emit: bool) -> Result<()> {
         self.check()?;
-        if let Some(persistence) = &self.persistence {
-            let before = self.committed.lock().clone();
-            persistence.commit(&before, &state)?;
-        }
-        let before = std::mem::replace(&mut *self.committed.lock(), state.clone());
+        let before = self.committed.lock().clone();
+        let previous_databases = before.databases.clone();
+        let (hook_before, hook_after) = match &self.persistence {
+            Some(persistence) => persistence.commit(&before, &state)?,
+            None => (before, state.clone()),
+        };
+        let published = if self
+            .persistence
+            .as_ref()
+            .is_some_and(Persistence::is_native)
+        {
+            let mut metadata = state.clone();
+            for (name, raw) in &mut metadata.databases {
+                if previous_databases
+                    .get(name)
+                    .is_some_and(|previous| Arc::ptr_eq(previous, raw))
+                {
+                    continue;
+                }
+                let stripped = raw.fork()?;
+                stripped.rows.clear();
+                stripped.baseline_rows.clear();
+                stripped.indexes.clear();
+                *raw = Arc::new(stripped);
+            }
+            metadata
+        } else {
+            state.clone()
+        };
+        *self.committed.lock() = published;
         if emit {
-            self.hooks.changes(&before.databases, &state.databases);
+            self.hooks
+                .changes(&hook_before.databases, &hook_after.databases);
         }
         Ok(())
     }
@@ -463,6 +516,7 @@ impl SessionState {
             identity,
             client_host: "localhost".into(),
             transaction: None,
+            native_snapshot: None,
             transaction_read: false,
             transaction_read_only: false,
             observed_tables: Some(BTreeSet::new()),
@@ -1064,6 +1118,7 @@ impl SessionState {
             .catalog
             .check_database(&self.identity, &self.database)?;
         self.transaction = Some((None, state));
+        self.native_snapshot = None;
         self.transaction_read = false;
         self.transaction_read_only = false;
         self.observed_columns.clear();
@@ -1076,12 +1131,14 @@ impl SessionState {
             drop(lease);
         }
         self.transaction_read = false;
+        self.native_snapshot = None;
         self.transaction_read_only = false;
         self.savepoints.clear();
         Ok(())
     }
     fn rollback(&mut self) {
         self.transaction = None;
+        self.native_snapshot = None;
         self.transaction_read = false;
         self.transaction_read_only = false;
         self.savepoints.clear();
@@ -1490,6 +1547,14 @@ impl SessionState {
                 None
             };
             if read && !session_only && !self.transaction_read {
+                let _publication = self.shared.publication.lock();
+                if self.transaction.is_some() && self.native_snapshot.is_none() {
+                    self.native_snapshot = self
+                        .shared
+                        .persistence
+                        .as_ref()
+                        .and_then(Persistence::native_snapshot);
+                }
                 let current = self.current_state()?;
                 if let Some((None, snapshot)) = &mut self.transaction {
                     *snapshot = current;
@@ -1505,23 +1570,70 @@ impl SessionState {
                     }
                 }
             }
-            let mut state = self
-                .transaction
-                .as_ref()
-                .map(|(_, state)| Ok(state.clone()))
-                .unwrap_or_else(|| self.current_state())?;
+            let mut statement_snapshot = None;
+            let mut state = if read
+                && self.transaction.is_none()
+                && self
+                    .shared
+                    .persistence
+                    .as_ref()
+                    .is_some_and(Persistence::is_native)
+            {
+                let _publication = self.shared.publication.lock();
+                let state = self.current_state()?;
+                statement_snapshot = self
+                    .shared
+                    .persistence
+                    .as_ref()
+                    .and_then(Persistence::native_snapshot);
+                state
+            } else {
+                self.transaction
+                    .as_ref()
+                    .map(|(_, state)| Ok(state.clone()))
+                    .unwrap_or_else(|| self.current_state())?
+            };
             // A read-only snapshot must not block independent cancellation/lease
             // updates. Upgrade only before the first write, then serialize writers.
             // A changed snapshot cannot safely overwrite newer committed state.
             let current = lease.as_ref().map(|_| self.current_state()).transpose()?;
             let lease = if let Some((transaction_lease, snapshot)) = &mut self.transaction {
                 if let Some(lease) = lease {
-                    let current = current.expect("writer upgrade has current state");
+                    let mut current = current.expect("writer upgrade has current state");
+                    if let Some(persistence) = &self.shared.persistence {
+                        if persistence.is_native() {
+                            if let Some(tables) = &self.observed_tables {
+                                let prior = snapshot.databases[&self.database].fork()?;
+                                persistence.hydrate_tables(
+                                    &prior,
+                                    tables.iter().cloned(),
+                                    self.native_snapshot.as_ref(),
+                                )?;
+                                snapshot
+                                    .databases
+                                    .insert(self.database.clone(), Arc::new(prior));
+                                let raw = current.databases[&self.database].fork()?;
+                                persistence.hydrate_tables(&raw, tables.iter().cloned(), None)?;
+                                current
+                                    .databases
+                                    .insert(self.database.clone(), Arc::new(raw));
+                            }
+                        }
+                    }
                     let unchanged = snapshot
                         .databases
                         .get(&self.database)
                         .zip(current.databases.get(&self.database))
                         .is_some_and(|(before, after)| {
+                            if self
+                                .shared
+                                .persistence
+                                .as_ref()
+                                .is_some_and(Persistence::is_native)
+                                && self.observed_tables.is_none()
+                            {
+                                return Arc::ptr_eq(before, after);
+                            }
                             Arc::ptr_eq(before, after)
                                 || (self.temporary_tables.contains_key(&self.database)
                                     && before.same_database_state(after))
@@ -1563,6 +1675,38 @@ impl SessionState {
                 lease
             };
             let mut normalized = self.authorize(text)?;
+            if let Some(persistence) = &self.shared.persistence {
+                if persistence.is_native() {
+                    let baseline = state.databases[&self.database].fork()?;
+                    let mut tables = statement_tables(ast, &baseline, !read);
+                    if normalized
+                        .to_ascii_uppercase()
+                        .contains("INFORMATION_SCHEMA")
+                    {
+                        tables.extend(baseline.schemas.iter().map(|item| item.key().clone()));
+                    }
+                    if matches!(
+                        ast,
+                        Some(
+                            Statement::ShowTables { .. }
+                                | Statement::ShowColumns { .. }
+                                | Statement::ShowCreate { .. }
+                        )
+                    ) {
+                        tables.clear();
+                    }
+                    persistence.hydrate_tables(
+                        &baseline,
+                        tables,
+                        self.native_snapshot
+                            .as_ref()
+                            .or(statement_snapshot.as_ref()),
+                    )?;
+                    state
+                        .databases
+                        .insert(self.database.clone(), Arc::new(baseline));
+                }
+            }
             let mut raw = state
                 .databases
                 .get(&self.database)
@@ -1688,7 +1832,33 @@ impl SessionState {
                 }
             }
             let raw = Arc::new(raw);
-            self.session_state = Some(raw.clone());
+            if self
+                .shared
+                .persistence
+                .as_ref()
+                .is_some_and(Persistence::is_native)
+            {
+                let session = raw.fork()?;
+                for table in session
+                    .rows
+                    .iter()
+                    .map(|item| item.key().clone())
+                    .collect::<Vec<_>>()
+                {
+                    if !session
+                        .schemas
+                        .get(&table)
+                        .is_some_and(|schema| schema.temporary)
+                    {
+                        session.rows.remove(&table);
+                        session.baseline_rows.remove(&table);
+                        session.indexes.remove(&table);
+                    }
+                }
+                self.session_state = Some(Arc::new(session));
+            } else {
+                self.session_state = Some(raw.clone());
+            }
             if !read {
                 state.databases.insert(self.database.clone(), raw);
                 if let Some((_, pending)) = &mut self.transaction {
@@ -1712,6 +1882,74 @@ impl Drop for SessionState {
 
 // Only direct table reads have a bounded dependency set here. Views, metadata,
 // functions and nested queries conservatively retain whole-database validation.
+fn statement_tables(
+    statement: Option<&Statement>,
+    raw: &RawEngine,
+    write: bool,
+) -> BTreeSet<String> {
+    use sqlparser::ast::{Visit, Visitor};
+    use std::ops::ControlFlow;
+    struct Relations(BTreeSet<String>);
+    impl Visitor for Relations {
+        type Break = ();
+        fn pre_visit_relation(&mut self, name: &ObjectName) -> ControlFlow<()> {
+            if let Some(name) = name.0.last() {
+                self.0.insert(name.value.clone());
+            }
+            ControlFlow::Continue(())
+        }
+    }
+    let mut relations = Relations(BTreeSet::new());
+    if let Some(statement) = statement {
+        let _ = statement.visit(&mut relations);
+    } else {
+        relations
+            .0
+            .extend(raw.schemas.iter().map(|schema| schema.key().clone()));
+    }
+    let mut visited_views = BTreeSet::new();
+    loop {
+        let mut expanded = false;
+        for view in relations.0.clone() {
+            if !visited_views.insert(view.clone()) {
+                continue;
+            }
+            if let Some(definition) = raw.views.get(&view) {
+                if let Ok(statements) = crate::sql::parse(&definition) {
+                    for statement in statements {
+                        let prior = relations.0.len();
+                        let _ = statement.visit(&mut relations);
+                        expanded |= relations.0.len() != prior;
+                    }
+                }
+            }
+        }
+        if !expanded {
+            break;
+        }
+    }
+    if write {
+        loop {
+            let mut expanded = false;
+            for schema in &raw.schemas {
+                for fk in &schema.foreign_keys {
+                    if relations.0.contains(schema.key())
+                        || relations.0.contains(&fk.referenced_table)
+                    {
+                        expanded |= relations.0.insert(schema.key().clone());
+                        expanded |= relations.0.insert(fk.referenced_table.clone());
+                    }
+                }
+            }
+            if !expanded {
+                break;
+            }
+        }
+    }
+    relations.0.retain(|name| raw.schemas.contains_key(name));
+    relations.0
+}
+
 fn read_dependencies(statement: Option<&Statement>, raw: &RawEngine) -> Option<BTreeSet<String>> {
     use sqlparser::ast::{Visit, Visitor};
     use std::ops::ControlFlow;
@@ -1817,6 +2055,7 @@ impl RawEngine {
     fn copy_table_from(&self, source: &Self, table: &str) {
         self.schemas.remove(table);
         self.rows.remove(table);
+        self.baseline_rows.remove(table);
         self.indexes.remove(table);
         self.clear_auto_inc(table);
         let prefix = format!("{table}:");
@@ -1827,6 +2066,9 @@ impl RawEngine {
         }
         if let Some(rows) = source.rows.get(table) {
             self.rows.insert(table.into(), rows.clone());
+        }
+        if let Some(rows) = source.baseline_rows.get(table) {
+            self.baseline_rows.insert(table.into(), rows.clone());
         }
         if let Some(indexes) = source.indexes.get(table) {
             self.indexes.insert(table.into(), indexes.clone());
@@ -1915,6 +2157,7 @@ impl RawEngine {
             cfg: self.cfg.clone(),
             schemas: self.schemas.clone(),
             rows: self.rows.clone(),
+            baseline_rows: self.baseline_rows.clone(),
             auto_inc: self.auto_inc.clone(),
             indexes: self.indexes.clone(),
             index_comments: self.index_comments.clone(),

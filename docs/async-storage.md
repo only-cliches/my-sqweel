@@ -124,7 +124,7 @@ system supplies a transaction that groups them.
 ## Current execution boundary
 
 The storage API is granular today. The compatibility SQL evaluator currently
-hydrates every configured table page into its in-process execution image when
+hydrates every configured table page from a custom backend into its in-process execution image when
 an engine opens. A backend never has to materialize a table for the
 engine, but the evaluator itself is not yet streaming. A future executor can
 consume `RowPage` directly so large scans stay bounded in the engine too.

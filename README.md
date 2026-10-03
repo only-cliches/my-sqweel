@@ -115,13 +115,14 @@ fn main() -> anyhow::Result<()> {
 RocksDB is the default persistent backend, using `rust-rocksdb`. Inserts and
 updates store complete rows as single values. Each SQL commit applies its
 row and metadata changes atomically. RocksDB locks the directory against
-concurrent opens; share an engine by cloning it. Legacy storage directories
-are not migrated automatically, so use a fresh directory for this format.
+concurrent opens; share an engine by cloning it.
 
-The current executor keeps table rows in memory, including when storage is
-persistent. Writes can copy and compare an affected table. A storage commit
-must succeed before changes become visible; a storage error stops further
-operations until the engine is reopened.
+With RocksDB, the engine keeps catalog and table metadata in memory while
+committed rows stay on disk. Queries and writes load the tables they need into
+temporary working memory, so a large table scan can still use memory
+proportional to that table. A storage commit must succeed before changes
+become visible; a storage error stops further operations until the engine is
+reopened.
 
 Custom backends implement `AsyncStorage` with catalog/schema loading, paged
 row reads, and atomic mutation batches. See the [storage contract](docs/async-storage.md)

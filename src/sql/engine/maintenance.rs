@@ -47,6 +47,7 @@ impl RawEngine {
         }
         self.schemas.clear();
         self.rows.clear();
+        self.baseline_rows.clear();
         self.auto_inc.clear();
         self.indexes.clear();
         for (k, v) in snapshot.schemas {

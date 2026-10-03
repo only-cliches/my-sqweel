@@ -824,6 +824,8 @@ pub(super) struct RawEngine {
     cfg: EngineConfig,
     schemas: DashMap<String, SharedValue<TableSchemaHint>>,
     rows: DashMap<String, SharedTable<StoredRow>>,
+    // Native RocksDB sessions keep a shared baseline for row-level commit diffs.
+    baseline_rows: DashMap<String, SharedTable<StoredRow>>,
     auto_inc: DashMap<String, i64>,
     indexes: DashMap<String, SharedTable<BTreeMap<String, BTreeSet<String>>>>,
     index_comments: DashMap<String, String>,
@@ -889,6 +891,7 @@ impl RawEngine {
             // locks and allocations copied on every statement fork.
             schemas: DashMap::with_shard_amount(2),
             rows: DashMap::with_shard_amount(2),
+            baseline_rows: DashMap::with_shard_amount(2),
             auto_inc: DashMap::with_shard_amount(2),
             indexes: DashMap::with_shard_amount(2),
             index_comments: DashMap::with_shard_amount(2),

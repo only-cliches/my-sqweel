@@ -3,6 +3,7 @@ pub(crate) mod delta;
 pub use custom::{CustomStorage, Storage};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 use rust_rocksdb::{DB, Direction, IteratorMode, Options, WriteBatch};
@@ -31,8 +32,41 @@ pub enum StorageWrite {
 }
 
 pub struct RocksDbStore {
-    db: DB,
+    db: Arc<DB>,
     _temporary_dir: Option<TempDir>,
+}
+
+/// A RocksDB read view which keeps its database alive until the snapshot drops.
+pub(crate) struct RocksDbSnapshot {
+    snapshot: std::mem::ManuallyDrop<rust_rocksdb::Snapshot<'static>>,
+    _db: Arc<DB>,
+}
+
+impl Drop for RocksDbSnapshot {
+    fn drop(&mut self) {
+        // The snapshot borrows `db`, which remains alive until after this call.
+        unsafe { std::mem::ManuallyDrop::drop(&mut self.snapshot) };
+    }
+}
+
+impl RocksDbSnapshot {
+    pub(crate) fn scan_prefix(&self, prefix: &str) -> Result<Vec<(String, String)>> {
+        let mut rows = Vec::new();
+        for entry in self
+            .snapshot
+            .iterator(IteratorMode::From(prefix.as_bytes(), Direction::Forward))
+        {
+            let (key, value) = entry?;
+            if !key.starts_with(prefix.as_bytes()) {
+                break;
+            }
+            rows.push((
+                String::from_utf8(key.to_vec())?,
+                String::from_utf8(value.to_vec())?,
+            ));
+        }
+        Ok(rows)
+    }
 }
 
 impl RocksDbStore {
@@ -63,12 +97,12 @@ impl RocksDbStore {
         }
         let mut options = Options::default();
         options.create_if_missing(true);
-        let db = DB::open(&options, &path).map_err(|error| {
+        let db = Arc::new(DB::open(&options, &path).map_err(|error| {
             anyhow!(
                 "data directory is already open or could not be opened: {} ({error})",
                 path.display()
             )
-        })?;
+        })?);
         Ok(Self {
             db,
             _temporary_dir: temporary_dir,
@@ -77,6 +111,21 @@ impl RocksDbStore {
 
     pub fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
         Ok(self.db.get(key.as_bytes())?)
+    }
+
+    pub(crate) fn snapshot(&self) -> RocksDbSnapshot {
+        let db = self.db.clone();
+        let snapshot = db.snapshot();
+        // SAFETY: RocksDbSnapshot owns this Arc<DB> and drops the snapshot first.
+        let snapshot = unsafe {
+            std::mem::transmute::<rust_rocksdb::Snapshot<'_>, rust_rocksdb::Snapshot<'static>>(
+                snapshot,
+            )
+        };
+        RocksDbSnapshot {
+            snapshot: std::mem::ManuallyDrop::new(snapshot),
+            _db: db,
+        }
     }
 
     pub fn scan_prefix(&self, prefix: &str) -> Result<Vec<(String, String)>> {
