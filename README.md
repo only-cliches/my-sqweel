@@ -21,6 +21,19 @@ listeners. You can start and stop endpoints while the engine keeps running.
 [Library guide](docs/README.md) · [SQL endpoints](docs/server.md) ·
 [Compatibility](#mariadb-compatibility) · [Changelog](CHANGELOG.md)
 
+## Startup and idle memory
+
+| Server | Startup to SQL handshake (median) | Idle process RSS (median) |
+| --- | ---: | ---: |
+| MariaDB 11.8.8 | 1.60 s | 111.7 MiB |
+| MySqweel 0.5.0, RocksDB | 25.4 ms | 23.2 MiB |
+| MySqweel 0.5.0, in memory | 17.3 ms | 21.4 MiB |
+
+Measured over five warm starts of empty databases on one x86-64 Xeon E5-2690 v2
+host, using release MySqweel binaries and data directories on `/tmp` (tmpfs).
+Each server accepted `SELECT 1`; RSS was sampled after five idle seconds.
+MariaDB data-directory initialization was outside the startup timing.
+
 ## Start with an Engine
 
 With this repository checked out at `../my-sqweel`, add these dependencies to
@@ -316,19 +329,6 @@ durability, concurrency, or availability guarantees.
 Read the [compatibility guide](docs/compatibility.md) and
 [MTR qualification rules](tests/mariadb-mtr-exclusions.md) when evaluating a
 workload. Passing tests establish behavior within their recorded scope.
-
-### Startup and idle memory
-
-| Server | Startup to SQL handshake (median) | Idle process RSS (median) |
-| --- | ---: | ---: |
-| MariaDB 11.8.8 | 1.60 s | 111.7 MiB |
-| MySqweel 0.5.0, RocksDB | 25.4 ms | 23.2 MiB |
-| MySqweel 0.5.0, in memory | 17.3 ms | 21.4 MiB |
-
-Measured over five warm starts of empty databases on one x86-64 Xeon E5-2690 v2
-host, using release MySqweel binaries and data directories on `/tmp` (tmpfs).
-Each server accepted `SELECT 1`; RSS was sampled after five idle seconds.
-MariaDB data-directory initialization was outside the startup timing.
 
 ## Contributing
 
