@@ -26,17 +26,23 @@ MariaDB compatibility or production database durability and concurrency.
 [Filters](docs/filters.md) · [Authentication](docs/server.md#wire-authentication-and-scopes) ·
 [Compatibility](#mariadb-compatibility)
 
-## Choose an API
+## One Engine, multiple ways to use it
 
-| API | Purpose |
-| --- | --- |
-| `Engine` | Cloneable shared database; sync and async embedded queries |
-| `EngineSession` | Explicit connection state and transactions across sync/async calls |
-| `Engine::spawn_sql` / `spawn_sql_async` | Independent SQL endpoints with explicit authentication and scope ceilings |
-| `Storage::Memory` / `Storage::RocksDb(path)` / `Storage::custom(backend)` | One storage choice for all uses of an engine |
-| `sqwl` | CLI server and maintenance REPL |
+An `Engine` owns the database and its storage backend. Clone it to share the
+same database with other parts of an application. Use `Engine::default()` for
+an in-memory database, or choose a backend with `Engine::open(config, storage)`.
+`Storage::RocksDb(path)` is the bundled persistent backend; it stores each row
+as one complete value. `Storage::custom(backend)` accepts an application
+provided async storage implementation.
 
-RocksDB is the bundled persistent backend. Each row is written as one complete value. Direct Engine query calls create fresh sessions; use `engine.session()` to retain `USE`, variables and transactions. JSON and CSV custom backends are provided as examples.
+Run embedded queries through the engine's sync or async methods. Each direct
+call gets a fresh session; create an `EngineSession` with `engine.session()`
+when a caller needs connection state such as `USE`, variables, or transactions
+to persist across calls. The same engine can spawn multiple SQL endpoints;
+each endpoint has its own authentication policy, scope ceiling, and runtime
+lifecycle while sharing the engine's database. The `sqwl` CLI uses this engine
+for its SQL server and maintenance REPL. JSON and CSV custom backends are
+provided as examples.
 
 ## Embed SQL in Rust
 
