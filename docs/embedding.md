@@ -1,7 +1,7 @@
 # Embedding and transactions
 
-`Engine` is the synchronous in-process API. It starts no network listeners and
-keeps data in memory unless opened with a data directory.
+`Engine` supports synchronous and asynchronous in-process queries. It starts
+no network listeners and uses the storage backend selected when it opens.
 
 ```rust
 use my_sqweel::sql::engine::Engine;
@@ -34,7 +34,7 @@ fn transfer() -> anyhow::Result<()> {
     db.execute_sql("CREATE TABLE balances (id INT PRIMARY KEY, amount INT)")?;
     db.execute_sql("INSERT INTO balances VALUES (1, 100), (2, 0)")?;
 
-    let mut session = db.session();
+    let mut session = engine.session();
     session.execute_sql("START TRANSACTION")?;
     session.execute_sql("UPDATE balances SET amount = amount - 25 WHERE id = 1")?;
     session.execute_sql("SAVEPOINT credited")?;

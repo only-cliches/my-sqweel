@@ -22,5 +22,5 @@ One cloneable `Engine` supports sync and async queries, memory or RocksDB storag
 - `my_sqweel::model::StoredRow` and `my_sqweel::schema::*`: serializable row
   and schema types used in snapshots and state images.
 
-The root [README](../README.md) lists supported SQL surfaces, CLI commands,
-the debug/search HTTP API, and the MariaDB verification matrix.
+The root [README](../README.md) introduces engine setup, storage, sessions,
+SQL endpoints, local workflows, and the supported SQL surface.

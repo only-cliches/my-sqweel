@@ -70,7 +70,8 @@ snapshots or state changed through low-level storage APIs. Use `rebuild_indexes_
 which is useful for local rebuild workflows.
 
 The CLI REPL and debug HTTP server expose corresponding workflows. The root
-[README](../README.md#local-data-workflows) lists their commands and endpoints.
+[README](../README.md#local-data-workflows) introduces the CLI workflow;
+[search and debug HTTP](search.md#drift-and-snapshot-operations) lists the HTTP routes.
 
 ## Failure injection
 
