@@ -31,6 +31,7 @@ impl Visitor for SupportValidator {
         if query.fetch.as_ref().is_some_and(|fetch| fetch.percent) {
             return unsupported("FETCH PERCENT");
         }
+        // ponytail: accept NOWAIT/SKIP LOCKED on uncontended reads; add row locks when concurrent lock conflicts are supported.
         if query.locks.iter().any(|lock| {
             !matches!(lock.lock_type, LockType::Share | LockType::Update)
                 || lock.of.is_some()

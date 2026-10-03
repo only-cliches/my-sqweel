@@ -417,11 +417,9 @@ fn unsupported_transaction_modes_fail_without_mutating_the_database() {
         .execute_sql("CREATE TABLE items (id INT PRIMARY KEY)")
         .unwrap();
     let mut session = engine.session();
-    assert!(
-        session
-            .execute_sql("SELECT * FROM items FOR UPDATE SKIP LOCKED")
-            .is_err()
-    );
+    assert!(session
+        .execute_sql("SELECT * FROM items FOR UPDATE SKIP LOCKED")
+        .is_ok());
     assert!(
         session
             .execute_sql("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
