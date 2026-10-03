@@ -23,7 +23,7 @@ listeners. You can start and stop endpoints while the engine keeps running.
 
 ## Startup and idle memory
 
-| Server | Startup to SQL handshake (median) | Idle process RSS (median) |
+| Server | Startup to SQL handshake (median) | Idle RAM in process (RSS, median) |
 | --- | ---: | ---: |
 | MariaDB 11.8.8 | 1.60 s | 111.7 MiB |
 | MySqweel 0.5.0, RocksDB | 25.4 ms | 23.2 MiB |
@@ -33,6 +33,9 @@ Measured over five warm starts of empty databases on one x86-64 Xeon E5-2690 v2
 host, using release MySqweel binaries and data directories on `/tmp` (tmpfs).
 Each server accepted `SELECT 1`; RSS was sampled after five idle seconds.
 MariaDB data-directory initialization was outside the startup timing.
+RSS (resident set size) is the RAM mapped into the server process, read from
+Linux `/proc/<pid>/status` as `VmRSS`. It includes shared pages and does not
+capture all filesystem cache, so it is not the database's total system memory.
 
 ## Start with an Engine
 
