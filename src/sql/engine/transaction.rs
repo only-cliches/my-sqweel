@@ -1702,7 +1702,7 @@ impl RawEngine {
             }
             && self.auto_inc.get(table).as_deref() == other.auto_inc.get(table).as_deref()
     }
-    fn fork(&self) -> Result<Self> {
+    pub(super) fn fork(&self) -> Result<Self> {
         // Copying a private working version is engine bookkeeping, not logical
         // SQL row access. Keep diagnostics scoped to the requested operation.
         let _metrics = QueryMetricsGuard::install(Rc::new(QueryMetricsRecorder::new(false)));

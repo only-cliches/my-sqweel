@@ -26,6 +26,8 @@ pub struct TableSchemaHint {
     pub table: String,
     #[serde(default)]
     pub temporary: bool,
+    #[serde(default)]
+    pub system_versioned: bool,
     pub columns: BTreeMap<String, ColumnHint>,
     #[serde(default)]
     pub column_order: Vec<String>,

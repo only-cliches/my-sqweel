@@ -859,6 +859,8 @@ fn mysql_error_kind(message: &str) -> ErrorKind {
         ErrorKind::ER_TOO_MANY_TABLES
     } else if message.contains("view multiupdate") {
         ErrorKind::ER_VIEW_MULTIUPDATE
+    } else if message.contains("view check option") {
+        ErrorKind::ER_VIEW_CHECK_FAILED
     } else if message.contains("doesn't exist in table") {
         ErrorKind::ER_KEY_DOES_NOT_EXITS
     } else if message.contains("unknown table: alias") {

@@ -2825,6 +2825,7 @@ impl ErrorKind {
     pub fn sqlstate(self) -> &'static [u8; 5] {
         match self {
             ErrorKind::ER_BAD_COMBINATION_OF_WINDOW_FRAME_BOUND_SPECS => b"HY000",
+            ErrorKind::ER_VIEW_CHECK_FAILED => b"44000",
             ErrorKind::ER_BAD_HOST_ERROR
             | ErrorKind::ER_HANDSHAKE_ERROR
             | ErrorKind::ER_UNKNOWN_COM_ERROR
@@ -3234,7 +3235,6 @@ impl ErrorKind {
             | ErrorKind::ER_NO_DEFAULT_FOR_FIELD
             | ErrorKind::ER_TRUNCATED_WRONG_VALUE_FOR_FIELD
             | ErrorKind::ER_VIEW_NONUPD_CHECK
-            | ErrorKind::ER_VIEW_CHECK_FAILED
             | ErrorKind::ER_RELAY_LOG_FAIL
             | ErrorKind::ER_PASSWD_LENGTH
             | ErrorKind::ER_UNKNOWN_TARGET_BINLOG

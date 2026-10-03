@@ -10,6 +10,8 @@ pub struct StoredRow {
     pub updated_at: DateTime<Utc>,
     pub version: u64,
     pub data: serde_json::Map<String, Value>,
+    #[serde(default)]
+    pub history: Vec<serde_json::Map<String, Value>>,
 }
 
 impl StoredRow {
@@ -22,6 +24,7 @@ impl StoredRow {
             updated_at: now,
             version: 1,
             data,
+            history: Vec::new(),
         }
     }
 }

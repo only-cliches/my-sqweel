@@ -34,9 +34,8 @@ impl Visitor for SupportValidator {
         if query.locks.iter().any(|lock| {
             !matches!(lock.lock_type, LockType::Share | LockType::Update)
                 || lock.of.is_some()
-                || lock.nonblock.is_some()
         }) {
-            return unsupported("SELECT locking clauses with OF/NOWAIT/SKIP LOCKED modifiers");
+            return unsupported("SELECT locking clauses with OF modifiers");
         }
         if query.for_clause.is_some()
             || query.settings.is_some()

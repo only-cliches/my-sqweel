@@ -73,7 +73,7 @@ fn accepts_plain_select_for_update_as_transaction_compatibility_syntax() {
 }
 
 #[test]
-fn rejects_select_locking_extensions_without_locking_semantics() {
+fn accepts_uncontended_nowait_and_skip_locked_selects() {
     let _guard = test_lock();
     let engine = Engine::default();
     engine
@@ -84,12 +84,18 @@ fn rejects_select_locking_extensions_without_locking_semantics() {
         "SELECT id FROM lock_targets FOR UPDATE NOWAIT",
         "SELECT id FROM lock_targets FOR UPDATE SKIP LOCKED",
     ] {
-        let error = engine.execute_sql(query).unwrap_err().to_string();
+        let result = engine.execute_sql(query).unwrap();
         assert!(
-            error.contains("unsupported SQL feature: SELECT locking clauses with OF/NOWAIT/SKIP LOCKED modifiers"),
-            "unexpected error for {query}: {error}"
+            result[0].columns.iter().any(|column| column == "id"),
+            "missing selected column for {query}"
         );
     }
+
+    let error = engine
+        .execute_sql("SELECT id FROM lock_targets FOR UPDATE OF lock_targets NOWAIT")
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("SELECT locking clauses with OF modifiers"));
 }
 
 #[test]

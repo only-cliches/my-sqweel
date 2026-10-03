@@ -642,6 +642,25 @@ impl Catalog {
 /// classification. Execution retains the original SQL so rewrites do not erase
 /// warning context or change CHECK/REPLACE semantics.
 pub(super) fn parse_session_statement(sql: &str) -> Result<Vec<Statement>> {
+    let trimmed = sql.trim().trim_end_matches(';').trim();
+    let upper = trimmed.to_ascii_uppercase();
+    if upper.starts_with("CREATE TABLE ") && upper.ends_with("WITH SYSTEM VERSIONING") {
+        let end = upper.rfind("WITH SYSTEM VERSIONING").unwrap();
+        return Ok(crate::sql::parse(trimmed[..end].trim_end())?);
+    }
+    if (upper.starts_with("CREATE VIEW ") || upper.starts_with("CREATE OR REPLACE VIEW "))
+        && upper.ends_with("WITH CHECK OPTION")
+    {
+        let end = upper.rfind("WITH CHECK OPTION").unwrap();
+        return Ok(crate::sql::parse(trimmed[..end].trim_end())?);
+    }
+    if upper.starts_with("SELECT ") && upper.contains(" FOR SYSTEM_TIME ALL") {
+        let start = upper.rfind(" FOR SYSTEM_TIME ALL").unwrap();
+        let end = start + " FOR SYSTEM_TIME ALL".len();
+        let normalized = format!("{}{}", &trimmed[..start], &trimmed[end..]);
+        return Ok(crate::sql::parse(&normalized)?);
+    }
+
     if let Some((table, names)) = parse_drop_foreign_keys(sql)? {
         let drops = names
             .iter()
@@ -1716,6 +1735,25 @@ mod tests {
         );
         assert!(AdminCommand::parse("CREATE DATABASE good; DROP DATABASE app").is_err());
         assert_eq!(parse_use("USE `app`;")?, Some("app".into()));
+        Ok(())
+    }
+
+    #[test]
+    fn system_versioning_ddl_is_parsed_for_authorization() -> Result<()> {
+        let sql = "CREATE TABLE versioned_probe (probe_id INT PRIMARY KEY, probe_label VARCHAR(24) NOT NULL) ENGINE=InnoDB WITH SYSTEM VERSIONING";
+        let statements = parse_session_statement(sql)?;
+        assert!(matches!(statements.as_slice(), [Statement::CreateTable(_)]));
+        let catalog = Catalog::default();
+        let admin = catalog.identity("root").unwrap();
+        assert_eq!(catalog.authorize_and_normalize(&admin, "app", sql)?, sql);
+        let engine = crate::sql::engine::Engine::new(
+            crate::sql::engine::EngineConfig::mysql_strict(),
+        );
+        engine.execute_sql("CREATE DATABASE test")?;
+        let mut session = engine.session();
+        session.execute_sql("USE test")?;
+        session.execute_sql(sql)?;
+        assert!(engine.export_state()?.databases["test"].schemas["versioned_probe"].system_versioned);
         Ok(())
     }
 }

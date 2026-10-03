@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration as StdDuration, Instant};
 
-use anyhow::{Result, anyhow};
+use anyhow::{Result, anyhow, ensure};
 use chrono::{
     DateTime, Datelike, Duration, Months, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc,
 };
@@ -1375,6 +1375,7 @@ impl RawEngine {
         parse_sql = rewrite_json_arrayagg_limits_for_parser(&parse_sql);
         parse_sql = rewrite_create_table_ignore_select_for_parser(&parse_sql);
         parse_sql = rewrite_create_view_security_for_parser(&parse_sql);
+        parse_sql = strip_view_check_option(&parse_sql);
         parse_sql = strip_select_modifiers_anywhere(&parse_sql);
         parse_sql = rewrite_set_statement_for_parser(&parse_sql);
         parse_sql = query::strip_explain_index_hints(&parse_sql);
@@ -1601,7 +1602,8 @@ impl RawEngine {
                     } else {
                         format!(" AS `{name}`")
                     };
-                    let replacement = format!("{keyword} ({}){alias}", view.value().trim(),);
+                    let definition = strip_view_check_option(view.value().trim());
+                    let replacement = format!("{keyword} ({}){alias}", definition.trim(),);
                     expanded.replace_range(start..end, &replacement);
                     changed = true;
                 }
@@ -1611,6 +1613,211 @@ impl RawEngine {
             }
         }
         expanded
+    }
+
+    fn select_system_time_all_compat(&self, sql: &str) -> Result<QueryResult> {
+        let upper = sql.to_ascii_uppercase();
+        let from_at = find_top_level_keyword(&upper, "FROM")
+            .ok_or_else(|| anyhow!("FOR SYSTEM_TIME ALL requires one table"))?;
+        let version_at = find_top_level_keyword(&upper, "FOR SYSTEM_TIME ALL")
+            .ok_or_else(|| anyhow!("invalid FOR SYSTEM_TIME ALL clause"))?;
+        ensure!(version_at > from_at, "FOR SYSTEM_TIME ALL requires one table");
+        let table = sql[from_at + "FROM".len()..version_at]
+            .trim()
+            .trim_matches('`')
+            .to_ascii_lowercase();
+        ensure!(
+            !table.is_empty() && !table.chars().any(char::is_whitespace),
+            "FOR SYSTEM_TIME ALL currently requires a single unaliased table"
+        );
+        ensure!(
+            self.schemas
+                .get(&table)
+                .is_some_and(|schema| schema.system_versioned),
+            "table is not system-versioned: {table}"
+        );
+
+        let fork = self.fork()?;
+        let mut rows = self
+            .rows
+            .get(&table)
+            .map(|rows| (**rows).clone())
+            .unwrap_or_default();
+        let current = rows.values().cloned().collect::<Vec<_>>();
+        let mut history_index = 0_u64;
+        for row in current {
+            for data in &row.history {
+                let mut historical = row.clone();
+                historical.history.clear();
+                historical.data = data.clone();
+                rows.insert(format!("__system_history_{history_index}"), historical);
+                history_index += 1;
+            }
+        }
+        fork.rows.insert(table, rows.into());
+
+        let rewritten = format!(
+            "{}{}",
+            &sql[..version_at],
+            &sql[version_at + "FOR SYSTEM_TIME ALL".len()..]
+        );
+        let mut results = fork.execute_sql_internal(&rewritten, &rewritten, false, false)?;
+        Ok(results.drain(..).next().unwrap_or_default())
+    }
+
+    fn view_check_definition(&self, name: &str) -> Result<Option<(String, Expr, Vec<String>)>> {
+        let Some(definition) = self.views.get(name).map(|definition| definition.clone()) else {
+            return Ok(None);
+        };
+        if !definition.to_ascii_uppercase().contains(" WITH CHECK OPTION") {
+            return Ok(None);
+        }
+        let query = strip_view_check_option(&definition);
+        let Some(Statement::Query(query)) = crate::sql::parse(&query)?.into_iter().next() else {
+            return Err(anyhow!("invalid checked view definition: {name}"));
+        };
+        let SetExpr::Select(select) = *query.body else {
+            return Err(anyhow!("checked view must be a simple SELECT: {name}"));
+        };
+        let source = select
+            .from
+            .first()
+            .ok_or_else(|| anyhow!("checked view has no source table: {name}"))?;
+        let table = table_factor_name(&source.relation)?;
+        let predicate = select
+            .selection
+            .ok_or_else(|| anyhow!("checked view has no row predicate: {name}"))?;
+        let columns = select
+            .projection
+            .into_iter()
+            .map(|item| match item {
+                SelectItem::ExprWithAlias { alias, .. } => Ok(alias.value),
+                SelectItem::UnnamedExpr(Expr::Identifier(identifier)) => Ok(identifier.value),
+                _ => Err(anyhow!("checked view requires named columns: {name}")),
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Some((table, predicate, columns)))
+    }
+
+    fn execute_view_check_dml_compat(&self, sql: &str) -> Result<Option<QueryResult>> {
+        let upper = sql.trim_start().to_ascii_uppercase();
+        if !upper.starts_with("INSERT ") && !upper.starts_with("UPDATE ") {
+            return Ok(None);
+        }
+        let mut statements = match crate::sql::parse(sql) {
+            Ok(statements) => statements,
+            Err(_) => return Ok(None),
+        };
+        let Some(statement) = statements.first_mut() else {
+            return Ok(None);
+        };
+        match statement {
+            Statement::Insert(insert) => {
+                let view = object_name(&insert.table_name)?;
+                let Some((table, predicate, view_columns)) = self.view_check_definition(&view)?
+                else {
+                    return Ok(None);
+                };
+                let columns = if insert.columns.is_empty() {
+                    view_columns
+                } else {
+                    insert
+                        .columns
+                        .iter()
+                        .map(|column| column.value.clone())
+                        .collect()
+                };
+                if let Some(source) = &insert.source
+                    && let SetExpr::Values(values) = source.body.as_ref()
+                {
+                    for values in &values.rows {
+                        let mut row = Map::new();
+                        for (column, value) in columns.iter().zip(values) {
+                            let value = self.eval_expr_ctx(
+                                value,
+                                &row,
+                                self.last_insert_id.load(AtomicOrdering::Relaxed),
+                            )?;
+                            row.insert(column.clone(), value);
+                        }
+                        if matches!(
+                            sql_truth(&self.eval_expr_ctx(
+                                &predicate,
+                                &row,
+                                self.last_insert_id.load(AtomicOrdering::Relaxed),
+                            )?),
+                            SqlTruth::False
+                        ) {
+                            return Err(anyhow!("view check option failed"));
+                        }
+                    }
+                } else {
+                    return Ok(None);
+                }
+                insert.table_name = ObjectName(vec![Ident::new(table)]);
+                let Statement::Insert(insert) = statements.remove(0) else {
+                    unreachable!();
+                };
+                self.insert_rows(insert).map(Some)
+            }
+            Statement::Update {
+                table: update_table,
+                assignments,
+                selection,
+                ..
+            } => {
+                let view = table_factor_name(&update_table.relation)?;
+                let Some((table, predicate, _)) = self.view_check_definition(&view)? else {
+                    return Ok(None);
+                };
+                let rows = self
+                    .rows
+                    .get(&table)
+                    .map(|rows| (**rows).clone())
+                    .unwrap_or_default();
+                for stored in rows.values() {
+                    let current = self.current_schema_row(&table, &stored.data);
+                    if let Some(selection) = selection
+                        && !matches!(
+                            sql_truth(&self.eval_expr_ctx(
+                                selection,
+                                &current,
+                                self.last_insert_id.load(AtomicOrdering::Relaxed),
+                            )?),
+                            SqlTruth::True
+                        )
+                    {
+                        continue;
+                    }
+                    let mut changed = current;
+                    for assignment in assignments.iter() {
+                        let column = assignment_target_name(assignment);
+                        let value = self.eval_expr_ctx(
+                            &assignment.value,
+                            &changed,
+                            self.last_insert_id.load(AtomicOrdering::Relaxed),
+                        )?;
+                        changed.insert(column, value);
+                    }
+                    if matches!(
+                        sql_truth(&self.eval_expr_ctx(
+                            &predicate,
+                            &changed,
+                            self.last_insert_id.load(AtomicOrdering::Relaxed),
+                        )?),
+                        SqlTruth::False
+                    ) {
+                        return Err(anyhow!("view check option failed"));
+                    }
+                }
+                let TableFactor::Table { name, .. } = &mut update_table.relation else {
+                    return Err(anyhow!("checked view update requires a single table"));
+                };
+                name.0 = vec![Ident::new(table)];
+                self.execute_statement_unobserved(statements.remove(0)).map(Some)
+            }
+            _ => Ok(None),
+        }
     }
 
     fn publish_query_event(&self, event: QueryEvent) {
@@ -2316,6 +2523,35 @@ impl RawEngine {
             return Ok(Some(QueryResult::default()));
         }
         let upper = trimmed.to_ascii_uppercase();
+        if let Some(result) = self.execute_view_check_dml_compat(trimmed)? {
+            return Ok(Some(result));
+        }
+        if upper.starts_with("CREATE TABLE ") && upper.contains("WITH SYSTEM VERSIONING") {
+            let normalized = self.rewrite_sql_for_parser(trimmed);
+            ensure!(
+                !normalized.to_ascii_uppercase().contains("WITH SYSTEM VERSIONING"),
+                "system versioning parser rewrite failed: {normalized}"
+            );
+            let mut results = self.execute_sql_internal(&normalized, &normalized, true, false)?;
+            let table = crate::sql::parse(&normalized)?
+                .into_iter()
+                .find_map(|statement| match statement {
+                    Statement::CreateTable(create) => object_name(&create.name).ok(),
+                    _ => None,
+                })
+                .ok_or_else(|| anyhow!("invalid system-versioned CREATE TABLE"))?;
+            let mut schema = self
+                .schemas
+                .get(&table)
+                .map(|schema| schema.clone())
+                .ok_or_else(|| anyhow!("unknown table: {table}"))?;
+            schema.system_versioned = true;
+            self.schemas.insert(table, schema.into());
+            return Ok(Some(results.drain(..).next().unwrap_or_default()));
+        }
+        if upper.starts_with("SELECT ") && upper.contains(" FOR SYSTEM_TIME ALL") {
+            return Ok(Some(self.select_system_time_all_compat(trimmed)?));
+        }
         if upper.starts_with("ALTER TABLE") {
             let normalized = strip_alter_execution_options(trimmed);
             if let Some(result) = self.execute_alter_add_generated_column_compat(&normalized)? {
@@ -6501,6 +6737,12 @@ fn strip_create_table_unsupported_options(sql: &str) -> String {
     };
     let prefix = &sql[..=close];
     let mut suffix = sql[close + 1..].to_string();
+    if let Some(index) = suffix
+        .to_ascii_uppercase()
+        .find("WITH SYSTEM VERSIONING")
+    {
+        suffix.truncate(index);
+    }
     for option in [
         "MAX_ROWS",
         "MIN_ROWS",
@@ -6844,6 +7086,14 @@ fn rewrite_create_view_security_for_parser(sql: &str) -> String {
         }
     }
     sql.to_string()
+}
+
+fn strip_view_check_option(sql: &str) -> String {
+    let upper = sql.to_ascii_uppercase();
+    upper
+        .rfind(" WITH CHECK OPTION")
+        .filter(|index| upper[*index + " WITH CHECK OPTION".len()..].trim().is_empty())
+        .map_or_else(|| sql.to_string(), |index| sql[..index].trim_end().to_string())
 }
 
 fn rewrite_create_table_ignore_select_for_parser(sql: &str) -> String {
