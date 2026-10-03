@@ -156,9 +156,7 @@ impl Engine {
             query_filters: Arc::default(),
             result_filters: Arc::default(),
         });
-        Ok(Self {
-            shared,
-        })
+        Ok(Self { shared })
     }
 
     /// Replace the bootstrap administrator before accepting connections.
@@ -1611,12 +1609,24 @@ impl SessionState {
             if !read && !ddl && !state.catalog.is_admin(&self.identity) {
                 // Check the actual row changes too: cascades and writable views can
                 // affect tables that do not appear in the original statement.
+                // A changed primary key is still an UPDATE, even though the
+                // row map represents it as removing and inserting keys.
+                let updates_keys = matches!(ast, Some(Statement::Update { .. }))
+                    || matches!(ast, Some(Statement::Insert(insert)) if insert.on.is_some() && !insert.replace_into);
+                let replace_table = match ast {
+                    Some(Statement::Insert(insert)) if insert.replace_into => {
+                        Some(object_name(&insert.table_name)?)
+                    }
+                    _ => None,
+                };
                 let before = &state.databases[&self.database];
                 for table in raw.rows.iter() {
                     let previous = before.rows.get(table.key());
                     for (key, row) in table.iter() {
                         let old = previous.as_ref().and_then(|rows| rows.get(key));
-                        let privilege = if old.is_none() {
+                        let privilege = if updates_keys {
+                            AuthPrivilege::Update
+                        } else if old.is_none() || replace_table.as_ref() == Some(table.key()) {
                             AuthPrivilege::Insert
                         } else {
                             AuthPrivilege::Update
@@ -1641,7 +1651,11 @@ impl SessionState {
                             &self.identity,
                             &self.database,
                             table.key(),
-                            AuthPrivilege::Delete,
+                            if updates_keys {
+                                AuthPrivilege::Update
+                            } else {
+                                AuthPrivilege::Delete
+                            },
                         )?;
                     }
                 }

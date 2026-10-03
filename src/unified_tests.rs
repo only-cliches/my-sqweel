@@ -822,3 +822,75 @@ mod joined_scopes {
         );
     }
 }
+
+#[cfg(test)]
+mod scoped_key_changes {
+    use crate::{
+        Engine,
+        sql::engine::{AuthPrivilege::*, AuthScope},
+    };
+
+    #[test]
+    fn key_changes_use_statement_privileges_and_check_cascades() {
+        let engine = Engine::default();
+        engine.execute_sql("CREATE TABLE parent(id INT PRIMARY KEY); CREATE TABLE child(id INT PRIMARY KEY, parent_id INT, FOREIGN KEY(parent_id) REFERENCES parent(id) ON UPDATE CASCADE); INSERT INTO parent VALUES(1); INSERT INTO child VALUES(1,1)").unwrap();
+        let mut session = engine.session();
+        session
+            .authenticate_external(
+                "writer".into(),
+                vec![AuthScope::table("app", "parent", [Update])],
+            )
+            .unwrap();
+        assert!(session.execute_sql("UPDATE parent SET id=2").is_err());
+        assert_eq!(
+            engine.execute_sql("SELECT id FROM parent").unwrap()[0].rows[0]["id"],
+            serde_json::json!(1)
+        );
+        session
+            .authenticate_external(
+                "writer".into(),
+                vec![
+                    AuthScope::table("app", "parent", [Update]),
+                    AuthScope::table("app", "child", [Update]),
+                ],
+            )
+            .unwrap();
+        session.execute_sql("UPDATE parent SET id=2").unwrap();
+        assert_eq!(
+            engine.execute_sql("SELECT parent_id FROM child").unwrap()[0].rows[0]["parent_id"],
+            serde_json::json!(2)
+        );
+
+        engine
+            .execute_sql(
+                "CREATE TABLE items(id INT PRIMARY KEY, value INT); INSERT INTO items VALUES(1,1)",
+            )
+            .unwrap();
+        session
+            .authenticate_external(
+                "writer".into(),
+                vec![AuthScope::table("app", "items", [Insert, Delete])],
+            )
+            .unwrap();
+        session
+            .execute_sql("REPLACE INTO items VALUES(1,2)")
+            .unwrap();
+        assert_eq!(
+            engine.execute_sql("SELECT value FROM items").unwrap()[0].rows[0]["value"],
+            serde_json::json!(2)
+        );
+        session
+            .authenticate_external(
+                "writer".into(),
+                vec![AuthScope::table("app", "items", [Insert, Update])],
+            )
+            .unwrap();
+        session
+            .execute_sql("INSERT INTO items VALUES(1,3) ON DUPLICATE KEY UPDATE id=2")
+            .unwrap();
+        assert_eq!(
+            engine.execute_sql("SELECT id FROM items").unwrap()[0].rows[0]["id"],
+            serde_json::json!(2)
+        );
+    }
+}
