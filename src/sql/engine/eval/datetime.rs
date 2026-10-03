@@ -1181,15 +1181,20 @@ fn split_interval_amount_and_unit(text: &str) -> Option<(&str, &str)> {
             _ => {}
         }
     }
+    for &idx in split_positions.iter().rev() {
+        let amount = trimmed[..idx].trim();
+        let unit = trimmed[idx..].trim();
+        if !amount.is_empty()
+            && (unit.eq_ignore_ascii_case("HOUR TO MINUTE")
+                || unit.eq_ignore_ascii_case("HOUR_MINUTE"))
+        {
+            return Some((amount, unit));
+        }
+    }
     for idx in split_positions.into_iter().rev() {
         let amount = trimmed[..idx].trim();
         let unit = trimmed[idx..].trim();
-        let is_compound =
-            unit.eq_ignore_ascii_case("HOUR TO MINUTE") || unit.eq_ignore_ascii_case("HOUR_MINUTE");
-        let is_simple = !amount.chars().any(char::is_whitespace)
-            && !unit.chars().any(char::is_whitespace)
-            && parse_mysql_interval_unit(unit).is_some();
-        if !amount.is_empty() && (is_simple || is_compound) {
+        if !amount.is_empty() && parse_mysql_interval_unit(unit).is_some() {
             return Some((amount, unit));
         }
     }

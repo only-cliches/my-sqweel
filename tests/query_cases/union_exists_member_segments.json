@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "id": "union_exists_member_segments",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Prashant-4527/mercaridb-mysql-30days",
+      "commit": "f72849f9ba3414412387bd9930b703258bed2b80",
+      "path": "day12_union_intersect_except.sql",
+      "url": "https://github.com/Prashant-4527/mercaridb-mysql-30days/blob/f72849f9ba3414412387bd9930b703258bed2b80/day12_union_intersect_except.sql",
+      "sha256": "d066da0587ed66a5546ec720a9704693e5aad8a17d31c84fba121790dc966c5e",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "day12_union_intersect_except.sql:218-245",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL report partitions every user into mutually exclusive activity segments with four UNION branches using paired correlated EXISTS and NOT EXISTS predicates, then applies one final deterministic ordering.",
+      "mysql_mariadb_translation": "Reauthored as a community-member engagement report. Four mutually exclusive UNION branches classify members as active-both, buyer-only, seller-only, or inactive from separate listing and purchase tables, with a final segment-and-name order."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "union-distinct",
+    "four-branch-segmentation",
+    "correlated-exists",
+    "correlated-not-exists",
+    "mutually-exclusive-branches",
+    "final-compound-order",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Members 5101 and 5105 have both listings and purchases; 5102 has purchases only; 5103 has listings only; 5104 has neither. Every member appears exactly once in the ordered segment report.",
+  "determinism_notes": "Member IDs, names, regions, listing and purchase keys, segment labels, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE community_members (member_id INT PRIMARY KEY, member_name VARCHAR(32) NOT NULL, region VARCHAR(16) NOT NULL)",
+    "CREATE TABLE member_listings (listing_id INT PRIMARY KEY, member_id INT NOT NULL, listing_title VARCHAR(32) NOT NULL)",
+    "CREATE TABLE member_purchases (purchase_id INT PRIMARY KEY, member_id INT NOT NULL, amount INT NOT NULL)",
+    "INSERT INTO community_members VALUES (5101, 'Aster', 'east'), (5102, 'Beryl', 'west'), (5103, 'Cobalt', 'north'), (5104, 'Dune', 'south'), (5105, 'Ember', 'east')",
+    "INSERT INTO member_listings VALUES (9101, 5101, 'lantern'), (9102, 5103, 'compass'), (9103, 5105, 'map')",
+    "INSERT INTO member_purchases VALUES (9701, 5101, 120), (9702, 5102, 80), (9703, 5105, 200)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT m.member_name, m.region, 'active-both' AS segment FROM community_members AS m WHERE EXISTS (SELECT 1 FROM member_listings AS l WHERE l.member_id = m.member_id) AND EXISTS (SELECT 1 FROM member_purchases AS p WHERE p.member_id = m.member_id) UNION SELECT m.member_name, m.region, 'buyer-only' FROM community_members AS m WHERE EXISTS (SELECT 1 FROM member_purchases AS p WHERE p.member_id = m.member_id) AND NOT EXISTS (SELECT 1 FROM member_listings AS l WHERE l.member_id = m.member_id) UNION SELECT m.member_name, m.region, 'seller-only' FROM community_members AS m WHERE EXISTS (SELECT 1 FROM member_listings AS l WHERE l.member_id = m.member_id) AND NOT EXISTS (SELECT 1 FROM member_purchases AS p WHERE p.member_id = m.member_id) UNION SELECT m.member_name, m.region, 'inactive' FROM community_members AS m WHERE NOT EXISTS (SELECT 1 FROM member_listings AS l WHERE l.member_id = m.member_id) AND NOT EXISTS (SELECT 1 FROM member_purchases AS p WHERE p.member_id = m.member_id) ORDER BY segment, member_name",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT member_id, member_name, region FROM community_members ORDER BY member_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT listing_id, member_id, listing_title FROM member_listings ORDER BY listing_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT purchase_id, member_id, amount FROM member_purchases ORDER BY purchase_id",
+      "ordered": true
+    }
+  ]
+}

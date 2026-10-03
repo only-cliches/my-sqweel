@@ -764,9 +764,11 @@ pub(super) fn eval_json_quote(
     if value == Value::Null {
         return Ok(Value::Null);
     }
-    Ok(Value::String(serde_json::to_string(
-        &json_scalar_to_string(&value),
-    )?))
+    let text = match &value {
+        Value::Array(_) | Value::Object(_) => json_compact_text(&value)?,
+        _ => json_scalar_to_string(&value),
+    };
+    Ok(Value::String(serde_json::to_string(&text)?))
 }
 
 pub(super) fn eval_json_pretty(

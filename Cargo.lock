@@ -1901,24 +1901,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mysql-common-derive"
-version = "0.32.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "66f62cad7623a9cb6f8f64037f0c4f69c8db8e82914334a83c9788201c2c1bfa"
-dependencies = [
- "darling",
- "heck 0.5.0",
- "num-bigint",
- "proc-macro-crate 3.5.0",
- "proc-macro-error2",
- "proc-macro2",
- "quote",
- "syn 2.0.117",
- "termcolor",
- "thiserror 2.0.18",
-]
-
-[[package]]
 name = "mysql_common"
 version = "0.31.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1939,7 +1921,7 @@ dependencies = [
  "flate2",
  "frunk",
  "lazy_static",
- "mysql-common-derive 0.30.2",
+ "mysql-common-derive",
  "num-bigint",
  "num-traits",
  "rand 0.8.6",
@@ -1972,7 +1954,6 @@ dependencies = [
  "crc32fast",
  "flate2",
  "getrandom 0.3.4",
- "mysql-common-derive 0.32.1",
  "num-bigint",
  "num-traits",
  "regex",
@@ -2314,28 +2295,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "version_check",
-]
-
-[[package]]
-name = "proc-macro-error-attr2"
-version = "2.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "96de42df36bb9bba5542fe9f1a054b8cc87e172759a1868aa05c1f3acc89dfc5"
-dependencies = [
- "proc-macro2",
- "quote",
-]
-
-[[package]]
-name = "proc-macro-error2"
-version = "2.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "11ec05c52be0a07b08061f7dd003e7d7092e0472bc731b4af7bb1ef876109802"
-dependencies = [
- "proc-macro-error-attr2",
- "proc-macro2",
- "quote",
- "syn 2.0.117",
 ]
 
 [[package]]
@@ -3120,9 +3079,9 @@ dependencies = [
 
 [[package]]
 name = "spin"
-version = "0.9.8"
+version = "0.9.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
+checksum = "3763264f6b73151db08c50ff20d7d8a0b8796e021cdea7ceedad07b80155fa0e"
 
 [[package]]
 name = "spki"

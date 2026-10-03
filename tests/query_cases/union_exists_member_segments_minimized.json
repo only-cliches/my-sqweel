@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "id": "union_exists_member_segments_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Prashant-4527/mercaridb-mysql-30days",
+      "commit": "f72849f9ba3414412387bd9930b703258bed2b80",
+      "path": "day12_union_intersect_except.sql",
+      "url": "https://github.com/Prashant-4527/mercaridb-mysql-30days/blob/f72849f9ba3414412387bd9930b703258bed2b80/day12_union_intersect_except.sql",
+      "sha256": "d066da0587ed66a5546ec720a9704693e5aad8a17d31c84fba121790dc966c5e",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "day12_union_intersect_except.sql:218-245",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL report partitions every user into mutually exclusive activity segments with four UNION branches using paired correlated EXISTS and NOT EXISTS predicates, then applies one final deterministic ordering.",
+      "mysql_mariadb_translation": "Reduced to one member in each of the four activity segments so the UNION branch precedence and final ordering remain observable."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "union-distinct",
+    "four-branch-segmentation",
+    "correlated-exists",
+    "correlated-not-exists",
+    "mutually-exclusive-branches",
+    "final-compound-order",
+    "dml-final-state",
+    "deterministic-order",
+    "minimized-regression"
+  ],
+  "fixture_notes": "Members 5201, 5202, 5203, and 5204 cover active-both, buyer-only, seller-only, and inactive branches respectively.",
+  "determinism_notes": "Member IDs, activity keys, segment labels, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE community_members_min (member_id INT PRIMARY KEY, member_name VARCHAR(32) NOT NULL, region VARCHAR(16) NOT NULL)",
+    "CREATE TABLE member_listings_min (listing_id INT PRIMARY KEY, member_id INT NOT NULL)",
+    "CREATE TABLE member_purchases_min (purchase_id INT PRIMARY KEY, member_id INT NOT NULL)",
+    "INSERT INTO community_members_min VALUES (5201, 'Iris', 'east'), (5202, 'Jade', 'west'), (5203, 'Kite', 'north'), (5204, 'Lumen', 'south')",
+    "INSERT INTO member_listings_min VALUES (9201, 5201), (9202, 5203)",
+    "INSERT INTO member_purchases_min VALUES (9801, 5201), (9802, 5202)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT m.member_name, m.region, 'active-both' AS segment FROM community_members_min AS m WHERE EXISTS (SELECT 1 FROM member_listings_min AS l WHERE l.member_id = m.member_id) AND EXISTS (SELECT 1 FROM member_purchases_min AS p WHERE p.member_id = m.member_id) UNION SELECT m.member_name, m.region, 'buyer-only' FROM community_members_min AS m WHERE EXISTS (SELECT 1 FROM member_purchases_min AS p WHERE p.member_id = m.member_id) AND NOT EXISTS (SELECT 1 FROM member_listings_min AS l WHERE l.member_id = m.member_id) UNION SELECT m.member_name, m.region, 'seller-only' FROM community_members_min AS m WHERE EXISTS (SELECT 1 FROM member_listings_min AS l WHERE l.member_id = m.member_id) AND NOT EXISTS (SELECT 1 FROM member_purchases_min AS p WHERE p.member_id = m.member_id) UNION SELECT m.member_name, m.region, 'inactive' FROM community_members_min AS m WHERE NOT EXISTS (SELECT 1 FROM member_listings_min AS l WHERE l.member_id = m.member_id) AND NOT EXISTS (SELECT 1 FROM member_purchases_min AS p WHERE p.member_id = m.member_id) ORDER BY segment, member_name",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT member_id, member_name, region FROM community_members_min ORDER BY member_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT listing_id, member_id FROM member_listings_min ORDER BY listing_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT purchase_id, member_id FROM member_purchases_min ORDER BY purchase_id",
+      "ordered": true
+    }
+  ]
+}

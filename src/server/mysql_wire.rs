@@ -1293,7 +1293,7 @@ fn write_row<W: io::Read + io::Write>(
                 if let Some(text) =
                     value.strip_prefix(crate::sql::engine::JSON_EXTRACT_TEXT_SENTINEL) =>
             {
-                if json_columns[index] {
+                if json_columns[index] || definition.coltype == ColumnType::MYSQL_TYPE_MEDIUM_BLOB {
                     match serde_json::from_str::<serde_json::Value>(text) {
                         Ok(value) => {
                             rw.write_col(crate::sql::engine::json_wire_text(&value).map_err(

@@ -489,12 +489,15 @@ impl RawEngine {
                 return Err(error);
             }
 
-            let auto_increment_key = auto_increment_column
-                .as_ref()
-                .map(|column| format!("{table}:{column}"));
-            let auto_increment_before = auto_increment_key
-                .as_ref()
-                .and_then(|key| self.auto_inc.get(key).map(|value| *value));
+            let auto_increment_before = if single_row {
+                None
+            } else {
+                auto_increment_column.as_ref().and_then(|column| {
+                    self.auto_inc
+                        .get(&format!("{table}:{column}"))
+                        .map(|value| *value)
+                })
+            };
             let (row_id, generated_id) = self.resolve_row_id(table, &data)?;
             let row_insert_id = if generated_id {
                 value_to_u64(&row_id)
@@ -550,15 +553,14 @@ impl RawEngine {
             );
             if !conflict_keys.is_empty()
                 && generated_id
+                && !single_row
                 && (options.ignore || !options.on_duplicate.is_empty())
-                && let (Some(auto_increment_key), Some(auto_increment_before)) =
-                    (&auto_increment_key, auto_increment_before)
+                && let (Some(auto_increment_column), Some(auto_increment_before)) =
+                    (&auto_increment_column, auto_increment_before)
             {
                 self.auto_inc
-                    .entry(auto_increment_key.clone())
-                    .and_modify(|current| *current = auto_increment_before);
+                    .insert(format!("{table}:{auto_increment_column}"), auto_increment_before);
             }
-
             if !conflict_keys.is_empty() {
                 if options.on_duplicate.is_empty() && options.ignore {
                     let key_name = if conflict_keys.contains(&key) {

@@ -2276,7 +2276,7 @@ impl Store {
     fn mem_sub(&self, amount: usize) {
         self.metrics
             .used_memory
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 Some(current.saturating_sub(amount))
             })
             .ok();
@@ -2297,7 +2297,7 @@ impl Store {
     pub(crate) fn key_removed(&self) {
         self.metrics
             .key_count
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 Some(current.saturating_sub(1))
             })
             .ok();

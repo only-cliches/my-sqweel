@@ -32,9 +32,11 @@ impl Visitor for SupportValidator {
             return unsupported("FETCH PERCENT");
         }
         if query.locks.iter().any(|lock| {
-            !matches!(lock.lock_type, LockType::Share | LockType::Update) || lock.of.is_some()
+            !matches!(lock.lock_type, LockType::Share | LockType::Update)
+                || lock.of.is_some()
+                || lock.nonblock.is_some()
         }) {
-            return unsupported("SELECT locking clauses with OF modifiers");
+            return unsupported("SELECT locking clauses with OF/NOWAIT/SKIP LOCKED modifiers");
         }
         if query.for_clause.is_some()
             || query.settings.is_some()
@@ -117,9 +119,11 @@ impl Visitor for SupportValidator {
                         | "MEDIAN"
                         | "PERCENTILE_CONT"
                         | "PERCENTILE_DISC"
+                        | "COUNT"
                         | "SUM"
                         | "AVG"
                         | "MIN"
+                        | "MAX"
                         | "BIT_AND"
                         | "BIT_OR"
                         | "BIT_XOR"

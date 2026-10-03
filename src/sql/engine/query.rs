@@ -2031,10 +2031,9 @@ impl RawEngine {
                     MysqlColumnType::Integer
                 };
             }
-            Expr::Floor { expr, .. } => {
-                let argument = self.expression_metadata(select, expr, String::new(), first_row);
+            Expr::Floor { .. } => {
                 metadata.column_type = MysqlColumnType::Decimal;
-                metadata.decimals = argument.decimals;
+                metadata.decimals = 0;
             }
             Expr::BinaryOp {
                 op:
@@ -2097,6 +2096,7 @@ impl RawEngine {
                         metadata.unsigned = true;
                         MysqlColumnType::BigInt
                     }
+                    "ASCII" | "ORD" => MysqlColumnType::Integer,
                     "BIT_AND" | "BIT_OR" | "BIT_XOR" => MysqlColumnType::BigInt,
                     "GET_LOCK" | "RELEASE_LOCK" | "IS_FREE_LOCK" | "COERCIBILITY" => {
                         MysqlColumnType::Integer
@@ -2802,23 +2802,39 @@ impl RawEngine {
                         }
                     }
                     "JSON_UNQUOTE" => {
-                        let argument = function_arguments(function)
+                        let argument_expr = function_arguments(function)
                             .ok()
-                            .and_then(|arguments| arguments.into_iter().next().flatten())
-                            .map(|argument| {
-                                self.expression_metadata(
-                                    select,
-                                    &argument,
-                                    String::new(),
-                                    first_row,
-                                )
+                            .and_then(|arguments| arguments.into_iter().next().flatten());
+                        let static_extract = argument_expr.as_ref().is_some_and(|argument| {
+                            let Expr::Function(extract) = argument else {
+                                return false;
+                            };
+                            extract.name.0.last().is_some_and(|name| {
+                                name.value.eq_ignore_ascii_case("JSON_EXTRACT")
+                            })
+                                && function_arguments(extract)
+                                    .ok()
+                                    .and_then(|arguments| arguments.into_iter().nth(1).flatten())
+                                    .is_some_and(|path| {
+                                        matches!(
+                                            path,
+                                            Expr::Value(
+                                                SqlValue::SingleQuotedString(_)
+                                                    | SqlValue::DoubleQuotedString(_)
+                                            )
+                                        )
+                                    })
+                        });
+                        let argument = argument_expr.map(|argument| {
+                            self.expression_metadata(select, &argument, String::new(), first_row)
                                 .column_type
-                            });
-                        match argument {
-                            Some(MysqlColumnType::Json | MysqlColumnType::LongBlob) => {
+                        });
+                        match (static_extract, argument) {
+                            (true, _) => MysqlColumnType::LongBlob,
+                            (_, Some(MysqlColumnType::Json | MysqlColumnType::LongBlob)) => {
                                 MysqlColumnType::Blob
                             }
-                            Some(MysqlColumnType::Blob | MysqlColumnType::MediumBlob) => {
+                            (_, Some(MysqlColumnType::Blob | MysqlColumnType::MediumBlob)) => {
                                 MysqlColumnType::MediumBlob
                             }
                             _ => MysqlColumnType::VarChar,
