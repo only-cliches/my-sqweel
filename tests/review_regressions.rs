@@ -1,7 +1,7 @@
 use my_sqweel::{
     AsyncEngine,
     sql::engine::{Engine, EngineConfig},
-    storage::LuxStorage,
+    storage::RocksDbStorage,
 };
 use serde_json::json;
 
@@ -92,7 +92,7 @@ fn successful_prefix_of_failed_async_batch_is_persisted() {
         .build()
         .unwrap()
         .block_on(async {
-            let storage = LuxStorage::open(None).await.unwrap();
+            let storage = RocksDbStorage::open(None).await.unwrap();
             let engine = AsyncEngine::open(EngineConfig::default(), storage.clone())
                 .await
                 .unwrap();

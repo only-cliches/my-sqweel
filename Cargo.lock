@@ -416,6 +416,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
 
 [[package]]
+name = "bzip2-sys"
+version = "0.1.13+1.0.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "225bff33b2141874fe80d71e07d6eec4f85c5c216453dd96388240f96e1acc14"
+dependencies = [
+ "cc",
+ "pkg-config",
+]
+
+[[package]]
 name = "cc"
 version = "1.2.63"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1843,6 +1853,7 @@ dependencies = [
  "ring",
  "rmp",
  "rsa",
+ "rust-rocksdb",
  "rustls 0.22.4",
  "serde",
  "serde_json",
@@ -2689,6 +2700,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "rust-librocksdb-sys"
+version = "0.48.1+11.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b206e7f3519b9ab5f791603a6a93227071e1f13b0be01d7b36fcd0fad32bdfa"
+dependencies = [
+ "bindgen",
+ "bzip2-sys",
+ "cc",
+ "glob",
+ "libc",
+ "libz-sys",
+ "pkg-config",
+ "rustflags",
+]
+
+[[package]]
+name = "rust-rocksdb"
+version = "0.53.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "38f59818211992b80ecd5d5195fc821b4917afd7ca771b8e0cc893c5909108e3"
+dependencies = [
+ "libc",
+ "parking_lot",
+ "rust-librocksdb-sys",
+]
+
+[[package]]
 name = "rust-stemmers"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2729,6 +2767,12 @@ checksum = "cfcb3a22ef46e85b45de6ee7e79d063319ebb6594faafcf1c225ea92ab6e9b92"
 dependencies = [
  "semver",
 ]
+
+[[package]]
+name = "rustflags"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a39e0e9135d7a7208ee80aa4e3e4b88f0f5ad7be92153ed70686c38a03db2e63"
 
 [[package]]
 name = "rustix"

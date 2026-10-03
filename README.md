@@ -15,7 +15,7 @@
 MySqweel implements a subset of MySQL/MariaDB SQL in Rust. Run it in process,
 connect existing clients through its MySQL wire server, or supply custom
 storage through the async embedded API. It includes strict SQL schemas,
-sessions and transactions, optional LuxDB persistence, and local maintenance
+sessions and transactions, optional RocksDB persistence, and local maintenance
 and search tools.
 
 The project is intended for embedded development datasets, fixtures, ORM and
@@ -30,16 +30,16 @@ MariaDB compatibility or production database durability and concurrency.
 
 | Entry point | What it provides | Current boundary |
 | --- | --- | --- |
-| `Engine` / `EngineSession` | Synchronous embedded SQL, sessions, transactions, snapshots, and query events | In-memory execution; optional directory-backed LuxDB persistence |
+| `Engine` / `EngineSession` | Synchronous embedded SQL, sessions, transactions, snapshots, and query events | In-memory execution; optional directory-backed RocksDB persistence |
 | `AsyncEngine<S>` / `AsyncEngineSession<S>` | Async storage integration and query/result filters | One `AsyncStorage` backend per instance; SQL evaluation is still synchronous |
 | `server::run` / `spawn_with_engine` | MySQL wire connections plus debug/search HTTP | Uses `Arc<Engine>`; does not invoke async execution filters or custom async storage |
 | `sqwl` | Server, SQL/maintenance REPL, and SQL inspection | Wraps the synchronous engine |
 
-LuxDB is the only bundled storage backend. It is a Redis-like datastore that
-holds the entire dataset in memory, even when disk persistence is enabled, so
-the dataset must fit in available RAM. JSON and CSV implementations are
-provided as [examples](#json-and-csv-examples). Multiple logical SQL databases
-are supported, but a registry of multiple storage backends and filter-driven
+RocksDB is the bundled storage backend. Passing no data directory creates a
+temporary store removed when it is dropped. SQL rows are persisted as complete
+serialized row values. JSON and CSV implementations are provided as
+[examples](#json-and-csv-examples). Multiple logical SQL databases are
+supported, but a registry of multiple storage backends and filter-driven
 backend routing are **not implemented**.
 
 ## Embed SQL in Rust
@@ -136,7 +136,7 @@ impl QueryFilter for CurrentTenant {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let db = AsyncEngine::open_luxDB(EngineConfig::default(), None).await?;
+    let db = AsyncEngine::open_rocksdb(EngineConfig::default(), None).await?;
     db.query_filters().push(CurrentTenant);
 
     let results = db.execute_sql("SELECT current_tenant").await?;
@@ -312,7 +312,7 @@ Place global options before the subcommand.
 | --- | --- |
 | `--bind <addr>` | MySQL bind address; default `127.0.0.1:3307` |
 | `--debug-bind <addr>` | HTTP bind address; default SQL address with port + 100 |
-| `--data-dir <dir>` | Enable locked LuxDB persistence |
+| `--data-dir <dir>` | Enable RocksDB persistence |
 | `--default-time-zone <offset>` | Initial session timezone; default UTC |
 | `--allow-remote` | Permit non-loopback listeners |
 | `--query-delay-ms <n>` | Add latency per SQL statement |
@@ -334,20 +334,13 @@ sqwl --data-dir .my-sqweel/data serve --repl
 
 Embedded callers use
 `Engine::open_with_data_dir(EngineConfig::default(), Some(path))`.
-The data directory is locked against concurrent opens. LuxDB persists logical
-databases, accounts, schemas, rows, counters, views, and index comments.
-
-The synchronous engine writes incremental changes before publishing the
-new SQL state. Its version-2 format rejects legacy unversioned stores and
-`transaction-image.json`; there is no automatic migration for old
-development data. The async LuxDB adapter uses a separate storage layout;
-its directory is not interchangeable with the synchronous engine's directory.
-
-The current LuxDB adapter uses command pipelines, so persistence does not
-guarantee crash-atomic multi-key commits or synchronous durability. The
-synchronous engine stops accepting operations after a persistence error and
-requires reopening; a partial storage write may remain. Writes can also copy
-an affected table and compare its rows linearly.
+RocksDB locks the data directory against concurrent opens and persists logical
+databases, accounts, schemas, complete rows, counters, views, and index
+comments. RocksDB write batches apply each SQL commit atomically. Existing
+data directories are not migrated automatically; start with a fresh directory.
+The synchronous engine stops accepting operations after a persistence error
+and requires reopening. Writes can also copy an affected table and compare its
+rows linearly.
 
 ### Maintenance, seeding, and snapshots
 
@@ -564,11 +557,11 @@ are not guarantees for the current checkout.
 ```text
 src/sql/engine/          SQL evaluation, transactions, catalog, and authorization
 src/async_engine.rs      Async wrapper, storage coordination, and execution filters
-src/storage/            LuxDB integration and public AsyncStorage contract
+src/storage/            RocksDB integration and public AsyncStorage contract
 src/server/             MySQL wire protocol, authentication, debug/search HTTP
 src/lib.rs              Public exports, CLI, and REPL
 src/bin/sqwl.rs          Executable entry point
-src/vendor/             Vendored LuxDB and wire-server implementations
+src/vendor/             Vendored wire-server implementation
 examples/               JSON and CSV custom storage examples
 docs/                   Library guides
 tests/                  Engine, wire, ORM, and compatibility suites

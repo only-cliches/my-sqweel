@@ -1,28 +1,27 @@
 # Async storage and custom backends
 
 `AsyncEngine<S>` has one active storage backend. `S` implements the native
-async `AsyncStorage` trait. The crate supplies `LuxStorage`; applications can
+async `AsyncStorage` trait. The crate supplies `RocksDbStorage`; applications can
 implement the trait for a CSV collection, an HTTP service, an object store, or
 another database.
 
 The interface is table-oriented. A backend is never asked to produce a whole
 `EngineState`, a complete table, or a serialized engine snapshot.
 
-## Use the bundled Lux backend
+## Use the bundled RocksDB backend
 
 ```rust,no_run
 use my_sqweel::AsyncEngine;
 use my_sqweel::sql::engine::EngineConfig;
-use my_sqweel::storage::LuxStorage;
+use my_sqweel::storage::RocksDbStorage;
 
-async fn open() -> anyhow::Result<AsyncEngine<LuxStorage>> {
-    let storage = LuxStorage::open(Some(".my-sqweel".into())).await?;
+async fn open() -> anyhow::Result<AsyncEngine<RocksDbStorage>> {
+    let storage = RocksDbStorage::open(Some(".my-sqweel".into())).await?;
     AsyncEngine::open(EngineConfig::default(), storage).await
 }
 ```
 
-Pass `None` to `LuxStorage::open` for an in-memory backend. `AsyncEngine::open_lux`
-combines these two calls when Lux is the selected backend.
+Pass `None` to `RocksDbStorage::open` to use a temporary database directory that is removed when the storage is dropped. `AsyncEngine::open_rocksdb` combines these calls for the bundled RocksDB backend.
 
 ## Storage contract
 

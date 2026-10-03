@@ -3,8 +3,8 @@
 ## Directory-backed synchronous engine
 
 Use `Engine::open_with_data_dir` for durable local development state. MySqweel
-opens a locked embedded Lux store in that directory; a second process cannot
-open the same directory at the same time.
+opens a RocksDB store in that directory; RocksDB prevents a second process
+from opening the same directory concurrently.
 
 ```rust,no_run
 use my_sqweel::sql::engine::{Engine, EngineConfig};

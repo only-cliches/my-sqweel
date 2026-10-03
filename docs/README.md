@@ -22,7 +22,7 @@ belongs behind an async boundary or when execution filters are needed.
 - `my_sqweel::sql::engine::Engine`: synchronous embedded engine and sessions.
 - `my_sqweel::AsyncEngine<S>`: asynchronous engine using one `AsyncStorage`
   backend.
-- `my_sqweel::storage::LuxStorage`: the bundled async backend.
+- `my_sqweel::storage::RocksDbStorage`: the bundled async backend.
 - `my_sqweel::server`: MariaDB wire server and debug/search HTTP server.
 - `my_sqweel::model::StoredRow` and `my_sqweel::schema::*`: serializable row
   and schema types used in snapshots and state images.

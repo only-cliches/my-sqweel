@@ -575,7 +575,7 @@ pub fn spawn(addr: SocketAddr, engine: SharedEngine) -> DebugHttpHandle {
     let join = thread::spawn(move || {
         // Keep one engine reference outside the async runtime. The debug state's
         // reference is dropped while the runtime is still active; retaining this
-        // guard ensures the final Engine/Lux cleanup runs after block_on returns.
+        // guard ensures the final Engine/storage cleanup runs after block_on returns.
         let engine_guard = engine.clone();
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()

@@ -1,6 +1,6 @@
 mod common;
 
-use common::{temp_lux_dir, test_lock};
+use common::{temp_storage_dir, test_lock};
 use my_sqweel::sql::engine::{Engine, EngineConfig};
 
 #[test]
@@ -124,9 +124,9 @@ fn queries_materialize_rows_against_current_schema_without_rewriting_storage() {
 }
 
 #[test]
-fn lux_storage_rehydrates_tables_and_rows_from_configured_directory() {
+fn rocksdb_storage_rehydrates_tables_and_rows_from_configured_directory() {
     let _guard = test_lock();
-    let dir = temp_lux_dir("rehydrate");
+    let dir = temp_storage_dir("rehydrate");
 
     {
         let engine = Engine::open_with_data_dir(EngineConfig::default(), Some(&dir)).unwrap();
@@ -156,9 +156,9 @@ fn lux_storage_rehydrates_tables_and_rows_from_configured_directory() {
 }
 
 #[test]
-fn lux_storage_rejects_second_open_of_configured_directory() {
+fn rocksdb_storage_rejects_second_open_of_configured_directory() {
     let _guard = test_lock();
-    let dir = temp_lux_dir("lock");
+    let dir = temp_storage_dir("lock");
 
     let engine = Engine::open_with_data_dir(EngineConfig::default(), Some(&dir)).unwrap();
     let err = match Engine::open_with_data_dir(EngineConfig::default(), Some(&dir)) {
@@ -175,9 +175,9 @@ fn lux_storage_rejects_second_open_of_configured_directory() {
 }
 
 #[test]
-fn lux_storage_rehydrates_incremental_mutations() {
+fn rocksdb_storage_rehydrates_incremental_mutations() {
     let _guard = test_lock();
-    let dir = temp_lux_dir("incremental");
+    let dir = temp_storage_dir("incremental");
 
     {
         let engine = Engine::open_with_data_dir(EngineConfig::default(), Some(&dir)).unwrap();
@@ -229,9 +229,9 @@ fn lux_storage_rehydrates_incremental_mutations() {
 }
 
 #[test]
-fn lux_storage_preserves_rows_after_rejected_unique_conflict() {
+fn rocksdb_storage_preserves_rows_after_rejected_unique_conflict() {
     let _guard = test_lock();
-    let dir = temp_lux_dir("unique-conflict");
+    let dir = temp_storage_dir("unique-conflict");
 
     {
         let engine = Engine::open_with_data_dir(EngineConfig::default(), Some(&dir)).unwrap();

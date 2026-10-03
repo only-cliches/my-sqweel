@@ -1,7 +1,7 @@
-//! Incremental embedded Lux storage. SQL isolation is in-memory; crash-atomic
-//! multi-key commits and synchronous durability are deliberately not promised.
+//! Incremental RocksDB storage. SQL isolation is in-memory; commits use atomic
+//! RocksDB write batches.
 use super::*;
-use crate::storage::{LuxRedisStore, RedisStore, StorageWrite};
+use crate::storage::{RocksDbStore, StorageWrite};
 use serde::de::DeserializeOwned;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -9,7 +9,7 @@ const META: &str = "sqweel:v2";
 const KINDS: [&str; 5] = ["schemas", "rows", "auto_inc", "views", "index_comments"];
 
 pub(super) struct Persistence {
-    store: LuxRedisStore,
+    store: RocksDbStore,
     poisoned: AtomicBool,
 }
 
@@ -27,14 +27,13 @@ impl Persistence {
             ));
         }
         std::fs::create_dir_all(directory)?;
-        // Catalog verifiers and row contents must stay private even when Lux
-        // creates WAL/snapshot files using the process's ordinary umask.
+        // Catalog metadata and row contents stay private on disk.
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700))?;
         }
-        let store = LuxRedisStore::open(Some(path))?;
+        let store = RocksDbStore::open(Some(path))?;
         let metadata = store.hgetall(META)?;
         if metadata.is_empty() {
             if !store.keys("*")?.is_empty() {
@@ -111,8 +110,8 @@ impl Persistence {
 
     pub(super) fn commit(&self, before: &Committed, after: &Committed) -> Result<()> {
         let writes = changes(before, after)?;
-        // Lux's pipeline can apply a prefix before an I/O/command error. Keep
-        // the previous SQL state visible and refuse further work after failure.
+        // Keep the previous SQL state visible and refuse further work after a
+        // failed RocksDB batch.
         if let Err(error) = self.store.write_batch(writes) {
             self.poisoned.store(true, Ordering::Release);
             return Err(error);
@@ -298,31 +297,33 @@ mod tests {
     }
 
     #[test]
-    fn lux_command_errors_poison_without_publishing_sql_state() {
+    fn rocksdb_persists_each_changed_row_as_one_value() {
         let directory =
-            std::env::temp_dir().join(format!("sqweel-lux-failure-{}", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("sqweel-rocksdb-row-{}", uuid::Uuid::new_v4()));
         let engine =
             Engine::open_with_data_dir(EngineConfig::mysql_strict(), directory.to_str()).unwrap();
         engine
-            .execute_sql("CREATE TABLE items(id INT PRIMARY KEY)")
+            .execute_sql("CREATE TABLE items(id INT PRIMARY KEY, value TEXT)")
             .unwrap();
-        let persistence = engine.shared.persistence.as_ref().unwrap();
-        // Deliberately make a rows hash the wrong Lux type to exercise command-level
-        // errors embedded in an otherwise successfully executed pipeline.
-        persistence
+        engine
+            .execute_sql("INSERT INTO items VALUES(1, 'whole row')")
+            .unwrap();
+        engine
+            .execute_sql("UPDATE items SET value='updated row' WHERE id=1")
+            .unwrap();
+        let stored = engine
+            .shared
+            .persistence
+            .as_ref()
+            .unwrap()
             .store
-            .sadd(&key("app", "rows"), "wrong-type")
+            .hgetall(&key("app", "rows"))
             .unwrap();
-        assert!(engine.execute_sql("INSERT INTO items VALUES(1)").is_err());
-        assert!(persistence.is_poisoned());
-        assert!(
-            engine.shared.committed.lock().databases["app"]
-                .rows
-                .get("items")
-                .map(|rows| rows.is_empty())
-                .unwrap_or(true)
-        );
-        assert!(engine.execute_sql("SELECT * FROM items").is_err());
+        assert_eq!(stored.len(), 1);
+        let row: StoredRow = serde_json::from_str(stored.values().next().unwrap()).unwrap();
+        assert_eq!(row.data.len(), 2);
+        assert_eq!(row.data["value"], "updated row");
+        assert_eq!(row.table, "items");
         drop(engine);
         std::fs::remove_dir_all(directory).unwrap();
     }
@@ -344,9 +345,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn lux_opens_commits_and_closes_inside_async_runtime() {
+    async fn rocksdb_opens_commits_and_closes_inside_async_runtime() {
         let directory =
-            std::env::temp_dir().join(format!("sqweel-async-lux-{}", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("sqweel-async-rocksdb-{}", uuid::Uuid::new_v4()));
         {
             let engine =
                 Engine::open_with_data_dir(EngineConfig::mysql_strict(), directory.to_str())

@@ -279,6 +279,13 @@ features = ["full"]
 [dependencies.tokio-tungstenite]
 version = "0.24"
 
+[dependencies.rust-rocksdb]
+version = "0.53"
+default-features = false
+
+[dependencies.tempfile]
+version = "3"
+
 [dependencies.tracing]
 version = "0.1"
 
@@ -307,9 +314,6 @@ version = "1"
 [dev-dependencies.rsa]
 version = "0.9"
 features = ["pem"]
-
-[dev-dependencies.tempfile]
-version = "3"
 
 [[test]]
 name = "database_isolation"

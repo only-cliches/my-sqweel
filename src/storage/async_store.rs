@@ -15,7 +15,7 @@ use serde_json::Value;
 use crate::model::StoredRow;
 use crate::schema::TableSchemaHint;
 
-use super::{LuxRedisStore, RedisStore, StorageWrite};
+use super::{RocksDbStore, StorageWrite};
 
 const CATALOG_KEY: &str = "sqweel:async:v2:catalog";
 const TABLES_KEY: &str = "sqweel:async:v2:tables";
@@ -137,29 +137,29 @@ pub trait AsyncStorage: Send + Sync + 'static {
     async fn commit(&self, batch: StorageBatch) -> Result<()>;
 }
 
-/// The built-in async backend, backed by the embedded Lux store.
+/// The built-in async backend, backed by RocksDB.
 #[derive(Clone)]
-pub struct LuxStorage {
-    inner: Arc<LuxRedisStore>,
+pub struct RocksDbStorage {
+    inner: Arc<RocksDbStore>,
 }
 
-impl LuxStorage {
+impl RocksDbStorage {
     pub async fn open(data_dir: Option<PathBuf>) -> Result<Self> {
         let inner = tokio::task::spawn_blocking(move || {
             let path = data_dir
                 .as_ref()
                 .map(|path| path.to_string_lossy().into_owned());
-            LuxRedisStore::open(path.as_deref())
+            RocksDbStore::open(path.as_deref())
         })
         .await
-        .map_err(|error| anyhow!("Lux storage worker failed: {error}"))??;
+        .map_err(|error| anyhow!("RocksDB storage worker failed: {error}"))??;
         Ok(Self {
             inner: Arc::new(inner),
         })
     }
 }
 
-impl AsyncStorage for LuxStorage {
+impl AsyncStorage for RocksDbStorage {
     async fn load_catalog(&self) -> Result<Option<StorageCatalog>> {
         let store = self.inner.clone();
         tokio::task::spawn_blocking(move || {
@@ -170,7 +170,7 @@ impl AsyncStorage for LuxStorage {
                 .transpose()
         })
         .await
-        .map_err(|error| anyhow!("Lux storage worker failed: {error}"))?
+        .map_err(|error| anyhow!("RocksDB storage worker failed: {error}"))?
     }
 
     async fn list_tables(&self, database: &str) -> Result<Vec<String>> {
@@ -186,7 +186,7 @@ impl AsyncStorage for LuxStorage {
                 .collect())
         })
         .await
-        .map_err(|error| anyhow!("Lux storage worker failed: {error}"))?
+        .map_err(|error| anyhow!("RocksDB storage worker failed: {error}"))?
     }
 
     async fn load_table(&self, database: &str, table: &str) -> Result<Option<TableState>> {
@@ -200,7 +200,7 @@ impl AsyncStorage for LuxStorage {
                 .transpose()
         })
         .await
-        .map_err(|error| anyhow!("Lux storage worker failed: {error}"))?
+        .map_err(|error| anyhow!("RocksDB storage worker failed: {error}"))?
     }
 
     async fn scan_rows(&self, scan: RowScan) -> Result<RowPage> {
@@ -218,7 +218,7 @@ impl AsyncStorage for LuxStorage {
             })
         })
         .await
-        .map_err(|error| anyhow!("Lux storage worker failed: {error}"))?
+        .map_err(|error| anyhow!("RocksDB storage worker failed: {error}"))?
     }
 
     async fn commit(&self, batch: StorageBatch) -> Result<()> {
@@ -226,13 +226,13 @@ impl AsyncStorage for LuxStorage {
             return Ok(());
         }
         let store = self.inner.clone();
-        tokio::task::spawn_blocking(move || store.write_batch(lux_writes(batch)?))
+        tokio::task::spawn_blocking(move || store.write_batch(rocks_writes(batch, &store)?))
             .await
-            .map_err(|error| anyhow!("Lux storage worker failed: {error}"))?
+            .map_err(|error| anyhow!("RocksDB storage worker failed: {error}"))?
     }
 }
 
-fn lux_writes(batch: StorageBatch) -> Result<Vec<StorageWrite>> {
+fn rocks_writes(batch: StorageBatch, store: &RocksDbStore) -> Result<Vec<StorageWrite>> {
     let mut writes = Vec::new();
     for mutation in batch.metadata {
         match mutation {
@@ -241,7 +241,21 @@ fn lux_writes(batch: StorageBatch) -> Result<Vec<StorageWrite>> {
                 field: "catalog".into(),
                 value: serde_json::to_string(&catalog)?,
             }),
-            MetadataMutation::DeleteDatabase { .. } => {}
+            MetadataMutation::DeleteDatabase { database } => {
+                for field in store.hgetall(TABLES_KEY)?.into_keys() {
+                    if let Some((candidate, table)) = decode_table_key(&field)
+                        && candidate == database
+                    {
+                        writes.push(StorageWrite::HDel {
+                            key: TABLES_KEY.into(),
+                            field,
+                        });
+                        writes.push(StorageWrite::Del {
+                            key: rows_key(&database, &table)?,
+                        });
+                    }
+                }
+            }
             MetadataMutation::PutTable {
                 database,
                 table,

@@ -11,7 +11,7 @@ use serde_json::Value;
 
 use crate::sql::engine::{Engine, EngineConfig, EngineSession, EngineState, QueryResult};
 use crate::storage::{
-    AsyncStorage, DatabaseMetadata, LuxStorage, MetadataMutation, RowMutation, RowScan,
+    AsyncStorage, DatabaseMetadata, MetadataMutation, RocksDbStorage, RowMutation, RowScan,
     StorageBatch, StorageCatalog, TableState,
 };
 
@@ -380,9 +380,9 @@ async fn commit_changes<S: AsyncStorage>(
 /// An async MySqweel engine with one active storage backend.
 ///
 /// `S` is generic, so an application can use a CSV, HTTP, or database-backed
-/// implementation of [`AsyncStorage`].  The built-in [`LuxStorage`] is the
+/// implementation of [`AsyncStorage`].  The built-in [`RocksDbStorage`] is the
 /// only backend supplied by this crate.
-pub struct AsyncEngine<S = LuxStorage> {
+pub struct AsyncEngine<S = RocksDbStorage> {
     inner: Arc<Inner<S>>,
 }
 
@@ -486,12 +486,12 @@ impl<S: AsyncStorage> AsyncEngine<S> {
     }
 }
 
-impl AsyncEngine<LuxStorage> {
-    pub async fn open_lux(
+impl AsyncEngine<RocksDbStorage> {
+    pub async fn open_rocksdb(
         config: EngineConfig,
         data_dir: Option<std::path::PathBuf>,
     ) -> Result<Self> {
-        Self::open(config, LuxStorage::open(data_dir).await?).await
+        Self::open(config, RocksDbStorage::open(data_dir).await?).await
     }
 }
 
@@ -1114,10 +1114,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn lux_storage_reopens_async_engine_state() {
+    async fn rocksdb_storage_reopens_async_engine_state() {
         let directory = tempfile::tempdir().unwrap();
         {
-            let storage = LuxStorage::open(Some(directory.path().to_path_buf()))
+            let storage = RocksDbStorage::open(Some(directory.path().to_path_buf()))
                 .await
                 .unwrap();
             let engine = AsyncEngine::open(EngineConfig::default(), storage)
@@ -1133,7 +1133,7 @@ mod tests {
                 .unwrap();
         }
 
-        let storage = LuxStorage::open(Some(directory.path().to_path_buf()))
+        let storage = RocksDbStorage::open(Some(directory.path().to_path_buf()))
             .await
             .unwrap();
         let engine = AsyncEngine::open(EngineConfig::default(), storage)
@@ -1147,8 +1147,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn lux_storage_scans_rows_in_bounded_pages() {
-        let storage = LuxStorage::open(None).await.unwrap();
+    async fn rocksdb_storage_scans_rows_in_bounded_pages() {
+        let storage = RocksDbStorage::open(None).await.unwrap();
         let engine = AsyncEngine::open(EngineConfig::default(), storage.clone())
             .await
             .unwrap();

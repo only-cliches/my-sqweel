@@ -659,7 +659,7 @@ fn print_help() {
         "\n",
         "Options:\n",
         "  --bind <addr>                 MySQL bind address (default 127.0.0.1:3307)\n",
-        "  --data-dir <dir>              locked Lux-backed data directory\n",
+        "  --data-dir <dir>              locked RocksDB data directory\n",
         "  --allow-remote                allow non-loopback bind addresses\n",
         "  --default-time-zone <offset>   initial session timezone (default +00:00)\n",
         "  --debug-bind <addr>           debug HTTP bind address (default: bind port + 100)\n",

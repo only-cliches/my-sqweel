@@ -79,10 +79,10 @@ an internal lock across an await.
 
 ```rust,no_run
 # use my_sqweel::{AsyncEngine, QueryFilter, ResultFilter};
-# use my_sqweel::storage::LuxStorage;
+# use my_sqweel::storage::RocksDbStorage;
 # struct Audit; impl QueryFilter for Audit { async fn filter(&self, _: &mut my_sqweel::QueryRequest) -> anyhow::Result<my_sqweel::QueryFilterAction> { Ok(my_sqweel::QueryFilterAction::Continue) } }
 # struct Redact; impl ResultFilter for Redact { async fn filter(&self, _: &my_sqweel::QueryRequest, _: &mut Vec<my_sqweel::sql::engine::QueryResult>) -> anyhow::Result<my_sqweel::ResultFilterAction> { Ok(my_sqweel::ResultFilterAction::Continue) } }
-# fn configure(db: &AsyncEngine<LuxStorage>) {
+# fn configure(db: &AsyncEngine<RocksDbStorage>) {
 db.query_filters().push(Audit);
 db.result_filters().push(Redact);
 # }

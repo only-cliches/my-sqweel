@@ -153,7 +153,7 @@ fn log_runtime(cfg: &ServerConfig) {
     }
 
     if let Some(path) = &cfg.data_dir {
-        tracing::info!(data_dir = %path, "embedded Lux incremental persistence enabled");
+        tracing::info!(data_dir = %path, "embedded RocksDB incremental persistence enabled");
     } else {
         tracing::info!("running with in-memory transactional storage");
     }

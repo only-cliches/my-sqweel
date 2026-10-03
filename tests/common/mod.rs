@@ -184,7 +184,7 @@ pub fn test_lock() -> MutexGuard<'static, ()> {
 }
 
 #[allow(dead_code)]
-pub fn temp_lux_dir(name: &str) -> String {
+pub fn temp_storage_dir(name: &str) -> String {
     std::env::temp_dir()
         .join(format!(
             "my-sqweel-{name}-{}-{}",
