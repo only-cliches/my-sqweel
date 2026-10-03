@@ -22,7 +22,7 @@ fn run() -> anyhow::Result<()> {
 ## Sessions and transactions
 
 Create one session for each independent connection or caller. Direct calls on
-`Engine::execute_sql` share its default session; use a session when a caller
+`Engine::execute_sql` create a fresh session for each call; use an explicit session when a caller
 needs transaction, prepared-statement, or session-variable state.
 
 ```rust
@@ -34,11 +34,12 @@ fn transfer() -> anyhow::Result<()> {
     db.execute_sql("CREATE TABLE balances (id INT PRIMARY KEY, amount INT)")?;
     db.execute_sql("INSERT INTO balances VALUES (1, 100), (2, 0)")?;
 
-    db.execute_sql("START TRANSACTION")?;
-    db.execute_sql("UPDATE balances SET amount = amount - 25 WHERE id = 1")?;
-    db.execute_sql("SAVEPOINT credited")?;
-    db.execute_sql("UPDATE balances SET amount = amount + 25 WHERE id = 2")?;
-    db.execute_sql("COMMIT")?;
+    let mut session = db.session();
+    session.execute_sql("START TRANSACTION")?;
+    session.execute_sql("UPDATE balances SET amount = amount - 25 WHERE id = 1")?;
+    session.execute_sql("SAVEPOINT credited")?;
+    session.execute_sql("UPDATE balances SET amount = amount + 25 WHERE id = 2")?;
+    session.execute_sql("COMMIT")?;
     Ok(())
 }
 ```

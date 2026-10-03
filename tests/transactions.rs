@@ -329,8 +329,13 @@ impl TestDirectory {
         Self(std::env::temp_dir().join(format!("sqweel-transactions-{}", uuid::Uuid::new_v4())))
     }
     fn open(&self) -> Engine {
-        Engine::open_with_data_dir(EngineConfig::mysql_strict(), Some(self.0.to_str().unwrap()))
-            .unwrap()
+        Engine::open(
+            EngineConfig::mysql_strict(),
+            (Some(self.0.to_str().unwrap())).map_or(my_sqweel::Storage::Memory, |path| {
+                my_sqweel::Storage::RocksDb(path.into())
+            }),
+        )
+        .unwrap()
     }
 }
 impl Drop for TestDirectory {
@@ -840,12 +845,12 @@ fn configured_timezone_is_inherited_and_session_changes_are_isolated() {
 fn invalid_default_timezones_are_rejected() {
     for zone in ["SYSTEM", "-14:00", "+14:01", "+00:60", "10:00", "-1:00"] {
         assert!(
-            Engine::open_with_data_dir(
+            Engine::open(
                 EngineConfig {
                     default_time_zone: Some(zone.into()),
                     ..EngineConfig::default()
                 },
-                None
+                my_sqweel::Storage::Memory
             )
             .is_err(),
             "{zone}"

@@ -300,17 +300,18 @@ fn resolves_explicit_default_without_overwriting_explicit_null() {
 fn supports_last_insert_id_and_scalar_expressions() {
     let _guard = test_lock();
     let engine = Engine::default();
-    engine
+    let mut session = engine.session();
+    session
         .execute_sql("CREATE TABLE users (id BIGINT PRIMARY KEY AUTO_INCREMENT, name TEXT, nickname TEXT, score BIGINT DEFAULT 10);")
         .unwrap();
 
-    let insert = engine
+    let insert = session
         .execute_sql("INSERT INTO users (name, nickname) VALUES ('Alice', NULL), ('Bob', 'bobby');")
         .unwrap();
     assert_eq!(insert[0].rows_affected, 2);
     assert_eq!(insert[0].last_insert_id, 1);
 
-    let last_insert_id = engine
+    let last_insert_id = session
         .execute_sql("SELECT LAST_INSERT_ID() AS inserted")
         .unwrap();
     assert_eq!(
@@ -318,7 +319,7 @@ fn supports_last_insert_id_and_scalar_expressions() {
         Some(1)
     );
 
-    let scalar = engine
+    let scalar = session
         .execute_sql("SELECT 1 + 2 AS total, CONCAT('w', 'db') AS label, COALESCE(NULL, 'fallback') AS fallback")
         .unwrap();
     assert_eq!(scalar[0].rows[0].get("total").unwrap().as_i64(), Some(3));
@@ -331,7 +332,7 @@ fn supports_last_insert_id_and_scalar_expressions() {
         Some("fallback")
     );
 
-    let row_expr = engine
+    let row_expr = session
         .execute_sql("SELECT id, score + 5 AS bumped, CONCAT(name, '-', IFNULL(nickname, 'none')) AS label FROM users WHERE id = 1")
         .unwrap();
     assert_eq!(
@@ -343,26 +344,26 @@ fn supports_last_insert_id_and_scalar_expressions() {
         Some("Alice-none")
     );
 
-    let ignored = engine
+    let ignored = session
         .execute_sql("INSERT IGNORE INTO users (id, name) VALUES (1, 'Ignored');")
         .unwrap();
     assert_eq!(ignored[0].rows_affected, 0);
     assert_eq!(ignored[0].last_insert_id, 0);
 
-    engine
+    session
         .execute_sql(
             "CREATE TABLE auto_users (id BIGINT PRIMARY KEY AUTO_INCREMENT, email TEXT UNIQUE, name TEXT);",
         )
         .unwrap();
-    engine
+    session
         .execute_sql(
             "INSERT INTO auto_users (email, name) VALUES ('a@example.com', 'Alice'), ('b@example.com', 'Bob');",
         )
         .unwrap();
-    engine
+    session
         .execute_sql("INSERT IGNORE INTO auto_users (email) VALUES ('a@example.com');")
         .unwrap();
-    let updated = engine
+    let updated = session
         .execute_sql(
             "INSERT INTO auto_users (email, name) VALUES ('a@example.com', 'Updated') \
              ON DUPLICATE KEY UPDATE name = VALUES(name);",
@@ -370,7 +371,7 @@ fn supports_last_insert_id_and_scalar_expressions() {
         .unwrap();
     assert_eq!(updated[0].rows_affected, 2);
     assert_eq!(updated[0].last_insert_id, 1);
-    let duplicate_last_id = engine
+    let duplicate_last_id = session
         .execute_sql("SELECT LAST_INSERT_ID() AS inserted")
         .unwrap();
     assert_eq!(
@@ -380,12 +381,12 @@ fn supports_last_insert_id_and_scalar_expressions() {
             .as_u64(),
         Some(1)
     );
-    let replaced = engine
+    let replaced = session
         .execute_sql("REPLACE INTO auto_users (email) VALUES ('a@example.com');")
         .unwrap();
     assert_eq!(replaced[0].rows_affected, 2);
     assert_eq!(replaced[0].last_insert_id, 5);
-    let last_auto_id = engine
+    let last_auto_id = session
         .execute_sql("SELECT LAST_INSERT_ID() AS inserted")
         .unwrap();
     assert_eq!(
@@ -398,28 +399,29 @@ fn supports_last_insert_id_and_scalar_expressions() {
 fn explicit_auto_increment_values_set_last_insert_id() {
     let _guard = test_lock();
     let engine = Engine::default();
-    engine
+    let mut session = engine.session();
+    session
         .execute_sql("CREATE TABLE parents (id BIGINT PRIMARY KEY AUTO_INCREMENT);")
         .unwrap();
-    engine
+    session
         .execute_sql(
             "CREATE TABLE children (id BIGINT PRIMARY KEY AUTO_INCREMENT, parent_id BIGINT);",
         )
         .unwrap();
 
-    let parent = engine
+    let parent = session
         .execute_sql("INSERT INTO parents (id) VALUES (1);")
         .unwrap();
     assert_eq!(parent[0].rows_affected, 1);
     assert_eq!(parent[0].last_insert_id, 1);
 
-    let child = engine
+    let child = session
         .execute_sql("INSERT INTO children (id, parent_id) VALUES (1, 1);")
         .unwrap();
     assert_eq!(child[0].rows_affected, 1);
     assert_eq!(child[0].last_insert_id, 1);
 
-    let last_insert_id = engine
+    let last_insert_id = session
         .execute_sql("SELECT LAST_INSERT_ID() AS inserted")
         .unwrap();
     assert_eq!(

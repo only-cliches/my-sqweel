@@ -3,12 +3,9 @@
 mod common;
 
 use std::collections::BTreeMap;
-use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::Duration;
 
-use my_sqweel::server::WireServer;
 use my_sqweel::sql::engine::{Engine, EngineConfig};
 use mysql::prelude::Queryable;
 use mysql::{Conn, Opts, OptsBuilder, Value};
@@ -181,13 +178,19 @@ fn replay(url: &str, case: &Case) -> Result<Vec<Observation>, String> {
     Ok(observations)
 }
 
-fn start_mysqweel() -> String {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    let engine = Arc::new(Engine::new(EngineConfig::mysql_strict()));
+fn start_mysqweel() -> (String, my_sqweel::SqlEndpoint) {
+    let engine = Engine::new(EngineConfig::mysql_strict());
     engine.execute_sql("CREATE DATABASE test").unwrap();
-    std::thread::spawn(move || WireServer::new(engine).serve_listener(listener).unwrap());
-    format!("mysql://root@{address}/test")
+    let endpoint = engine
+        .spawn_sql(my_sqweel::SqlEndpointConfig::new(
+            "127.0.0.1:0".parse().unwrap(),
+            my_sqweel::server::Authentication::AllowAll,
+        ))
+        .unwrap();
+    (
+        format!("mysql://root@{}/test", endpoint.local_addr()),
+        endpoint,
+    )
 }
 
 fn load_case(path: &Path) -> Result<Case, String> {
@@ -255,7 +258,8 @@ fn run_case(path: &Path, baseline: &str) -> serde_json::Value {
             } else if std::env::var("QUERY_COVERAGE_MODE").as_deref() == Ok("baseline") {
                 serde_json::json!({"status": "pass", "baseline": expected})
             } else {
-                match replay(&start_mysqweel(), &case) {
+                let (url, _endpoint) = start_mysqweel();
+                match replay(&url, &case) {
                     Ok(actual) => {
                         serde_json::json!({"status": if expected == actual {"pass"} else {"mismatch"}, "baseline": expected, "mysqweel": actual})
                     }
@@ -351,7 +355,8 @@ fn comparator_preserves_semantic_differences() {
 
 #[test]
 fn wire_comparison_detects_order_duplicates_errors_and_rollback() {
-    let mut conn = connect(&start_mysqweel()).unwrap();
+    let (url, _endpoint) = start_mysqweel();
+    let mut conn = connect(&url).unwrap();
     conn.query_drop("CREATE TABLE cmp (id INT PRIMARY KEY, value INT)")
         .unwrap();
     conn.query_drop("INSERT INTO cmp VALUES (1, 10), (2, 20)")

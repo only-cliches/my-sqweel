@@ -150,8 +150,13 @@ impl Directory {
         Self(std::env::temp_dir().join(format!("sqweel-catalog-{}", uuid::Uuid::new_v4())))
     }
     fn open(&self) -> Engine {
-        Engine::open_with_data_dir(EngineConfig::mysql_strict(), Some(self.0.to_str().unwrap()))
-            .unwrap()
+        Engine::open(
+            EngineConfig::mysql_strict(),
+            (Some(self.0.to_str().unwrap())).map_or(my_sqweel::Storage::Memory, |path| {
+                my_sqweel::Storage::RocksDb(path.into())
+            }),
+        )
+        .unwrap()
     }
 }
 impl Drop for Directory {
@@ -508,8 +513,13 @@ fn separately_named_indexes_on_same_columns_survive_drop_and_reopen() {
     let directory =
         std::env::temp_dir().join(format!("sqweel-index-names-{}", uuid::Uuid::new_v4()));
     {
-        let engine =
-            Engine::open_with_data_dir(EngineConfig::mysql_strict(), directory.to_str()).unwrap();
+        let engine = Engine::open(
+            EngineConfig::mysql_strict(),
+            (directory.to_str()).map_or(my_sqweel::Storage::Memory, |path| {
+                my_sqweel::Storage::RocksDb(path.into())
+            }),
+        )
+        .unwrap();
         engine.execute_sql("CREATE TABLE records(id INT PRIMARY KEY,value INT); CREATE INDEX first_idx ON records(value); CREATE INDEX second_idx ON records(value); INSERT INTO records VALUES(1,10)").unwrap();
         assert_eq!(engine.execute_sql("SELECT INDEX_NAME FROM information_schema.STATISTICS WHERE TABLE_NAME='records' AND INDEX_NAME!='PRIMARY'").unwrap()[0].rows.len(), 2);
         engine
@@ -517,8 +527,13 @@ fn separately_named_indexes_on_same_columns_survive_drop_and_reopen() {
             .unwrap();
     }
     {
-        let engine =
-            Engine::open_with_data_dir(EngineConfig::mysql_strict(), directory.to_str()).unwrap();
+        let engine = Engine::open(
+            EngineConfig::mysql_strict(),
+            (directory.to_str()).map_or(my_sqweel::Storage::Memory, |path| {
+                my_sqweel::Storage::RocksDb(path.into())
+            }),
+        )
+        .unwrap();
         let rows = engine.execute_sql("SELECT INDEX_NAME FROM information_schema.STATISTICS WHERE TABLE_NAME='records' AND INDEX_NAME!='PRIMARY'").unwrap().remove(0).rows;
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["INDEX_NAME"], "second_idx");

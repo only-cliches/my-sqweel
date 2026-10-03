@@ -1,8 +1,8 @@
 # Execution filters
 
-`AsyncEngine` exposes two mutable, ordered pipelines:
+`Engine` exposes two mutable, ordered pipelines:
 
-- `engine.query_filters()` runs before authorization and SQL execution.
+- `engine.query_filters()` runs after initial authorization and before SQL execution.
 - `engine.result_filters()` runs after successful execution, before the caller
   receives results.
 
@@ -78,11 +78,10 @@ awaiting a filter, so application code can update the pipeline without holding
 an internal lock across an await.
 
 ```rust,no_run
-# use my_sqweel::{AsyncEngine, QueryFilter, ResultFilter};
-# use my_sqweel::storage::RocksDbStorage;
+# use my_sqweel::{Engine, QueryFilter, ResultFilter};
 # struct Audit; impl QueryFilter for Audit { async fn filter(&self, _: &mut my_sqweel::QueryRequest) -> anyhow::Result<my_sqweel::QueryFilterAction> { Ok(my_sqweel::QueryFilterAction::Continue) } }
 # struct Redact; impl ResultFilter for Redact { async fn filter(&self, _: &my_sqweel::QueryRequest, _: &mut Vec<my_sqweel::sql::engine::QueryResult>) -> anyhow::Result<my_sqweel::ResultFilterAction> { Ok(my_sqweel::ResultFilterAction::Continue) } }
-# fn configure(db: &AsyncEngine<RocksDbStorage>) {
+# fn configure(db: &Engine) {
 db.query_filters().push(Audit);
 db.result_filters().push(Redact);
 # }
@@ -90,8 +89,8 @@ db.result_filters().push(Redact);
 
 ## Scope
 
-Filters are part of `AsyncEngine` and `AsyncEngineSession`. The current
-synchronous `Engine` and `server::WireServer` retain their compatibility API
-and do not invoke this async pipeline. Use the async embedded API when query
-or result filtering is required.
+The same filters run for synchronous calls, asynchronous calls, and every SQL endpoint. `request.context()` exposes an immutable session ID, current database, authenticated username and optional endpoint ID. Rewritten SQL is authorized again before execution; synthetic results require the original request to be authorized.
 
+Filters are trusted application code. They run on the engine's callback runtime. Calling database operations from inside a query, result or storage callback is rejected to prevent reentrant deadlocks. Query-hook subscribers run separately after publication and may query the engine.
+
+Read hooks see successfully filtered results. Result-filter rejection cannot undo an already committed write.

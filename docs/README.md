@@ -1,9 +1,6 @@
 # MySqweel library guide
 
-MySqweel is an embeddable MySQL/MariaDB-compatible development database. Use
-the synchronous `Engine` for in-process work and the built-in MariaDB wire
-server when existing clients need to connect. Use `AsyncEngine` when storage
-belongs behind an async boundary or when execution filters are needed.
+One cloneable `Engine` supports sync and async queries, memory or RocksDB storage, custom async storage, and independently scoped SQL endpoints.
 
 ## Choose an entry point
 
@@ -19,11 +16,9 @@ belongs behind an async boundary or when execution filters are needed.
 
 ## Public API map
 
-- `my_sqweel::sql::engine::Engine`: synchronous embedded engine and sessions.
-- `my_sqweel::AsyncEngine<S>`: asynchronous engine using one `AsyncStorage`
-  backend.
-- `my_sqweel::storage::RocksDbStorage`: the bundled async backend.
-- `my_sqweel::server`: MariaDB wire server and debug/search HTTP server.
+- `my_sqweel::{Engine, EngineSession, Storage}`: shared embedded database and sessions.
+- `my_sqweel::{SqlEndpoint, SqlEndpointConfig}`: owned SQL listeners.
+- `my_sqweel::server`: authentication and explicit debug/search HTTP APIs.
 - `my_sqweel::model::StoredRow` and `my_sqweel::schema::*`: serializable row
   and schema types used in snapshots and state images.
 

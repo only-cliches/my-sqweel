@@ -1414,11 +1414,7 @@ impl RawEngine {
                         let mut numbers = frame_rows
                             .iter()
                             .map(|index| {
-                                self.eval_expr_ctx(
-                                    &order.expr,
-                                    &rows[*index],
-                                    last_insert_id,
-                                )
+                                self.eval_expr_ctx(&order.expr, &rows[*index], last_insert_id)
                             })
                             .collect::<Result<Vec<_>>>()?
                             .into_iter()
@@ -1475,11 +1471,7 @@ impl RawEngine {
                         let mut values = frame_rows
                             .iter()
                             .map(|index| {
-                                self.eval_expr_ctx(
-                                    &order.expr,
-                                    &rows[*index],
-                                    last_insert_id,
-                                )
+                                self.eval_expr_ctx(&order.expr, &rows[*index], last_insert_id)
                             })
                             .collect::<Result<Vec<_>>>()?
                             .into_iter()
@@ -1718,7 +1710,6 @@ impl RawEngine {
         if let Some(schema) = self.schemas.get(&table) {
             columns.extend(ordered_schema_columns(&schema));
         }
-
     }
     fn select_result_metadata(
         &self,
@@ -1942,9 +1933,11 @@ impl RawEngine {
                 let branch_is_null = results
                     .iter()
                     .map(|result| matches!(result, Expr::Value(SqlValue::Null)))
-                    .chain(else_result.iter().map(|result| {
-                        matches!(result.as_ref(), Expr::Value(SqlValue::Null))
-                    }))
+                    .chain(
+                        else_result
+                            .iter()
+                            .map(|result| matches!(result.as_ref(), Expr::Value(SqlValue::Null))),
+                    )
                     .collect::<Vec<_>>();
                 let non_null_branch_metadata = branch_metadata
                     .iter()
@@ -2145,13 +2138,8 @@ impl RawEngine {
                             .iter()
                             .flatten()
                             .map(|argument| {
-                                self.expression_metadata(
-                                    select,
-                                    argument,
-                                    String::new(),
-                                    first_row,
-                                )
-                                .column_type
+                                self.expression_metadata(select, argument, String::new(), first_row)
+                                    .column_type
                             })
                             .collect::<Vec<_>>();
                         let has_case_argument = arguments
@@ -2223,12 +2211,7 @@ impl RawEngine {
                     }
                     "REPLACE" => {
                         if let Some(argument) = function_argument(function, 0).map(|argument| {
-                            self.expression_metadata(
-                                select,
-                                argument,
-                                String::new(),
-                                first_row,
-                            )
+                            self.expression_metadata(select, argument, String::new(), first_row)
                         }) {
                             metadata.nullable = argument.nullable;
                             metadata.unsigned = argument.unsigned;
@@ -2325,12 +2308,7 @@ impl RawEngine {
                     }
                     "PERCENTILE_DISC" => {
                         let argument = function.within_group.first().map(|order| {
-                            self.expression_metadata(
-                                select,
-                                &order.expr,
-                                String::new(),
-                                first_row,
-                            )
+                            self.expression_metadata(select, &order.expr, String::new(), first_row)
                         });
                         if let Some(input) = argument {
                             metadata.decimals = input.decimals;
@@ -5178,9 +5156,18 @@ impl RawEngine {
             _ => Err(anyhow!("unsupported join type")),
         }
     }
+    fn metadata_visible(&self, table: &str) -> bool {
+        self.visible_tables
+            .as_ref()
+            .is_none_or(|tables| tables.contains(table))
+    }
     pub(super) fn select_information_schema_tables(&self, select: &Select) -> Result<QueryResult> {
         let mut rows = Vec::new();
-        for table in self.schemas.iter() {
+        for table in self
+            .schemas
+            .iter()
+            .filter(|schema| self.metadata_visible(schema.key()))
+        {
             let mut row = Map::new();
             let table_rows = self
                 .rows
@@ -5282,7 +5269,11 @@ impl RawEngine {
         // database column's metadata before the ordinary virtual-table filter.
         let table_name = metadata_table_name(select.selection.as_ref());
         let mut rows = Vec::new();
-        for schema in self.schemas.iter() {
+        for schema in self
+            .schemas
+            .iter()
+            .filter(|schema| self.metadata_visible(schema.key()))
+        {
             if table_name
                 .as_ref()
                 .is_some_and(|name| !mysql_eq(&Value::String(schema.table.clone()), name))
@@ -5438,7 +5429,11 @@ impl RawEngine {
         select: &Select,
     ) -> Result<QueryResult> {
         let mut rows = Vec::new();
-        for schema in self.schemas.iter() {
+        for schema in self
+            .schemas
+            .iter()
+            .filter(|schema| self.metadata_visible(schema.key()))
+        {
             if !schema.primary_key.is_empty() {
                 let mut row = Map::new();
                 row.insert(
@@ -5489,7 +5484,11 @@ impl RawEngine {
                 rows.push(row);
             }
 
-            for foreign_key in &schema.foreign_keys {
+            for foreign_key in schema
+                .foreign_keys
+                .iter()
+                .filter(|key| self.metadata_visible(&key.referenced_table))
+            {
                 let mut row = Map::new();
                 row.insert(
                     "constraint_schema".to_string(),
@@ -5532,7 +5531,11 @@ impl RawEngine {
         select: &Select,
     ) -> Result<QueryResult> {
         let mut rows = Vec::new();
-        for schema in self.schemas.iter() {
+        for schema in self
+            .schemas
+            .iter()
+            .filter(|schema| self.metadata_visible(schema.key()))
+        {
             for (idx, column) in schema.primary_key.iter().enumerate() {
                 let mut row = key_column_usage_row(
                     &self.database_name,
@@ -5568,7 +5571,11 @@ impl RawEngine {
                     rows.push(row);
                 }
             }
-            for foreign_key in &schema.foreign_keys {
+            for foreign_key in schema
+                .foreign_keys
+                .iter()
+                .filter(|key| self.metadata_visible(&key.referenced_table))
+            {
                 for (idx, column) in foreign_key.columns.iter().enumerate() {
                     let referenced = foreign_key.referenced_columns.get(idx).cloned();
                     let mut row = key_column_usage_row(
@@ -5596,7 +5603,11 @@ impl RawEngine {
         select: &Select,
     ) -> Result<QueryResult> {
         let mut rows = Vec::new();
-        for schema in self.schemas.iter() {
+        for schema in self
+            .schemas
+            .iter()
+            .filter(|schema| self.metadata_visible(schema.key()))
+        {
             for index in &schema.indexes {
                 let index_name = index.name.clone();
                 for (idx, col) in index.columns.iter().enumerate() {
@@ -5657,7 +5668,11 @@ impl RawEngine {
         select: &Select,
     ) -> Result<QueryResult> {
         let mut rows = Vec::new();
-        for schema in self.schemas.iter() {
+        for schema in self
+            .schemas
+            .iter()
+            .filter(|schema| self.metadata_visible(schema.key()))
+        {
             for (idx, col) in schema.primary_key.iter().enumerate() {
                 rows.push(key_column_usage_row(
                     &self.database_name,
@@ -5683,7 +5698,11 @@ impl RawEngine {
                     ));
                 }
             }
-            for foreign_key in &schema.foreign_keys {
+            for foreign_key in schema
+                .foreign_keys
+                .iter()
+                .filter(|key| self.metadata_visible(&key.referenced_table))
+            {
                 for (idx, col) in foreign_key.columns.iter().enumerate() {
                     let referenced = foreign_key.referenced_columns.get(idx).cloned();
                     rows.push(key_column_usage_row(
@@ -5723,8 +5742,16 @@ impl RawEngine {
         select: &Select,
     ) -> Result<QueryResult> {
         let mut rows = Vec::new();
-        for schema in self.schemas.iter() {
-            for foreign_key in &schema.foreign_keys {
+        for schema in self
+            .schemas
+            .iter()
+            .filter(|schema| self.metadata_visible(schema.key()))
+        {
+            for foreign_key in schema
+                .foreign_keys
+                .iter()
+                .filter(|key| self.metadata_visible(&key.referenced_table))
+            {
                 let mut row = Map::new();
                 row.insert(
                     "constraint_catalog".to_string(),
@@ -5878,6 +5905,7 @@ impl RawEngine {
         let rows = self
             .views
             .iter()
+            .filter(|view| self.metadata_visible(view.key()))
             .map(|view| {
                 let definition = view.value().trim();
                 let view_definition = definition
@@ -6369,6 +6397,7 @@ impl RawEngine {
         let rows = self
             .schemas
             .iter()
+            .filter(|schema| self.metadata_visible(schema.key()))
             .map(|schema| {
                 let mut row = Map::new();
                 row.insert(columns[0].clone(), Value::String(schema.table.clone()));

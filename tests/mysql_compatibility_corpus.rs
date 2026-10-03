@@ -1,12 +1,9 @@
 mod common;
 
 use std::collections::BTreeMap;
-use std::net::TcpListener;
-use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use my_sqweel::server::WireServer;
 use my_sqweel::sql::engine::{Engine, EngineConfig};
 use mysql::prelude::Queryable;
 use mysql::{Opts, Pool, Row, Value as MyValue};
@@ -40,7 +37,7 @@ fn representative_query_corpus_meets_mysql_compatibility_floor() {
     let _guard = common::test_lock();
     let mysql_target = common::mysql_compare_target();
 
-    let mysqweel_url = start_mysqweel_server();
+    let (mysqweel_url, _endpoint) = start_mysqweel_server();
     let mysqweel_pool = Pool::new(Opts::from_url(&mysqweel_url).expect("valid MySqweel URL"))
         .expect("create MySqweel pool");
     let mut mysqweel = connect_with_retry(&mysqweel_pool, "MySqweel");
@@ -176,17 +173,19 @@ fn evaluate_cases(
         .collect()
 }
 
-fn start_mysqweel_server() -> String {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind local port");
-    let address = listener.local_addr().expect("read local address");
-    let engine = Arc::new(Engine::new(EngineConfig::mysql_strict()));
+fn start_mysqweel_server() -> (String, my_sqweel::SqlEndpoint) {
+    let engine = Engine::new(EngineConfig::mysql_strict());
     engine.execute_sql("CREATE DATABASE test").unwrap();
-    thread::spawn(move || {
-        WireServer::new(engine)
-            .serve_listener(listener)
-            .expect("MySqweel wire server should run");
-    });
-    format!("mysql://root@{address}/test")
+    let endpoint = engine
+        .spawn_sql(my_sqweel::SqlEndpointConfig::new(
+            "127.0.0.1:0".parse().unwrap(),
+            my_sqweel::server::Authentication::AllowAll,
+        ))
+        .unwrap();
+    (
+        format!("mysql://root@{}/test", endpoint.local_addr()),
+        endpoint,
+    )
 }
 
 fn connect_with_retry(pool: &Pool, label: &str) -> mysql::PooledConn {

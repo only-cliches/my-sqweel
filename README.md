@@ -28,19 +28,15 @@ MariaDB compatibility or production database durability and concurrency.
 
 ## Choose an API
 
-| Entry point | What it provides | Current boundary |
-| --- | --- | --- |
-| `Engine` / `EngineSession` | Synchronous embedded SQL, sessions, transactions, snapshots, and query events | In-memory execution; optional directory-backed RocksDB persistence |
-| `AsyncEngine<S>` / `AsyncEngineSession<S>` | Async storage integration and query/result filters | One `AsyncStorage` backend per instance; SQL evaluation is still synchronous |
-| `server::run` / `spawn_with_engine` | MySQL wire connections plus debug/search HTTP | Uses `Arc<Engine>`; does not invoke async execution filters or custom async storage |
-| `sqwl` | Server, SQL/maintenance REPL, and SQL inspection | Wraps the synchronous engine |
+| API | Purpose |
+| --- | --- |
+| `Engine` | Cloneable shared database; sync and async embedded queries |
+| `EngineSession` | Explicit connection state and transactions across sync/async calls |
+| `Engine::spawn_sql` / `spawn_sql_async` | Independent SQL endpoints with explicit authentication and scope ceilings |
+| `Storage::Memory` / `Storage::RocksDb(path)` / `Storage::custom(backend)` | One storage choice for all uses of an engine |
+| `sqwl` | CLI server and maintenance REPL |
 
-RocksDB is the bundled storage backend. Passing no data directory creates a
-temporary store removed when it is dropped. SQL rows are persisted as complete
-serialized row values. JSON and CSV implementations are provided as
-[examples](#json-and-csv-examples). Multiple logical SQL databases are
-supported, but a registry of multiple storage backends and filter-driven
-backend routing are **not implemented**.
+RocksDB is the bundled persistent backend. Each row is written as one complete value. Direct Engine query calls create fresh sessions; use `engine.session()` to retain `USE`, variables and transactions. JSON and CSV custom backends are provided as examples.
 
 ## Embed SQL in Rust
 
@@ -80,8 +76,7 @@ fn main() -> anyhow::Result<()> {
 }
 ```
 
-Create one session per independent caller. Direct calls on `Engine` share its
-default session. Query methods return a `Vec<QueryResult>`, with one entry per
+Create one session per independent caller. Direct calls on `Engine` create a fresh session for each call. Query methods return a `Vec<QueryResult>`, with one entry per
 SQL statement. Each result includes rows as JSON objects, column metadata,
 affected-row counts, the last insert ID, and warnings.
 
@@ -117,7 +112,7 @@ Add `tokio = { version = "1", features = ["full"] }` to the application
 dependencies to run the async examples.
 
 ```rust
-use my_sqweel::{AsyncEngine, QueryFilter, QueryFilterAction, QueryRequest};
+use my_sqweel::{Engine, Storage, QueryFilter, QueryFilterAction, QueryRequest};
 use my_sqweel::sql::engine::EngineConfig;
 
 struct CurrentTenant;
@@ -136,10 +131,10 @@ impl QueryFilter for CurrentTenant {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let db = AsyncEngine::open_rocksdb(EngineConfig::default(), None).await?;
+    let db = Engine::open_async(EngineConfig::default(), Storage::Memory).await?;
     db.query_filters().push(CurrentTenant);
 
-    let results = db.execute_sql("SELECT current_tenant").await?;
+    let results = db.execute_sql_async("SELECT current_tenant").await?;
     assert_eq!(results[0].rows[0]["tenant"], "acme");
     Ok(())
 }
@@ -156,12 +151,12 @@ ordered pipelines can be changed using `push` and `clear`.
 Parameters are bound before query filters run. Synthetic results also pass
 through result filters. Result filtering occurs after SQL execution;
 rejecting a result does **not** undo the statement's writes. These hooks
-apply to `AsyncEngine` and its sessions. See [execution filters](docs/filters.md).
+apply to sync and async queries and SQL endpoints. See [execution filters](docs/filters.md).
 
 ### Implement a custom backend
 
 Implement `my_sqweel::storage::AsyncStorage`, then pass your implementation to
-`AsyncEngine::open(config, storage).await`.
+`Engine::open_async(config, Storage::custom(storage)).await`.
 
 | Method | Responsibility |
 | --- | --- |
@@ -176,14 +171,12 @@ atomically, with metadata mutations before row mutations. Explicit SQL
 transactions emit their committed changes together at `COMMIT`.
 
 The API accepts pages and incremental mutations, but the current executor
-loads every table's rows into memory when the async engine opens. It also
+loads every table's rows into memory when the engine opens. It also
 exports before/after state images to calculate changes. It does not stream
 SQL scans from the backend or push predicates into CSV/HTTP services.
-Execution is serialized through the async engine's commit gate.
+Writers serialize per logical database; storage publication is atomic.
 
-A backend commit failure currently occurs after the in-memory SQL state has
-changed; the async wrapper does not restore that state automatically. Backend
-atomicity and recovery therefore need explicit handling in an application.
+A backend commit must succeed before changes become visible. A storage error stops further operations until the engine is reopened. Custom backends must make each batch atomic.
 See [custom async storage](docs/async-storage.md) for the full contract.
 
 ### JSON and CSV examples
@@ -246,7 +239,7 @@ Authentication is configurable through the Rust server API:
 
 | Policy | Behavior |
 | --- | --- |
-| `Authentication::AllowAll` | Default: accepts usernames/passwords with full scope |
+| `Authentication::AllowAll` | Explicitly accepts usernames/passwords with full scope |
 | `Authentication::EngineAccounts` | Authenticates against the SQL account catalog |
 | `Authentication::static_users(...)` | Uses configured usernames/passwords and scopes |
 | `Authentication::callback(...)` | Delegates to an `AsyncAuthenticator` |
@@ -254,22 +247,26 @@ Authentication is configurable through the Rust server API:
 For example, run a server with a read-only user for `app`:
 
 ```rust,no_run
-use my_sqweel::server::{self, Authentication, ServerConfig, StaticUser};
+use my_sqweel::{Engine, SqlEndpointConfig};
+use my_sqweel::server::{Authentication, StaticUser};
 use my_sqweel::sql::engine::{AuthPrivilege, AuthScope};
 
 fn main() -> anyhow::Result<()> {
-    server::run(ServerConfig {
-        authentication: Authentication::static_users([StaticUser::new(
-            "reporter",
-            "example-password",
+    let engine = Engine::default();
+    let mut endpoint = engine.spawn_sql(SqlEndpointConfig::new(
+        "127.0.0.1:3307".parse()?,
+        Authentication::static_users([StaticUser::new(
+            "reporter", "example-password",
             [AuthScope::database("app", [AuthPrivilege::Select])],
         )]),
-        ..ServerConfig::default()
-    })
+    ))?;
+    // Keep the handle alive while clients connect.
+    endpoint.shutdown()?;
+    Ok(())
 }
 ```
 
-Database scopes cover `Select`, `Insert`, `Update`, and `Delete`;
+Database and table scopes cover DML plus `Create`, `Alter`, `Drop`, `Index`, and `References`;
 `AuthScope::All` includes administrative access. External authenticators
 receive the username, requested database, and native-password
 challenge/response, not a plaintext client password. They return an
@@ -289,9 +286,7 @@ syntax accepted by an external callback. Fresh engines bootstrap `root`
 with an empty password. `set_admin_credentials` changes catalog credentials;
 wire connections use them only when `EngineAccounts` is selected.
 
-Use `server::spawn_with_engine` to serve an existing `Arc<Engine>`;
-dropping its `ServerHandle` stops the listeners. The CLI has no
-authentication-policy flags. See [server and authentication](docs/server.md).
+Use `engine.spawn_sql(config)` to serve a shared engine. The endpoint scope ceiling intersects authenticated grants, even for administrators. `shutdown` waits for session cleanup; dropping its handle closes the listener and disconnects clients. SQL endpoints do not start debug HTTP. See [server and authentication](docs/server.md).
 
 SQL authentication and grants do not protect the debug/search HTTP routes.
 Those routes provide unauthenticated administrative access to `app`.
@@ -333,12 +328,12 @@ sqwl --data-dir .my-sqweel/data serve --repl
 ```
 
 Embedded callers use
-`Engine::open_with_data_dir(EngineConfig::default(), Some(path))`.
+`Engine::open(EngineConfig::default(), Storage::RocksDb(path.into()))`.
 RocksDB locks the data directory against concurrent opens and persists logical
 databases, accounts, schemas, complete rows, counters, views, and index
 comments. RocksDB write batches apply each SQL commit atomically. Existing
 data directories are not migrated automatically; start with a fresh directory.
-The synchronous engine stops accepting operations after a persistence error
+The engine stops accepting operations after a persistence error
 and requires reopening. Writes can also copy an affected table and compare its
 rows linearly.
 
@@ -367,7 +362,7 @@ table swaps, and snapshot restoration operate on the default `app` database.
 A synchronous `Snapshot` covers `app`, including schemas, rows, counters,
 views, and index comments. It excludes other databases and the account
 catalog. `Engine::export_state()` / `import_state()` work with a complete
-`EngineState`; `AsyncEngine::snapshot()` also returns that full image.
+`EngineState`.
 
 Drift reports remain useful for restored or externally modified rows and
 for stored row shapes retained across schema changes. They do not enable
@@ -375,8 +370,7 @@ relaxed SQL schemas. See [persistence and maintenance](docs/operations.md).
 
 ### Async query hooks
 
-`Engine::subscribe_query_hooks(options, callback)` and
-`AsyncEngine::subscribe_query_hooks(options, callback)` register engine-wide
+`Engine::subscribe_query_hooks(options, callback)` registers engine-wide
 async callbacks. Register inside a Tokio runtime and keep the returned handle
 alive. Callbacks must be `Send + Sync` and their futures `Send`; callbacks receive an
 `Arc<QueryHookEvent>` and return `anyhow::Result<()>`. These are trusted Rust
@@ -395,7 +389,7 @@ writes and deletes are selected. See the runnable
   drops contain database/table names. Schema notifications cover the columns,
   keys, indexes, and constraints represented by that type. Auto-increment counter
   advances and timestamp-only changes do not produce schema notifications.
-- Changes appear after commit and, for `AsyncEngine`, after storage succeeds.
+- Changes appear after commit succeeds in the configured storage backend.
   Transactions emit net changes: repeated updates coalesce, and an inserted then
   deleted row emits nothing. Cascades and DDL-induced row changes are included.
   Temporary tables, restore/import, rollbacks, and unchanged rows are excluded.
@@ -422,8 +416,7 @@ it and discards pending events; cancellation also drops an in-flight callback
 future. A callback already running can have external side effects.
 
 Listeners never change a SQL result or undo a commit. An external async storage
-failure or cancellation makes the async engine refuse subsequent execution
-until reopened; its pending change events are discarded. Queries from a
+failure makes the engine refuse subsequent execution until reopened; unpublished change events are discarded. Cancelling an async caller does not abort an accepted commit. Queries from a
 callback can themselves trigger hooks, so integrations must avoid feedback
 loops. With no listeners registered, no feed payloads or row comparisons are
 performed. The existing query-event API below remains available for query
@@ -556,7 +549,7 @@ are not guarantees for the current checkout.
 
 ```text
 src/sql/engine/          SQL evaluation, transactions, catalog, and authorization
-src/async_engine.rs      Async wrapper, storage coordination, and execution filters
+src/filters.rs           Shared query/result filters and immutable request context
 src/storage/            RocksDB integration and public AsyncStorage contract
 src/server/             MySQL wire protocol, authentication, debug/search HTTP
 src/lib.rs              Public exports, CLI, and REPL

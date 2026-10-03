@@ -27,7 +27,6 @@ use crate::model::StoredRow;
 use crate::schema::{CheckConstraintHint, ColumnHint, ForeignKeyHint, IndexHint, TableSchemaHint};
 
 mod catalog;
-pub(crate) use catalog::may_start_with;
 pub use catalog::{AuthPrivilege, AuthScope};
 mod hooks;
 pub(crate) use hooks::HookRegistry;
@@ -45,8 +44,6 @@ mod maintenance;
 mod query;
 mod support;
 mod values;
-
-pub(crate) use values::substitute_params as bind_params;
 
 use compat::*;
 use ddl::*;
@@ -822,6 +819,7 @@ pub(super) struct RawEngine {
     session_user: String,
     current_user: String,
     visible_databases: Vec<String>,
+    visible_tables: Option<BTreeSet<String>>,
     database_charsets: BTreeMap<String, (String, String)>,
     cfg: EngineConfig,
     schemas: DashMap<String, SharedValue<TableSchemaHint>>,
@@ -883,6 +881,7 @@ impl RawEngine {
             session_user: "root@localhost".into(),
             current_user: "root@%".into(),
             visible_databases: vec!["app".into()],
+            visible_tables: None,
             database_charsets: BTreeMap::new(),
             cfg,
             // Statement-private directories have no concurrent writers. DashMap
@@ -7092,8 +7091,15 @@ fn strip_view_check_option(sql: &str) -> String {
     let upper = sql.to_ascii_uppercase();
     upper
         .rfind(" WITH CHECK OPTION")
-        .filter(|index| upper[*index + " WITH CHECK OPTION".len()..].trim().is_empty())
-        .map_or_else(|| sql.to_string(), |index| sql[..index].trim_end().to_string())
+        .filter(|index| {
+            upper[*index + " WITH CHECK OPTION".len()..]
+                .trim()
+                .is_empty()
+        })
+        .map_or_else(
+            || sql.to_string(),
+            |index| sql[..index].trim_end().to_string(),
+        )
 }
 
 fn rewrite_create_table_ignore_select_for_parser(sql: &str) -> String {

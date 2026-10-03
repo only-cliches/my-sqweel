@@ -2,10 +2,8 @@ mod common;
 
 use std::cell::RefCell;
 use std::fmt::Debug;
-use std::net::TcpListener;
 use std::thread;
 
-use my_sqweel::server::WireServer;
 use my_sqweel::sql::engine::{Engine, EngineConfig};
 use mysql::prelude::Queryable;
 use mysql::{Opts, Pool, Row, Value as MyValue};
@@ -74,19 +72,19 @@ fn assert_parity_eq<T: Debug + PartialEq>(actual: &T, expected: &T, context: &st
     }
 }
 
-fn start_whatever_server() -> String {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind local port");
-    let addr = listener.local_addr().expect("local addr");
-
-    thread::spawn(move || {
-        let engine = std::sync::Arc::new(Engine::new(EngineConfig::mysql_strict()));
-        engine.execute_sql("CREATE DATABASE test").unwrap();
-        let wire = WireServer::new(engine);
-        wire.serve_listener(listener)
-            .expect("wire server should run");
-    });
-
-    format!("mysql://root@127.0.0.1:{}/test", addr.port())
+fn start_whatever_server() -> (String, my_sqweel::SqlEndpoint) {
+    let engine = Engine::new(EngineConfig::mysql_strict());
+    engine.execute_sql("CREATE DATABASE test").unwrap();
+    let endpoint = engine
+        .spawn_sql(my_sqweel::SqlEndpointConfig::new(
+            "127.0.0.1:0".parse().unwrap(),
+            my_sqweel::server::Authentication::AllowAll,
+        ))
+        .unwrap();
+    (
+        format!("mysql://root@{}/test", endpoint.local_addr()),
+        endpoint,
+    )
 }
 
 fn fetch_rows(conn: &mut mysql::PooledConn, sql: &str) -> mysql::Result<Vec<Vec<String>>> {
@@ -261,7 +259,7 @@ fn sorting_and_compound_sorting_match_mysql_for_all_primitives() {
     let _guard = common::test_lock();
     let _mismatches = ParityMismatchCollector::new();
     let mysql_target = mysql_compare_target();
-    let whatever_url = start_whatever_server();
+    let (whatever_url, _endpoint) = start_whatever_server();
     let whatever_pool = Pool::new(Opts::from_url(&whatever_url).expect("valid MySqweel URL"))
         .expect("connect to my-sqweel");
     let mysql_pool = mysql_target.as_ref().map(|target| {
@@ -413,7 +411,7 @@ fn parity_with_mysql_for_supported_semantics() {
     };
     let mysql_url = mysql_target.url();
 
-    let whatever_url = start_whatever_server();
+    let (whatever_url, _endpoint) = start_whatever_server();
 
     let mysql_pool = Pool::new(Opts::from_url(mysql_url).expect("valid MySQL compare URL"))
         .expect("connect to mysql");
@@ -1149,7 +1147,7 @@ fn parity_with_mysql_for_information_schema() {
         return;
     };
     let mysql_url = mysql_target.url();
-    let whatever_url = start_whatever_server();
+    let (whatever_url, _endpoint) = start_whatever_server();
 
     let mysql_pool = Pool::new(Opts::from_url(mysql_url).expect("valid MySQL compare URL"))
         .expect("connect to mysql");
@@ -1396,7 +1394,7 @@ fn parity_with_mysql_for_information_schema() {
 
 #[test]
 fn recursive_ctes_return_mysql_rows() {
-    let whatever_url = start_whatever_server();
+    let (whatever_url, _endpoint) = start_whatever_server();
     let whatever_pool =
         Pool::new(Opts::from_url(&whatever_url).expect("valid MySqweel URL")).expect("connect");
     let mut conn = whatever_pool.get_conn().expect("whatever conn");
@@ -1441,7 +1439,7 @@ fn parity_with_mysql_for_json_expressions() {
         return;
     };
     let mysql_url = mysql_target.url();
-    let whatever_url = start_whatever_server();
+    let (whatever_url, _endpoint) = start_whatever_server();
 
     let mysql_pool = Pool::new(Opts::from_url(mysql_url).expect("valid MySQL compare URL"))
         .expect("connect to mysql");
@@ -1610,7 +1608,7 @@ fn parity_with_mysql_for_json_collection_paths() {
         return;
     };
     let mysql_url = mysql_target.url();
-    let whatever_url = start_whatever_server();
+    let (whatever_url, _endpoint) = start_whatever_server();
 
     let mysql_pool = Pool::new(Opts::from_url(mysql_url).expect("valid MySQL compare URL"))
         .expect("connect to mysql");
@@ -1715,7 +1713,7 @@ fn parity_with_mysql_for_conditional_expressions() {
         return;
     };
     let mysql_url = mysql_target.url();
-    let whatever_url = start_whatever_server();
+    let (whatever_url, _endpoint) = start_whatever_server();
 
     let mysql_pool = Pool::new(Opts::from_url(mysql_url).expect("valid MySQL compare URL"))
         .expect("connect to mysql");

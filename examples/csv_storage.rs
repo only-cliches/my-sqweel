@@ -10,13 +10,13 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, anyhow};
-use my_sqweel::AsyncEngine;
 use my_sqweel::model::StoredRow;
 use my_sqweel::sql::engine::EngineConfig;
 use my_sqweel::storage::{
     AsyncStorage, MetadataMutation, RowMutation, RowPage, RowScan, StorageBatch, StorageCatalog,
     TableState,
 };
+use my_sqweel::{Engine, Storage};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone)]
@@ -353,29 +353,33 @@ async fn main() -> Result<()> {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("target/csv-storage-example"));
     let storage = CsvStorage::open(&root)?;
-    let database = AsyncEngine::open(EngineConfig::default(), storage).await?;
+    let database = Engine::open_async(EngineConfig::default(), Storage::custom(storage)).await?;
 
     database
-        .execute_sql(
+        .execute_sql_async(
             "CREATE TABLE IF NOT EXISTS tasks (id INT PRIMARY KEY, title TEXT NOT NULL, done BOOLEAN NOT NULL DEFAULT false)",
         )
         .await?;
     database
-        .execute_sql(
+        .execute_sql_async(
             "INSERT INTO tasks VALUES (1, 'write CSV backend', false), (2, 'remove stale task', false) ON DUPLICATE KEY UPDATE title = VALUES(title), done = VALUES(done)",
         )
         .await?;
     database
-        .execute_sql("UPDATE tasks SET done = true WHERE id = 1")
+        .execute_sql_async("UPDATE tasks SET done = true WHERE id = 1")
         .await?;
     database
-        .execute_sql("DELETE FROM tasks WHERE id = 2")
+        .execute_sql_async("DELETE FROM tasks WHERE id = 2")
         .await?;
     drop(database);
 
-    let reopened = AsyncEngine::open(EngineConfig::default(), CsvStorage::open(&root)?).await?;
+    let reopened = Engine::open_async(
+        EngineConfig::default(),
+        Storage::custom(CsvStorage::open(&root)?),
+    )
+    .await?;
     let result = reopened
-        .execute_sql("SELECT id, title, done FROM tasks ORDER BY id")
+        .execute_sql_async("SELECT id, title, done FROM tasks ORDER BY id")
         .await?;
     println!("persisted CSV directory: {}", root.display());
     println!(

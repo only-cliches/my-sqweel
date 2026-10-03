@@ -5,11 +5,15 @@ use crate::storage::{RocksDbStore, StorageWrite};
 use serde::de::DeserializeOwned;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-const META: &str = "sqweel:v2";
+const META: &str = "sqweel:v3";
 const KINDS: [&str; 5] = ["schemas", "rows", "auto_inc", "views", "index_comments"];
 
 pub(super) struct Persistence {
-    store: RocksDbStore,
+    store: Option<RocksDbStore>,
+    custom: Option<(
+        crate::storage::CustomStorage,
+        Arc<crate::runtime::EngineRuntime>,
+    )>,
     poisoned: AtomicBool,
 }
 
@@ -26,6 +30,14 @@ impl Persistence {
                 "unsupported legacy development database format; remove the old data directory and restart with fresh storage"
             ));
         }
+        // Reject old layouts before opening RocksDB, which can update its logs.
+        let marker = directory.join("sqweel-format");
+        if directory.exists() && directory.read_dir()?.next().is_some() {
+            ensure!(
+                std::fs::read(&marker).ok().as_deref() == Some(b"3\n"),
+                "unsupported legacy development database format; use a fresh directory"
+            );
+        }
         std::fs::create_dir_all(directory)?;
         // Catalog metadata and row contents stay private on disk.
         #[cfg(unix)]
@@ -34,6 +46,9 @@ impl Persistence {
             std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700))?;
         }
         let store = RocksDbStore::open(Some(path))?;
+        if !marker.exists() {
+            std::fs::write(&marker, b"3\n")?;
+        }
         let metadata = store.hgetall(META)?;
         if metadata.is_empty() {
             if !store.keys("*")?.is_empty() {
@@ -41,23 +56,41 @@ impl Persistence {
                     "unsupported legacy development database format; remove the old data directory and restart with fresh storage"
                 ));
             }
-        } else if metadata.get("version").map(String::as_str) != Some("2") {
+        } else if metadata.get("version").map(String::as_str) != Some("3") {
             return Err(anyhow!(
                 "unsupported development database storage version; remove the old data directory and restart with fresh storage"
             ));
         }
         Ok(Self {
-            store,
+            store: Some(store),
+            custom: None,
             poisoned: AtomicBool::new(false),
         })
     }
 
+    pub(super) fn custom(
+        storage: crate::storage::CustomStorage,
+        runtime: Arc<crate::runtime::EngineRuntime>,
+    ) -> Self {
+        Self {
+            store: None,
+            custom: Some((storage, runtime)),
+            poisoned: AtomicBool::new(false),
+        }
+    }
     pub(super) fn is_poisoned(&self) -> bool {
         self.poisoned.load(Ordering::Acquire)
     }
 
     pub(super) fn load(&self, cfg: &EngineConfig) -> Result<Option<Committed>> {
-        let metadata = self.store.hgetall(META)?;
+        if let Some((storage, runtime)) = &self.custom {
+            let storage = storage.0.clone();
+            return runtime
+                .run(async move { crate::storage::delta::load_state(storage.as_ref()).await })?
+                .map(|image| committed_from_image(image, cfg))
+                .transpose();
+        }
+        let metadata = self.store.as_ref().unwrap().hgetall(META)?;
         let Some(catalog) = metadata.get("catalog") else {
             return Ok(None);
         };
@@ -70,7 +103,7 @@ impl Persistence {
         let mut databases = BTreeMap::new();
         for name in names {
             let mut rows: BTreeMap<String, BTreeMap<String, StoredRow>> = BTreeMap::new();
-            for (field, value) in self.store.hgetall(&key(&name, "rows"))? {
+            for (field, value) in self.store.as_ref().unwrap().hgetall(&key(&name, "rows"))? {
                 let (table, pk): (String, String) = serde_json::from_str(&field)?;
                 rows.entry(table)
                     .or_default()
@@ -102,6 +135,8 @@ impl Persistence {
         kind: &str,
     ) -> Result<BTreeMap<String, T>> {
         self.store
+            .as_ref()
+            .unwrap()
             .hgetall(&key(database, kind))?
             .into_iter()
             .map(|(field, value)| Ok((field, serde_json::from_str(&value)?)))
@@ -109,10 +144,33 @@ impl Persistence {
     }
 
     pub(super) fn commit(&self, before: &Committed, after: &Committed) -> Result<()> {
+        if let Some((storage, runtime)) = &self.custom {
+            let before = image(before)?;
+            let after = image(after)?;
+            let mut batch = crate::storage::delta::storage_batch(&before, &after);
+            if !batch
+                .metadata
+                .iter()
+                .any(|item| matches!(item, crate::storage::MetadataMutation::PutCatalog(_)))
+            {
+                batch.metadata.insert(
+                    0,
+                    crate::storage::MetadataMutation::PutCatalog(
+                        crate::storage::delta::storage_catalog(&after),
+                    ),
+                );
+            }
+            let storage = storage.0.clone();
+            let result = runtime.run(async move { storage.commit(batch).await });
+            if result.is_err() {
+                self.poisoned.store(true, Ordering::Release);
+            }
+            return result;
+        }
         let writes = changes(before, after)?;
         // Keep the previous SQL state visible and refuse further work after a
         // failed RocksDB batch.
-        if let Err(error) = self.store.write_batch(writes) {
+        if let Err(error) = self.store.as_ref().unwrap().write_batch(writes) {
             self.poisoned.store(true, Ordering::Release);
             return Err(error);
         }
@@ -162,7 +220,7 @@ fn changes(before: &Committed, after: &Committed) -> Result<Vec<StorageWrite>> {
     let mut writes = vec![StorageWrite::HSet {
         key: META.into(),
         field: "version".into(),
-        value: "2".into(),
+        value: "3".into(),
     }];
     // Catalog metadata is small and also initializes a new store on its first commit.
     set(&mut writes, META, "catalog", &after.catalog)?;
@@ -267,7 +325,7 @@ mod tests {
         engine.execute_sql("CREATE TABLE rows_here(id INT PRIMARY KEY, value TEXT); INSERT INTO rows_here VALUES (1,'old'),(2,'untouched'); CREATE DATABASE elsewhere; USE elsewhere; CREATE TABLE big(id INT PRIMARY KEY, payload TEXT)").unwrap();
         engine
             .execute_sql_with_params(
-                "INSERT INTO big VALUES (1,?)",
+                "USE elsewhere; INSERT INTO big VALUES (1,?)",
                 &[Value::String("x".repeat(5_000_000))],
             )
             .unwrap();
@@ -300,8 +358,13 @@ mod tests {
     fn rocksdb_persists_each_changed_row_as_one_value() {
         let directory =
             std::env::temp_dir().join(format!("sqweel-rocksdb-row-{}", uuid::Uuid::new_v4()));
-        let engine =
-            Engine::open_with_data_dir(EngineConfig::mysql_strict(), directory.to_str()).unwrap();
+        let engine = Engine::open(
+            EngineConfig::mysql_strict(),
+            (directory.to_str()).map_or(crate::Storage::Memory, |path| {
+                crate::Storage::RocksDb(path.into())
+            }),
+        )
+        .unwrap();
         engine
             .execute_sql("CREATE TABLE items(id INT PRIMARY KEY, value TEXT)")
             .unwrap();
@@ -317,6 +380,8 @@ mod tests {
             .as_ref()
             .unwrap()
             .store
+            .as_ref()
+            .unwrap()
             .hgetall(&key("app", "rows"))
             .unwrap();
         assert_eq!(stored.len(), 1);
@@ -335,7 +400,12 @@ mod tests {
         std::fs::create_dir(&directory).unwrap();
         let file = directory.join("transaction-image.json");
         std::fs::write(&file, "legacy").unwrap();
-        let error = match Engine::open_with_data_dir(EngineConfig::default(), directory.to_str()) {
+        let error = match Engine::open(
+            EngineConfig::default(),
+            (directory.to_str()).map_or(crate::Storage::Memory, |path| {
+                crate::Storage::RocksDb(path.into())
+            }),
+        ) {
             Ok(_) => panic!("legacy image accepted"),
             Err(error) => error,
         };
@@ -344,26 +414,69 @@ mod tests {
         std::fs::remove_dir_all(directory).unwrap();
     }
 
+    #[test]
+    fn legacy_rocksdb_is_rejected_without_changing_files() {
+        let directory = tempfile::tempdir().unwrap();
+        {
+            let store = RocksDbStore::open(directory.path().to_str()).unwrap();
+            store.hset("sqweel:v2", "version", "2").unwrap();
+        }
+        let files = || {
+            std::fs::read_dir(directory.path())
+                .unwrap()
+                .map(|entry| {
+                    let path = entry.unwrap().path();
+                    (
+                        path.file_name().unwrap().to_owned(),
+                        std::fs::read(path).unwrap(),
+                    )
+                })
+                .collect::<BTreeMap<_, _>>()
+        };
+        let before = files();
+        assert!(
+            Engine::open(
+                EngineConfig::default(),
+                crate::Storage::RocksDb(directory.path().into())
+            )
+            .is_err()
+        );
+        assert_eq!(before, files());
+    }
+
     #[tokio::test]
     async fn rocksdb_opens_commits_and_closes_inside_async_runtime() {
         let directory =
             std::env::temp_dir().join(format!("sqweel-async-rocksdb-{}", uuid::Uuid::new_v4()));
         {
-            let engine =
-                Engine::open_with_data_dir(EngineConfig::mysql_strict(), directory.to_str())
-                    .unwrap();
+            let engine = Engine::open(
+                EngineConfig::mysql_strict(),
+                (directory.to_str()).map_or(crate::Storage::Memory, |path| {
+                    crate::Storage::RocksDb(path.into())
+                }),
+            )
+            .unwrap();
             engine
                 .execute_sql("CREATE TABLE items(id INT PRIMARY KEY); INSERT INTO items VALUES(7)")
                 .unwrap();
             assert!(
-                Engine::open_with_data_dir(EngineConfig::mysql_strict(), directory.to_str())
-                    .is_err()
+                Engine::open(
+                    EngineConfig::mysql_strict(),
+                    (directory.to_str()).map_or(crate::Storage::Memory, |path| {
+                        crate::Storage::RocksDb(path.into())
+                    })
+                )
+                .is_err()
             );
         }
         {
-            let engine =
-                Engine::open_with_data_dir(EngineConfig::mysql_strict(), directory.to_str())
-                    .unwrap();
+            let engine = Engine::open(
+                EngineConfig::mysql_strict(),
+                (directory.to_str()).map_or(crate::Storage::Memory, |path| {
+                    crate::Storage::RocksDb(path.into())
+                }),
+            )
+            .unwrap();
             assert_eq!(
                 engine.execute_sql("SELECT id FROM items").unwrap()[0].rows[0]["id"],
                 7
@@ -386,9 +499,12 @@ mod benchmarks {
             for populated in [false, true] {
                 let directory =
                     std::env::temp_dir().join(format!("sqweel-ddl-bench-{}", uuid::Uuid::new_v4()));
-                let engine = Engine::open_with_data_dir(
+                let engine = Engine::open(
                     EngineConfig::mysql_strict(),
-                    if persistent { directory.to_str() } else { None },
+                    (if persistent { directory.to_str() } else { None })
+                        .map_or(crate::Storage::Memory, |path| {
+                            crate::Storage::RocksDb(path.into())
+                        }),
                 )
                 .unwrap();
                 if populated {
@@ -428,4 +544,32 @@ mod benchmarks {
             }
         }
     }
+}
+
+fn image(state: &Committed) -> Result<EngineState> {
+    Ok(EngineState {
+        version: 1,
+        metadata: serde_json::to_value(&state.catalog)?,
+        databases: state
+            .databases
+            .iter()
+            .map(|(name, raw)| (name.clone(), raw.snapshot()))
+            .collect(),
+    })
+}
+fn committed_from_image(image: EngineState, cfg: &EngineConfig) -> Result<Committed> {
+    ensure!(
+        image.version == 1 && image.databases.contains_key("app"),
+        "invalid custom storage catalog"
+    );
+    let catalog = serde_json::from_value(image.metadata)?;
+    let mut databases = BTreeMap::new();
+    for (name, snapshot) in image.databases {
+        ensure!(snapshot.version == 1, "unsupported snapshot version");
+        let mut raw = RawEngine::new(cfg.clone());
+        raw.database_name = name.clone();
+        raw.apply_snapshot(snapshot);
+        databases.insert(name, Arc::new(raw));
+    }
+    Ok(Committed { catalog, databases })
 }

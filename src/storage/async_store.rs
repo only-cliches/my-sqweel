@@ -130,11 +130,21 @@ impl StorageBatch {
 #[allow(async_fn_in_trait)]
 pub trait AsyncStorage: Send + Sync + 'static {
     /// Return `None` only for a new, empty backend.
-    async fn load_catalog(&self) -> Result<Option<StorageCatalog>>;
-    async fn list_tables(&self, database: &str) -> Result<Vec<String>>;
-    async fn load_table(&self, database: &str, table: &str) -> Result<Option<TableState>>;
-    async fn scan_rows(&self, scan: RowScan) -> Result<RowPage>;
-    async fn commit(&self, batch: StorageBatch) -> Result<()>;
+    fn load_catalog(
+        &self,
+    ) -> impl std::future::Future<Output = Result<Option<StorageCatalog>>> + Send;
+    fn list_tables(
+        &self,
+        database: &str,
+    ) -> impl std::future::Future<Output = Result<Vec<String>>> + Send;
+    fn load_table(
+        &self,
+        database: &str,
+        table: &str,
+    ) -> impl std::future::Future<Output = Result<Option<TableState>>> + Send;
+    fn scan_rows(&self, scan: RowScan)
+    -> impl std::future::Future<Output = Result<RowPage>> + Send;
+    fn commit(&self, batch: StorageBatch) -> impl std::future::Future<Output = Result<()>> + Send;
 }
 
 /// The built-in async backend, backed by RocksDB.

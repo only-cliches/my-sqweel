@@ -8,18 +8,21 @@ use anyhow::{Context, Result, anyhow};
 use serde_json::{Value, json};
 use sqlparser::ast::{SetExpr, Statement, TableFactor};
 
-use crate::sql::engine::{Engine, QueryResult};
+pub use crate::sql::engine::{Engine, EngineConfig, EngineSession, QueryResult};
+pub use server::{SqlEndpoint, SqlEndpointConfig};
+pub use storage::Storage;
+mod runtime;
 
-pub mod async_engine;
+mod filters;
 pub mod model;
 pub mod schema;
 pub mod server;
 pub mod sql;
 pub mod storage;
 
-pub use async_engine::{
-    AsyncEngine, AsyncEngineSession, QueryFilter, QueryFilterAction, QueryFilters, QueryRequest,
-    ResultFilter, ResultFilterAction, ResultFilters,
+pub use filters::{
+    QueryContext, QueryFilter, QueryFilterAction, QueryFilters, QueryRequest, ResultFilter,
+    ResultFilterAction, ResultFilters,
 };
 pub use sql::engine::{
     QueryHookError, QueryHookEvent, QueryHookKey, QueryHookOptions, QueryHookRow,
@@ -278,6 +281,7 @@ fn ensure_no_extra(args: &[String], usage: &str) -> Result<()> {
 fn run_repl(app: &AppConfig, engine: Arc<Engine>, server_running: bool) -> Result<()> {
     println!("MySqweel maintenance REPL. Type `help` for commands, `quit` to exit.");
     let input = repl_input_events();
+    let mut session = engine.session();
     loop {
         print!("sqwl> ");
         io::stdout().flush().context("flush REPL prompt")?;
@@ -301,7 +305,9 @@ fn run_repl(app: &AppConfig, engine: Arc<Engine>, server_running: bool) -> Resul
             Ok(ReplCommand::Quit) => return Ok(()),
             Ok(ReplCommand::Help) => print_repl_help(),
             Ok(command) => {
-                if let Err(err) = run_repl_command(app, &engine, server_running, command) {
+                if let Err(err) =
+                    run_repl_command(app, &engine, &mut session, server_running, command)
+                {
                     eprintln!("error: {err:#}");
                 }
             }
@@ -403,6 +409,7 @@ fn parse_repl_command(line: &str) -> Result<ReplCommand> {
 fn run_repl_command(
     app: &AppConfig,
     engine: &Engine,
+    session: &mut EngineSession,
     server_running: bool,
     command: ReplCommand,
 ) -> Result<()> {
@@ -470,7 +477,7 @@ fn run_repl_command(
         }
         ReplCommand::Explain { sql } => print_explain(&sql),
         ReplCommand::Sql { sql } => {
-            let results = engine.execute_sql(&sql)?;
+            let results = session.execute_sql(&sql)?;
             let results = results.iter().map(query_result_json).collect::<Vec<_>>();
             print_json(&json!({ "results": results }))
         }
@@ -757,3 +764,6 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+mod unified_tests;

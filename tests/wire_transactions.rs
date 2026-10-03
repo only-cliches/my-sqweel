@@ -1,13 +1,12 @@
 use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::net::{SocketAddr, TcpStream};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::thread::JoinHandle;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use my_sqweel::server::{
     AccountOperation, AccountOperationAction, AccountOperationKind, AsyncAuthenticator,
-    AuthenticatedUser, Authentication, AuthenticationRequest, StaticUser, WireServer,
+    AuthenticatedUser, Authentication, AuthenticationRequest, StaticUser,
     verify_mysql_native_password,
 };
 use my_sqweel::sql::engine::{AuthPrivilege, AuthScope, Engine, EngineConfig};
@@ -16,8 +15,7 @@ use mysql::{Conn, OptsBuilder};
 
 struct Server {
     addr: SocketAddr,
-    stop: Arc<AtomicBool>,
-    thread: Option<JoinHandle<()>>,
+    _endpoint: my_sqweel::SqlEndpoint,
 }
 
 impl Server {
@@ -29,19 +27,15 @@ impl Server {
     }
 
     fn start_with_authentication(engine: Arc<Engine>, authentication: Authentication) -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        let stop = Arc::new(AtomicBool::new(false));
-        let worker_stop = stop.clone();
-        let thread = std::thread::spawn(move || {
-            WireServer::with_authentication(engine, authentication)
-                .serve_listener_until(listener, worker_stop)
-                .unwrap();
-        });
+        let endpoint = engine
+            .spawn_sql(my_sqweel::SqlEndpointConfig::new(
+                "127.0.0.1:0".parse().unwrap(),
+                authentication,
+            ))
+            .unwrap();
         Self {
-            addr,
-            stop,
-            thread: Some(thread),
+            addr: endpoint.local_addr(),
+            _endpoint: endpoint,
         }
     }
 
@@ -115,15 +109,6 @@ impl AsyncAuthenticator for AccountDirectory {
         assert!(operation.sql.contains("external_user"));
         self.operations.fetch_add(1, Ordering::Relaxed);
         Ok(AccountOperationAction::Handled)
-    }
-}
-
-impl Drop for Server {
-    fn drop(&mut self) {
-        self.stop.store(true, Ordering::Relaxed);
-        if let Some(thread) = self.thread.take() {
-            thread.join().unwrap();
-        }
     }
 }
 

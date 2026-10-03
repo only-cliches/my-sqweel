@@ -5,7 +5,7 @@ use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
 
-use my_sqweel::server::{self, ServerConfig};
+use my_sqweel::server;
 use my_sqweel::sql::engine::Engine;
 
 fn free_loopback_addr() -> SocketAddr {
@@ -46,13 +46,8 @@ fn official_python_meilisearch_client_smoke() {
         debug_addr = free_loopback_addr();
     }
 
-    let cfg = ServerConfig {
-        bind_addr,
-        debug_addr: Some(debug_addr),
-        ..ServerConfig::default()
-    };
     let engine = Arc::new(Engine::default());
-    let _server = server::spawn_with_engine(cfg, engine).expect("spawn my-sqweel server");
+    let _server = server::spawn_debug_http(debug_addr, engine);
 
     let output = Command::new(&python)
         .arg("tests/python/meili_client_compat.py")

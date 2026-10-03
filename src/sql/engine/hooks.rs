@@ -185,21 +185,14 @@ impl Drop for QueryHookSubscription {
     }
 }
 
-type Delivery = (
-    Arc<QueryHookEvent>,
-    Vec<(Arc<Listener>, async_mpsc::OwnedPermit<Arc<QueryHookEvent>>)>,
-);
-
 #[derive(Default)]
 struct RegistryState {
     listeners: Vec<Arc<Listener>>,
-    deferred: Option<Vec<Delivery>>,
 }
 
 #[derive(Default)]
 pub(crate) struct HookRegistry {
     state: Mutex<RegistryState>,
-    pub(crate) external_reads: std::sync::atomic::AtomicBool,
 }
 
 impl Drop for HookRegistry {
@@ -296,7 +289,7 @@ impl HookRegistry {
     }
 
     fn emit(&self, event: QueryHookEvent) {
-        let mut state = self.state.lock();
+        let state = self.state.lock();
         let listeners = state
             .listeners
             .iter()
@@ -307,18 +300,8 @@ impl HookRegistry {
             return;
         }
         let event = Arc::new(event);
-        if !matches!(&*event, QueryHookEvent::Read { .. }) && state.deferred.is_some() {
-            let deliveries = listeners
-                .into_iter()
-                .filter_map(|listener| listener.reserve().map(|permit| (listener, permit)))
-                .collect::<Vec<_>>();
-            if !deliveries.is_empty() {
-                state.deferred.as_mut().unwrap().push((event, deliveries));
-            }
-        } else {
-            for listener in listeners {
-                listener.send(event.clone());
-            }
+        for listener in listeners {
+            listener.send(event.clone());
         }
     }
 
@@ -329,32 +312,6 @@ impl HookRegistry {
                 sql: sql.into(),
                 results: results.to_vec(),
             });
-        }
-    }
-
-    pub(crate) fn automatic_reads(&self) -> bool {
-        !self.external_reads.load(AtomicOrdering::Relaxed) && self.options().read
-    }
-
-    pub(crate) fn begin_deferred(&self) {
-        let mut state = self.state.lock();
-        assert!(
-            state.deferred.is_none(),
-            "overlapping async hook publication"
-        );
-        state.deferred = Some(Vec::new());
-    }
-
-    pub(crate) fn end_deferred(&self, success: bool) {
-        let mut state = self.state.lock();
-        if let Some(events) = state.deferred.take().filter(|_| success) {
-            for (event, listeners) in events {
-                for (listener, permit) in listeners {
-                    if listener.active() {
-                        permit.send(event.clone());
-                    }
-                }
-            }
         }
     }
 

@@ -5,8 +5,10 @@ use super::catalog::{
 use super::*;
 use anyhow::ensure;
 mod persistence;
+mod session;
 use parking_lot::Condvar;
 use persistence::Persistence;
+pub use session::EngineSession;
 
 #[derive(Clone)]
 struct Committed {
@@ -24,6 +26,9 @@ struct Coordinator {
     advisory_locks: Mutex<HashMap<String, (uuid::Uuid, u32)>>,
     advisory_available: Condvar,
     persistence: Option<Persistence>,
+    runtime: Arc<crate::runtime::EngineRuntime>,
+    query_filters: Arc<crate::QueryFilters>,
+    result_filters: Arc<crate::ResultFilters>,
 }
 
 #[derive(Default)]
@@ -48,14 +53,17 @@ impl Drop for WriterLease {
 }
 
 /// An embedded database server. Use `session()` for each independent connection.
+#[derive(Clone)]
 pub struct Engine {
     shared: Arc<Coordinator>,
-    default_session: Mutex<EngineSession>,
 }
 
 /// Connection-owned state. Dropping a session rolls back uncommitted changes.
-pub struct EngineSession {
+pub(crate) struct SessionState {
     pub(crate) last_query_read: bool,
+    endpoint_id: Option<uuid::Uuid>,
+    endpoint_stop: Option<Arc<std::sync::atomic::AtomicBool>>,
+    ceiling: Option<Vec<AuthScope>>,
     shared: Arc<Coordinator>,
     database: String,
     identity: Identity,
@@ -82,10 +90,13 @@ impl Default for Engine {
 
 impl Engine {
     pub fn new(cfg: EngineConfig) -> Self {
-        Self::open_with_data_dir(cfg, None).expect("failed to open MySqweel")
+        Self::open(cfg, crate::Storage::Memory).expect("failed to open MySqweel")
     }
 
-    pub fn open_with_data_dir(cfg: EngineConfig, data_dir: Option<&str>) -> Result<Self> {
+    pub async fn open_async(cfg: EngineConfig, storage: crate::Storage) -> Result<Self> {
+        tokio::task::spawn_blocking(move || Self::open(cfg, storage)).await?
+    }
+    pub fn open(cfg: EngineConfig, storage: crate::Storage) -> Result<Self> {
         if let Some(zone) = &cfg.default_time_zone {
             let bytes = zone.as_bytes();
             let valid = bytes.len() == 6
@@ -110,7 +121,15 @@ impl Engine {
                 return Err(anyhow!("default time zone offset is out of range"));
             }
         }
-        let persistence = data_dir.map(Persistence::open).transpose()?;
+        let runtime = Arc::new(crate::runtime::EngineRuntime::new()?);
+        let persistence = match storage {
+            crate::Storage::Memory => None,
+            crate::Storage::RocksDb(path) => Some(Persistence::open(
+                path.to_str()
+                    .ok_or_else(|| anyhow!("storage path must be UTF-8"))?,
+            )?),
+            crate::Storage::Custom(storage) => Some(Persistence::custom(storage, runtime.clone())),
+        };
         let recovered = persistence
             .as_ref()
             .map(|store| store.load(&cfg))
@@ -133,9 +152,11 @@ impl Engine {
             advisory_locks: Mutex::new(HashMap::new()),
             advisory_available: Condvar::new(),
             persistence,
+            runtime,
+            query_filters: Arc::default(),
+            result_filters: Arc::default(),
         });
         Ok(Self {
-            default_session: Mutex::new(EngineSession::new(shared.clone())),
             shared,
         })
     }
@@ -145,27 +166,41 @@ impl Engine {
         if username.is_empty() {
             return Err(anyhow!("administrator username must not be empty"));
         }
-        let mut session = self.default_session.lock();
         let _lease = self.shared.acquire()?;
         let mut state = self.shared.committed.lock().clone();
         state.catalog.set_admin_credentials(username, password);
-        let identity = state.catalog.identity(username)?;
         self.shared.publish(state)?;
-        session.identity = identity;
         Ok(())
     }
     pub fn session(&self) -> EngineSession {
-        EngineSession::new(self.shared.clone())
+        EngineSession {
+            inner: Arc::new(Mutex::new(SessionState::new(self.shared.clone()))),
+            shared: self.shared.clone(),
+        }
+    }
+    pub fn query_filters(&self) -> &crate::QueryFilters {
+        &self.shared.query_filters
+    }
+    pub fn result_filters(&self) -> &crate::ResultFilters {
+        &self.shared.result_filters
     }
     pub fn execute_sql(&self, sql: &str) -> Result<Vec<QueryResult>> {
-        self.default_session
-            .lock()
-            .run(sql, Ok(sql.to_owned()), true)
+        self.session().execute_sql(sql)
     }
     pub fn execute_sql_with_params(&self, sql: &str, params: &[Value]) -> Result<Vec<QueryResult>> {
-        self.default_session
-            .lock()
-            .run(sql, substitute_params(sql, params), true)
+        self.session().execute_sql_with_params(sql, params)
+    }
+    pub async fn execute_sql_async(&self, sql: impl Into<String>) -> Result<Vec<QueryResult>> {
+        self.session().execute_sql_async(sql).await
+    }
+    pub async fn execute_sql_with_params_async(
+        &self,
+        sql: impl Into<String>,
+        params: Vec<Value>,
+    ) -> Result<Vec<QueryResult>> {
+        self.session()
+            .execute_sql_with_params_async(sql, params)
+            .await
     }
     pub fn execute_statement(&self, statement: Statement) -> Result<QueryResult> {
         self.execute_sql(&statement.to_string())?
@@ -185,13 +220,6 @@ impl Engine {
         Fut: std::future::Future<Output = Result<()>> + Send + 'static,
     {
         self.shared.hooks.subscribe(options, callback)
-    }
-    pub(crate) fn hooks(&self) -> Arc<HookRegistry> {
-        self.shared.hooks.clone()
-    }
-    pub(crate) fn hook_context(&self) -> (String, bool) {
-        let session = self.default_session.lock();
-        (session.database.clone(), session.last_query_read)
     }
     pub fn subscribe_query_events(&self, options: QueryEventOptions) -> QueryEventStream {
         self.shared.committed.lock().databases["app"].subscribe_query_events(options)
@@ -245,9 +273,7 @@ impl Engine {
             databases.insert(name, Arc::new(raw));
         }
         let committed = Committed { catalog, databases };
-        let identity = committed.catalog.administrator_identity();
         self.shared.publish_quietly(committed)?;
-        self.default_session.lock().identity = identity;
         Ok(())
     }
     pub fn restore_snapshot(&self, snapshot: Snapshot) -> Result<()> {
@@ -415,7 +441,8 @@ impl Coordinator {
     fn publish_locked(&self, state: Committed, emit: bool) -> Result<()> {
         self.check()?;
         if let Some(persistence) = &self.persistence {
-            persistence.commit(&self.committed.lock(), &state)?;
+            let before = self.committed.lock().clone();
+            persistence.commit(&before, &state)?;
         }
         let before = std::mem::replace(&mut *self.committed.lock(), state.clone());
         if emit {
@@ -425,12 +452,15 @@ impl Coordinator {
     }
 }
 
-impl EngineSession {
+impl SessionState {
     fn new(shared: Arc<Coordinator>) -> Self {
         let identity = shared.committed.lock().catalog.administrator_identity();
         Self {
             shared,
             last_query_read: false,
+            endpoint_id: None,
+            endpoint_stop: None,
+            ceiling: None,
             database: "app".into(),
             identity,
             client_host: "localhost".into(),
@@ -466,9 +496,7 @@ impl EngineSession {
             key => self.variables.get(key).cloned(),
         }
     }
-    pub fn current_database(&self) -> &str {
-        &self.database
-    }
+
     pub fn authenticate(&mut self, username: &str, salt: &[u8], response: &[u8]) -> bool {
         self.reset_authentication_state();
         let state = self.shared.committed.lock();
@@ -479,6 +507,9 @@ impl EngineSession {
             return false;
         };
         self.identity = identity;
+        if let Some(scopes) = &self.ceiling {
+            self.identity.set_ceiling(scopes.clone());
+        }
         true
     }
 
@@ -490,6 +521,9 @@ impl EngineSession {
         self.reset_authentication_state();
         self.shared.check()?;
         self.identity = Identity::external(username, scopes)?;
+        if let Some(scopes) = &self.ceiling {
+            self.identity.set_ceiling(scopes.clone());
+        }
         Ok(())
     }
 
@@ -599,6 +633,20 @@ impl EngineSession {
         Ok(())
     }
 
+    fn configure_visibility(&self, raw: &mut RawEngine, catalog: &Catalog) {
+        raw.visible_tables = if catalog.is_admin(&self.identity) {
+            None
+        } else {
+            Some(
+                raw.schemas
+                    .iter()
+                    .map(|entry| entry.key().clone())
+                    .chain(raw.views.iter().map(|entry| entry.key().clone()))
+                    .filter(|table| catalog.table_visible(&self.identity, &self.database, table))
+                    .collect(),
+            )
+        };
+    }
     fn configure_executor(&self, raw: &mut RawEngine) {
         if let Some(session) = &self.session_state {
             raw.copy_session_from(session);
@@ -650,6 +698,8 @@ impl EngineSession {
             .map(str::to_owned)
             .collect();
         raw.database_charsets = state.catalog.database_charsets().clone();
+        self.configure_visibility(&mut raw, &state.catalog);
+        self.authorize_views(&state, &self.database, &sql, &mut BTreeSet::new())?;
         self.configure_executor(&mut raw);
         raw.execute_sql_internal(&sql, &sql, false, false)
     }
@@ -659,26 +709,6 @@ impl EngineSession {
     pub fn autocommit(&self) -> bool {
         self.autocommit
     }
-    pub fn execute_sql(&mut self, sql: &str) -> Result<Vec<QueryResult>> {
-        self.run(sql, Ok(sql.to_owned()), true)
-    }
-    pub fn execute_sql_with_params(
-        &mut self,
-        sql: &str,
-        params: &[Value],
-    ) -> Result<Vec<QueryResult>> {
-        self.run(sql, substitute_params(sql, params), true)
-    }
-    pub(crate) fn execute_sql_for_wire(&mut self, sql: &str) -> Result<Vec<QueryResult>> {
-        self.run(sql, Ok(sql.to_owned()), false)
-    }
-    pub(crate) fn execute_sql_with_params_for_wire(
-        &mut self,
-        sql: &str,
-        params: &[Value],
-    ) -> Result<Vec<QueryResult>> {
-        self.run(sql, substitute_params(sql, params), false)
-    }
     fn run(
         &mut self,
         event_sql: &str,
@@ -686,19 +716,9 @@ impl EngineSession {
         normalize: bool,
     ) -> Result<Vec<QueryResult>> {
         self.last_query_read = false;
-        let database = self
-            .shared
-            .hooks
-            .automatic_reads()
-            .then(|| self.database.clone());
-        let outcome = self.run_observed(event_sql, execution, normalize);
-        if self.last_query_read {
-            if let (Some(database), Ok(results)) = (database, &outcome) {
-                self.shared.hooks.read(&database, event_sql, results);
-            }
-        }
-        outcome
+        self.run_observed(event_sql, execution, normalize)
     }
+
     fn run_observed(
         &mut self,
         event_sql: &str,
@@ -735,6 +755,128 @@ impl EngineSession {
             ),
         }
         outcome
+    }
+    fn authorize_views(
+        &self,
+        state: &Committed,
+        database: &str,
+        sql: &str,
+        visited: &mut BTreeSet<String>,
+    ) -> Result<()> {
+        use sqlparser::ast::{Visit, Visitor};
+        use std::ops::ControlFlow;
+        struct Relations(BTreeSet<String>);
+        impl Visitor for Relations {
+            type Break = ();
+            fn pre_visit_relation(&mut self, name: &ObjectName) -> ControlFlow<()> {
+                if let Some(name) = name.0.last() {
+                    self.0.insert(name.value.clone());
+                }
+                ControlFlow::Continue(())
+            }
+        }
+        if state.catalog.is_admin(&self.identity) {
+            return Ok(());
+        }
+        let mut relations = Relations(BTreeSet::new());
+        let _ = catalog::parse_session_statement(sql)?.visit(&mut relations);
+        for name in relations.0 {
+            if let Some(definition) = state
+                .databases
+                .get(database)
+                .and_then(|raw| raw.views.get(&name))
+            {
+                ensure!(visited.insert(name.clone()), "cyclic view reference");
+                let definition = strip_view_check_option(&definition);
+                state
+                    .catalog
+                    .authorize_and_normalize(&self.identity, database, &definition)?;
+                self.authorize_views(state, database, &definition, visited)?;
+                visited.remove(&name);
+            }
+        }
+        Ok(())
+    }
+    fn authorize_request(&self, sql: &str) -> Result<()> {
+        let mut database = self.database.clone();
+        let mut state = self.current_state()?;
+        let mut prepared = self.prepared.clone();
+        for sql in split_sql_statements(sql)? {
+            if let Some(target) = parse_use(&sql)? {
+                state.catalog.check_database(&self.identity, &target)?;
+                database = target;
+                continue;
+            }
+            if let Some(command) = AdminCommand::parse(&sql)? {
+                state.catalog.apply(&self.identity, command)?;
+                continue;
+            }
+            let sql = if let Some(command) = PreparedCommand::parse(&sql)? {
+                match command {
+                    PreparedCommand::Prepare { name, source } => {
+                        let sql = match source {
+                            PreparedSource::Sql(sql) => sql,
+                            PreparedSource::Variable(name) => match self
+                                .session_state
+                                .as_ref()
+                                .map(|raw| raw.user_variable(&name))
+                            {
+                                Some(Value::String(sql)) => sql,
+                                _ => return Err(anyhow!("PREPARE source must be a SQL string")),
+                            },
+                        };
+                        state
+                            .catalog
+                            .validate_prepared(&self.identity, &database, &sql)?;
+                        prepared.insert(name, (database.clone(), sql.clone()));
+                        sql
+                    }
+                    PreparedCommand::Execute { name, variables } => {
+                        let (owner, sql) = prepared
+                            .get(&name)
+                            .ok_or_else(|| anyhow!("unknown prepared statement: {name}"))?;
+                        ensure!(
+                            owner == &database,
+                            "prepared statement belongs to another database"
+                        );
+                        let params = variables
+                            .iter()
+                            .map(|name| {
+                                self.session_state
+                                    .as_ref()
+                                    .map(|raw| raw.user_variable(name))
+                                    .unwrap_or(Value::Null)
+                            })
+                            .collect::<Vec<_>>();
+                        substitute_params(sql, &params)?
+                    }
+                    PreparedCommand::Deallocate { name } => {
+                        ensure!(
+                            prepared.remove(&name).is_some(),
+                            "unknown prepared statement: {name}"
+                        );
+                        continue;
+                    }
+                }
+            } else {
+                sql
+            };
+            let normalized = state
+                .catalog
+                .authorize_and_normalize(&self.identity, &database, &sql)
+                .or_else(|error| {
+                    let Some(raw) = state.databases.get(&database) else {
+                        return Err(error);
+                    };
+                    state.catalog.authorize_and_normalize(
+                        &self.identity,
+                        &database,
+                        &raw.rewrite_sql_for_parser(&sql),
+                    )
+                })?;
+            self.authorize_views(&state, &database, &normalized, &mut BTreeSet::new())?;
+        }
+        Ok(())
     }
     fn authorize(&self, sql: &str) -> Result<String> {
         let state = self.shared.committed.lock();
@@ -1435,6 +1577,7 @@ impl EngineSession {
                 .map(str::to_owned)
                 .collect();
             raw.database_charsets = state.catalog.database_charsets().clone();
+            self.configure_visibility(&mut raw, &state.catalog);
             // DROP TEMPORARY must never remove a permanent table of the same name.
             if let Some(Statement::Drop {
                 temporary: true,
@@ -1463,7 +1606,46 @@ impl EngineSession {
                 normalized = format!("DROP TABLE {}", targets.join(", "));
             }
             self.configure_executor(&mut raw);
+            self.authorize_views(&state, &self.database, &normalized, &mut BTreeSet::new())?;
             let mut out = raw.execute_sql_internal(text, &normalized, normalize, emit)?;
+            if !read && !ddl && !state.catalog.is_admin(&self.identity) {
+                // Check the actual row changes too: cascades and writable views can
+                // affect tables that do not appear in the original statement.
+                let before = &state.databases[&self.database];
+                for table in raw.rows.iter() {
+                    let previous = before.rows.get(table.key());
+                    for (key, row) in table.iter() {
+                        let old = previous.as_ref().and_then(|rows| rows.get(key));
+                        let privilege = if old.is_none() {
+                            AuthPrivilege::Insert
+                        } else {
+                            AuthPrivilege::Update
+                        };
+                        if old != Some(row) {
+                            state.catalog.check_table(
+                                &self.identity,
+                                &self.database,
+                                table.key(),
+                                privilege,
+                            )?;
+                        }
+                    }
+                }
+                for table in before.rows.iter() {
+                    let current = raw.rows.get(table.key());
+                    if table
+                        .keys()
+                        .any(|key| current.as_ref().is_none_or(|rows| !rows.contains_key(key)))
+                    {
+                        state.catalog.check_table(
+                            &self.identity,
+                            &self.database,
+                            table.key(),
+                            AuthPrivilege::Delete,
+                        )?;
+                    }
+                }
+            }
             for result in &mut out {
                 preserve_select_result_headers(text, result);
                 for (metadata, name) in result.column_metadata.iter_mut().zip(&result.columns) {
@@ -1508,7 +1690,7 @@ impl EngineSession {
     }
 }
 
-impl Drop for EngineSession {
+impl Drop for SessionState {
     fn drop(&mut self) {
         self.release_advisory_locks();
     }
@@ -1714,6 +1896,7 @@ impl RawEngine {
             session_user: self.session_user.clone(),
             current_user: self.current_user.clone(),
             visible_databases: self.visible_databases.clone(),
+            visible_tables: self.visible_tables.clone(),
             database_charsets: self.database_charsets.clone(),
             cfg: self.cfg.clone(),
             schemas: self.schemas.clone(),
@@ -1999,7 +2182,7 @@ mod tests {
         let mut reader = engine.session();
         let sql = "SELECT * FROM items";
         assert_eq!(reader.execute_sql(sql).unwrap()[0].columns, ["id"]);
-        let read = reader.session_state.as_ref().unwrap().clone();
+        let read = reader.inner.lock().session_state.as_ref().unwrap().clone();
         for table in ["items", "unrelated"] {
             assert!(
                 before
@@ -2024,6 +2207,8 @@ mod tests {
         assert!(Arc::ptr_eq(
             &cached,
             reader
+                .inner
+                .lock()
                 .session_state
                 .as_ref()
                 .unwrap()
@@ -2083,7 +2268,7 @@ mod tests {
         reader
             .execute_sql("SELECT id FROM items WHERE value = 10")
             .unwrap();
-        let read = reader.session_state.as_ref().unwrap();
+        let read = reader.inner.lock().session_state.as_ref().unwrap().clone();
         for table in ["items", "unrelated"] {
             assert!(
                 before

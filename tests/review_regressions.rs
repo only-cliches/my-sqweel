@@ -1,5 +1,5 @@
 use my_sqweel::{
-    AsyncEngine,
+    Storage,
     sql::engine::{Engine, EngineConfig},
     storage::RocksDbStorage,
 };
@@ -93,39 +93,46 @@ fn successful_prefix_of_failed_async_batch_is_persisted() {
         .unwrap()
         .block_on(async {
             let storage = RocksDbStorage::open(None).await.unwrap();
-            let engine = AsyncEngine::open(EngineConfig::default(), storage.clone())
-                .await
-                .unwrap();
+            let engine =
+                Engine::open_async(EngineConfig::default(), Storage::custom(storage.clone()))
+                    .await
+                    .unwrap();
             engine
-                .execute_sql("CREATE TABLE items (id INT PRIMARY KEY)")
+                .execute_sql_async("CREATE TABLE items (id INT PRIMARY KEY)")
                 .await
                 .unwrap();
             assert!(
                 engine
-                    .execute_sql("INSERT INTO items VALUES (1); INSERT INTO items VALUES (1)")
+                    .execute_sql_async("INSERT INTO items VALUES (1); INSERT INTO items VALUES (1)")
                     .await
                     .is_err()
             );
             assert_eq!(
-                engine.execute_sql("SELECT * FROM items").await.unwrap()[0]
+                engine
+                    .execute_sql_async("SELECT * FROM items")
+                    .await
+                    .unwrap()[0]
                     .rows
                     .len(),
                 1
             );
-            let session = engine.session();
+            let mut session = engine.session();
             assert!(
                 session
-                    .execute_sql("INSERT INTO items VALUES (2); INSERT INTO items VALUES (2)")
+                    .execute_sql_async("INSERT INTO items VALUES (2); INSERT INTO items VALUES (2)")
                     .await
                     .is_err()
             );
             drop(session);
             drop(engine);
-            let reopened = AsyncEngine::open(EngineConfig::default(), storage)
+            let reopened = Engine::open_async(EngineConfig::default(), Storage::custom(storage))
                 .await
                 .unwrap();
             assert_eq!(
-                reopened.execute_sql("SELECT * FROM items").await.unwrap()[0]
+                reopened
+                    .execute_sql_async("SELECT * FROM items")
+                    .await
+                    .unwrap()[0]
                     .rows
                     .len(),
                 2,
@@ -137,39 +144,35 @@ fn successful_prefix_of_failed_async_batch_is_persisted() {
 #[test]
 fn ctas_enforces_declared_primary_key() {
     let engine = Engine::default();
-    engine
+    let mut session = engine.session();
+    session
         .execute_sql("CREATE TABLE source (id INT); INSERT INTO source VALUES (10), (10)")
         .unwrap();
     let result =
-        engine.execute_sql("CREATE TABLE copied (id INT PRIMARY KEY) AS SELECT id FROM source");
+        session.execute_sql("CREATE TABLE copied (id INT PRIMARY KEY) AS SELECT id FROM source");
     assert!(
         result.is_err(),
         "CTAS accepted duplicate primary keys: {result:?}"
     );
-    engine
+    session
         .execute_sql(
             "CREATE TEMPORARY TABLE grouped AS SELECT id, SUM(id) AS total FROM source GROUP BY id",
         )
         .unwrap();
-    let rows = engine.execute_sql("SELECT id, total FROM grouped").unwrap();
+    let rows = session
+        .execute_sql("SELECT id, total FROM grouped")
+        .unwrap();
     assert_eq!(rows[0].rows[0]["total"], json!("20"));
 }
 
 fn with_wire(test: impl FnOnce(&mut mysql::Conn)) {
-    use std::net::TcpListener;
-    use std::sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    };
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    let stop = Arc::new(AtomicBool::new(false));
-    let worker_stop = stop.clone();
-    let worker = std::thread::spawn(move || {
-        my_sqweel::server::WireServer::new(Arc::new(Engine::default()))
-            .serve_listener_until(listener, worker_stop)
-            .unwrap();
-    });
+    let mut endpoint = Engine::default()
+        .spawn_sql(my_sqweel::SqlEndpointConfig::new(
+            "127.0.0.1:0".parse().unwrap(),
+            my_sqweel::server::Authentication::AllowAll,
+        ))
+        .unwrap();
+    let address = endpoint.local_addr();
     let mut conn = mysql::Conn::new(
         mysql::OptsBuilder::new()
             .ip_or_hostname(Some("127.0.0.1"))
@@ -180,8 +183,7 @@ fn with_wire(test: impl FnOnce(&mut mysql::Conn)) {
     .unwrap();
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| test(&mut conn)));
     drop(conn);
-    stop.store(true, Ordering::Relaxed);
-    worker.join().unwrap();
+    endpoint.shutdown().unwrap();
     if let Err(payload) = result {
         std::panic::resume_unwind(payload);
     }
@@ -324,8 +326,13 @@ fn temporary_tables_shadow_permanent_tables_and_follow_transactions() {
 fn temporary_tables_are_not_persisted_and_are_database_scoped() {
     let dir = tempfile::tempdir().unwrap();
     {
-        let engine =
-            Engine::open_with_data_dir(EngineConfig::default(), dir.path().to_str()).unwrap();
+        let engine = Engine::open(
+            EngineConfig::default(),
+            (dir.path().to_str()).map_or(my_sqweel::Storage::Memory, |path| {
+                my_sqweel::Storage::RocksDb(path.into())
+            }),
+        )
+        .unwrap();
         let mut session = engine.session();
         session.execute_sql("CREATE DATABASE other; CREATE TEMPORARY TABLE scratch (id INT); INSERT INTO scratch VALUES (1); USE other").unwrap();
         assert!(session.execute_sql("SELECT * FROM scratch").is_err());
@@ -339,8 +346,13 @@ fn temporary_tables_are_not_persisted_and_are_database_scoped() {
             json!(1)
         );
     }
-    let reopened =
-        Engine::open_with_data_dir(EngineConfig::default(), dir.path().to_str()).unwrap();
+    let reopened = Engine::open(
+        EngineConfig::default(),
+        (dir.path().to_str()).map_or(my_sqweel::Storage::Memory, |path| {
+            my_sqweel::Storage::RocksDb(path.into())
+        }),
+    )
+    .unwrap();
     assert!(reopened.execute_sql("SELECT * FROM scratch").is_err());
     assert!(
         reopened

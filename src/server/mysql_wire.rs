@@ -142,21 +142,53 @@ impl AsyncAuthenticatorHandle {
     fn authenticate(
         &self,
         request: AuthenticationRequest,
+        stop: Option<Arc<AtomicBool>>,
     ) -> anyhow::Result<Option<AuthenticatedUser>> {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
-        runtime.block_on(self.0.authenticate(request))
+        runtime.block_on(async {
+            let future = self.0.authenticate(request);
+            tokio::pin!(future);
+            loop {
+                anyhow::ensure!(
+                    !stop
+                        .as_ref()
+                        .is_some_and(|stop| stop.load(Ordering::Acquire)),
+                    "SQL endpoint stopped"
+                );
+                tokio::select! {
+                    result = &mut future => return result,
+                    _ = tokio::time::sleep(Duration::from_millis(10)), if stop.is_some() => {}
+                }
+            }
+        })
     }
 
     fn account_operation(
         &self,
         operation: AccountOperation,
+        stop: Option<Arc<AtomicBool>>,
     ) -> anyhow::Result<AccountOperationAction> {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
-        runtime.block_on(self.0.account_operation(operation))
+        runtime.block_on(async {
+            let future = self.0.account_operation(operation);
+            tokio::pin!(future);
+            loop {
+                anyhow::ensure!(
+                    !stop
+                        .as_ref()
+                        .is_some_and(|stop| stop.load(Ordering::Acquire)),
+                    "SQL endpoint stopped"
+                );
+                tokio::select! {
+                    result = &mut future => return result,
+                    _ = tokio::time::sleep(Duration::from_millis(10)), if stop.is_some() => {}
+                }
+            }
+        })
     }
 }
 
@@ -222,7 +254,11 @@ impl Authentication {
         Self::Callback(AsyncAuthenticatorHandle::new(authenticator))
     }
 
-    fn authenticate(&self, request: AuthenticationRequest) -> anyhow::Result<AuthDecision> {
+    fn authenticate(
+        &self,
+        request: AuthenticationRequest,
+        stop: Option<Arc<AtomicBool>>,
+    ) -> anyhow::Result<AuthDecision> {
         match self {
             Self::EngineAccounts => Ok(AuthDecision::EngineAccounts),
             Self::AllowAll => Ok(AuthDecision::External(AuthenticatedUser::new(
@@ -247,7 +283,7 @@ impl Authentication {
                 })
                 .unwrap_or(AuthDecision::Reject)),
             Self::Callback(authenticator) => Ok(authenticator
-                .authenticate(request)?
+                .authenticate(request, stop)?
                 .map(AuthDecision::External)
                 .unwrap_or(AuthDecision::Reject)),
         }
@@ -309,90 +345,81 @@ pub fn verify_mysql_native_password(password: &str, challenge: &[u8], response: 
 }
 
 #[derive(Clone)]
-pub struct WireServer {
+pub(crate) struct WireServer {
+    endpoint: Option<(
+        super::SqlEndpointConfig,
+        Arc<super::endpoint::Clients>,
+        uuid::Uuid,
+    )>,
     engine: Arc<Engine>,
     authentication: Authentication,
 }
 
 impl WireServer {
-    pub fn new(engine: Arc<Engine>) -> Self {
-        Self::with_authentication(engine, Authentication::default())
-    }
-
-    pub fn with_authentication(engine: Arc<Engine>, authentication: Authentication) -> Self {
+    pub(crate) fn scoped(
+        engine: Arc<Engine>,
+        config: super::SqlEndpointConfig,
+        clients: Arc<super::endpoint::Clients>,
+    ) -> Self {
         Self {
             engine,
-            authentication,
+            authentication: config.authentication.clone(),
+            endpoint: Some((config, clients, uuid::Uuid::new_v4())),
         }
     }
-
-    pub fn serve(&self, bind_addr: std::net::SocketAddr) -> io::Result<()> {
-        let listener = TcpListener::bind(bind_addr)?;
-        self.serve_listener(listener)
-    }
-
-    pub fn serve_listener(&self, listener: TcpListener) -> io::Result<()> {
-        for stream in listener.incoming() {
-            match stream {
-                Ok(stream) => {
-                    self.spawn_session(stream);
+    pub(crate) fn serve_scoped(&self, listener: TcpListener) -> io::Result<()> {
+        let clients = &self.endpoint.as_ref().unwrap().1;
+        while !clients.stopping.load(Ordering::Acquire) {
+            match listener.accept() {
+                Ok((stream, _)) => self.spawn_session(stream),
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(10))
                 }
-                Err(err) => {
-                    tracing::warn!(error = %err, "failed accepting mysql connection");
-                }
+                Err(error) => return Err(error),
             }
         }
         Ok(())
     }
-
-    pub fn serve_listener_until(
-        &self,
-        listener: TcpListener,
-        stop: Arc<AtomicBool>,
-    ) -> io::Result<()> {
-        // This is a blocking embedding API. Keep its private reactor outside any
-        // caller's Tokio runtime so block_on and runtime shutdown remain valid.
-        if tokio::runtime::Handle::try_current().is_ok() {
-            return std::thread::scope(|scope| {
-                scope
-                    .spawn(|| self.serve_listener_until(listener, stop))
-                    .join()
-                    .unwrap_or_else(|_| Err(io::Error::other("mysql accept worker panicked")))
-            });
-        }
-        listener.set_nonblocking(true)?;
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_io()
-            .enable_time()
-            .build()?;
-        runtime.block_on(async {
-            let listener = tokio::net::TcpListener::from_std(listener)?;
-            // The timer only checks shutdown. Socket readiness wakes accept
-            // immediately, without adding 50 ms to each fresh SQL connection.
-            let mut shutdown_check = tokio::time::interval(Duration::from_millis(50));
-            while !stop.load(Ordering::Relaxed) {
-                tokio::select! {
-                    accepted = listener.accept() => match accepted {
-                        Ok((stream, _)) => self.spawn_session(stream.into_std()?),
-                        Err(err) => {
-                            tracing::warn!(error = %err, "failed accepting mysql connection");
-                            tokio::time::sleep(Duration::from_millis(50)).await;
-                        }
-                    },
-                    _ = shutdown_check.tick() => {}
-                }
-            }
-            Ok(())
-        })
-    }
-
     fn spawn_session(&self, stream: std::net::TcpStream) {
         let mut backend =
             Backend::with_authentication(self.engine.clone(), self.authentication.clone());
         if let Ok(peer) = stream.peer_addr() {
             backend.session.set_client_host(peer.ip().to_string());
         }
-        std::thread::spawn(move || {
+        let connection_id = uuid::Uuid::new_v4();
+        let clients = self
+            .endpoint
+            .as_ref()
+            .map(|(_, clients, _)| clients.clone());
+        if let Some((config, registry, endpoint_id)) = &self.endpoint {
+            backend.session.set_endpoint(
+                *endpoint_id,
+                config.scopes.clone(),
+                registry.stopping.clone(),
+            );
+            backend.stopping = Some(registry.stopping.clone());
+            backend.default_database = Some(config.default_database.clone());
+            let mut streams = registry.streams.lock().unwrap();
+            if registry.stopping.load(Ordering::Acquire) {
+                return;
+            }
+            let Ok(socket) = stream.try_clone() else {
+                return;
+            };
+            streams.insert(connection_id, socket);
+        }
+        let cleanup = clients.clone();
+        let worker = std::thread::spawn(move || {
+            struct Cleanup(Option<Arc<super::endpoint::Clients>>, uuid::Uuid);
+            impl Drop for Cleanup {
+                fn drop(&mut self) {
+                    if let Some(clients) = &self.0 {
+                        clients.streams.lock().unwrap().remove(&self.1);
+                    }
+                }
+            }
+            let _cleanup = Cleanup(cleanup, connection_id);
+
             if let Err(err) = stream.set_nonblocking(false) {
                 tracing::warn!(error = %err, "failed setting mysql session stream to blocking mode");
                 return;
@@ -407,10 +434,17 @@ impl WireServer {
                 tracing::warn!(error = %err, "mysql session ended with error");
             }
         });
+        if let Some(clients) = clients {
+            let mut workers = clients.workers.lock().unwrap();
+            workers.retain(|worker| !worker.is_finished());
+            workers.push(worker);
+        }
     }
 }
 
 struct Backend {
+    stopping: Option<Arc<AtomicBool>>,
+    default_database: Option<String>,
     session: EngineSession,
     authentication: Authentication,
     next_stmt_id: AtomicU32,
@@ -427,6 +461,8 @@ struct PreparedStatement {
 impl Backend {
     fn with_authentication(engine: Arc<Engine>, authentication: Authentication) -> Self {
         Self {
+            default_database: None,
+            stopping: None,
             session: engine.session(),
             authentication,
             next_stmt_id: AtomicU32::new(1),
@@ -531,12 +567,15 @@ impl<W: io::Read + io::Write> MysqlShim<W> for Backend {
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
         let decision = self
             .authentication
-            .authenticate(AuthenticationRequest {
-                username: user.to_owned(),
-                challenge: context.auth_plugin_data.to_vec(),
-                response: context.auth_response.to_vec(),
-                database: database.clone(),
-            })
+            .authenticate(
+                AuthenticationRequest {
+                    username: user.to_owned(),
+                    challenge: context.auth_plugin_data.to_vec(),
+                    response: context.auth_response.to_vec(),
+                    database: database.clone(),
+                },
+                self.stopping.clone(),
+            )
             .map_err(|_| io::Error::new(io::ErrorKind::PermissionDenied, "Access denied"))?;
         match decision {
             AuthDecision::EngineAccounts => {
@@ -562,7 +601,7 @@ impl<W: io::Read + io::Write> MysqlShim<W> for Backend {
                 ));
             }
         }
-        if let Some(database) = database {
+        if let Some(database) = database.or_else(|| self.default_database.clone()) {
             self.session.use_database(&database).map_err(|error| {
                 io::Error::new(io::ErrorKind::PermissionDenied, error.to_string())
             })?;
@@ -692,65 +731,41 @@ impl Backend {
         query: &str,
         params: &[Value],
     ) -> anyhow::Result<Vec<QueryResult>> {
-        if params.is_empty() {
-            return self.execute_text_query(query);
-        }
-        let bound = crate::sql::engine::bind_params(query, params)?;
-        if let Some(results) = self.handle_external_account_operation(&bound)? {
-            return Ok(results);
-        }
-        self.session.execute_sql_with_params_for_wire(query, params)
+        let authentication = self.authentication.clone();
+        let stopping = self.stopping.clone();
+        let warnings = self.warnings.clone();
+        let last_insert_id = self.last_insert_id;
+        let administrator = self.session.require_administrator().is_ok();
+        self.session.execute_wire_with(query, params, |query| {
+            if let Some(column) = last_insert_id_column(query) {
+                return Ok(Some(vec![last_insert_id_result(last_insert_id, column)]));
+            }
+            if query
+                .trim()
+                .trim_end_matches(';')
+                .trim()
+                .eq_ignore_ascii_case("SHOW WARNINGS")
+            {
+                return Ok(Some(vec![show_warnings_result(&warnings)]));
+            }
+            if let Authentication::Callback(authenticator) = &authentication {
+                if let Some(operation) = account_operation(query) {
+                    anyhow::ensure!(administrator, "Administrative command denied");
+                    if authenticator.account_operation(operation, stopping.clone())?
+                        == AccountOperationAction::Handled
+                    {
+                        return Ok(Some(vec![QueryResult::default()]));
+                    }
+                }
+            }
+            Ok(None)
+        })
     }
 
     fn execute_text_query(&mut self, query: &str) -> anyhow::Result<Vec<QueryResult>> {
-        if let Some(result) = self.execute_session_query(query) {
-            return Ok(vec![result]);
-        }
-        if let Some(column) = last_insert_id_column(query) {
-            return Ok(vec![last_insert_id_result(self.last_insert_id, column)]);
-        }
-        if let Some(results) = self.handle_external_account_operation(query)? {
-            return Ok(results);
-        }
         let parser_query =
             crate::sql::engine::rewrite_delete_returning_order_limit_for_parser(query);
-        let results = self.session.execute_sql_for_wire(&parser_query)?;
-        Ok(results)
-    }
-
-    fn handle_external_account_operation(
-        &mut self,
-        query: &str,
-    ) -> anyhow::Result<Option<Vec<QueryResult>>> {
-        let Authentication::Callback(authenticator) = &self.authentication else {
-            return Ok(None);
-        };
-        let Some(operation) = account_operation(query) else {
-            return Ok(None);
-        };
-        self.session.require_administrator()?;
-        match authenticator.account_operation(operation)? {
-            AccountOperationAction::Continue => Ok(None),
-            AccountOperationAction::Handled => Ok(Some(vec![QueryResult::default()])),
-        }
-    }
-
-    fn execute_session_query(&mut self, query: &str) -> Option<QueryResult> {
-        if !crate::sql::engine::may_start_with(query, &["SELECT", "SHOW"]) {
-            return None;
-        }
-        // Never swallow a multi-statement request: later transaction controls
-        // and writes must reach the same per-connection executor.
-        let statements = crate::sql::parse(query).ok()?;
-        if statements.len() != 1 {
-            return None;
-        }
-        let trimmed = query.trim().trim_end_matches(';').trim();
-        let upper = trimmed.to_ascii_uppercase();
-        if upper.starts_with("SHOW WARNINGS") {
-            return Some(show_warnings_result(&self.warnings));
-        }
-        None
+        self.execute_prepared_query(&parser_query, &[])
     }
 }
 
@@ -2111,7 +2126,7 @@ mod tests {
     #[test]
     fn wire_text_and_prepared_statements_share_transaction_state() {
         let engine =
-            Arc::new(Engine::open_with_data_dir(EngineConfig::mysql_strict(), None).unwrap());
+            Arc::new(Engine::open(EngineConfig::mysql_strict(), crate::Storage::Memory).unwrap());
         let mut backend = Backend::with_authentication(engine.clone(), Authentication::default());
         backend
             .execute_text_query("CREATE TABLE wire_tx (id BIGINT PRIMARY KEY)")
@@ -2165,16 +2180,14 @@ mod tests {
     fn wire_session_shortcuts_do_not_swallow_later_statements() {
         let mut backend =
             Backend::with_authentication(Arc::new(Engine::default()), Authentication::default());
-        assert!(
-            backend
-                .execute_session_query("SELECT @@autocommit; BEGIN")
-                .is_none()
-        );
-        assert!(
-            backend
-                .execute_session_query("SET autocommit = 0")
-                .is_none()
-        );
+        backend
+            .execute_text_query("SELECT @@autocommit; BEGIN")
+            .unwrap();
+        assert!(backend.session.is_in_transaction());
+        backend
+            .execute_text_query("ROLLBACK; SET autocommit = 0")
+            .unwrap();
+        assert!(!backend.session.autocommit());
     }
 
     #[test]
@@ -2287,7 +2300,7 @@ mod tests {
 
     #[test]
     fn preparing_a_write_does_not_execute_it_for_metadata() {
-        let engine = Engine::open_with_data_dir(EngineConfig::mysql_strict(), None).unwrap();
+        let engine = Engine::open(EngineConfig::mysql_strict(), crate::Storage::Memory).unwrap();
         engine
             .execute_sql(
                 "CREATE TABLE users (id BIGINT PRIMARY KEY AUTO_INCREMENT, email TEXT UNIQUE)",

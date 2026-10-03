@@ -1,3 +1,6 @@
+pub(crate) mod custom;
+pub(crate) mod delta;
+pub use custom::{CustomStorage, Storage};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 

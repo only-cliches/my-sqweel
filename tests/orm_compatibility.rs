@@ -1,11 +1,8 @@
 mod common;
 
-use std::net::TcpListener;
-use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use my_sqweel::server::WireServer;
 use my_sqweel::sql::engine::{Engine, EngineConfig};
 use mysql::prelude::Queryable;
 use mysql::{Opts, Pool, Row, Value as MyValue};
@@ -15,7 +12,7 @@ use common::test_lock;
 #[test]
 fn common_orm_migration_introspection_and_prepared_crud_shapes_work() {
     let _guard = test_lock();
-    let url = start_strict_server();
+    let (url, _endpoint) = start_strict_server();
     let pool = Pool::new(Opts::from_url(&url).unwrap()).unwrap();
     let mut connection = connect_with_retry(&pool);
     let suffix = format!("{}_{}", std::process::id(), uuid::Uuid::new_v4().simple());
@@ -166,15 +163,19 @@ fn common_orm_migration_introspection_and_prepared_crud_shapes_work() {
         .unwrap();
 }
 
-fn start_strict_server() -> String {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    thread::spawn(move || {
-        let engine = Arc::new(Engine::new(EngineConfig::mysql_strict()));
-        engine.execute_sql("CREATE DATABASE test").unwrap();
-        WireServer::new(engine).serve_listener(listener).unwrap();
-    });
-    format!("mysql://root@{address}/test")
+fn start_strict_server() -> (String, my_sqweel::SqlEndpoint) {
+    let engine = Engine::new(EngineConfig::mysql_strict());
+    engine.execute_sql("CREATE DATABASE test").unwrap();
+    let endpoint = engine
+        .spawn_sql(my_sqweel::SqlEndpointConfig::new(
+            "127.0.0.1:0".parse().unwrap(),
+            my_sqweel::server::Authentication::AllowAll,
+        ))
+        .unwrap();
+    (
+        format!("mysql://root@{}/test", endpoint.local_addr()),
+        endpoint,
+    )
 }
 
 fn connect_with_retry(pool: &Pool) -> mysql::PooledConn {

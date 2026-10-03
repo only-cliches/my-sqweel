@@ -7,10 +7,7 @@
 mod common;
 
 use std::collections::BTreeSet;
-use std::net::TcpListener;
-use std::sync::Arc;
 
-use my_sqweel::server::WireServer;
 use my_sqweel::sql::engine::{Engine, EngineConfig};
 use mysql::prelude::Queryable;
 use mysql::{Conn, Opts, Value};
@@ -294,13 +291,19 @@ impl Deterministic {
     }
 }
 
-fn start_mysqweel() -> String {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind MySqweel server");
-    let address = listener.local_addr().expect("MySqweel listener address");
-    let engine = Arc::new(Engine::new(EngineConfig::mysql_strict()));
+fn start_mysqweel() -> (String, my_sqweel::SqlEndpoint) {
+    let engine = Engine::new(EngineConfig::mysql_strict());
     engine.execute_sql("CREATE DATABASE test").unwrap();
-    std::thread::spawn(move || WireServer::new(engine).serve_listener(listener).unwrap());
-    format!("mysql://root@{address}/test")
+    let endpoint = engine
+        .spawn_sql(my_sqweel::SqlEndpointConfig::new(
+            "127.0.0.1:0".parse().unwrap(),
+            my_sqweel::server::Authentication::AllowAll,
+        ))
+        .unwrap();
+    (
+        format!("mysql://root@{}/test", endpoint.local_addr()),
+        endpoint,
+    )
 }
 
 fn connect(url: &str) -> Conn {
@@ -411,7 +414,8 @@ fn generated_stateful_programs_match_mariadb() {
     let (seeds, require_variant_coverage) = configured_seeds();
 
     let target = common::mysql_compare_target();
-    let mut mysqweel = connect(&start_mysqweel());
+    let (url, _endpoint) = start_mysqweel();
+    let mut mysqweel = connect(&url);
     let mut mariadb = target.as_ref().map(|target| connect(target.url()));
     let mut covered = BTreeSet::new();
     let mut interactions = BTreeSet::new();

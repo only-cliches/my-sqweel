@@ -389,7 +389,7 @@ pub(super) fn virtual_select_result(
         }
         _ => None,
     });
-    let rows = rows
+    let mut rows = rows
         .into_iter()
         .filter_map(|row| {
             let mut view = row.clone();
@@ -403,13 +403,31 @@ pub(super) fn virtual_select_result(
                 }
             }
             match matches_selection(select.selection.as_ref(), &view) {
-                Ok(true) => Some(project_row(&select.projection, &view, 0)),
+                Ok(true) => Some(Ok(view)),
                 Ok(false) => None,
                 Err(err) => Some(Err(err)),
             }
         })
         .collect::<Result<Vec<_>>>()?;
 
+    if let Some(result) = aggregate_select_result(
+        select,
+        &mut rows,
+        &[],
+        &[],
+        &BTreeMap::new(),
+        None,
+        None,
+        0,
+        &eval_expr,
+        None,
+    )? {
+        return Ok(result);
+    }
+    let rows = rows
+        .iter()
+        .map(|row| project_row(&select.projection, row, 0))
+        .collect::<Result<Vec<_>>>()?;
     Ok(QueryResult {
         rows_affected: 0,
         last_insert_id: 0,
@@ -5664,7 +5682,7 @@ pub(super) fn cast_json_value(value: Value, data_type: &str) -> Result<Value> {
             }
         }
         return Ok(Value::Number(Number::from(
-            json_to_f64_lossy(&value)?.round() as i64
+            json_to_f64_lossy(&value)?.round() as i64,
         )));
     }
     if data_type.contains("decimal")

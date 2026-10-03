@@ -1,27 +1,8 @@
-# Async storage and custom backends
+# Custom async storage
 
-`AsyncEngine<S>` has one active storage backend. `S` implements the native
-async `AsyncStorage` trait. The crate supplies `RocksDbStorage`; applications can
-implement the trait for a CSV collection, an HTTP service, an object store, or
-another database.
+One `Engine` uses one storage backend across all embedded calls and SQL endpoints. Implement `AsyncStorage`, then open with `Engine::open(config, Storage::custom(backend))` or `Engine::open_async(config, Storage::custom(backend)).await`.
 
-The interface is table-oriented. A backend is never asked to produce a whole
-`EngineState`, a complete table, or a serialized engine snapshot.
-
-## Use the bundled RocksDB backend
-
-```rust,no_run
-use my_sqweel::AsyncEngine;
-use my_sqweel::sql::engine::EngineConfig;
-use my_sqweel::storage::RocksDbStorage;
-
-async fn open() -> anyhow::Result<AsyncEngine<RocksDbStorage>> {
-    let storage = RocksDbStorage::open(Some(".my-sqweel".into())).await?;
-    AsyncEngine::open(EngineConfig::default(), storage).await
-}
-```
-
-Pass `None` to `RocksDbStorage::open` to use a temporary database directory that is removed when the storage is dropped. `AsyncEngine::open_rocksdb` combines these calls for the bundled RocksDB backend.
+For bundled persistence, use `Storage::RocksDb(path)` directly. `Storage::Memory` keeps everything in memory. RocksDB writes each complete row as one value and commits related changes atomically.
 
 ## Storage contract
 
@@ -144,14 +125,15 @@ system supplies a transaction that groups them.
 
 The storage API is granular today. The compatibility SQL evaluator currently
 hydrates every configured table page into its in-process execution image when
-an async engine opens. A backend never has to materialize a table for the
+an engine opens. A backend never has to materialize a table for the
 engine, but the evaluator itself is not yet streaming. A future executor can
 consume `RowPage` directly so large scans stay bounded in the engine too.
 
 ## Async sessions and transactions
 
-`AsyncEngine::session()` creates an `AsyncEngineSession`. Its SQL methods are
-`async` and retain session state. At `COMMIT`, the resulting row/schema changes
+`Engine::session()` creates an `EngineSession`. Its sync methods and `_async` equivalents retain the same session state. At `COMMIT`, the resulting row/schema changes
 are emitted as one `StorageBatch`; a backend should make that batch atomic.
 
 See [execution filters](filters.md) for query routing and policy hooks.
+
+Storage futures must be `Send`. Accepted commits complete even if their async caller is cancelled. Storage errors prevent publication and poison the engine until reopened; custom backends must apply each batch atomically.

@@ -291,7 +291,6 @@ async fn failures_overflow_and_cancellation_are_isolated() {
 #[tokio::test]
 async fn mysql_clients_use_the_same_hook_registry() {
     use mysql::prelude::Queryable;
-    use std::sync::atomic::{AtomicBool, Ordering};
     let engine = Arc::new(Engine::default());
     let (_handle, mut rx) = listen(
         &engine,
@@ -300,16 +299,13 @@ async fn mysql_clients_use_the_same_hook_registry() {
             ..all()
         },
     );
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    let stop = Arc::new(AtomicBool::new(false));
-    let worker_stop = stop.clone();
-    let server_engine = engine.clone();
-    let worker = std::thread::spawn(move || {
-        my_sqweel::server::WireServer::new(server_engine)
-            .serve_listener_until(listener, worker_stop)
-            .unwrap()
-    });
+    let mut endpoint = engine
+        .spawn_sql(my_sqweel::SqlEndpointConfig::new(
+            "127.0.0.1:0".parse().unwrap(),
+            my_sqweel::server::Authentication::AllowAll,
+        ))
+        .unwrap();
+    let address = endpoint.local_addr();
     let mut conn = mysql::Conn::new(
         mysql::OptsBuilder::new()
             .ip_or_hostname(Some("127.0.0.1"))
@@ -323,8 +319,7 @@ async fn mysql_clients_use_the_same_hook_registry() {
     conn.exec_drop("INSERT INTO wire_items VALUES (?)", (7,))
         .unwrap();
     drop(conn);
-    stop.store(true, Ordering::Relaxed);
-    worker.join().unwrap();
+    endpoint.shutdown().unwrap();
     assert!(
         matches!(&*next(&mut rx).await, Event::TableCreated { table, .. } if table == "wire_items")
     );
@@ -336,7 +331,8 @@ async fn mysql_clients_use_the_same_hook_registry() {
 #[tokio::test]
 async fn schema_key_changes_and_other_databases_use_current_row_identity() {
     let engine = Engine::default();
-    engine.execute_sql("CREATE DATABASE other; USE other; CREATE TABLE items (id INT, v INT); INSERT INTO items VALUES (1, 4)").unwrap();
+    let mut session = engine.session();
+    session.execute_sql("CREATE DATABASE other; USE other; CREATE TABLE items (id INT, v INT); INSERT INTO items VALUES (1, 4)").unwrap();
     let (_subscription, mut rx) = listen(
         &engine,
         QueryHookOptions {
@@ -344,7 +340,7 @@ async fn schema_key_changes_and_other_databases_use_current_row_identity() {
             ..all()
         },
     );
-    engine
+    session
         .execute_sql("ALTER TABLE items ADD PRIMARY KEY (id)")
         .unwrap();
     assert!(
@@ -356,7 +352,7 @@ async fn schema_key_changes_and_other_databases_use_current_row_identity() {
     assert!(
         matches!(&*next(&mut rx).await, Event::Write { rows, .. } if rows[0].key == primary(1))
     );
-    engine.execute_sql("INSERT INTO items VALUES (1, 8) ON DUPLICATE KEY UPDATE v=VALUES(v); REPLACE INTO items VALUES (1, 9)").unwrap();
+    session.execute_sql("INSERT INTO items VALUES (1, 8) ON DUPLICATE KEY UPDATE v=VALUES(v); REPLACE INTO items VALUES (1, 9)").unwrap();
     for value in [8, 9] {
         assert!(
             matches!(&*next(&mut rx).await, Event::Write { rows, .. } if rows[0].row["v"] == json!(value))
@@ -364,7 +360,7 @@ async fn schema_key_changes_and_other_databases_use_current_row_identity() {
     }
     let state = engine.export_state().unwrap();
     assert_eq!(state.databases["other"].rows["items"].len(), 1);
-    engine.execute_sql("DROP DATABASE other").unwrap();
+    session.execute_sql("DROP DATABASE other").unwrap();
     let deleted = next(&mut rx).await;
     assert!(
         matches!(&*deleted, Event::Delete { database, keys, .. } if database == "other" && keys == &vec![primary(1)])

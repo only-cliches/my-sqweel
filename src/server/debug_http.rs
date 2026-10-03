@@ -4756,11 +4756,12 @@ mod tests {
     fn meili_search_stays_in_app_when_embedded_sql_selects_platform() {
         let engine = Arc::new(Engine::new(EngineConfig::mysql_strict()));
         engine.execute_sql("CREATE DATABASE platform").unwrap();
-        engine.execute_sql("USE platform").unwrap();
-        engine
+        let mut session = engine.session();
+        session.execute_sql("USE platform").unwrap();
+        session
             .execute_sql("CREATE TABLE books (id TEXT PRIMARY KEY, title TEXT)")
             .unwrap();
-        engine
+        session
             .execute_sql("INSERT INTO books VALUES ('platform', 'Private platform row')")
             .unwrap();
         let state = MeiliState::new(engine.clone());
@@ -4808,7 +4809,7 @@ mod tests {
         assert_eq!(body.0["hits"][0]["id"], "search");
 
         // Search never changes the embedding owner's selected database or rows.
-        let platform = engine.execute_sql("SELECT id, title FROM books").unwrap();
+        let platform = session.execute_sql("SELECT id, title FROM books").unwrap();
         assert_eq!(platform[0].rows.len(), 1);
         assert_eq!(platform[0].rows[0]["id"], "platform");
         assert_eq!(platform[0].rows[0]["title"], "Private platform row");
@@ -6643,8 +6644,13 @@ mod tests {
             uuid::Uuid::new_v4()
         ));
         Arc::new(
-            Engine::open_with_data_dir(EngineConfig::default(), Some(&dir.to_string_lossy()))
-                .unwrap(),
+            Engine::open(
+                EngineConfig::default(),
+                (Some(&dir.to_string_lossy())).map_or(crate::Storage::Memory, |path| {
+                    crate::Storage::RocksDb(path.to_string().into())
+                }),
+            )
+            .unwrap(),
         )
     }
 }

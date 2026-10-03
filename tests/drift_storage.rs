@@ -129,7 +129,13 @@ fn rocksdb_storage_rehydrates_tables_and_rows_from_configured_directory() {
     let dir = temp_storage_dir("rehydrate");
 
     {
-        let engine = Engine::open_with_data_dir(EngineConfig::default(), Some(&dir)).unwrap();
+        let engine = Engine::open(
+            EngineConfig::default(),
+            (Some(&dir)).map_or(my_sqweel::Storage::Memory, |path| {
+                my_sqweel::Storage::RocksDb(path.into())
+            }),
+        )
+        .unwrap();
         engine
             .execute_sql(
                 "CREATE TABLE users (id BIGINT PRIMARY KEY AUTO_INCREMENT, email VARCHAR(255));",
@@ -141,7 +147,13 @@ fn rocksdb_storage_rehydrates_tables_and_rows_from_configured_directory() {
     }
 
     {
-        let engine = Engine::open_with_data_dir(EngineConfig::default(), Some(&dir)).unwrap();
+        let engine = Engine::open(
+            EngineConfig::default(),
+            (Some(&dir)).map_or(my_sqweel::Storage::Memory, |path| {
+                my_sqweel::Storage::RocksDb(path.into())
+            }),
+        )
+        .unwrap();
         let rows = engine
             .execute_sql("SELECT id, email FROM users WHERE id = 1")
             .unwrap();
@@ -160,8 +172,19 @@ fn rocksdb_storage_rejects_second_open_of_configured_directory() {
     let _guard = test_lock();
     let dir = temp_storage_dir("lock");
 
-    let engine = Engine::open_with_data_dir(EngineConfig::default(), Some(&dir)).unwrap();
-    let err = match Engine::open_with_data_dir(EngineConfig::default(), Some(&dir)) {
+    let engine = Engine::open(
+        EngineConfig::default(),
+        (Some(&dir)).map_or(my_sqweel::Storage::Memory, |path| {
+            my_sqweel::Storage::RocksDb(path.into())
+        }),
+    )
+    .unwrap();
+    let err = match Engine::open(
+        EngineConfig::default(),
+        (Some(&dir)).map_or(my_sqweel::Storage::Memory, |path| {
+            my_sqweel::Storage::RocksDb(path.into())
+        }),
+    ) {
         Ok(_) => panic!("second open should fail while the first engine is alive"),
         Err(err) => err,
     };
@@ -169,7 +192,13 @@ fn rocksdb_storage_rejects_second_open_of_configured_directory() {
 
     drop(engine);
 
-    let reopened = Engine::open_with_data_dir(EngineConfig::default(), Some(&dir)).unwrap();
+    let reopened = Engine::open(
+        EngineConfig::default(),
+        (Some(&dir)).map_or(my_sqweel::Storage::Memory, |path| {
+            my_sqweel::Storage::RocksDb(path.into())
+        }),
+    )
+    .unwrap();
     drop(reopened);
     let _ = std::fs::remove_dir_all(dir);
 }
@@ -180,7 +209,13 @@ fn rocksdb_storage_rehydrates_incremental_mutations() {
     let dir = temp_storage_dir("incremental");
 
     {
-        let engine = Engine::open_with_data_dir(EngineConfig::default(), Some(&dir)).unwrap();
+        let engine = Engine::open(
+            EngineConfig::default(),
+            (Some(&dir)).map_or(my_sqweel::Storage::Memory, |path| {
+                my_sqweel::Storage::RocksDb(path.into())
+            }),
+        )
+        .unwrap();
         engine
             .execute_sql("CREATE TABLE users (id BIGINT PRIMARY KEY AUTO_INCREMENT, email VARCHAR(255), name TEXT);")
             .unwrap();
@@ -201,7 +236,13 @@ fn rocksdb_storage_rehydrates_incremental_mutations() {
     }
 
     {
-        let engine = Engine::open_with_data_dir(EngineConfig::default(), Some(&dir)).unwrap();
+        let engine = Engine::open(
+            EngineConfig::default(),
+            (Some(&dir)).map_or(my_sqweel::Storage::Memory, |path| {
+                my_sqweel::Storage::RocksDb(path.into())
+            }),
+        )
+        .unwrap();
         let rows = engine
             .execute_sql("SELECT email, name FROM users ORDER BY id")
             .unwrap();
@@ -234,7 +275,13 @@ fn rocksdb_storage_preserves_rows_after_rejected_unique_conflict() {
     let dir = temp_storage_dir("unique-conflict");
 
     {
-        let engine = Engine::open_with_data_dir(EngineConfig::default(), Some(&dir)).unwrap();
+        let engine = Engine::open(
+            EngineConfig::default(),
+            (Some(&dir)).map_or(my_sqweel::Storage::Memory, |path| {
+                my_sqweel::Storage::RocksDb(path.into())
+            }),
+        )
+        .unwrap();
         engine
             .execute_sql("CREATE TABLE users (id BIGINT PRIMARY KEY AUTO_INCREMENT, email VARCHAR(255) UNIQUE, name TEXT);")
             .unwrap();
@@ -249,7 +296,13 @@ fn rocksdb_storage_preserves_rows_after_rejected_unique_conflict() {
     }
 
     {
-        let engine = Engine::open_with_data_dir(EngineConfig::default(), Some(&dir)).unwrap();
+        let engine = Engine::open(
+            EngineConfig::default(),
+            (Some(&dir)).map_or(my_sqweel::Storage::Memory, |path| {
+                my_sqweel::Storage::RocksDb(path.into())
+            }),
+        )
+        .unwrap();
         let rows = engine
             .execute_sql("SELECT email, name FROM users WHERE email = 'a@example.com'")
             .unwrap();

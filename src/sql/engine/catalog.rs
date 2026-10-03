@@ -6,8 +6,8 @@ use std::ops::ControlFlow;
 use anyhow::{Result, anyhow, bail, ensure};
 use serde::{Deserialize, Serialize};
 use sqlparser::ast::{
-    AlterTableOperation, ColumnDef, ColumnOption, Expr, Ident, ObjectName, Query, SetExpr,
-    Statement, TableConstraint, VisitMut, VisitorMut,
+    AlterTableOperation, ColumnDef, ColumnOption, Expr, Ident, ObjectName, Query, Statement,
+    TableConstraint, VisitMut, VisitorMut,
 };
 use sqlparser::dialect::{Dialect, MySqlDialect};
 use sqlparser::tokenizer::{Token, Tokenizer};
@@ -17,13 +17,19 @@ pub(crate) struct Identity {
     pub(crate) username: String,
     incarnation: String,
     external_access: Option<ExternalAccess>,
+    ceiling: Option<ExternalAccess>,
 }
 impl Identity {
+    pub(crate) fn set_ceiling(&mut self, scopes: Vec<AuthScope>) {
+        self.ceiling = Some(ExternalAccess::from_scopes(scopes));
+    }
+
     pub(crate) fn unauthenticated() -> Self {
         Self {
             username: String::new(),
             incarnation: String::new(),
             external_access: None,
+            ceiling: None,
         }
     }
 
@@ -36,6 +42,7 @@ impl Identity {
             username,
             incarnation: uuid::Uuid::new_v4().to_string(),
             external_access: Some(ExternalAccess::from_scopes(scopes)),
+            ceiling: None,
         })
     }
 }
@@ -46,6 +53,11 @@ pub enum AuthPrivilege {
     Insert,
     Update,
     Delete,
+    Create,
+    Alter,
+    Drop,
+    Index,
+    References,
 }
 
 /// Database privileges assigned to an externally authenticated connection.
@@ -53,6 +65,11 @@ pub enum AuthPrivilege {
 /// listed data privileges.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuthScope {
+    Table {
+        database: String,
+        table: String,
+        privileges: BTreeSet<AuthPrivilege>,
+    },
     All,
     Database {
         database: String,
@@ -61,6 +78,17 @@ pub enum AuthScope {
 }
 
 impl AuthScope {
+    pub fn table(
+        database: impl Into<String>,
+        table: impl Into<String>,
+        privileges: impl IntoIterator<Item = AuthPrivilege>,
+    ) -> Self {
+        Self::Table {
+            database: database.into(),
+            table: table.into(),
+            privileges: privileges.into_iter().collect(),
+        }
+    }
     pub fn database(
         database: impl Into<String>,
         privileges: impl IntoIterator<Item = AuthPrivilege>,
@@ -78,16 +106,51 @@ type Privilege = AuthPrivilege;
 struct ExternalAccess {
     all: bool,
     grants: BTreeMap<String, BTreeSet<Privilege>>,
+    tables: BTreeMap<(String, String), BTreeSet<Privilege>>,
 }
 
+impl ExternalAccess {
+    fn database(&self, database: &str) -> bool {
+        self.all
+            || self.grants.get(database).is_some_and(|v| !v.is_empty())
+            || self
+                .tables
+                .iter()
+                .any(|((db, _), v)| db == database && !v.is_empty())
+    }
+    fn permits(&self, database: &str, table: Option<&str>, privilege: Privilege) -> bool {
+        self.all
+            || self
+                .grants
+                .get(database)
+                .is_some_and(|v| v.contains(&privilege))
+            || table.is_some_and(|table| {
+                self.tables
+                    .get(&(database.into(), table.into()))
+                    .is_some_and(|v| v.contains(&privilege))
+            })
+    }
+}
 impl ExternalAccess {
     fn from_scopes(scopes: Vec<AuthScope>) -> Self {
         let mut access = Self {
             all: false,
             grants: BTreeMap::new(),
+            tables: BTreeMap::new(),
         };
         for scope in scopes {
             match scope {
+                AuthScope::Table {
+                    database,
+                    table,
+                    privileges,
+                } => {
+                    access
+                        .tables
+                        .entry((database, table))
+                        .or_default()
+                        .extend(privileges);
+                }
                 AuthScope::All => access.all = true,
                 AuthScope::Database {
                     database,
@@ -191,10 +254,14 @@ impl Catalog {
             username: username.into(),
             incarnation: account.incarnation.clone(),
             external_access: None,
+            ceiling: None,
         })
     }
 
     pub(crate) fn is_admin(&self, identity: &Identity) -> bool {
+        if identity.ceiling.as_ref().is_some_and(|scope| !scope.all) {
+            return false;
+        }
         if let Some(access) = &identity.external_access {
             return access.all;
         }
@@ -216,13 +283,16 @@ impl Catalog {
             self.databases.contains(database),
             "Unknown database '{database}'"
         );
+        ensure!(
+            identity
+                .ceiling
+                .as_ref()
+                .is_none_or(|scope| scope.database(database)),
+            "Access denied for database '{database}'"
+        );
         if let Some(access) = &identity.external_access {
             ensure!(
-                access.all
-                    || access
-                        .grants
-                        .get(database)
-                        .is_some_and(|grants| !grants.is_empty()),
+                access.database(database),
                 "Access denied for database '{database}'"
             );
             return Ok(());
@@ -253,35 +323,110 @@ impl Catalog {
         privilege: Privilege,
     ) -> Result<()> {
         self.check_database(identity, database)?;
+        let permits = |access: &ExternalAccess| {
+            access.permits(database, None, privilege)
+                || access
+                    .tables
+                    .iter()
+                    .any(|((db, _), grants)| db == database && grants.contains(&privilege))
+        };
+        ensure!(
+            identity.ceiling.as_ref().is_none_or(permits),
+            "{privilege:?} command denied for database '{database}'"
+        );
         if let Some(access) = &identity.external_access {
             ensure!(
-                access.all
-                    || access
-                        .grants
-                        .get(database)
-                        .is_some_and(|grants| grants.contains(&privilege)),
+                permits(access),
                 "{privilege:?} command denied for database '{database}'"
             );
-            return Ok(());
+        } else {
+            let account = &self.users[&identity.username];
+            ensure!(
+                account.admin
+                    || account
+                        .grants
+                        .get(database)
+                        .is_some_and(|v| v.contains(&privilege)),
+                "{privilege:?} command denied for database '{database}'"
+            );
         }
-        let account = &self.users[&identity.username];
+        Ok(())
+    }
+    pub(crate) fn check_table(
+        &self,
+        identity: &Identity,
+        database: &str,
+        table: &str,
+        privilege: Privilege,
+    ) -> Result<()> {
+        self.check_privilege(identity, database, privilege)?;
         ensure!(
-            account.admin
-                || account
-                    .grants
-                    .get(database)
-                    .is_some_and(|grants| grants.contains(&privilege)),
-            "{privilege:?} command denied for database '{database}'"
+            identity.ceiling.as_ref().is_none_or(|scope| scope.permits(
+                database,
+                Some(table),
+                privilege
+            )),
+            "{privilege:?} command denied for table '{database}.{table}'"
+        );
+        ensure!(
+            identity
+                .external_access
+                .as_ref()
+                .is_none_or(|scope| scope.permits(database, Some(table), privilege)),
+            "{privilege:?} command denied for table '{database}.{table}'"
         );
         Ok(())
     }
-
+    pub(crate) fn table_visible(&self, identity: &Identity, database: &str, table: &str) -> bool {
+        [
+            Privilege::Select,
+            Privilege::Insert,
+            Privilege::Update,
+            Privilege::Delete,
+            Privilege::Create,
+            Privilege::Alter,
+            Privilege::Drop,
+            Privilege::Index,
+            Privilege::References,
+        ]
+        .iter()
+        .any(|p| self.check_table(identity, database, table, *p).is_ok())
+    }
     pub(crate) fn apply(
         &mut self,
         identity: &Identity,
         command: AdminCommand,
     ) -> Result<CatalogEffect> {
-        ensure!(self.is_admin(identity), "Administrative command denied");
+        match &command {
+            AdminCommand::CreateDatabase { name, .. } | AdminCommand::DropDatabase { name, .. } => {
+                let privilege = if matches!(&command, AdminCommand::CreateDatabase { .. }) {
+                    Privilege::Create
+                } else {
+                    Privilege::Drop
+                };
+                ensure!(
+                    identity
+                        .ceiling
+                        .as_ref()
+                        .is_none_or(|scope| scope.permits(name, None, privilege)),
+                    "Database administration denied"
+                );
+                if let Some(access) = &identity.external_access {
+                    ensure!(
+                        access.permits(name, None, privilege),
+                        "Database administration denied"
+                    );
+                } else {
+                    ensure!(
+                        self.users
+                            .get(&identity.username)
+                            .is_some_and(|a| a.admin && a.incarnation == identity.incarnation),
+                        "Database administration denied"
+                    );
+                }
+            }
+            _ => ensure!(self.is_admin(identity), "Administrative command denied"),
+        }
         match command {
             AdminCommand::CreateDatabase {
                 name,
@@ -447,6 +592,10 @@ impl Catalog {
             | Statement::ShowVariable { .. }
             | Statement::ShowVariables { .. }
             | Statement::ShowStatus { .. } => None,
+            Statement::CreateTable(_) | Statement::CreateView { .. } => Some(Privilege::Create),
+            Statement::AlterTable { .. } => Some(Privilege::Alter),
+            Statement::CreateIndex(_) => Some(Privilege::Index),
+            Statement::Drop { .. } | Statement::Truncate { .. } => Some(Privilege::Drop),
             _ => {
                 ensure!(
                     self.is_admin(identity),
@@ -495,13 +644,21 @@ impl Catalog {
     ) -> Result<String> {
         self.check_database(identity, database)?;
         if let Some((mut table, names)) = parse_drop_foreign_keys(sql)? {
-            ensure!(self.is_admin(identity), "Administrative command denied");
+            self.check_table(
+                identity,
+                database,
+                &table.0.last().unwrap().value,
+                Privilege::Alter,
+            )?;
             DatabaseVisitor {
                 catalog: self,
                 identity,
                 database,
                 read_only: false,
                 rewritten: false,
+                privilege: Privilege::Alter,
+                queries: Vec::new(),
+                targets: None,
             }
             .relation(&mut table)?;
             let drops = names
@@ -512,13 +669,21 @@ impl Catalog {
             return Ok(format!("ALTER TABLE {table} {drops}"));
         }
         if let Some((mut table, index, if_exists)) = parse_index_drop(sql)? {
-            ensure!(self.is_admin(identity), "Administrative command denied");
+            self.check_table(
+                identity,
+                database,
+                &table.0.last().unwrap().value,
+                Privilege::Index,
+            )?;
             DatabaseVisitor {
                 catalog: self,
                 identity,
                 database,
                 read_only: false,
                 rewritten: false,
+                privilege: Privilege::Index,
+                queries: Vec::new(),
+                targets: None,
             }
             .relation(&mut table)?;
             let conditional = if if_exists { "IF EXISTS " } else { "" };
@@ -527,13 +692,21 @@ impl Catalog {
             ));
         }
         if let Some((mut table, old_name, new_name)) = parse_index_rename(sql)? {
-            ensure!(self.is_admin(identity), "Administrative command denied");
+            self.check_table(
+                identity,
+                database,
+                &table.0.last().unwrap().value,
+                Privilege::Index,
+            )?;
             DatabaseVisitor {
                 catalog: self,
                 identity,
                 database,
                 read_only: false,
                 rewritten: false,
+                privilege: Privilege::Index,
+                queries: Vec::new(),
+                targets: None,
             }
             .relation(&mut table)?;
             return Ok(format!(
@@ -541,13 +714,21 @@ impl Catalog {
             ));
         }
         if let Some((mut table, next)) = parse_auto_increment_option(sql)? {
-            ensure!(self.is_admin(identity), "Administrative command denied");
+            self.check_table(
+                identity,
+                database,
+                &table.0.last().unwrap().value,
+                Privilege::Alter,
+            )?;
             DatabaseVisitor {
                 catalog: self,
                 identity,
                 database,
                 read_only: false,
                 rewritten: false,
+                privilege: Privilege::Alter,
+                queries: Vec::new(),
+                targets: None,
             }
             .relation(&mut table)?;
             return Ok(format!("ALTER TABLE {table} AUTO_INCREMENT={next}"));
@@ -578,6 +759,9 @@ impl Catalog {
                 database,
                 read_only: matches!(statement, Statement::Query(_)),
                 rewritten: false,
+                privilege: Privilege::Select,
+                queries: Vec::new(),
+                targets: None,
             };
             if let ControlFlow::Break(error) = statement.visit(&mut visitor) {
                 return Err(error);
@@ -867,6 +1051,17 @@ impl VisitorMut for MysqlStringEscapes {
     }
 }
 
+fn table_factor_name(factor: &sqlparser::ast::TableFactor) -> Option<String> {
+    if let sqlparser::ast::TableFactor::Table { name, alias, .. } = factor {
+        alias
+            .as_ref()
+            .map(|alias| alias.name.value.clone())
+            .or_else(|| name.0.last().map(|name| name.value.clone()))
+    } else {
+        None
+    }
+}
+
 struct DatabaseVisitor<'a> {
     catalog: &'a Catalog,
     identity: &'a Identity,
@@ -874,23 +1069,50 @@ struct DatabaseVisitor<'a> {
     read_only: bool,
     // Set at each qualifier rewrite instead of cloning/comparing bulk VALUES ASTs.
     rewritten: bool,
+    privilege: Privilege,
+    queries: Vec<(Privilege, BTreeSet<String>)>,
+    targets: Option<(Privilege, BTreeSet<String>)>,
 }
 impl DatabaseVisitor<'_> {
     fn column(&mut self, column: &mut ColumnDef) -> Result<()> {
         for option in &mut column.options {
             if let ColumnOption::ForeignKey { foreign_table, .. } = &mut option.option {
-                self.relation(foreign_table)?;
+                self.relation_with(foreign_table, Privilege::References)?;
             }
         }
         Ok(())
     }
     fn constraint(&mut self, constraint: &mut TableConstraint) -> Result<()> {
         if let TableConstraint::ForeignKey { foreign_table, .. } = constraint {
-            self.relation(foreign_table)?;
+            self.relation_with(foreign_table, Privilege::References)?;
         }
         Ok(())
     }
+    fn relation_with(&mut self, name: &mut ObjectName, privilege: Privilege) -> Result<()> {
+        let previous = self.privilege;
+        self.privilege = privilege;
+        let result = self.relation(name);
+        self.privilege = previous;
+        result
+    }
     fn relation(&mut self, name: &mut ObjectName) -> Result<()> {
+        let table = name
+            .0
+            .last()
+            .ok_or_else(|| anyhow!("missing table"))?
+            .value
+            .clone();
+        let metadata =
+            name.0.len() == 2 && name.0[0].value.eq_ignore_ascii_case("information_schema");
+        let alias = name.0.len() == 1
+            && self
+                .queries
+                .iter()
+                .any(|(_, aliases)| aliases.contains(&table));
+        if !metadata && !alias {
+            self.catalog
+                .check_table(self.identity, self.database, &table, self.privilege)?;
+        }
         match name.0.as_slice() {
             [_] => Ok(()),
             [database, _] if database.value == self.database => {
@@ -910,14 +1132,111 @@ impl DatabaseVisitor<'_> {
 impl VisitorMut for DatabaseVisitor<'_> {
     type Break = anyhow::Error;
     fn pre_visit_statement(&mut self, statement: &mut Statement) -> ControlFlow<Self::Break> {
+        self.privilege = match statement {
+            Statement::Insert(_) => Privilege::Insert,
+            Statement::Update { .. } => Privilege::Update,
+            Statement::Delete(_) => Privilege::Delete,
+            Statement::CreateTable(_) | Statement::CreateView { .. } => Privilege::Create,
+            Statement::AlterTable { .. } => Privilege::Alter,
+            Statement::CreateIndex(_) => Privilege::Index,
+            Statement::Drop { .. } | Statement::Truncate { .. } => Privilege::Drop,
+            _ => Privilege::Select,
+        };
+        self.targets = match statement {
+            Statement::Update {
+                table, assignments, ..
+            } => {
+                let primary = table_factor_name(&table.relation);
+                let mut targets = BTreeSet::new();
+                for assignment in assignments {
+                    let columns = match &assignment.target {
+                        sqlparser::ast::AssignmentTarget::ColumnName(name) => {
+                            std::slice::from_ref(name)
+                        }
+                        sqlparser::ast::AssignmentTarget::Tuple(names) => names.as_slice(),
+                    };
+                    for column in columns {
+                        if column.0.len() > 1 {
+                            targets.insert(column.0[column.0.len() - 2].value.clone());
+                        } else if let Some(primary) = &primary {
+                            targets.insert(primary.clone());
+                        }
+                    }
+                }
+                Some((Privilege::Update, targets))
+            }
+            Statement::Delete(delete) => {
+                let (sqlparser::ast::FromTable::WithFromKeyword(tables)
+                | sqlparser::ast::FromTable::WithoutKeyword(tables)) = &delete.from;
+                let targets = if delete.tables.is_empty() {
+                    tables
+                        .first()
+                        .and_then(|table| table_factor_name(&table.relation))
+                        .into_iter()
+                        .collect()
+                } else {
+                    delete
+                        .tables
+                        .iter()
+                        .filter_map(|name| {
+                            name.0
+                                .iter()
+                                .rev()
+                                .find(|part| part.value != "*")
+                                .map(|part| part.value.clone())
+                        })
+                        .collect()
+                };
+                Some((Privilege::Delete, targets))
+            }
+            _ => None,
+        };
         let result = (|| {
             self.catalog
                 .check_statement(self.identity, self.database, statement)?;
             // These ObjectName fields have no relation visitor annotations in sqlparser.
             match statement {
+                Statement::Insert(insert) => {
+                    if insert.on.is_some() {
+                        self.relation_with(&mut insert.table_name, Privilege::Update)?;
+                    }
+                    if insert.replace_into {
+                        self.relation_with(&mut insert.table_name, Privilege::Delete)?;
+                    }
+                    if insert.returning.is_some() {
+                        self.relation_with(&mut insert.table_name, Privilege::Select)?;
+                    }
+                }
+                Statement::Update {
+                    table,
+                    returning: Some(_),
+                    ..
+                } => {
+                    if let sqlparser::ast::TableFactor::Table { name, .. } = &mut table.relation {
+                        self.relation_with(name, Privilege::Select)?;
+                    }
+                }
                 Statement::Delete(delete) => {
+                    if delete.returning.is_some() {
+                        let (sqlparser::ast::FromTable::WithFromKeyword(tables)
+                        | sqlparser::ast::FromTable::WithoutKeyword(tables)) = &mut delete.from;
+                        for table in tables {
+                            if let sqlparser::ast::TableFactor::Table { name, .. } =
+                                &mut table.relation
+                            {
+                                self.relation_with(name, Privilege::Select)?;
+                            }
+                        }
+                    }
                     for table in &mut delete.tables {
-                        self.relation(table)?;
+                        if table.0.len() == 2 && table.0[1].value != "*" {
+                            ensure!(
+                                table.0[0].value == self.database,
+                                "Cross-database statements are not supported"
+                            );
+                            table.0.remove(0);
+                            self.rewritten = true;
+                        }
                     }
                 }
                 Statement::Drop { names, .. } => {
@@ -926,6 +1245,33 @@ impl VisitorMut for DatabaseVisitor<'_> {
                     }
                 }
                 Statement::ShowCreate { obj_name, .. } => self.relation(obj_name)?,
+                Statement::ShowColumns { show_options, .. } => {
+                    if let Some(name) = show_options
+                        .show_in
+                        .as_mut()
+                        .and_then(|clause| clause.parent_name.as_mut())
+                    {
+                        self.relation(name)?;
+                    }
+                }
+                Statement::ShowVariable { variable }
+                    if variable.first().is_some_and(|name| {
+                        matches!(
+                            name.value.to_ascii_uppercase().as_str(),
+                            "INDEX" | "INDEXES" | "KEYS"
+                        )
+                    }) =>
+                {
+                    let table = variable
+                        .last()
+                        .ok_or_else(|| anyhow!("missing metadata table"))?;
+                    self.catalog.check_table(
+                        self.identity,
+                        self.database,
+                        &table.value,
+                        Privilege::Select,
+                    )?;
+                }
                 Statement::ShowTables { show_options, .. } => {
                     if let Some(name) = show_options
                         .show_in
@@ -938,9 +1284,22 @@ impl VisitorMut for DatabaseVisitor<'_> {
                         );
                     }
                 }
+                Statement::CreateView {
+                    name,
+                    or_replace: true,
+                    ..
+                } => {
+                    self.relation_with(name, Privilege::Drop)?;
+                }
                 Statement::CreateTable(table) => {
+                    if table.or_replace {
+                        self.relation_with(&mut table.name, Privilege::Drop)?;
+                    }
+                    if table.query.is_some() {
+                        self.relation_with(&mut table.name, Privilege::Insert)?;
+                    }
                     for name in [&mut table.like, &mut table.clone].into_iter().flatten() {
-                        self.relation(name)?;
+                        self.relation_with(name, Privilege::Select)?;
                     }
                     for column in &mut table.columns {
                         self.column(column)?;
@@ -949,7 +1308,9 @@ impl VisitorMut for DatabaseVisitor<'_> {
                         self.constraint(constraint)?;
                     }
                 }
-                Statement::AlterTable { operations, .. } => {
+                Statement::AlterTable {
+                    name, operations, ..
+                } => {
                     for operation in operations {
                         match operation {
                             AlterTableOperation::AddConstraint(constraint) => {
@@ -959,7 +1320,9 @@ impl VisitorMut for DatabaseVisitor<'_> {
                                 self.column(column_def)?
                             }
                             AlterTableOperation::RenameTable { table_name } => {
-                                self.relation(table_name)?
+                                self.relation_with(name, Privilege::Drop)?;
+                                self.relation_with(table_name, Privilege::Create)?;
+                                self.relation_with(table_name, Privilege::Insert)?;
                             }
                             _ => {}
                         }
@@ -974,6 +1337,22 @@ impl VisitorMut for DatabaseVisitor<'_> {
             Err(error) => ControlFlow::Break(error),
         }
     }
+    fn pre_visit_table_factor(
+        &mut self,
+        factor: &mut sqlparser::ast::TableFactor,
+    ) -> ControlFlow<Self::Break> {
+        if self.queries.is_empty() {
+            if let Some((write, targets)) = &self.targets {
+                self.privilege =
+                    if table_factor_name(factor).is_some_and(|name| targets.contains(&name)) {
+                        *write
+                    } else {
+                        Privilege::Select
+                    };
+            }
+        }
+        ControlFlow::Continue(())
+    }
     fn pre_visit_relation(&mut self, relation: &mut ObjectName) -> ControlFlow<Self::Break> {
         match self.relation(relation) {
             Ok(()) => ControlFlow::Continue(()),
@@ -981,16 +1360,42 @@ impl VisitorMut for DatabaseVisitor<'_> {
         }
     }
     fn pre_visit_query(&mut self, query: &mut Query) -> ControlFlow<Self::Break> {
-        if matches!(query.body.as_ref(), SetExpr::Values(_)) {
-            return ControlFlow::Continue(());
+        let old = self.privilege;
+        let aliases = BTreeSet::new();
+        self.queries.push((old, aliases));
+        self.privilege = Privilege::Select;
+        // Validate each CTE before making its name visible to subsequent CTEs.
+        if let Some(with) = &mut query.with {
+            for cte in &mut with.cte_tables {
+                if with.recursive
+                    && let sqlparser::ast::SetExpr::SetOperation { left, .. } =
+                        cte.query.body.as_mut()
+                {
+                    // The anchor must be authorized before the recursive alias exists.
+                    if let ControlFlow::Break(error) = left.visit(self) {
+                        return ControlFlow::Break(error);
+                    }
+                    self.queries
+                        .last_mut()
+                        .unwrap()
+                        .1
+                        .insert(cte.alias.name.value.clone());
+                }
+                if let ControlFlow::Break(error) = cte.query.visit(self) {
+                    return ControlFlow::Break(error);
+                }
+                self.queries
+                    .last_mut()
+                    .unwrap()
+                    .1
+                    .insert(cte.alias.name.value.clone());
+            }
         }
-        match self
-            .catalog
-            .check_privilege(self.identity, self.database, Privilege::Select)
-        {
-            Ok(()) => ControlFlow::Continue(()),
-            Err(error) => ControlFlow::Break(error),
-        }
+        ControlFlow::Continue(())
+    }
+    fn post_visit_query(&mut self, _: &mut Query) -> ControlFlow<Self::Break> {
+        self.privilege = self.queries.pop().unwrap().0;
+        ControlFlow::Continue(())
     }
     fn pre_visit_expr(&mut self, expression: &mut Expr) -> ControlFlow<Self::Break> {
         if let Expr::CompoundIdentifier(parts) = expression {
@@ -1589,9 +1994,7 @@ mod tests {
                 .unwrap()
                 .is_some()
         );
-        assert!(
-            parse_auto_increment_option("ALTER TABLE items AUTO_INCREMENT=2 garbage").is_err()
-        );
+        assert!(parse_auto_increment_option("ALTER TABLE items AUTO_INCREMENT=2 garbage").is_err());
         assert!(
             normalize_rename("/* leading */ RENAME TABLE items TO renamed")
                 .unwrap()
@@ -1746,14 +2149,15 @@ mod tests {
         let catalog = Catalog::default();
         let admin = catalog.identity("root").unwrap();
         assert_eq!(catalog.authorize_and_normalize(&admin, "app", sql)?, sql);
-        let engine = crate::sql::engine::Engine::new(
-            crate::sql::engine::EngineConfig::mysql_strict(),
-        );
+        let engine =
+            crate::sql::engine::Engine::new(crate::sql::engine::EngineConfig::mysql_strict());
         engine.execute_sql("CREATE DATABASE test")?;
         let mut session = engine.session();
         session.execute_sql("USE test")?;
         session.execute_sql(sql)?;
-        assert!(engine.export_state()?.databases["test"].schemas["versioned_probe"].system_versioned);
+        assert!(
+            engine.export_state()?.databases["test"].schemas["versioned_probe"].system_versioned
+        );
         Ok(())
     }
 }

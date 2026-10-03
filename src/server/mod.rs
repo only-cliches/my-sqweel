@@ -1,3 +1,5 @@
+mod endpoint;
+pub use endpoint::{SqlEndpoint, SqlEndpointConfig};
 mod debug_http;
 mod mysql_wire;
 
@@ -13,38 +15,19 @@ use crate::sql::engine::{Engine, EngineConfig};
 pub use mysql_wire::{
     AccountOperation, AccountOperationAction, AccountOperationKind, AsyncAuthenticator,
     AsyncAuthenticatorHandle, AuthenticatedUser, Authentication, AuthenticationRequest, StaticUser,
-    WireServer, verify_mysql_native_password,
+    verify_mysql_native_password,
 };
 
-pub struct ServerHandle {
-    stop: Arc<AtomicBool>,
-    join: Option<thread::JoinHandle<Result<()>>>,
-    debug: Option<debug_http::DebugHttpHandle>,
-}
+pub use debug_http::{DebugHttpHandle, spawn as spawn_debug_http};
+use mysql_wire::WireServer;
 
-impl Drop for ServerHandle {
-    fn drop(&mut self) {
-        self.stop.store(true, Ordering::Relaxed);
-        if let Some(join) = self.join.take() {
-            match join.join() {
-                Ok(Ok(())) => {}
-                Ok(Err(err)) => {
-                    tracing::warn!(error = %err, "server accept thread stopped with error");
-                }
-                Err(err) => {
-                    tracing::warn!(?err, "server accept thread panicked during shutdown");
-                }
-            }
-        }
-        // Stop the debug/search server before the caller drops its final Engine
-        // reference.  The debug server owns an Engine clone and must be joined so
-        // persistent storage can flush on clean dev restarts.
-        self.debug.take();
-    }
+pub(crate) struct ServerHandle {
+    _sql: SqlEndpoint,
+    _debug: debug_http::DebugHttpHandle,
 }
 
 #[derive(Debug, Clone)]
-pub struct ServerConfig {
+pub(crate) struct ServerConfig {
     pub bind_addr: SocketAddr,
     pub data_dir: Option<String>,
     pub allow_remote: bool,
@@ -99,45 +82,38 @@ impl ServerConfig {
     }
 }
 
-pub fn open_engine(cfg: &ServerConfig) -> Result<Arc<Engine>> {
-    Ok(Arc::new(Engine::open_with_data_dir(
+pub(crate) fn open_engine(cfg: &ServerConfig) -> Result<Arc<Engine>> {
+    Ok(Arc::new(Engine::open(
         cfg.engine.clone(),
-        cfg.data_dir.as_deref(),
+        (cfg.data_dir.as_deref()).map_or(crate::Storage::Memory, |path| {
+            crate::Storage::RocksDb(path.into())
+        }),
     )?))
 }
 
-pub fn run(cfg: ServerConfig) -> Result<()> {
+pub(crate) fn run(cfg: ServerConfig) -> Result<()> {
     cfg.validate()?;
     let engine = open_engine(&cfg)?;
     run_with_engine(cfg, engine)
 }
 
-pub fn run_with_engine(cfg: ServerConfig, engine: Arc<Engine>) -> Result<()> {
-    cfg.validate()?;
-    log_runtime(&cfg);
-    let _debug = start_debug_http(&cfg, engine.clone());
-
-    let wire = WireServer::with_authentication(engine.clone(), cfg.authentication.clone());
-    wire.serve(cfg.bind_addr)?;
-    Ok(())
+fn run_with_engine(cfg: ServerConfig, engine: Arc<Engine>) -> Result<()> {
+    let _server = spawn_with_engine(cfg, engine)?;
+    loop {
+        thread::park();
+    }
 }
 
-pub fn spawn_with_engine(cfg: ServerConfig, engine: Arc<Engine>) -> Result<ServerHandle> {
+pub(crate) fn spawn_with_engine(cfg: ServerConfig, engine: Arc<Engine>) -> Result<ServerHandle> {
     cfg.validate()?;
-    let listener = std::net::TcpListener::bind(cfg.bind_addr)?;
     log_runtime(&cfg);
-    let debug = start_debug_http(&cfg, engine.clone());
-    let wire = WireServer::with_authentication(engine, cfg.authentication.clone());
-    let stop = Arc::new(AtomicBool::new(false));
-    let thread_stop = stop.clone();
-    let join = thread::spawn(move || {
-        wire.serve_listener_until(listener, thread_stop)
-            .map_err(Into::into)
-    });
+    let mut endpoint = SqlEndpointConfig::new(cfg.bind_addr, cfg.authentication.clone());
+    endpoint.allow_remote = cfg.allow_remote;
+    let sql = engine.spawn_sql(endpoint)?;
+    let debug = start_debug_http(&cfg, engine);
     Ok(ServerHandle {
-        stop,
-        join: Some(join),
-        debug: Some(debug),
+        _sql: sql,
+        _debug: debug,
     })
 }
 
@@ -171,31 +147,6 @@ mod tests {
     use super::*;
     use std::net::{TcpListener, TcpStream};
     use std::time::{Duration, Instant};
-
-    #[test]
-    fn blocking_wire_listener_stops_and_releases_port_inside_tokio() {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        runtime.block_on(async {
-            let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-            let address = listener.local_addr().unwrap();
-            let stop = Arc::new(AtomicBool::new(false));
-            let worker_stop = stop.clone();
-            let stopper = thread::spawn(move || {
-                thread::sleep(Duration::from_millis(20));
-                worker_stop.store(true, Ordering::Relaxed);
-            });
-            WireServer::new(Arc::new(Engine::new(EngineConfig::default())))
-                .serve_listener_until(listener, stop)
-                .unwrap();
-            stopper.join().unwrap();
-            // A completed blocking call must release its listener/reactor.
-            let rebound = TcpListener::bind(address).unwrap();
-            drop(rebound);
-        });
-    }
 
     #[test]
     fn server_handle_stops_debug_server_before_drop() {

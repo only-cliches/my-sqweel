@@ -1,15 +1,15 @@
 # Persistence, snapshots, and maintenance
 
-## Directory-backed synchronous engine
+## Persistent engine
 
-Use `Engine::open_with_data_dir` for durable local development state. MySqweel
+Use `Engine::open` with `Storage::RocksDb(path)` for durable local development state. MySqweel
 opens a RocksDB store in that directory; RocksDB prevents a second process
 from opening the same directory concurrently.
 
 ```rust,no_run
 use my_sqweel::sql::engine::{Engine, EngineConfig};
 
-let engine = Engine::open_with_data_dir(EngineConfig::default(), Some(".my-sqweel"))?;
+let engine = Engine::open(EngineConfig::default(), my_sqweel::Storage::RocksDb(".my-sqweel".into()))?;
 # Ok::<(), anyhow::Error>(())
 ```
 
