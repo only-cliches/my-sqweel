@@ -2,7 +2,7 @@
 
 All notable changes to MySqweel will be documented in this file.
 
-## 0.5.0 Unreleased
+## 0.5.0 Oct 3rd, 2026
 
 - RocksDB now loads only database and table metadata at startup and retains no committed rows in the engine. Queries fetch referenced tables into temporary working memory; transaction reads use RocksDB snapshots, and writes still commit complete rows atomically.
 - Unified embedded sync/async queries, custom async storage and SQL endpoints behind one cloneable `Engine`. Choose `Storage::Memory`, `Storage::RocksDb(path)` or `Storage::custom(backend)`; retain connection state with an explicit `EngineSession`.
