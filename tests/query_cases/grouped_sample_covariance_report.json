@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "grouped_sample_covariance_report",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "repository": "fivetran/dbt-language-server",
+      "commit": "e055c2d361bcb1f4e3811c0c1620a4b533c6bb93",
+      "path": "e2e/projects/snowflake-npm-features/models/functions/aggregate/covar_samp.sql",
+      "location": "lines 1-11",
+      "url": "https://github.com/fivetran/dbt-language-server/blob/e055c2d361bcb1f4e3811c0c1620a4b533c6bb93/e2e/projects/snowflake-npm-features/models/functions/aggregate/covar_samp.sql#L1-L11",
+      "source_sha256": "2802da7903372be5495737deef3655b7625b4ccc1ffc6df4e80675ec8ba82da3",
+      "source_dialect": "snowflake",
+      "observed_pattern": "A Snowflake model builds paired numeric samples in a CTE and computes COVAR_SAMP over the sample.",
+      "mysql_mariadb_translation": "Reauthored as a grouped calibration report. Because MariaDB 10.11.7 has no native COVAR_SAMP aggregate, the query uses the equivalent guarded sample-covariance formula (n * SUM(x*y) - SUM(x) * SUM(y)) / (n * (n - 1)) over each region. The CTE and singleton region are retained to exercise grouped sample covariance and SQL NULL when fewer than two pairs exist."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "covar-samp",
+    "paired-sample-statistic",
+    "cte-aggregate",
+    "singleton-statistic-null",
+    "deterministic-order"
+  ],
+  "fixture_notes": "North has pairs (1,2), (2,4), (3,6), giving covariance 2. South has (2,10), (4,14), (6,18), giving covariance 8. East has one pair and therefore NULL sample covariance.",
+  "determinism_notes": "All paired values and region labels are fixed; region ordering is explicit and no clocks, randomness, limits, or concurrent schedules are used.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "WITH calibration_samples AS (SELECT 'North' AS region_code, 1 AS measured_x, 2 AS measured_y UNION ALL SELECT 'North', 2, 4 UNION ALL SELECT 'North', 3, 6 UNION ALL SELECT 'South', 2, 10 UNION ALL SELECT 'South', 4, 14 UNION ALL SELECT 'South', 6, 18 UNION ALL SELECT 'East', 9, 12) SELECT region_code, COUNT(*) AS sample_count, CASE WHEN COUNT(*) > 1 THEN (COUNT(*) * SUM(measured_x * measured_y) - SUM(measured_x) * SUM(measured_y)) / (COUNT(*) * (COUNT(*) - 1)) ELSE NULL END AS sample_covariance FROM calibration_samples GROUP BY region_code ORDER BY region_code",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
