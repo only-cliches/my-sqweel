@@ -23,14 +23,14 @@ listeners. You can start and stop endpoints while the engine keeps running.
 
 ## First startup and idle memory
 
-| Server | First startup to SQL handshake (median) | Idle RAM in process (RSS, median) |
+| Server | First startup to SQL handshake (median; range) | Idle RAM in process (RSS, median) |
 | --- | ---: | ---: |
-| MariaDB 11.8.8, InnoDB | 2.09 s | 111.8 MiB |
-| MariaDB 11.8.8, MEMORY | 2.47 s | 77.7 MiB |
-| MySqweel 0.5.0, RocksDB | 39.9 ms | 23.0 MiB |
-| MySqweel 0.5.0, in memory | 25.2 ms | 21.6 MiB |
+| MariaDB 11.8.8, InnoDB | 1.83 s; 0.89–3.28 s | 111.8 MiB |
+| MariaDB 11.8.8, MEMORY | 1.32 s; 0.94–2.14 s | 77.9 MiB |
+| MySqweel 0.5.0, RocksDB | 32.8 ms; 17.3–61.7 ms | 23.1 MiB |
+| MySqweel 0.5.0, in memory | 20.1 ms; 16.7–32.1 ms | 21.6 MiB |
 
-Measured over five first starts per configuration on one Linux host, using
+Measured over 15 first starts per configuration on one Linux host, using
 release MySqweel binaries and fresh data directories on `/tmp` (tmpfs) where
 needed. Both MariaDB modes include system-table initialization in startup time;
 the MEMORY mode uses `--default-storage-engine=MEMORY --skip-innodb`. MySqweel's
