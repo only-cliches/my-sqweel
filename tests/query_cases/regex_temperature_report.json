@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "regex_temperature_report",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "jorgeluis500/SQL-challenges-and-projects",
+      "commit": "14f7c28e94c2acf8c3903ba1f2a11078813d2f9e",
+      "path": "Preppin Data/PD - 2019 Week 30/pd2019w30_MySQL.sql",
+      "url": "https://github.com/jorgeluis500/SQL-challenges-and-projects/blob/14f7c28e94c2acf8c3903ba1f2a11078813d2f9e/Preppin%20Data/PD%20-%202019%20Week%2030/pd2019w30_MySQL.sql",
+      "sha256": "1107a0c460b14cf0cc3acd43626463fd0ba9cede3135abb59c6696b5b4f620a6",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Preppin Data/PD - 2019 Week 30/pd2019w30_MySQL.sql:24-35",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL extraction query classifies structured temperature messages, extracts water and air measurements with REGEXP_SUBSTR, removes the measurement prefix with REGEXP_REPLACE, and retains a normalized commentary field.",
+      "mysql_mariadb_translation": "Reauthored as a fixed weather-report audit. The case expression uses MariaDB's REGEXP predicate for the source's callable REGEXP_LIKE test, REGEXP_SUBSTR extracts water and air readings, and REGEXP_REPLACE removes the structured prefix. The source tweet schema, values, date pipeline, recursive scaffolding, and stopword workflow are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["regex-classification", "regexp-substr", "regexp-replace", "multi-field-extraction", "null-propagation", "deterministic-order"],
+  "fixture_notes": "Reports 3001 and 3002 contain valid water and air measurements, report 3003 is an unrelated note, and report 3004 is NULL. The audit preserves nonmatching and NULL rows while counting only complete temperature reports.",
+  "determinism_notes": "Report IDs, fixed message text, regex patterns, replacement text, filters, and ordering are fixed. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE weather_reports (report_id INT PRIMARY KEY, report_text VARCHAR(240) NULL)",
+    "INSERT INTO weather_reports VALUES (3001, '17 Apr 2025: Water - 12.4F / 10.2C; Air - 68.7F / 20.4C. Clear skies'), (3002, '18 Apr 2025: Water - 8.0F / -1.5C; Air - 46.4F / 7.0C. Frost warning'), (3003, '18 Apr 2025: Visibility reduced near the harbor.'), (3004, NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT report_id, CASE WHEN report_text REGEXP 'Water - [0-9]{1,2}\\.[0-9]F / -?[0-9]{1,2}\\.[0-9]C; Air - [0-9]{1,2}\\.[0-9]F / -?[0-9]{1,2}\\.[0-9]C\\.' THEN 'temperature' ELSE 'other' END AS report_kind, REGEXP_SUBSTR(report_text, 'Water - [0-9]{1,2}\\.[0-9]F / -?[0-9]{1,2}\\.[0-9]C') AS water_reading, REGEXP_SUBSTR(report_text, 'Air - [0-9]{1,2}\\.[0-9]F / -?[0-9]{1,2}\\.[0-9]C') AS air_reading, REGEXP_REPLACE(report_text, '^[^;]+;\\s*Air - [^.]+\\.\\s*', '') AS commentary FROM weather_reports ORDER BY report_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT COUNT(*) AS complete_temperature_reports FROM weather_reports WHERE report_text REGEXP 'Water - [0-9]{1,2}\\.[0-9]F / -?[0-9]{1,2}\\.[0-9]C; Air - [0-9]{1,2}\\.[0-9]F / -?[0-9]{1,2}\\.[0-9]C\\.'",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT report_id, report_text FROM weather_reports ORDER BY report_id",
+      "ordered": true
+    }
+  ]
+}
