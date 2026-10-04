@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "qualify_window_invite_summary",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "repository": "dymytryo/sql_snippets",
+      "commit": "6ba9cbc9619204feab28f8fad81c7bff3d1ec5f9",
+      "path": "qualify.sql",
+      "location": "lines 1-24",
+      "url": "https://github.com/dymytryo/sql_snippets/blob/6ba9cbc9619204feab28f8fad81c7bff3d1ec5f9/qualify.sql#L1-L24",
+      "source_sha256": "d4e761363a2bbcac3f1596fe122b21d3900b883808575a108c01237db6648710",
+      "source_dialect": "snowflake",
+      "observed_pattern": "A QUALIFY query keeps the most recent row per merchant while projecting the merchant's first invite with FIRST_VALUE over a full partition frame and the partition count with COUNT OVER.",
+      "mysql_mariadb_translation": "Reauthored as a vendor invite report. MariaDB has no QUALIFY clause, so the window calculations and row_number predicate are evaluated in a derived table and the outer query filters latest_rank = 1; invite ID tie-breakers make both endpoint and latest-row selection deterministic."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "qualify-translation",
+    "derived-window-filter",
+    "first-value",
+    "full-partition-window",
+    "window-count",
+    "latest-row-filter",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Vendor 41 has three invites, including a latest-date tie resolved by invite ID; vendor 42 has two invites. The report returns the newest invite, the first invite ID, and the total invite count for each vendor.",
+  "determinism_notes": "Created timestamps and invite IDs are fixed. Ascending invite ID resolves FIRST_VALUE peers, descending invite ID resolves latest-row peers, and vendor ID orders the final report.",
+  "setup": [
+    "CREATE TABLE vendor_invites (invite_id INT PRIMARY KEY, vendor_id INT NOT NULL, created_at DATETIME NOT NULL, invite_type VARCHAR(16) NOT NULL, status VARCHAR(16) NOT NULL)",
+    "INSERT INTO vendor_invites VALUES (401, 41, '2024-01-02 09:00:00', 'email', 'sent'), (402, 41, '2024-01-04 10:00:00', 'sms', 'accepted'), (403, 41, '2024-01-04 10:00:00', 'push', 'expired'), (404, 42, '2024-02-01 08:00:00', 'email', 'sent'), (405, 42, '2024-02-03 08:00:00', 'sms', 'accepted')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT invite_id, vendor_id, created_at, status, initial_invite_id, invite_count FROM (SELECT invite_id, vendor_id, created_at, status, FIRST_VALUE(invite_id) OVER (PARTITION BY vendor_id ORDER BY created_at ASC, invite_id ASC ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS initial_invite_id, COUNT(*) OVER (PARTITION BY vendor_id) AS invite_count, ROW_NUMBER() OVER (PARTITION BY vendor_id ORDER BY created_at DESC, invite_id DESC) AS latest_rank FROM vendor_invites) AS ranked_invites WHERE latest_rank = 1 ORDER BY vendor_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT invite_id, vendor_id, status FROM vendor_invites ORDER BY invite_id",
+      "ordered": true
+    }
+  ]
+}
