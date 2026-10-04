@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "full_outer_join_reconciliation",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "query/joins/oracle.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/query/joins/oracle.sql",
+      "sha256": "14d7f374bc615a54ca58b1c5777da5b6df4e064f100e7ec9b4fdb6ed418c3567",
+      "source_dialect": "oracle"
+    },
+    "inspiration": {
+      "source_location": "query/joins/oracle.sql:17-22",
+      "source_dialect": "oracle",
+      "observed_pattern": "An Oracle query uses FULL OUTER JOIN to retain matched rows and unmatched rows from both input relations.",
+      "mysql_mariadb_translation": "Reauthored as a customer-receipt reconciliation. Because MariaDB has no FULL OUTER JOIN, a LEFT JOIN branch plus a reversed LEFT JOIN anti-match branch are combined with UNION ALL; COALESCE on the non-NULL customer key and explicit ordering preserve the full-join result."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "full-outer-join-translation",
+    "union-all-join",
+    "unmatched-both-sides",
+    "coalesce-join-key",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Customer 101 has no receipt, customer 102 has one receipt, and receipt 903 has no customer. The translated full join must retain all three reconciliation rows while matching customer 102 exactly once.",
+  "determinism_notes": "Customer and receipt IDs are fixed and non-NULL. COALESCE yields a stable reconciliation key, and the final key ordering is explicit with no limits, clocks, randomness, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE customers (customer_id INT PRIMARY KEY, customer_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE receipts (receipt_id INT PRIMARY KEY, customer_id INT NOT NULL, amount INT NOT NULL)",
+    "INSERT INTO customers VALUES (101, 'Ada'), (102, 'Bela')",
+    "INSERT INTO receipts VALUES (902, 102, 45), (903, 103, 60)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT COALESCE(c.customer_id, r.customer_id) AS reconciliation_id, c.customer_name, r.receipt_id, r.amount FROM customers c LEFT JOIN receipts r ON c.customer_id = r.customer_id UNION ALL SELECT COALESCE(c.customer_id, r.customer_id) AS reconciliation_id, c.customer_name, r.receipt_id, r.amount FROM receipts r LEFT JOIN customers c ON c.customer_id = r.customer_id WHERE c.customer_id IS NULL ORDER BY reconciliation_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT customer_id, customer_name FROM customers ORDER BY customer_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT receipt_id, customer_id, amount FROM receipts ORDER BY receipt_id",
+      "ordered": true
+    }
+  ]
+}
