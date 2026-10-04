@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "population_sample_covariance_report",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "repository": "felipebz/zpa",
+      "commit": "a9810f4f4a6762082e9b99d6b3a37d4e482271a3",
+      "path": "zpa-checks/src/integrationTest/resources/sources/oracle-database_26/sqlrf/COVAR_POP-1.sql",
+      "location": "lines 1-8",
+      "url": "https://github.com/felipebz/zpa/blob/a9810f4f4a6762082e9b99d6b3a37d4e482271a3/zpa-checks/src/integrationTest/resources/sources/oracle-database_26/sqlrf/COVAR_POP-1.sql#L1-L8",
+      "source_sha256": "78e648f729c0d2219ca822c0d30ee5bf8efb6133b94225ac7196b2b27ba6a40f",
+      "source_dialect": "oracle",
+      "observed_pattern": "An Oracle grouped report compares population and sample covariance side by side after filtering departments, ordering by the grouping key and both covariance results.",
+      "mysql_mariadb_translation": "Reauthored as a calibration report with fixed paired samples. MariaDB has no native COVAR_POP or COVAR_SAMP, so guarded covariance identities use denominators n squared for population covariance and n times (n - 1) for sample covariance; Oracle's SYSDATE and employee tables are omitted."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "covar-pop",
+    "population-sample-covariance",
+    "grouped-statistics",
+    "singleton-statistic-null",
+    "deterministic-order"
+  ],
+  "fixture_notes": "North has pairs (1,2), (2,4), (3,6), giving population covariance 1.3333 and sample covariance 2. South has (2,10), (4,14), (6,18), giving population covariance 5.3333 and sample covariance 8. East has one pair: population covariance is 0 while sample covariance is NULL.",
+  "determinism_notes": "All paired values and region labels are fixed; region ordering is explicit and no clocks, randomness, limits, or concurrent schedules are used.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "WITH calibration_samples AS (SELECT 'North' AS region_code, 1 AS measured_x, 2 AS measured_y UNION ALL SELECT 'North', 2, 4 UNION ALL SELECT 'North', 3, 6 UNION ALL SELECT 'South', 2, 10 UNION ALL SELECT 'South', 4, 14 UNION ALL SELECT 'South', 6, 18 UNION ALL SELECT 'East', 9, 12) SELECT region_code, COUNT(*) AS sample_count, CASE WHEN COUNT(*) > 0 THEN (COUNT(*) * SUM(measured_x * measured_y) - SUM(measured_x) * SUM(measured_y)) / (COUNT(*) * COUNT(*)) ELSE NULL END AS population_covariance, CASE WHEN COUNT(*) > 1 THEN (COUNT(*) * SUM(measured_x * measured_y) - SUM(measured_x) * SUM(measured_y)) / (COUNT(*) * (COUNT(*) - 1)) ELSE NULL END AS sample_covariance FROM calibration_samples GROUP BY region_code ORDER BY region_code",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
