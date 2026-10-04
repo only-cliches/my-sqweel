@@ -3,6 +3,8 @@
 All notable changes to MySqweel will be documented in this file.
 
 ## 0.5.1 Unreleased
+- Added GitHub-attributed Oracle GROUPING SETS coverage based on [Apress/oracle-sql-revealed](https://github.com/Apress/oracle-sql-revealed/blob/c17de9aeac85ac9d3315214830239e4e61be4754/ch04/Listing%20Cube%2C%20Rollup%2C%20Grouping%20Sets.sql) at commit `c17de9aeac85ac9d3315214830239e4e61be4754` (source SHA-256 `0c1fa4c11324282586dc23b42b9c5b53d74d73272f31c0d594b3ed08a6a0160a`, source dialect `oracle`, source location `ch04/Listing Cube, Rollup, Grouping Sets.sql:46-52`): independently authored `grouping_sets_campaign_summary` coverage translates detail, region subtotal, product-line subtotal, and grand-total grouping sets to ordered `UNION ALL` branches with explicit summary-level labels and deterministic ordering. MariaDB 10.11.7 baselines were byte-identical twice, and three fresh differential reruns plus the initial differential comparison matched MySqweel.
+
 - Added GitHub-attributed PostgreSQL ILIKE coverage based on [credativ/omdb-postgresql](https://github.com/credativ/omdb-postgresql/blob/a42544c4eaa40dde3948573235dff11bc39686e6/pgbench/search.sql) at commit `a42544c4eaa40dde3948573235dff11bc39686e6` (source SHA-256 `876adc0409683f516d1c07d801b130dcee6fb94442cd9e4396aad6a272b560ae`, source dialect `postgresql`, source location `pgbench/search.sql:3-6`): independently authored `ilike_media_catalog_report` coverage translates case-insensitive ILIKE searches to `LOWER(...) LIKE LOWER(...)`, preserves mixed-case film/book/archive matches, grouped per-kind counts, NULL nonmatches, and deterministic ordering. MariaDB 10.11.7 baselines were byte-identical twice, and three fresh differential reruns plus the initial differential comparison matched MySqweel.
 
 

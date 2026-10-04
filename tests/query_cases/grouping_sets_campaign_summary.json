@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "grouping_sets_campaign_summary",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Apress/oracle-sql-revealed",
+      "commit": "c17de9aeac85ac9d3315214830239e4e61be4754",
+      "path": "ch04/Listing Cube, Rollup, Grouping Sets.sql",
+      "url": "https://github.com/Apress/oracle-sql-revealed/blob/c17de9aeac85ac9d3315214830239e4e61be4754/ch04/Listing%20Cube%2C%20Rollup%2C%20Grouping%20Sets.sql",
+      "sha256": "0c1fa4c11324282586dc23b42b9c5b53d74d73272f31c0d594b3ed08a6a0160a",
+      "source_dialect": "oracle"
+    },
+    "inspiration": {
+      "source_location": "ch04/Listing Cube, Rollup, Grouping Sets.sql:46-52",
+      "source_dialect": "oracle",
+      "observed_pattern": "A sales summary uses GROUPING SETS to emit product-level totals, client-level totals, and a grand total in one ordered report, while labeling the grouping level separately from NULL dimension values.",
+      "mysql_mariadb_translation": "Reauthored as a campaign-sales summary with region/product-line dimensions and explicit summary-level labels. Because MariaDB 10.11.7 and MySqweel do not expose native GROUPING SETS, the equivalent grouping sets are expressed as ordered UNION ALL branches for detail, each subtotal family, and the grand total. Oracle-only DUAL, DECODE, and GROUP_ID constructs are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["grouping-sets", "multi-level-summary", "subtotal-union", "grand-total", "null-dimension-label", "deterministic-order"],
+  "fixture_notes": "Five campaign sales rows produce detail rows, region subtotals, product-line subtotals, and one grand total. The explicit summary_level column distinguishes subtotal NULLs from stored dimension values.",
+  "determinism_notes": "Sale IDs, dimensions, amounts, fixed UNION ALL branches, labels, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE campaign_sales (sale_id INT PRIMARY KEY, region_code VARCHAR(16) NOT NULL, product_line VARCHAR(16) NOT NULL, amount INT NOT NULL)",
+    "INSERT INTO campaign_sales VALUES (901, 'North', 'Hardware', 12), (902, 'North', 'Software', 18), (903, 'South', 'Hardware', 9), (904, 'South', 'Software', 21), (905, 'East', 'Hardware', 7)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT region_code, product_line, SUM(amount) AS total_amount, 'detail' AS summary_level FROM campaign_sales GROUP BY region_code, product_line UNION ALL SELECT region_code, NULL, SUM(amount), 'region-total' FROM campaign_sales GROUP BY region_code UNION ALL SELECT NULL, product_line, SUM(amount), 'product-total' FROM campaign_sales GROUP BY product_line UNION ALL SELECT NULL, NULL, SUM(amount), 'grand-total' FROM campaign_sales ORDER BY summary_level, region_code, product_line",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT sale_id, region_code, product_line, amount FROM campaign_sales ORDER BY sale_id",
+      "ordered": true
+    }
+  ]
+}
