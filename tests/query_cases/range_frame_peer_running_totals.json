@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "range_frame_peer_running_totals",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "repository": "TexanInParis/Effective-SQL",
+      "commit": "8047973838c2780da1795742793016faff36315c",
+      "path": "Microsoft SQL Server/Chapter 05/Listing 5.032.sql",
+      "location": "lines 9-21",
+      "url": "https://github.com/TexanInParis/Effective-SQL/blob/8047973838c2780da1795742793016faff36315c/Microsoft%20SQL%20Server/Chapter%2005/Listing%205.032.sql#L9-L21",
+      "source_sha256": "bfe50498babbe95dd3f238efd7c51d029a9c5874043fcdbfa5e0b1ff66bb7a0d",
+      "source_dialect": "transact-sql",
+      "observed_pattern": "A partitioned SUM window uses an ORDER BY expression with RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, alongside an unordered partition total.",
+      "mysql_mariadb_translation": "Reauthored as an independent account-ledger report. Numeric day peers share the same RANGE running total, while a second partitioned SUM reports each account total; SQL Server USE and GO commands, source tables, identifiers, values, and sales example context are omitted."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "range-between",
+    "window-frame",
+    "window-aggregate",
+    "peer-ties",
+    "partitioning",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Account 10 has two entries on day 1, which must share a RANGE total of 17 before day 2 reaches 22; account 20 supplies an independent partition and account totals.",
+  "determinism_notes": "Sale IDs uniquely order the final projection, while the window ORDER BY intentionally uses only day_no to expose peer behavior; all values are fixed with no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE account_ledger (entry_id INT PRIMARY KEY, account_id INT NOT NULL, day_no INT NOT NULL, amount DECIMAL(10,2) NOT NULL)",
+    "INSERT INTO account_ledger VALUES (101, 10, 1, 10.00), (102, 10, 1, 7.00), (103, 10, 2, 5.00), (201, 20, 1, 4.00), (202, 20, 3, 6.00)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT entry_id, account_id, day_no, amount, SUM(amount) OVER (PARTITION BY account_id ORDER BY day_no RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS peer_running_total, SUM(amount) OVER (PARTITION BY account_id) AS account_total FROM account_ledger ORDER BY account_id, day_no, entry_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT entry_id, account_id, day_no, amount FROM account_ledger ORDER BY account_id, day_no, entry_id",
+      "ordered": true
+    }
+  ]
+}
