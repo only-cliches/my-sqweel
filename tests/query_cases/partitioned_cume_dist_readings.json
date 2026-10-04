@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "partitioned_cume_dist_readings",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "repository": "felipebz/zpa",
+      "commit": "a9810f4f4a6762082e9b99d6b3a37d4e482271a3",
+      "path": "zpa-checks/src/integrationTest/resources/sources/oracle-database_26/sqlrf/CUME_DIST-1.sql",
+      "location": "lines 1-5",
+      "url": "https://github.com/felipebz/zpa/blob/a9810f4f4a6762082e9b99d6b3a37d4e482271a3/zpa-checks/src/integrationTest/resources/sources/oracle-database_26/sqlrf/CUME_DIST-1.sql#L1-L5",
+      "source_sha256": "dff4b0b71b6b62dfef3aa1ffbe5bc62cf3403b7796f56c203bcb4fbc530ca605",
+      "source_dialect": "oracle",
+      "observed_pattern": "An Oracle analytic query computes CUME_DIST within each job partition, orders by salary, filters the input rows, and emits the cumulative distribution with deterministic output ordering.",
+      "mysql_mariadb_translation": "Reauthored as a warehouse-reading report. MariaDB's CUME_DIST window remains partitioned by site and ordered by reading so tied readings share a peer-inclusive cumulative distribution; a sensor ID is used only for deterministic final output ordering, not as a window peer breaker."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "cume-dist",
+    "partitioned-window",
+    "peer-inclusive-percentile",
+    "filtered-window-input",
+    "deterministic-order"
+  ],
+  "fixture_notes": "North has four readings with a tied pair at 20, producing cumulative distributions 0.25, 0.75, 0.75, and 1. South has three distinct readings producing one-third, two-thirds, and 1. The final sensor ID order does not alter the reading peers.",
+  "determinism_notes": "Readings, site labels, sensor IDs, and the site filter are fixed. The window orders only by reading to preserve peer semantics; final output orders by site, reading, and sensor ID.",
+  "setup": [
+    "CREATE TABLE warehouse_readings (reading_id INT PRIMARY KEY, site_code VARCHAR(16) NOT NULL, sensor_id INT NOT NULL, reading_value INT NOT NULL)",
+    "INSERT INTO warehouse_readings VALUES (601, 'North', 11, 10), (602, 'North', 12, 20), (603, 'North', 13, 20), (604, 'North', 14, 40), (605, 'South', 21, 5), (606, 'South', 22, 15), (607, 'South', 23, 30), (608, 'West', 31, 99)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT site_code, sensor_id, reading_value, CUME_DIST() OVER (PARTITION BY site_code ORDER BY reading_value) AS cumulative_share FROM warehouse_readings WHERE site_code IN ('North', 'South') ORDER BY site_code, reading_value, sensor_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT reading_id, site_code, sensor_id, reading_value FROM warehouse_readings ORDER BY reading_id",
+      "ordered": true
+    }
+  ]
+}
