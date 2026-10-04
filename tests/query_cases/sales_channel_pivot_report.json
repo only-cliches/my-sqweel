@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "sales_channel_pivot_report",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "repository": "TimelordUK/sql-cli",
+      "commit": "2bbf770691627405ed03f545aeb8e3b2ad3147c9",
+      "path": "examples/pivot.sql",
+      "location": "lines 13-18,45-54",
+      "url": "https://github.com/TimelordUK/sql-cli/blob/2bbf770691627405ed03f545aeb8e3b2ad3147c9/examples/pivot.sql#L13-L18",
+      "source_sha256": "2adaac03747ced68ed17aae0ab972de0b5ded0ee00d478786a10e8d4a6cf66b4",
+      "source_dialect": "sql-server-compatible",
+      "observed_pattern": "A PIVOT query turns category values into aggregate result columns and leaves a NULL when a group has no row for one of the requested categories.",
+      "mysql_mariadb_translation": "Reauthored as a sales-channel report using one SUM(CASE WHEN ...) expression per requested channel and GROUP BY region. The conditional aggregates preserve totals for repeated channel rows and NULL for absent region/channel combinations without relying on PIVOT or batch separators."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "pivot-translation",
+    "conditional-aggregate",
+    "row-to-column",
+    "wide-report",
+    "missing-pivot-value-null",
+    "deterministic-order"
+  ],
+  "fixture_notes": "North has repeated web and store sales, South has store and mobile sales but no web sales, and East has only web sales. Missing channel/region combinations must remain NULL in the wide report.",
+  "determinism_notes": "All sales rows and channel labels are fixed; region ordering is explicit and no limits, clocks, randomness, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE channel_sales (sale_id INT PRIMARY KEY, region_code VARCHAR(16) NOT NULL, sales_channel VARCHAR(16) NOT NULL, net_amount INT NOT NULL)",
+    "INSERT INTO channel_sales VALUES (501, 'North', 'web', 12), (502, 'North', 'store', 8), (503, 'North', 'web', 5), (504, 'South', 'store', 7), (505, 'South', 'mobile', 4), (506, 'East', 'web', 9)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT region_code, SUM(CASE WHEN sales_channel = 'web' THEN net_amount ELSE NULL END) AS web_total, SUM(CASE WHEN sales_channel = 'store' THEN net_amount ELSE NULL END) AS store_total, SUM(CASE WHEN sales_channel = 'mobile' THEN net_amount ELSE NULL END) AS mobile_total FROM channel_sales GROUP BY region_code ORDER BY region_code",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT sale_id, region_code, sales_channel, net_amount FROM channel_sales ORDER BY sale_id",
+      "ordered": true
+    }
+  ]
+}
