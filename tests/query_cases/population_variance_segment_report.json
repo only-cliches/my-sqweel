@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "population_variance_segment_report",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "databricks/Spark-The-Definitive-Guide",
+      "commit": "4ba5601eb9b9aed1d01ab79775e3af228216ff6f",
+      "path": "code/Structured_APIs-Chapter_7_Aggregations.sql",
+      "url": "https://github.com/databricks/Spark-The-Definitive-Guide/blob/4ba5601eb9b9aed1d01ab79775e3af228216ff6f/code/Structured_APIs-Chapter_7_Aggregations.sql",
+      "sha256": "a0e0448ddfb496494beb41d4458d37ee015eec5f3c71f77132843ab860319633",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "code/Structured_APIs-Chapter_7_Aggregations.sql:36-39",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A statistics query computes population variance as an aggregate over a numeric column.",
+      "mysql_mariadb_translation": "Reauthored as grouped segment statistics. Because the native VAR_POP aggregate is not assumed by MySqweel, the population variance identity (n*SUM(x*x)-SUM(x)^2)/(n*n) is evaluated from grouped counts and sums, preserving zero variance for a singleton segment."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "variance-pop",
+    "population-variance-identity",
+    "grouped-statistics",
+    "singleton-statistic-zero",
+    "deterministic-order"
+  ],
+  "fixture_notes": "North values 1, 2, and 3 produce population variance 0.6667; South values 10, 14, and 18 produce 10.6667; East is a singleton with variance 0.",
+  "determinism_notes": "Segment codes and measurements are fixed, grouped arithmetic has no empty or NULL inputs, and the final report is explicitly ordered. No clocks, randomness, limits, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE segment_measurements (measurement_id INT PRIMARY KEY, segment_code VARCHAR(16) NOT NULL, measurement INT NOT NULL)",
+    "INSERT INTO segment_measurements VALUES (101, 'North', 1), (102, 'North', 2), (103, 'North', 3), (201, 'South', 10), (202, 'South', 14), (203, 'South', 18), (301, 'East', 7)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH stats AS (SELECT segment_code, COUNT(*) AS sample_size, SUM(measurement) AS total_value, SUM(measurement * measurement) AS total_square FROM segment_measurements GROUP BY segment_code) SELECT segment_code, (sample_size * total_square - total_value * total_value) / (sample_size * sample_size) AS population_variance FROM stats ORDER BY segment_code",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT measurement_id, segment_code, measurement FROM segment_measurements ORDER BY measurement_id",
+      "ordered": true
+    }
+  ]
+}

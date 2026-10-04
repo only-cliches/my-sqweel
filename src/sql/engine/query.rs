@@ -3022,13 +3022,14 @@ impl RawEngine {
                     | BinaryOperator::MyIntegerDivide),
                 right,
             } => {
-                // MariaDB widens arithmetic: integer operands yield BIGINT,
-                // a DECIMAL operand yields DECIMAL, and a floating operand
-                // yields DOUBLE. Preserve the widest decimal scale too; for
-                // example, `1000 + AVG(int_column) OVER (...)` must retain
-                // AVG's four fractional digits. Division also applies
-                // MariaDB's four-digit div_precision_increment to the
-                // left operand's decimal scale.
+                // MariaDB widens arithmetic: integer operands yield BIGINT
+                // except for `/`, which yields DECIMAL; a DECIMAL operand
+                // yields DECIMAL, and a floating operand yields DOUBLE.
+                // Preserve the widest decimal scale too; for example,
+                // `1000 + AVG(int_column) OVER (...)` must retain AVG's four
+                // fractional digits. Division also applies MariaDB's
+                // four-digit div_precision_increment to the left operand's
+                // decimal scale.
                 let left_metadata =
                     self.expression_metadata(select, left, String::new(), first_row);
                 let right_metadata =
@@ -3044,6 +3045,10 @@ impl RawEngine {
                 let to_days_difference = is_to_days(left) && is_to_days(right);
                 metadata.column_type = if to_days_difference {
                     MysqlColumnType::Integer
+                } else if matches!(op, BinaryOperator::Divide) {
+                    // MariaDB's `/` always produces a DECIMAL result, including
+                    // when both operands are integers; `DIV` is the integer form.
+                    MysqlColumnType::Decimal
                 } else {
                     match rank {
                         1 => MysqlColumnType::BigInt,

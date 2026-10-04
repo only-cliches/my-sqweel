@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "id": "population_variance_segment_report_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "databricks/Spark-The-Definitive-Guide",
+      "commit": "4ba5601eb9b9aed1d01ab79775e3af228216ff6f",
+      "path": "code/Structured_APIs-Chapter_7_Aggregations.sql",
+      "url": "https://github.com/databricks/Spark-The-Definitive-Guide/blob/4ba5601eb9b9aed1d01ab79775e3af228216ff6f/code/Structured_APIs-Chapter_7_Aggregations.sql",
+      "sha256": "a0e0448ddfb496494beb41d4458d37ee015eec5f3c71f77132843ab860319633",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "code/Structured_APIs-Chapter_7_Aggregations.sql:36-39",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A population variance aggregate yields a fractional result from integer observations.",
+      "mysql_mariadb_translation": "Minimized to the equivalent integer arithmetic division 6/9, isolating MariaDB's four-digit decimal division rounding from grouped query planning."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "variance-pop",
+    "population-variance-identity",
+    "decimal-division-rounding",
+    "minimized-regression",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The minimized expression is 6/9, the North population-variance identity after grouped sums, and should render as 0.6667 under MariaDB's four-digit division precision increment.",
+  "determinism_notes": "The query has no tables, input state, clocks, randomness, limits, or concurrent schedules.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT 6 / 9 AS population_variance",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}

@@ -1367,20 +1367,51 @@ fn format_decimal_text(value: &str, scale: usize) -> String {
     let (integer, fraction) = value.split_once('.').map_or((value, ""), |parts| parts);
     let integer = if integer.is_empty() { "0" } else { integer };
     let mut fraction = fraction.to_string();
+    let round_up = fraction
+        .as_bytes()
+        .get(scale)
+        .is_some_and(|digit| *digit >= b'5');
     fraction.truncate(scale);
+    let mut integer = integer.to_string();
+    if round_up {
+        let mut digits = format!("{integer}{fraction}");
+        increment_decimal_digits(&mut digits);
+        let split = digits.len().saturating_sub(scale);
+        integer = if split == 0 {
+            "0".to_string()
+        } else {
+            digits[..split].to_string()
+        };
+        fraction = digits[split..].to_string();
+    }
     while fraction.len() < scale {
         fraction.push('0');
     }
     let mut output = String::new();
-    if negative && value != "0" {
+    if negative && (integer != "0" || fraction.bytes().any(|digit| digit != b'0')) {
         output.push('-');
     }
-    output.push_str(integer);
+    output.push_str(&integer);
     if scale > 0 {
         output.push('.');
         output.push_str(&fraction);
     }
     output
+}
+
+fn increment_decimal_digits(digits: &mut String) {
+    let mut bytes = digits.as_bytes().to_vec();
+    for digit in bytes.iter_mut().rev() {
+        if *digit == b'9' {
+            *digit = b'0';
+        } else {
+            *digit += 1;
+            *digits = String::from_utf8(bytes).expect("decimal digits are ASCII");
+            return;
+        }
+    }
+    bytes.insert(0, b'1');
+    *digits = String::from_utf8(bytes).expect("decimal digits are ASCII");
 }
 
 fn write_unsigned_numeric_column<W: io::Read + io::Write>(
@@ -2087,8 +2118,8 @@ mod tests {
 
     use super::{
         Authentication, Backend, canonicalize_information_schema_columns,
-        parse_mysql_datetime_value, prepared_result_columns, references_information_schema,
-        validate_wire_rows,
+        format_decimal_text, parse_mysql_datetime_value, prepared_result_columns,
+        references_information_schema, validate_wire_rows,
     };
     use crate::sql::engine::{Engine, EngineConfig, QueryResult};
 
@@ -2280,6 +2311,13 @@ mod tests {
         assert!(parse_mysql_datetime_value("2026-07-15 12:34:56.123456").is_some());
         assert!(parse_mysql_datetime_value("2026-07-15T12:34:56.123Z").is_some());
         assert!(parse_mysql_datetime_value("\"2026-07-15T12:34:56.123Z\"").is_some());
+    }
+
+    #[test]
+    fn decimal_wire_values_round_at_declared_scale() {
+        assert_eq!(format_decimal_text("0.6666666666", 4), "0.6667");
+        assert_eq!(format_decimal_text("9.99996", 4), "10.0000");
+        assert_eq!(format_decimal_text("-0.00005", 4), "-0.0001");
     }
 
     #[test]
