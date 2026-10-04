@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "nulls_first_priority_order",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "repository": "boringcollege/postgres-by-example",
+      "commit": "ffde0d358722498e37982b57bdbd711871a61c43",
+      "path": "source/order-by.sql",
+      "location": "lines 21-22",
+      "url": "https://github.com/boringcollege/postgres-by-example/blob/ffde0d358722498e37982b57bdbd711871a61c43/source/order-by.sql#L21-L22",
+      "source_sha256": "735d47ec60dc07dbb246c74d48dfb9f4b2c5dc991325ca845e8db0e03a366b04",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A PostgreSQL ORDER BY explicitly places NULL values first in an ascending sort.",
+      "mysql_mariadb_translation": "Reauthored as an independent queue-priority report. MariaDB's boolean sort key (priority IS NOT NULL), followed by the nullable priority and a unique item ID, translates NULLS FIRST while making peer ordering deterministic; PostgreSQL catalog tables and VALUES syntax are omitted."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "nulls-first",
+    "null-preserving-order",
+    "boolean-sort-key",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Two unprioritized queue items must precede priorities 1 and 2; the item ID resolves the order within the NULL peer group.",
+  "determinism_notes": "Item IDs uniquely resolve all output ties, and the NULL placement expression is explicit; all values are fixed with no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE queue_items (item_id INT PRIMARY KEY, item_label VARCHAR(32) NOT NULL, priority INT NULL)",
+    "INSERT INTO queue_items VALUES (301, 'unassigned-a', NULL), (302, 'urgent', 1), (303, 'unassigned-b', NULL), (304, 'routine', 2)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT item_id, item_label, priority FROM queue_items ORDER BY (priority IS NOT NULL), priority, item_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT item_id, item_label, priority FROM queue_items ORDER BY item_id",
+      "ordered": true
+    }
+  ]
+}
