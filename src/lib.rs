@@ -8,7 +8,10 @@ use anyhow::{Context, Result, anyhow};
 use serde_json::{Value, json};
 use sqlparser::ast::{SetExpr, Statement, TableFactor};
 
-pub use crate::sql::engine::{Engine, EngineConfig, EngineSession, QueryResult};
+pub use crate::sql::engine::{
+    Engine, EngineConfig, EngineSession, ImportColumn, ImportDecision, ImportMode, ImportOptions,
+    ImportReport, ImportTable, ImportVisitor, QueryResult,
+};
 pub use server::{SqlEndpoint, SqlEndpointConfig};
 pub use storage::Storage;
 mod runtime;

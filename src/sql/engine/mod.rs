@@ -34,6 +34,10 @@ pub use hooks::{
     QueryHookError, QueryHookEvent, QueryHookKey, QueryHookOptions, QueryHookRow,
     QueryHookSubscription,
 };
+mod ingest;
+pub use ingest::{
+    ImportColumn, ImportDecision, ImportMode, ImportOptions, ImportReport, ImportTable, ImportVisitor,
+};
 mod transaction;
 pub use transaction::{Engine, EngineSession};
 mod compat;

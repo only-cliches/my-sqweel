@@ -104,6 +104,69 @@ Use `Engine::open_async(config, storage).await` when opening storage from an
 async application. Both query styles use the same storage, filters, and
 transaction behavior.
 
+### Track query performance
+
+Subscribe before running a query to read its elapsed time and logical row counts:
+
+```rust
+use my_sqweel::sql::engine::{Engine, QueryEvent, QueryEventOptions};
+
+fn main() -> anyhow::Result<()> {
+    let engine = Engine::default();
+    let events = engine.subscribe_query_events(QueryEventOptions::metadata_only());
+    engine.execute_sql("SELECT 1")?;
+    let _received = events.recv()?;
+    if let QueryEvent::Completed(done) = events.recv()? {
+        println!("elapsed: {:?}, rows read: {}", done.duration, done.metrics.rows_read);
+    }
+    Ok(())
+}
+```
+
+See [query events](docs/embedding.md#databases-accounts-and-events) for result
+sizes and write counters.
+
+### Import CSV or JSON
+
+Imports can create a table from inferred column types or write to an existing
+table. A visitor can change or skip each row before it is written:
+
+```rust
+use my_sqweel::{Engine, ImportDecision, ImportMode, ImportOptions, ImportTable};
+use serde_json::{Map, Value, json};
+
+fn main() -> anyhow::Result<()> {
+    let engine = Engine::default();
+    let mut visitor = |_: usize, row: &mut Map<String, Value>| -> anyhow::Result<ImportDecision> {
+        if row.get("name") == Some(&json!("Skip")) {
+            return Ok(ImportDecision::Skip);
+        }
+        row.insert("name".into(), json!("Ada Lovelace"));
+        Ok(ImportDecision::Include)
+    };
+    engine.import_csv(
+        "people",
+        "id,name\n1,Ada\n2,Skip\n".as_bytes(),
+        ImportOptions { visitor: Some(&mut visitor), ..ImportOptions::default() },
+    )?;
+    engine.import_json(
+        "people",
+        r#"[{"id":1,"name":"Updated"}]"#.as_bytes(),
+        ImportOptions {
+            table: ImportTable::Existing,
+            mode: ImportMode::UpsertMerge,
+            ..ImportOptions::default()
+        },
+    )?;
+    Ok(())
+}
+```
+
+Set `ImportOptions.columns` to explicit `ImportColumn` definitions to control
+table creation. `UpsertMerge` keeps omitted columns; `UpsertReplace` replaces the
+whole row. Both use primary or unique keys to find existing rows. See
+[import options and reset workflows](docs/operations.md#csv-and-json-imports).
+
 ## Choose storage once
 
 The storage backend belongs to the engine and serves all of its sessions

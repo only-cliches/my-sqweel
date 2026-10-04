@@ -43,6 +43,54 @@ For an async custom backend, persist the catalog/table/row mutations in each
 multi-database state without requiring a whole-instance image. See
 [custom async storage](async-storage.md).
 
+## CSV and JSON imports
+
+`Engine::import_csv` reads a header row; `Engine::import_json` accepts an object,
+an array of objects, or newline-delimited objects. Both accept `std::io::Read`
+inputs and return an `ImportReport` with read, imported, and skipped row counts.
+By default, an import creates a missing table and infers `BOOLEAN`, `BIGINT`,
+`DOUBLE`, `DATE`, `DATETIME`, `JSON`, or `TEXT` columns from the included rows.
+A non-null `id` column becomes a primary key when its values fit an integer or
+`VARCHAR(255)`. Empty CSV fields become `NULL`.
+
+Use `ImportOptions::columns` to define the new table explicitly, or set
+`ImportTable::Existing` to require a table that is already present. For example:
+
+```rust,no_run
+use my_sqweel::{Engine, ImportColumn, ImportMode, ImportOptions, ImportTable};
+
+let engine = Engine::default();
+let columns = vec![
+    ImportColumn::new("id", "BIGINT").primary_key(),
+    ImportColumn::new("name", "VARCHAR(80)"),
+];
+engine.import_csv(
+    "people",
+    "id,name\n1,Ada\n".as_bytes(),
+    ImportOptions { columns: Some(columns), ..ImportOptions::default() },
+)?;
+engine.import_json(
+    "people",
+    r#"{"id":1,"name":"Ada Lovelace"}"#.as_bytes(),
+    ImportOptions {
+        table: ImportTable::Existing,
+        mode: ImportMode::UpsertMerge,
+        ..ImportOptions::default()
+    },
+)?;
+# Ok::<(), anyhow::Error>(())
+```
+
+`UpsertMerge` changes only supplied columns. `UpsertReplace` replaces the entire
+row, applying defaults to omitted columns. Both use SQL primary or unique key
+conflicts. An optional `visitor` receives each row and its one-based source row
+number before inference; it can edit the row or return `ImportDecision::Skip`.
+
+Rows are grouped into SQL batches and committed in one transaction. If a write
+fails, all imported rows roll back. A table created for the import remains empty
+because table creation runs before the row transaction. Inference examines the
+entire input, so an import temporarily uses memory proportional to its input.
+
 ## JSON ingestion and reset
 
 Use `upsert_json_documents` or `seed_json_rows` to load JSON objects directly.
