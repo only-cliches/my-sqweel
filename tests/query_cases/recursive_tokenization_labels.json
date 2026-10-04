@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "recursive_tokenization_labels",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "jorgeluis500/SQL-challenges-and-projects",
+      "commit": "14f7c28e94c2acf8c3903ba1f2a11078813d2f9e",
+      "path": "Preppin Data/PD - 2019 Week 30/pd2019w30_MySQL.sql",
+      "url": "https://github.com/jorgeluis500/SQL-challenges-and-projects/blob/14f7c28e94c2acf8c3903ba1f2a11078813d2f9e/Preppin%20Data/PD%20-%202019%20Week%2030/pd2019w30_MySQL.sql",
+      "sha256": "1107a0c460b14cf0cc3acd43626463fd0ba9cede3135abb59c6696b5b4f620a6",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Preppin Data/PD - 2019 Week 30/pd2019w30_MySQL.sql:81-108,114-136",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL data-preparation query recursively scaffolds token positions, cross joins those positions to delimited text rows, and extracts each indexed word before producing a normalized row set.",
+      "mysql_mariadb_translation": "Reauthored as a label-batch tokenizer. The recursive CTE derives the maximum token position from the new label rows, the cross join expands each row to its required positions, and nested SUBSTRING_INDEX calls extract the indexed token. This is the MariaDB/MySqweel equivalent of the source's occurrence-indexed REGEXP_SUBSTR; source tables, tweet data, temporary-table pipeline, and stopword workflow are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["recursive-tokenization", "recursive-scaffold", "cross-join-expansion", "indexed-delimited-extraction", "deterministic-order"],
+  "fixture_notes": "Label batches contain three, two, and one comma-separated labels. The recursive scaffold expands exactly to the longest batch, and the position filter prevents fabricated tokens for shorter rows.",
+  "determinism_notes": "Batch IDs, fixed label lists, recursive bound, extraction delimiter, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE label_batches (batch_id INT PRIMARY KEY, label_list VARCHAR(96) NOT NULL)",
+    "INSERT INTO label_batches VALUES (1001, 'amber,bravo,charlie'), (1002, 'delta,echo'), (1003, 'foxtrot')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH RECURSIVE positions (position_no) AS (SELECT 1 UNION ALL SELECT position_no + 1 FROM positions WHERE position_no < (SELECT MAX(LENGTH(label_list) - LENGTH(REPLACE(label_list, ',', '')) + 1) FROM label_batches)) SELECT b.batch_id, p.position_no, SUBSTRING_INDEX(SUBSTRING_INDEX(b.label_list, ',', p.position_no), ',', -1) AS label_value FROM label_batches AS b CROSS JOIN positions AS p WHERE p.position_no <= LENGTH(b.label_list) - LENGTH(REPLACE(b.label_list, ',', '')) + 1 ORDER BY b.batch_id, p.position_no",
+      "ordered": true
+    },
+    {
+      "sql": "WITH RECURSIVE positions (position_no) AS (SELECT 1 UNION ALL SELECT position_no + 1 FROM positions WHERE position_no < (SELECT MAX(LENGTH(label_list) - LENGTH(REPLACE(label_list, ',', '')) + 1) FROM label_batches)) SELECT b.batch_id, COUNT(*) AS label_count FROM label_batches AS b CROSS JOIN positions AS p WHERE p.position_no <= LENGTH(b.label_list) - LENGTH(REPLACE(b.label_list, ',', '')) + 1 GROUP BY b.batch_id ORDER BY b.batch_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT batch_id, label_list FROM label_batches ORDER BY batch_id",
+      "ordered": true
+    }
+  ]
+}
