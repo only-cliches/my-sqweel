@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "id": "mode_by_region_report",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "mitchellh/advent-2021-sql",
+      "commit": "0f56f50f8a9c8b061a6f43901ee4e4bd2d1bfa80",
+      "path": "day03/answer.sql",
+      "url": "https://github.com/mitchellh/advent-2021-sql/blob/0f56f50f8a9c8b061a6f43901ee4e4bd2d1bfa80/day03/answer.sql",
+      "sha256": "568eecdb1cdb6a9e0a6a26a93f22ae8f2f0e6ac509e2a7efa989530840414ced",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "day03/answer.sql:15-30",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped query uses MODE within each position to select the most frequent value in that group.",
+      "mysql_mariadb_translation": "Reauthored as a region-label report. MariaDB 10.11.7 lacks native MODE, so grouped label frequencies are ranked with ROW_NUMBER per region and the highest-frequency label is selected; label ordering makes the selection deterministic if a future tie is introduced."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "mode",
+    "grouped-frequency-ranking",
+    "partitioned-top-one",
+    "deterministic-order"
+  ],
+  "fixture_notes": "North's mode is alpha with three observations, South's mode is gamma with two observations, and East's singleton mode is solo.",
+  "determinism_notes": "Region codes and labels are fixed, frequency ranking uses an explicit label tie-breaker, and the final mode rows are ordered by region. No clocks, randomness, limits, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE region_labels (label_id INT PRIMARY KEY, region_code VARCHAR(16) NOT NULL, label VARCHAR(16) NOT NULL)",
+    "INSERT INTO region_labels VALUES (101, 'North', 'alpha'), (102, 'North', 'alpha'), (103, 'North', 'alpha'), (104, 'North', 'beta'), (201, 'South', 'gamma'), (202, 'South', 'gamma'), (203, 'South', 'delta'), (301, 'East', 'solo')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH frequencies AS (SELECT region_code, label, COUNT(*) AS occurrences FROM region_labels GROUP BY region_code, label), ranked AS (SELECT region_code, label, occurrences, ROW_NUMBER() OVER (PARTITION BY region_code ORDER BY occurrences DESC, label ASC) AS frequency_rank FROM frequencies) SELECT region_code, label, occurrences FROM ranked WHERE frequency_rank = 1 ORDER BY region_code",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT label_id, region_code, label FROM region_labels ORDER BY label_id",
+      "ordered": true
+    }
+  ]
+}
