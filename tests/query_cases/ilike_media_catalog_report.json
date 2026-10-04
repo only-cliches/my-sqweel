@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "ilike_media_catalog_report",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "credativ/omdb-postgresql",
+      "commit": "a42544c4eaa40dde3948573235dff11bc39686e6",
+      "path": "pgbench/search.sql",
+      "url": "https://github.com/credativ/omdb-postgresql/blob/a42544c4eaa40dde3948573235dff11bc39686e6/pgbench/search.sql",
+      "sha256": "876adc0409683f516d1c07d801b130dcee6fb94442cd9e4396aad6a272b560ae",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "pgbench/search.sql:3-6",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A movie-database search applies the case-insensitive ILIKE predicate to movie names, people names, cast roles, and category names while retaining deterministic ordering.",
+      "mysql_mariadb_translation": "Reauthored as a media-catalog report. MariaDB 10.11.7 expresses the same case-insensitive pattern with LOWER(column) LIKE LOWER(pattern), and the report returns matching entries plus per-kind counts. The schema, labels, values, and report shape are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["ilike", "case-insensitive-pattern", "like", "grouped-aggregate", "null-propagation", "deterministic-order"],
+  "fixture_notes": "The search term matches mixed-case title text in film and book entries, leaves a nonmatching entry and a NULL title out, and counts matches by entry kind.",
+  "determinism_notes": "Entry IDs, fixed titles, kinds, search pattern, grouping, and ordering are fixed. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE media_catalog (entry_id INT PRIMARY KEY, entry_title VARCHAR(96) NULL, entry_kind VARCHAR(16) NOT NULL)",
+    "INSERT INTO media_catalog VALUES (801, 'Hitchcock at Dusk', 'film'), (802, 'The HITCHHIKER Index', 'book'), (803, 'The Matrix', 'film'), (804, NULL, 'archive'), (805, 'HITCH Notes', 'archive')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT entry_id, entry_title, entry_kind FROM media_catalog WHERE LOWER(entry_title) LIKE LOWER('%hitch%') ORDER BY entry_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT entry_kind, COUNT(*) AS matching_entries FROM media_catalog WHERE LOWER(entry_title) LIKE LOWER('%hitch%') GROUP BY entry_kind ORDER BY entry_kind",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT entry_id, entry_title, entry_kind FROM media_catalog ORDER BY entry_id",
+      "ordered": true
+    }
+  ]
+}
