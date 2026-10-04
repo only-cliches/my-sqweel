@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "cube_campaign_summary",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "nileshmahale03/T-SQL",
+      "commit": "efa3dbbba24ff4f7463854a72cb5502771d15728",
+      "path": "T-SQL/09 Grouping Sets/02 GROUP BY CUBE.sql",
+      "url": "https://github.com/nileshmahale03/T-SQL/blob/efa3dbbba24ff4f7463854a72cb5502771d15728/T-SQL/09%20Grouping%20Sets/02%20GROUP%20BY%20CUBE.sql",
+      "sha256": "df80976fe2fe6de6b5b24610da12f1af643810bf1224df91044acce5269516db",
+      "source_dialect": "transact-sql"
+    },
+    "inspiration": {
+      "source_location": "T-SQL/09 Grouping Sets/02 GROUP BY CUBE.sql:5-12,22-24",
+      "source_dialect": "transact-sql",
+      "observed_pattern": "A reporting query uses CUBE over two dimensions to produce the detail grouping, each single-dimension subtotal, and the grand total in one result set.",
+      "mysql_mariadb_translation": "Reauthored as a campaign-sales report with region and product-line dimensions. Because MariaDB 10.11.7 and MySqweel do not expose native CUBE, the four CUBE grouping sets are expressed as ordered UNION ALL branches: detail, region subtotal, product-line subtotal, and grand total. T-SQL USE, GO, dbo qualification, and source tables are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["cube", "all-dimensional-subtotals", "grand-total", "subtotal-union", "null-dimension-label", "deterministic-order"],
+  "fixture_notes": "Four campaign-sales rows produce every grouping level for two dimensions. summary_level makes subtotal NULLs explicit and distinguishes them from stored dimension values.",
+  "determinism_notes": "Sale IDs, dimensions, amounts, fixed grouping branches, labels, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE cube_sales (sale_id INT PRIMARY KEY, region_code VARCHAR(16) NOT NULL, product_line VARCHAR(16) NOT NULL, amount INT NOT NULL)",
+    "INSERT INTO cube_sales VALUES (911, 'North', 'Hardware', 14), (912, 'North', 'Software', 26), (913, 'South', 'Hardware', 11), (914, 'South', 'Software', 19)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT region_code, product_line, SUM(amount) AS total_amount, 'detail' AS summary_level FROM cube_sales GROUP BY region_code, product_line UNION ALL SELECT region_code, NULL, SUM(amount), 'region-total' FROM cube_sales GROUP BY region_code UNION ALL SELECT NULL, product_line, SUM(amount), 'product-total' FROM cube_sales GROUP BY product_line UNION ALL SELECT NULL, NULL, SUM(amount), 'grand-total' FROM cube_sales ORDER BY summary_level, region_code, product_line",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT sale_id, region_code, product_line, amount FROM cube_sales ORDER BY sale_id",
+      "ordered": true
+    }
+  ]
+}
