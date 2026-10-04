@@ -25,17 +25,19 @@ listeners. You can start and stop endpoints while the engine keeps running.
 
 | Server | First startup to SQL handshake (median) | Idle RAM in process (RSS, median) |
 | --- | ---: | ---: |
-| MariaDB 11.8.8 | 2.44 s | 111.9 MiB |
-| MySqweel 0.5.0, RocksDB | 51.4 ms | 22.9 MiB |
-| MySqweel 0.5.0, in memory | 27.2 ms | 21.5 MiB |
+| MariaDB 11.8.8, InnoDB | 2.09 s | 111.8 MiB |
+| MariaDB 11.8.8, MEMORY | 2.47 s | 77.7 MiB |
+| MySqweel 0.5.0, RocksDB | 39.9 ms | 23.0 MiB |
+| MySqweel 0.5.0, in memory | 25.2 ms | 21.6 MiB |
 
-Measured over five starts from fresh, empty data directories on one Linux host,
-using release MySqweel binaries and `/tmp` (tmpfs).
-Startup timing includes MariaDB's data-directory initialization and MySqweel's
-RocksDB directory creation; in-memory mode has no data directory. Each server
-accepted `SELECT 1`; RSS was sampled after five idle seconds. RSS (resident set
-size) is the RAM mapped into the process, read from Linux `/proc/<pid>/status`
-as `VmRSS`. It includes shared pages and does not capture all filesystem cache.
+Measured over five first starts per configuration on one Linux host, using
+release MySqweel binaries and fresh data directories on `/tmp` (tmpfs) where
+needed. Both MariaDB modes include system-table initialization in startup time;
+the MEMORY mode uses `--default-storage-engine=MEMORY --skip-innodb`. MySqweel's
+RocksDB mode includes directory creation; its in-memory mode needs no directory.
+Each server accepted `SELECT 1`; RSS was sampled after five idle seconds. RSS
+(resident set size) comes from Linux `/proc/<pid>/status` as `VmRSS`. It includes
+shared pages and does not capture all filesystem cache.
 
 ## Start with an Engine
 
