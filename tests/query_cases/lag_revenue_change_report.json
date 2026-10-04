@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "lag_revenue_change_report",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Apress/expert-tsql-window-funct-in-sql-server-2019",
+      "commit": "329e6ce022697d2c0ad698b19e9646394ed4a71c",
+      "path": "Chapter 11/Listing 11-03.sql",
+      "url": "https://github.com/Apress/expert-tsql-window-funct-in-sql-server-2019/blob/329e6ce022697d2c0ad698b19e9646394ed4a71c/Chapter%2011/Listing%2011-03.sql",
+      "sha256": "7edb6eeba2d50f82ba43792faab896e25d95a83178359e851d57bfc7cc54b133",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Chapter 11/Listing 11-03.sql:30-35,102-107",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A monthly summary uses LAG over ordered periods for prior-period comparisons and a row-based running total window over the same sequence.",
+      "mysql_mariadb_translation": "Reauthored as a fixed monthly revenue report. The summary CTE is replaced by a small ledger table, LAG preserves the previous observed row across a missing month, and SUM with an explicit ROWS frame computes the cumulative total without clocks, date functions, or source schemas."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "lag-lead-window",
+    "window-previous-row",
+    "running-window-total",
+    "missing-period-sequence",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Revenue exists for periods 1, 2, and 4. Period 4 must compare with the previous observed period 2, not synthesize a missing period 3.",
+  "determinism_notes": "Period numbers and revenues are fixed, the window order is unique, and the final result is explicitly ordered. No clocks, randomness, limits, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE monthly_revenue (period_no INT PRIMARY KEY, revenue INT NOT NULL)",
+    "INSERT INTO monthly_revenue VALUES (1, 40), (2, 55), (4, 30)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH ordered_revenue AS (SELECT period_no, revenue FROM monthly_revenue) SELECT period_no, revenue, LAG(revenue) OVER (ORDER BY period_no) AS prior_revenue, revenue - COALESCE(LAG(revenue) OVER (ORDER BY period_no), 0) AS change_from_prior, SUM(revenue) OVER (ORDER BY period_no ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_revenue FROM ordered_revenue ORDER BY period_no",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT period_no, revenue FROM monthly_revenue ORDER BY period_no",
+      "ordered": true
+    }
+  ]
+}
