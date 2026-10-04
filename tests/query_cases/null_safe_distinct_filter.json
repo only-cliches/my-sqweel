@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "null_safe_distinct_filter",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "repository": "MLforHealth/MIMIC_Extract",
+      "commit": "d8d2dea551283bea449b8495bfc1b5a41b90d837",
+      "path": "utils/niv-durations.sql",
+      "location": "line 71",
+      "url": "https://github.com/MLforHealth/MIMIC_Extract/blob/d8d2dea551283bea449b8495bfc1b5a41b90d837/utils/niv-durations.sql#L71",
+      "source_sha256": "8dcdb34ade6f9752356cb27b774ca5a5d1b6040c0ea0ce533ace81bb866d28e2",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A PostgreSQL filter uses IS DISTINCT FROM against a constant so NULL-valued observations remain eligible while the excluded marker does not.",
+      "mysql_mariadb_translation": "Reauthored as an independent assay review. NOT (error_code <=> 1) translates null-safe distinctness to MariaDB, retaining NULL and nonmatching codes while excluding the marker value; the source's clinical tables, time arithmetic, and ventilation workflow are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "null-safe-distinctness",
+    "null-safe-comparison",
+    "null-preserving-filter",
+    "not",
+    "deterministic-order"
+  ],
+  "fixture_notes": "A NULL error code is distinct from the excluded marker and must remain in the report; code 0 also remains, while code 1 is excluded.",
+  "determinism_notes": "Result IDs uniquely order the filtered report, and all codes are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE assay_results (result_id INT PRIMARY KEY, sample_label VARCHAR(32) NOT NULL, error_code INT NULL)",
+    "INSERT INTO assay_results VALUES (11, 'alpha', NULL), (12, 'beta', 0), (13, 'gamma', 1), (14, 'delta', NULL), (15, 'epsilon', 2)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT result_id, sample_label, error_code FROM assay_results WHERE NOT (error_code <=> 1) ORDER BY result_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT result_id, sample_label, error_code FROM assay_results ORDER BY result_id",
+      "ordered": true
+    }
+  ]
+}
