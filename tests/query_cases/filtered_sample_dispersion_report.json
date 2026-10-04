@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "filtered_sample_dispersion_report",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "repository": "citusdata/cstore_fdw",
+      "commit": "90e22b62fbee6852529104fdd463f532cf7a3311",
+      "path": "sql/query.sql",
+      "location": "lines 8-12",
+      "url": "https://github.com/citusdata/cstore_fdw/blob/90e22b62fbee6852529104fdd463f532cf7a3311/sql/query.sql#L8-L12",
+      "source_sha256": "68838f7daad6ed2d8dbf635dfac37c8ce69223328a77070bd7327b625627ff41",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A PostgreSQL report combines AVG and STDDEV_SAMP, filters measurements before grouping, and orders the grouped statistics by category.",
+      "mysql_mariadb_translation": "Reauthored as a delivery-metric report using MariaDB's STDDEV_SAMP aggregate over filtered region groups. The source's foreign tables, extension-specific settings, and JSON query are omitted; a singleton filtered group deliberately retains the SQL NULL sample deviation result."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "stddev-samp",
+    "filtered-group-statistics",
+    "sample-dispersion",
+    "singleton-statistic-null",
+    "deterministic-order"
+  ],
+  "fixture_notes": "North and South retain three qualifying measurements each, producing means 12 and 24 with sample deviations 2 and 4. East retains one qualifying measurement after filtering, so STDDEV_SAMP is NULL.",
+  "determinism_notes": "All measurements and the threshold are fixed; region ordering is explicit and no clocks, randomness, limits, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE delivery_metrics (metric_id INT PRIMARY KEY, region_code VARCHAR(16) NOT NULL, metric_value INT NOT NULL)",
+    "INSERT INTO delivery_metrics VALUES (701, 'North', 10), (702, 'North', 12), (703, 'North', 14), (704, 'South', 20), (705, 'South', 24), (706, 'South', 28), (707, 'East', 8), (708, 'East', 10)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT region_code, COUNT(*) AS observation_count, AVG(metric_value) AS mean_value, STDDEV_SAMP(metric_value) AS sample_stddev FROM delivery_metrics WHERE metric_value >= 10 GROUP BY region_code ORDER BY region_code",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT metric_id, region_code, metric_value FROM delivery_metrics ORDER BY metric_id",
+      "ordered": true
+    }
+  ]
+}
