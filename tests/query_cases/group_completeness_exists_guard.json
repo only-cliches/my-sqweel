@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "id": "group_completeness_exists_guard",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "repository": "MichaelJacob21012/TalentShowDB",
+      "commit": "e1db3e4d5aedb076573777ef214467d288371938",
+      "path": "select.sql",
+      "location": "lines 65-71,74-85",
+      "url": "https://github.com/MichaelJacob21012/TalentShowDB/blob/e1db3e4d5aedb076573777ef214467d288371938/select.sql#L65-L85",
+      "source_sha256": "b3aeb65d85d31caa2ff0971304860f8f67a3e08d732571c086680ff7eab35626",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL query turns a grouped HAVING threshold into a scalar completeness flag by wrapping NOT EXISTS in IF, then reevaluates the flag after adding a member to an underfilled group.",
+      "mysql_mariadb_translation": "Reauthored as an independent cohort audit. An inner join counts enrolled members for team cohorts, IF(NOT EXISTS(... HAVING COUNT(*) < 2), TRUE, FALSE) reports whether every represented team is complete, and a later enrollment changes the flag from false to true while a non-team cohort and an empty team remain outside the count. The source tables, identifiers, people, labels, and application workflow are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "if-expression",
+    "not-exists",
+    "inner-join",
+    "grouping",
+    "aggregate-having",
+    "boolean",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Team cohort 20 starts with one enrollment and makes the initial completeness flag false; adding its second enrollment makes it true. Team cohort 40 has no enrollments and is ignored by the inner join, while non-team cohort 30 has one enrollment but is filtered out.",
+  "determinism_notes": "Cohort and enrollment IDs are fixed, grouping uses the unique cohort ID, and every result read has explicit ordering; no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE cohorts (cohort_id INT PRIMARY KEY, cohort_name VARCHAR(32) NOT NULL, cohort_kind CHAR(1) NOT NULL)",
+    "CREATE TABLE enrollments (enrollment_id INT PRIMARY KEY, cohort_id INT NOT NULL, member_name VARCHAR(32) NOT NULL)",
+    "INSERT INTO cohorts VALUES (10, 'Atlas', 'T'), (20, 'Boreal', 'T'), (30, 'Cinder', 'S'), (40, 'Delta', 'T')",
+    "INSERT INTO enrollments VALUES (1001, 10, 'Mira'), (1002, 10, 'Noah'), (1003, 20, 'Oren'), (1004, 30, 'Pia')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT IF(NOT EXISTS (SELECT c.cohort_id FROM cohorts c INNER JOIN enrollments e ON e.cohort_id = c.cohort_id WHERE c.cohort_kind = 'T' GROUP BY c.cohort_id HAVING COUNT(*) < 2), TRUE, FALSE) AS all_teams_complete",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO enrollments VALUES (1005, 20, 'Quinn')",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT IF(NOT EXISTS (SELECT c.cohort_id FROM cohorts c INNER JOIN enrollments e ON e.cohort_id = c.cohort_id WHERE c.cohort_kind = 'T' GROUP BY c.cohort_id HAVING COUNT(*) < 2), TRUE, FALSE) AS all_teams_complete",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT c.cohort_id, COUNT(e.enrollment_id) AS member_count FROM cohorts c LEFT JOIN enrollments e ON e.cohort_id = c.cohort_id GROUP BY c.cohort_id ORDER BY c.cohort_id",
+      "ordered": true
+    }
+  ]
+}

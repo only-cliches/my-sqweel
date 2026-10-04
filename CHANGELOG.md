@@ -2,6 +2,10 @@
 
 All notable changes to MySqweel will be documented in this file.
 
+## 0.5.1 Unreleased
+
+- Added GitHub-attributed MySQL/MariaDB grouped completeness coverage based on [MichaelJacob21012/TalentShowDB](https://github.com/MichaelJacob21012/TalentShowDB/blob/e1db3e4d5aedb076573777ef214467d288371938/select.sql#L65-L85) at commit `e1db3e4d5aedb076573777ef214467d288371938` (source SHA-256 `b3aeb65d85d31caa2ff0971304860f8f67a3e08d732571c086680ff7eab35626`, source dialect `mysql-mariadb`, source location `select.sql:65-71,74-85`): independently authored `group_completeness_exists_guard` and `group_completeness_exists_guard_minimized` coverage wrap a grouped `HAVING COUNT(*) < 2` test in `IF(NOT EXISTS(...), TRUE, FALSE)`, observe the flag change after completing an underfilled cohort, and retain deterministic member-count checks. MariaDB 10.11.7 baselines were byte-identical twice; differential runs exposed and fixed boolean-literal branch metadata so MySqweel reports MariaDB's `MYSQL_TYPE_LONG` for the full and minimized expressions.
+
 ## 0.5.0 Oct 3rd, 2026
 
 - RocksDB now loads only database and table metadata at startup and retains no committed rows in the engine. Queries fetch referenced tables into temporary working memory; transaction reads use RocksDB snapshots, and writes still commit complete rows atomically.

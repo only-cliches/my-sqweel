@@ -3010,6 +3010,7 @@ impl RawEngine {
                 }
             }
             Expr::Value(SqlValue::Null) => metadata.column_type = MysqlColumnType::Null,
+            Expr::Value(SqlValue::Boolean(_)) => metadata.column_type = MysqlColumnType::Integer,
             Expr::BinaryOp {
                 left,
                 op:

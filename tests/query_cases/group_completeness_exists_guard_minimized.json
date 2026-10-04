@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "group_completeness_exists_guard_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "repository": "MichaelJacob21012/TalentShowDB",
+      "commit": "e1db3e4d5aedb076573777ef214467d288371938",
+      "path": "select.sql",
+      "location": "lines 65-71",
+      "url": "https://github.com/MichaelJacob21012/TalentShowDB/blob/e1db3e4d5aedb076573777ef214467d288371938/select.sql#L65-L71",
+      "source_sha256": "b3aeb65d85d31caa2ff0971304860f8f67a3e08d732571c086680ff7eab35626",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped completeness predicate is exposed as a scalar IF result whose branches are SQL booleans.",
+      "mysql_mariadb_translation": "Reduced to one independently authored scalar IF over TRUE and FALSE, isolating MariaDB's integer boolean metadata from the source tables, grouped subquery, and mutation workflow."
+    },
+    "independently_authored": true,
+    "minimized_from": "group_completeness_exists_guard"
+  },
+  "features": ["if-expression", "boolean", "deterministic-order"],
+  "fixture_notes": "A scalar true branch and false branch retain the boolean result metadata that differed in the full grouped completeness case.",
+  "determinism_notes": "The scalar expression has no table state, clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "SELECT IF(TRUE, TRUE, FALSE) AS all_teams_complete",
+      "ordered": true
+    }
+  ]
+}
