@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "id": "continuous_percentile_segment_report",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "timbroderick/pracSQL",
+      "commit": "ef14e9aad7f58218e2ac5c363ee431dde0c624cd",
+      "url": "https://github.com/timbroderick/pracSQL/blob/ef14e9aad7f58218e2ac5c363ee431dde0c624cd/Chapter_05_math/Chapter_05.sql",
+      "sha256": "3840b6c033aa565b89a7b50f19da3be3f48aac1137dac1a9049612e28493f744",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Chapter_05_math/Chapter_05.sql:120-133",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped statistics query computes a continuous percentile over ordered numeric observations alongside aggregate summaries.",
+      "mysql_mariadb_translation": "Reauthored as a segment report using ROW_NUMBER and COUNT windows to derive the continuous 75th-percentile interpolation because MariaDB 10.11.7 lacks native PERCENTILE_CONT. The lower and upper ordered observations are selected per segment and linearly interpolated, with singleton and exact-rank groups handled by the same formula."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "percentile-cont",
+    "continuous-percentile-interpolation",
+    "partitioned-order-statistics",
+    "window-ranked-aggregate",
+    "deterministic-order"
+  ],
+  "fixture_notes": "North has four observations, so its 75th percentile interpolates between 40 and 80 to 50. South has three observations, so it interpolates between 15 and 25 to 20. East is a singleton and remains 99.",
+  "determinism_notes": "Segment and observation IDs are fixed, each value has a unique observation ID for tie-breaking, and the final report is explicitly ordered. No clocks, randomness, limits, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE segment_observations (observation_id INT PRIMARY KEY, segment_code VARCHAR(16) NOT NULL, measurement INT NOT NULL)",
+    "INSERT INTO segment_observations VALUES (101, 'North', 10), (102, 'North', 20), (103, 'North', 40), (104, 'North', 80), (201, 'South', 5), (202, 'South', 15), (203, 'South', 25), (301, 'East', 99)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH ranked AS (SELECT segment_code, measurement, ROW_NUMBER() OVER (PARTITION BY segment_code ORDER BY measurement, observation_id) AS value_rank, COUNT(*) OVER (PARTITION BY segment_code) AS value_count FROM segment_observations), targets AS (SELECT segment_code, value_rank, measurement, value_count, 1 + 0.75 * (value_count - 1) AS target_rank FROM ranked), bounds AS (SELECT segment_code, MAX(target_rank) AS target_rank, MAX(FLOOR(target_rank)) AS lower_rank, MAX(CEIL(target_rank)) AS upper_rank, MAX(CASE WHEN value_rank = FLOOR(target_rank) THEN measurement END) AS lower_value, MAX(CASE WHEN value_rank = CEIL(target_rank) THEN measurement END) AS upper_value FROM targets GROUP BY segment_code) SELECT segment_code, CASE WHEN lower_rank = upper_rank THEN lower_value ELSE lower_value + (upper_value - lower_value) * (target_rank - lower_rank) END AS percentile_75 FROM bounds ORDER BY segment_code",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT observation_id, segment_code, measurement FROM segment_observations ORDER BY observation_id",
+      "ordered": true
+    }
+  ]
+}
