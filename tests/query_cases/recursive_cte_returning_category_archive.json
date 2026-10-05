@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "id": "recursive_cte_returning_category_archive",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "multica-ai/multica",
+      "commit": "b4ca5b4a23e68b26292a680dca7689a952bb1cd5",
+      "path": "server/pkg/db/queries/comment.sql",
+      "url": "https://github.com/multica-ai/multica/blob/b4ca5b4a23e68b26292a680dca7689a952bb1cd5/server/pkg/db/queries/comment.sql",
+      "sha256": "6989922f72d3e8a8890dee744885a1bdbf5eb30f4a316cd5ede92f642076626b",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "server/pkg/db/queries/comment.sql:733-767,771-778",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A PostgreSQL application query uses a recursive CTE to walk a comment tree and an UPDATE RETURNING query to emit changed rows as separate patterns.",
+      "mysql_mariadb_translation": "Combine those portable behaviors in an independently authored category archive: recursively select one category subtree, insert it in deterministic depth order, and return generated archive IDs with each category and depth."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "recursive-cte-returning",
+    "recursive-hierarchy",
+    "insert-select-returning",
+    "generated-key-returning",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Only the Platform subtree is archived; the unrelated Sales subtree remains outside the returned rows.",
+  "determinism_notes": "Fixed category IDs, explicit depth/category ordering, and auto-increment IDs created in that order; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE categories (category_id INT PRIMARY KEY, parent_id INT NULL, category_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE category_archive (archive_id INT AUTO_INCREMENT PRIMARY KEY, category_id INT NOT NULL, category_name VARCHAR(32) NOT NULL, depth INT NOT NULL)",
+    "INSERT INTO categories VALUES (1, NULL, 'Platform'), (2, 1, 'API'), (3, 1, 'UI'), (4, NULL, 'Sales'), (5, 4, 'Field')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO category_archive (category_id, category_name, depth) WITH RECURSIVE descendants AS (SELECT category_id, parent_id, category_name, 0 AS depth FROM categories WHERE category_id = 1 UNION ALL SELECT c.category_id, c.parent_id, c.category_name, d.depth + 1 FROM categories AS c JOIN descendants AS d ON c.parent_id = d.category_id) SELECT category_id, category_name, depth FROM descendants ORDER BY depth, category_id RETURNING archive_id, category_id, category_name, depth",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT archive_id, category_id, category_name, depth FROM category_archive ORDER BY archive_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT category_id, parent_id, category_name FROM categories ORDER BY category_id",
+      "ordered": true
+    }
+  ]
+}
