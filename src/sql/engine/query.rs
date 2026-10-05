@@ -1954,11 +1954,17 @@ impl RawEngine {
                         .map(|branch| numeric_type_rank(branch.column_type))
                         .max()
                         .unwrap_or_default();
+                    let has_null_branch =
+                        else_result.is_none() || branch_is_null.iter().any(|is_null| *is_null);
                     metadata.column_type = match rank {
-                        1 if non_null_branch_metadata
-                            .iter()
-                            .any(|branch| branch.column_type == MysqlColumnType::BigInt) =>
+                        1 if has_null_branch
+                            || non_null_branch_metadata
+                                .iter()
+                                .any(|branch| branch.column_type == MysqlColumnType::BigInt) =>
                         {
+                            // MariaDB promotes an integer CASE with a NULL
+                            // branch to LONGLONG, including the implicit NULL
+                            // ELSE of a searched CASE.
                             MysqlColumnType::BigInt
                         }
                         1 => MysqlColumnType::Integer,

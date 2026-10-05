@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "window_filtered_quality_minimum_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "yippee-fun/plume",
+      "commit": "c3b899bae4f6be4f3e2001272c3823cc35d0dc7f",
+      "path": "fixtures/sqlite/sql/window8-35.sql",
+      "url": "https://github.com/yippee-fun/plume/blob/c3b899bae4f6be4f3e2001272c3823cc35d0dc7f/fixtures/sqlite/sql/window8-35.sql",
+      "sha256": "097a8e88451051f3ea8b4bfe89e5447a58260dc4c51f95a9022277f384eafaf6",
+      "source_dialect": "sqlite"
+    },
+    "inspiration": {
+      "source_location": "Minimized from window_filtered_quality_minimum",
+      "source_dialect": "sqlite",
+      "observed_pattern": "A named symmetric ROWS window computes a conditional MIN over ordered rows, and the result metadata must remain compatible with the integer source column.",
+      "mysql_mariadb_translation": "Reduced to one lane and three readings. MIN(CASE WHEN ... THEN reading_value ELSE NULL END) OVER a named two-row frame isolates the filtered window type metadata while retaining a rejected middle reading."
+    },
+    "independently_authored": true,
+    "minimized_from": "window_filtered_quality_minimum"
+  },
+  "features": ["window-filtered-aggregate", "named-window", "symmetric-row-frame", "conditional-window-aggregate", "minimized-regression", "deterministic-order"],
+  "fixture_notes": "One lane has two usable integer readings around one rejected reading. The filtered minimum is 7 for all three rows, while MariaDB declares the window result as LONGLONG and MySqweel previously declared LONG.",
+  "determinism_notes": "Reading IDs, sequence numbers, values, quality states, frame bounds, and ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE quality_readings_min (reading_id INT PRIMARY KEY, lane_id INT NOT NULL, sequence_no INT NOT NULL, reading_value INT NOT NULL, quality_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO quality_readings_min VALUES (5101, 51, 1, 12, 'usable'), (5102, 51, 2, 18, 'rejected'), (5103, 51, 3, 7, 'usable')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT reading_id, lane_id, sequence_no, MIN(CASE WHEN quality_state = 'usable' THEN reading_value ELSE NULL END) OVER nearby AS filtered_window_min FROM quality_readings_min WINDOW nearby AS (PARTITION BY lane_id ORDER BY sequence_no ROWS BETWEEN 2 PRECEDING AND 2 FOLLOWING) ORDER BY reading_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT reading_id, reading_value, quality_state FROM quality_readings_min ORDER BY reading_id",
+      "ordered": true
+    }
+  ]
+}

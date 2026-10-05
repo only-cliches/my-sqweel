@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "window_filtered_quality_minimum",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "yippee-fun/plume",
+      "commit": "c3b899bae4f6be4f3e2001272c3823cc35d0dc7f",
+      "path": "fixtures/sqlite/sql/window8-35.sql",
+      "url": "https://github.com/yippee-fun/plume/blob/c3b899bae4f6be4f3e2001272c3823cc35d0dc7f/fixtures/sqlite/sql/window8-35.sql",
+      "sha256": "097a8e88451051f3ea8b4bfe89e5447a58260dc4c51f95a9022277f384eafaf6",
+      "source_dialect": "sqlite"
+    },
+    "inspiration": {
+      "source_location": "fixtures/sqlite/sql/window8-35.sql:1-3",
+      "source_dialect": "sqlite",
+      "observed_pattern": "A named window with a symmetric ROWS frame computes a filtered MIN over the nearby ordered rows, excluding values that do not satisfy a predicate while retaining the frame boundaries.",
+      "mysql_mariadb_translation": "Reauthored as a partitioned quality-reading report. SQLite's aggregate FILTER clause becomes MIN(CASE WHEN ... THEN reading_value END) inside a named MariaDB-compatible window, with a two-row preceding/following frame and deterministic reading order. The source table, values, and conformance-test context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["window-filtered-aggregate", "named-window", "symmetric-row-frame", "conditional-window-aggregate", "partitioned-window", "deterministic-order"],
+  "fixture_notes": "Each lane contains ordered readings with both usable and rejected values. The filtered minimum ignores rejected values within the bounded frame, and the partition prevents readings from crossing lanes.",
+  "determinism_notes": "Reading IDs, lane IDs, sequence numbers, values, quality states, frame bounds, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE quality_readings (reading_id INT PRIMARY KEY, lane_id INT NOT NULL, sequence_no INT NOT NULL, reading_value INT NOT NULL, quality_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO quality_readings VALUES (4101, 41, 1, 12, 'usable'), (4102, 41, 2, 18, 'rejected'), (4103, 41, 3, 7, 'usable'), (4104, 41, 4, 21, 'usable'), (4201, 42, 1, 30, 'usable'), (4202, 42, 2, 25, 'rejected')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT reading_id, lane_id, sequence_no, reading_value, quality_state, MIN(CASE WHEN quality_state = 'usable' THEN reading_value ELSE NULL END) OVER nearby AS filtered_window_min FROM quality_readings WINDOW nearby AS (PARTITION BY lane_id ORDER BY sequence_no ROWS BETWEEN 2 PRECEDING AND 2 FOLLOWING) ORDER BY lane_id, sequence_no",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT lane_id, MIN(CASE WHEN quality_state = 'usable' THEN reading_value ELSE NULL END) OVER nearby AS filtered_window_min FROM quality_readings WINDOW nearby AS (PARTITION BY lane_id ORDER BY sequence_no ROWS BETWEEN 2 PRECEDING AND 2 FOLLOWING) ORDER BY lane_id, sequence_no",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT reading_id, lane_id, sequence_no, reading_value, quality_state FROM quality_readings ORDER BY lane_id, sequence_no",
+      "ordered": true
+    }
+  ]
+}
