@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "id": "json_table_window_insert_returning",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "antlr/grammars-v4",
+      "commit": "7df52be94698550d219d299d04105c6bafadd9c3",
+      "path": "sql/mariadb/examples/fast/dml_select.sql",
+      "url": "https://github.com/antlr/grammars-v4/blob/7df52be94698550d219d299d04105c6bafadd9c3/sql/mariadb/examples/fast/dml_select.sql",
+      "sha256": "b9128ffb5b50bea79c534bc24a127d9d626fd2d21be8cb0a45deafd8d6c84f79",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/mariadb/examples/fast/dml_select.sql:188-243",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "The public MariaDB examples exercise window functions alongside JSON_TABLE row expansion in ordinary SELECT statements.",
+      "mysql_mariadb_translation": "Combine those constructs with the repository's MariaDB INSERT RETURNING coverage in a newly authored fixture: expand a fixed JSON task batch with JSON_TABLE, rank ready tasks per team with ROW_NUMBER(), insert the ranked rows, and return generated archive identifiers."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "json-table",
+    "window-function",
+    "partitioned-ranking",
+    "insert-select-returning",
+    "generated-key-returning",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "JSON_TABLE expands four task objects; three ready tasks are ranked within their teams and archived, while the not-ready task is excluded. RETURNING exposes generated archive IDs and ranks.",
+  "determinism_notes": "The JSON document, task IDs, priorities, readiness flags, and ROW_NUMBER tie-breakers are fixed; returned and final rows are ordered by generated archive ID. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE json_task_archive (archive_id INT AUTO_INCREMENT PRIMARY KEY, task_id INT NOT NULL, team_name VARCHAR(32) NOT NULL, task_name VARCHAR(32) NOT NULL, rank_no INT NOT NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO json_task_archive (task_id, team_name, task_name, rank_no) SELECT jt.task_id, jt.team_name, jt.task_name, ROW_NUMBER() OVER (PARTITION BY jt.team_name ORDER BY jt.priority DESC, jt.task_id) FROM JSON_TABLE('[{\"task_id\":601,\"team_name\":\"red\",\"task_name\":\"index\",\"priority\":20,\"ready\":1},{\"task_id\":602,\"team_name\":\"red\",\"task_name\":\"backup\",\"priority\":10,\"ready\":1},{\"task_id\":603,\"team_name\":\"blue\",\"task_name\":\"deploy\",\"priority\":30,\"ready\":1},{\"task_id\":604,\"team_name\":\"blue\",\"task_name\":\"review\",\"priority\":5,\"ready\":0}]', '$[*]' COLUMNS (task_id INT PATH '$.task_id', team_name VARCHAR(32) PATH '$.team_name', task_name VARCHAR(32) PATH '$.task_name', priority INT PATH '$.priority', ready TINYINT PATH '$.ready')) AS jt WHERE jt.ready = 1 ORDER BY jt.team_name, jt.priority DESC, jt.task_id RETURNING archive_id, task_id, team_name, rank_no",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT archive_id, task_id, team_name, task_name, rank_no FROM json_task_archive ORDER BY archive_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT archive_id, task_id, team_name, task_name, rank_no FROM json_task_archive ORDER BY archive_id",
+      "ordered": true
+    }
+  ]
+}
