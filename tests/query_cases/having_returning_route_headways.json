@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "id": "having_returning_route_headways",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "jamespfennell/transiter",
+      "commit": "c75400f6b578e8a5b9eae68f586c3367984c209e",
+      "path": "db/queries/route_queries.sql",
+      "url": "https://github.com/jamespfennell/transiter/blob/c75400f6b578e8a5b9eae68f586c3367984c209e/db/queries/route_queries.sql",
+      "sha256": "8eddba8c29f70d26d4f8a4ef5e4202381158ed69a5c38cc05cceb07376630066",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "db/queries/route_queries.sql:1-10,53-72",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A PostgreSQL transit application inserts routes with RETURNING and computes route headways through a grouped CTE whose per-stop rows use HAVING COUNT(*) > 1.",
+      "mysql_mariadb_translation": "Combine those application behaviors in an independently authored route fixture: return generated route IDs from a multi-row insert, then calculate deterministic average headways only from stop groups that pass a HAVING threshold."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "having-returning",
+    "insert-returning",
+    "generated-key-returning",
+    "grouped-cte",
+    "having-count-filter",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Single-observation stop groups are excluded by HAVING COUNT(*) > 1; qualifying stop groups contribute their total span and interval count to each route's average headway.",
+  "determinism_notes": "Fixed route and stop-time values, explicit grouping and ordering, and no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE routes (route_pk INT AUTO_INCREMENT PRIMARY KEY, route_id VARCHAR(16) NOT NULL, route_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE stop_times (route_pk INT NOT NULL, stop_pk INT NOT NULL, arrival_minute INT NOT NULL, past TINYINT NOT NULL)",
+    "INSERT INTO stop_times VALUES (1, 10, 10, 0), (1, 10, 20, 0), (1, 10, 35, 0), (1, 11, 50, 0), (2, 10, 5, 0), (2, 10, 17, 0), (2, 12, 40, 1)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO routes (route_id, route_name) VALUES ('R1', 'Red Line'), ('R2', 'Blue Line') RETURNING route_pk, route_id, route_name",
+      "ordered": true
+    },
+    {
+      "sql": "WITH per_stop_data AS (SELECT route_pk, stop_pk, MAX(arrival_minute) - MIN(arrival_minute) AS total_diff, COUNT(*) - 1 AS num_diffs FROM stop_times WHERE past = 0 GROUP BY route_pk, stop_pk HAVING COUNT(*) > 1) SELECT route_pk, CAST(COALESCE(ROUND(SUM(total_diff) / SUM(num_diffs)), -1) AS SIGNED) AS estimated_headway FROM per_stop_data GROUP BY route_pk ORDER BY route_pk",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT route_pk, route_id, route_name FROM routes ORDER BY route_pk",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT route_pk, stop_pk, arrival_minute, past FROM stop_times ORDER BY route_pk, stop_pk, arrival_minute",
+      "ordered": true
+    }
+  ]
+}
