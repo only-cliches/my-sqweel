@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "json_table_ordinality_histogram",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "openpodcast/api",
+      "commit": "37b2f20191919aeb7acc716d64d9e17c35d7290f",
+      "path": "db_schema/queries/v1/episodesLTRHistogram.sql",
+      "url": "https://github.com/openpodcast/api/blob/37b2f20191919aeb7acc716d64d9e17c35d7290f/db_schema/queries/v1/episodesLTRHistogram.sql",
+      "sha256": "0352bf297297d22707c7a482657174e8e63afe4fc232e00ed579fe879349239e",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "db_schema/queries/v1/episodesLTRHistogram.sql:6-16",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A source row's JSON array is expanded with a correlated CROSS JOIN JSON_TABLE and FOR ORDINALITY, then the indexed values are rebuilt as a JSON_ARRAYAGG of JSON_OBJECT entries for a histogram-style result.",
+      "mysql_mariadb_translation": "Reauthored as a stream-snapshot report. Each snapshot expands fixed listener samples through JSON_TABLE, converts one-based ordinality to zero-based JSON object keys, aggregates the ordered samples back into a JSON array, and reports the maximum and sample count. The source schema, names, values, and application filters are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["json-table", "json-table-ordinality", "cross-joined-json-expansion", "json-object-arrayagg", "ordinal-key-normalization", "aggregate-max", "deterministic-order"],
+  "fixture_notes": "The north and south snapshots expand to ordered sample objects; the north snapshot contains a zero reading and the south snapshot has a lower sample count, making both JSON ordering and aggregate boundaries observable.",
+  "determinism_notes": "Snapshot IDs, stream names, JSON arrays, ordinality arithmetic, JSON aggregation ordering, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE stream_snapshots (snapshot_id INT PRIMARY KEY, stream_name VARCHAR(32) NOT NULL, samples JSON NOT NULL)",
+    "INSERT INTO stream_snapshots VALUES (501, 'north-bay', '[12, 0, 7, 19]'), (502, 'south-ridge', '[3, 11, 5]')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH expanded AS (SELECT s.snapshot_id, s.stream_name, jt.sample_no, jt.listeners FROM stream_snapshots s CROSS JOIN JSON_TABLE(s.samples, '$[*]' COLUMNS (sample_no FOR ORDINALITY, listeners INT PATH '$')) AS jt) SELECT snapshot_id, stream_name, JSON_ARRAYAGG(JSON_OBJECT(sample_no - 1, listeners) ORDER BY sample_no) AS listener_histogram, MAX(listeners) AS peak_listeners, COUNT(*) AS sample_count FROM expanded GROUP BY snapshot_id, stream_name ORDER BY snapshot_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT snapshot_id, stream_name, JSON_COMPACT(samples) AS samples FROM stream_snapshots ORDER BY snapshot_id",
+      "ordered": true
+    }
+  ]
+}
