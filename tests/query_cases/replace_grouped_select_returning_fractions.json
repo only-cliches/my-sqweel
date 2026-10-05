@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "id": "replace_grouped_select_returning_fractions",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "USEPA/EPA_MOVES_Model",
+      "commit": "25dc6c833dd8c88198f82cee93ca30be1456df8b",
+      "path": "database/PreAggDAY.sql",
+      "url": "https://github.com/USEPA/EPA_MOVES_Model/blob/25dc6c833dd8c88198f82cee93ca30be1456df8b/database/PreAggDAY.sql",
+      "sha256": "1fe543828acee31dd3714242c5b732db7a5dd062a4c3db489120cdc523d15f52",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "database/PreAggDAY.sql:137-143,287-292,314-321",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL aggregation script replaces a destination table's rows from grouped source data, combining REPLACE INTO ... SELECT with GROUP BY to materialize one aggregate row per key.",
+      "mysql_mariadb_translation": "Reauthored as a delivery-fraction refresh. Independently authored raw fraction rows are grouped by source, route, and day, REPLACE INTO refreshes conflicting unique keys or inserts new keys, and RETURNING exposes the resulting aggregate rows; the source tables, identifiers, operational setup, and values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "replace-select",
+    "replace-grouped-select",
+    "grouped-aggregate",
+    "replace-returning",
+    "grouped-aggregate-replacement",
+    "dml-final-state",
+    "deterministic-final-state"
+  ],
+  "fixture_notes": "Two raw rows aggregate into the refreshed source 1/route 10/day 1 fraction, one raw row replaces the existing source 2 key, and one new source 3 key is inserted. The unrelated source 9 row remains unchanged.",
+  "determinism_notes": "Fixed source, route, day, fraction, and primary-key values are used; the grouped mutation result is compared without row-order dependence and the final read is ordered by fraction ID.",
+  "setup": [
+    "CREATE TABLE delivery_fractions (fraction_id INT PRIMARY KEY AUTO_INCREMENT, source_type INT NOT NULL, route_type INT NOT NULL, day_code INT NOT NULL, fraction DECIMAL(6,3) NOT NULL, UNIQUE KEY fraction_identity (source_type, route_type, day_code))",
+    "CREATE TABLE fraction_inputs (input_id INT PRIMARY KEY, source_type INT NOT NULL, route_type INT NOT NULL, day_code INT NOT NULL, raw_fraction DECIMAL(6,3) NOT NULL)",
+    "INSERT INTO delivery_fractions VALUES (9001, 1, 10, 1, 0.400), (9002, 2, 10, 1, 0.800), (9003, 9, 20, 4, 0.500)",
+    "INSERT INTO fraction_inputs VALUES (1001, 1, 10, 1, 0.600), (1002, 1, 10, 1, 0.400), (1003, 2, 10, 1, 0.250), (1004, 3, 20, 2, 0.750)"
+  ],
+  "steps": [
+    {
+      "sql": "REPLACE INTO delivery_fractions (source_type, route_type, day_code, fraction) SELECT source_type, route_type, day_code, SUM(raw_fraction) FROM fraction_inputs GROUP BY source_type, route_type, day_code RETURNING fraction_id, source_type, route_type, day_code, fraction",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT fraction_id, source_type, route_type, day_code, fraction FROM delivery_fractions ORDER BY fraction_id",
+      "ordered": true
+    }
+  ]
+}
