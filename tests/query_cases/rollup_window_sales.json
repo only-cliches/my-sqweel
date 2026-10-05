@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "rollup_window_sales",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "slthomason/StartupHakkSamples",
+      "commit": "73d26ab8c805a46e646df53c2167e4b71cd78fba",
+      "path": "225_Advance_SQL_Queries/advancedqueries.sql",
+      "url": "https://github.com/slthomason/StartupHakkSamples/blob/73d26ab8c805a46e646df53c2167e4b71cd78fba/225_Advance_SQL_Queries/advancedqueries.sql",
+      "sha256": "f627d17bee5a5334faa00e262da26887fcc970ae4c0083d8f29ec4b17d551b0f",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "225_Advance_SQL_Queries/advancedqueries.sql:27-82",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "An advanced SQL tutorial demonstrates ROW_NUMBER partitioned ranking alongside GROUP_CONCAT and hierarchical ROLLUP aggregation patterns.",
+      "mysql_mariadb_translation": "Combine the ranking and hierarchical aggregation patterns in an independently authored regional sales report: rank sales within each region and month in a CTE, then aggregate the ranked rows through GROUP BY ... WITH ROLLUP while retaining deterministic detail and subtotal ordering."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "rollup-window",
+    "window-ranked-rollup",
+    "cte-window-ranking",
+    "hierarchical-aggregation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The report emits month rows, one subtotal per region, and a grand total; sale ranks remain available to validate the window-ranked input at each rollup level.",
+  "determinism_notes": "Fixed sale IDs, explicit window tie-breakers, and explicit NULL-aware ordering of detail, subtotal, and grand-total rows; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE regional_sales (sale_id INT PRIMARY KEY, region_code VARCHAR(16) NOT NULL, month_no INT NOT NULL, amount INT NOT NULL)",
+    "INSERT INTO regional_sales VALUES (1, 'North', 1, 120), (2, 'North', 1, 80), (3, 'North', 2, 90), (4, 'South', 1, 200), (5, 'South', 1, 150), (6, 'South', 2, 75)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH ranked_sales AS (SELECT sale_id, region_code, month_no, amount, ROW_NUMBER() OVER (PARTITION BY region_code, month_no ORDER BY amount DESC, sale_id) AS sale_rank FROM regional_sales), rolled_sales AS (SELECT region_code, month_no, SUM(amount) AS total_amount, COUNT(*) AS sale_count, MAX(sale_rank) AS max_sale_rank FROM ranked_sales GROUP BY region_code, month_no WITH ROLLUP) SELECT region_code, month_no, total_amount, sale_count, max_sale_rank FROM rolled_sales ORDER BY region_code IS NULL, region_code, month_no IS NULL, month_no",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
