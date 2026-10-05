@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "id": "club_fixture_standings",
+  "provenance": {
+    "kind": "github_sql_pattern",
+    "source": {
+      "kind": "github",
+      "repository": "huanminwu/LeetCode",
+      "commit": "4f7c95f91b77d3ff3a2ee5719489299f2dcdddeb",
+      "path": "SQL/LeetCode1841.sql",
+      "url": "https://github.com/huanminwu/LeetCode/blob/4f7c95f91b77d3ff3a2ee5719489299f2dcdddeb/SQL/LeetCode1841.sql",
+      "sha256": "021f2becf2270be2acd12eee5b94a85dd48cbdb624b42b4c2f6924a3538efac3",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "SQL/LeetCode1841.sql:91-162",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A standings report normalizes home and away fixture rows into one team-perspective relation with UNION ALL, derives grouped appearance counts and aggregate score totals from that relation, and joins both summaries back to the club table for deterministic ranking.",
+      "mysql_mariadb_translation": "Reauthored as an independent club-fixture leaderboard. Home and visitor scores become points, goals-for, goals-against, and margin through two UNION ALL branches; two grouped summaries are joined to clubs, while an unplayed club demonstrates the source's inner-join exclusion. The source schema, identifiers, labels, values, and sports prompt are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "cte",
+    "cte-union-all",
+    "two-perspective-normalization",
+    "conditional-scoring",
+    "grouped-aggregate-reuse",
+    "multi-summary-inner-joins",
+    "deterministic-ranking"
+  ],
+  "fixture_notes": "Aurora, Beacon, and Comet have five fixed fixtures with wins, a draw, and a reverse fixture; Drift has no fixture and is excluded by the inner summary joins. The final order is points descending, margin descending, then club name.",
+  "determinism_notes": "Club IDs, fixture IDs, scores, tie-break ordering, and all labels are fixed. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE leaderboard_clubs (club_id INT PRIMARY KEY, club_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE leaderboard_fixtures (fixture_id INT PRIMARY KEY, home_club_id INT NOT NULL, away_club_id INT NOT NULL, home_score INT NOT NULL, away_score INT NOT NULL)",
+    "INSERT INTO leaderboard_clubs VALUES (11, 'Aurora'), (22, 'Beacon'), (33, 'Comet'), (44, 'Drift')",
+    "INSERT INTO leaderboard_fixtures VALUES (101, 11, 22, 2, 0), (102, 11, 33, 1, 1), (103, 22, 33, 0, 3), (104, 22, 11, 2, 2), (105, 33, 11, 0, 1)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH club_results AS (SELECT home_club_id AS club_id, CASE WHEN home_score > away_score THEN 3 WHEN home_score = away_score THEN 1 ELSE 0 END AS points_awarded, home_score AS goals_for, away_score AS goals_against, home_score - away_score AS goal_margin FROM leaderboard_fixtures UNION ALL SELECT away_club_id AS club_id, CASE WHEN home_score > away_score THEN 0 WHEN home_score = away_score THEN 1 ELSE 3 END AS points_awarded, away_score AS goals_for, home_score AS goals_against, away_score - home_score AS goal_margin FROM leaderboard_fixtures), appearance_counts AS (SELECT club_id, COUNT(*) AS games_played FROM club_results GROUP BY club_id) SELECT clubs.club_name, appearance_counts.games_played, totals.points, totals.goals_for, totals.goals_against, totals.goal_margin FROM leaderboard_clubs AS clubs INNER JOIN appearance_counts ON appearance_counts.club_id = clubs.club_id INNER JOIN (SELECT club_id, SUM(points_awarded) AS points, SUM(goals_for) AS goals_for, SUM(goals_against) AS goals_against, SUM(goal_margin) AS goal_margin FROM club_results GROUP BY club_id) AS totals ON totals.club_id = clubs.club_id ORDER BY totals.points DESC, totals.goal_margin DESC, clubs.club_name ASC",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT club_id, club_name FROM leaderboard_clubs ORDER BY club_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT fixture_id, home_club_id, away_club_id, home_score, away_score FROM leaderboard_fixtures ORDER BY fixture_id",
+      "ordered": true
+    }
+  ]
+}
