@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "grouping_id_campaign_masks",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "felipebz/zpa",
+      "commit": "0230f089adcae743bd8b8ad7a56a0000acbe1e63",
+      "path": "zpa-checks/src/integrationTest/resources/sources/oracle-database_26/sqlrf/GROUPING_ID-0.sql",
+      "url": "https://github.com/felipebz/zpa/blob/0230f089adcae743bd8b8ad7a56a0000acbe1e63/zpa-checks/src/integrationTest/resources/sources/oracle-database_26/sqlrf/GROUPING_ID-0.sql",
+      "sha256": "7e0719140c318371cbb59058b0220d5b22a1bc9f36d4259cc9e9b1616fc77a8b",
+      "source_dialect": "oracle"
+    },
+    "inspiration": {
+      "source_location": "zpa-checks/src/integrationTest/resources/sources/oracle-database_26/sqlrf/GROUPING_ID-0.sql:2-7",
+      "source_dialect": "oracle",
+      "observed_pattern": "A CUBE report projects GROUPING flags plus GROUPING_ID masks in both argument orders, making subtotal level and bit significance observable alongside aggregate totals.",
+      "mysql_mariadb_translation": "Reauthored as a campaign-sales cube report. MariaDB-compatible UNION ALL branches emit detail, channel subtotal, promotion subtotal, and grand-total rows with explicit grouping flags and the corresponding two argument-order bitmasks; the source schema, values, filter, and Oracle syntax are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["grouping-id", "grouping-bitmask", "argument-order-sensitive-grouping", "cube-summary-levels", "grouped-aggregate", "deterministic-order"],
+  "fixture_notes": "Four campaign sales rows produce four detail rows, two channel subtotals, three promotion subtotals, and one grand total. The two grouping-ID columns deliberately reverse their bit significance to expose argument order.",
+  "determinism_notes": "Campaign IDs, channel IDs, promotion IDs, amounts, summary masks, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE campaign_sales_masks (sale_id INT PRIMARY KEY, channel_id INT NOT NULL, promo_id INT NOT NULL, amount_cents INT NOT NULL)",
+    "INSERT INTO campaign_sales_masks VALUES (8101, 101, 501, 125), (8102, 101, 502, 75), (8103, 202, 501, 50), (8104, 202, 503, 90)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT channel_id, promo_id, SUM(amount_cents) AS total_cents, 0 AS grouping_channel, 0 AS grouping_promo, 0 AS grouping_id_channel_promo, 0 AS grouping_id_promo_channel FROM campaign_sales_masks WHERE promo_id > 496 GROUP BY channel_id, promo_id UNION ALL SELECT channel_id, NULL, SUM(amount_cents), 0, 1, 1, 2 FROM campaign_sales_masks WHERE promo_id > 496 GROUP BY channel_id UNION ALL SELECT NULL, promo_id, SUM(amount_cents), 1, 0, 2, 1 FROM campaign_sales_masks WHERE promo_id > 496 GROUP BY promo_id UNION ALL SELECT NULL, NULL, SUM(amount_cents), 1, 1, 3, 3 FROM campaign_sales_masks WHERE promo_id > 496 ORDER BY channel_id, promo_id, total_cents, grouping_channel",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT sale_id, channel_id, promo_id, amount_cents FROM campaign_sales_masks ORDER BY sale_id",
+      "ordered": true
+    }
+  ]
+}
