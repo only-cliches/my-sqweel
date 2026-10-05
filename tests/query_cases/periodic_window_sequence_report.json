@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "periodic_window_sequence_report",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "kamyu104/LeetCode-Solutions",
+      "commit": "4351f2d3e00b32787c2c5c4763395f681dc723df",
+      "path": "MySQL/find-students-with-study-spiral-pattern.sql",
+      "url": "https://github.com/kamyu104/LeetCode-Solutions/blob/4351f2d3e00b32787c2c5c4763395f681dc723df/MySQL/find-students-with-study-spiral-pattern.sql",
+      "sha256": "4f4425fac1ae01c0264fc438e7fbb4b301a8d6cfc1f4046bd0f7f6f0065fb470",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/find-students-with-study-spiral-pattern.sql:5-44",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A multi-stage CTE uses LAG to measure gaps, a running window SUM to assign contiguous groups, ordered GROUP_CONCAT plus COUNT(DISTINCT) to summarize each group, and HAVING predicates to recognize a repeated subject cycle.",
+      "mysql_mariadb_translation": "Reauthored as a learner study-log report with independently named tables and rows. Explicit session identifiers make date ordering deterministic; gap-separated runs are summarized with ordered pipe-delimited subjects, rounded hours, distinct-subject cycle lengths, modulo divisibility, and repeated-prefix matching. The final join returns only qualifying learner runs with a stable tie-breaker."
+    },
+    "independently_authored": true
+  },
+  "features": ["cte", "lag-window", "running-window-sum", "gap-based-grouping", "ordered-group-concat", "count-distinct", "grouped-having-alias", "modulo-cycle-filter", "repeat-prefix-match", "round", "deterministic-final-state"],
+  "fixture_notes": "Learner 101 has one six-session ABC cycle and one qualifying report row; learner 102 repeats only AB and is excluded by the minimum cycle length; learner 103 has a non-divisible ABCABD sequence; learner 104 has two short runs split by a gap and is excluded; learner 105 has a valid six-session cycle with a lower total. Duplicate dates are avoided and session IDs provide a deterministic secondary order.",
+  "determinism_notes": "All learner IDs, dates, session IDs, subjects, hours, grouping order, concatenation separator, rounding precision, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE learners (learner_id INT PRIMARY KEY, learner_name VARCHAR(32) NOT NULL, major VARCHAR(32) NOT NULL)",
+    "CREATE TABLE study_logs (session_id INT PRIMARY KEY, learner_id INT NOT NULL, subject VARCHAR(16) NOT NULL, session_date DATE NOT NULL, hours_studied DECIMAL(5,1) NOT NULL)",
+    "INSERT INTO learners VALUES (101, 'Ada', 'mathematics'), (102, 'Lin', 'history'), (103, 'Maya', 'physics'), (104, 'Noor', 'biology'), (105, 'Omar', 'chemistry')",
+    "INSERT INTO study_logs VALUES (1001, 101, 'algebra', '2024-01-01', 1.0), (1002, 101, 'biology', '2024-01-02', 1.5), (1003, 101, 'chemistry', '2024-01-03', 2.0), (1004, 101, 'algebra', '2024-01-04', 1.0), (1005, 101, 'biology', '2024-01-05', 1.5), (1006, 101, 'chemistry', '2024-01-06', 2.0), (1011, 101, 'algebra', '2024-01-12', 0.5), (1012, 101, 'biology', '2024-01-13', 0.5), (1013, 101, 'chemistry', '2024-01-14', 0.5), (1014, 101, 'algebra', '2024-01-15', 0.5), (1015, 101, 'biology', '2024-01-16', 0.5), (1016, 101, 'chemistry', '2024-01-17', 0.5), (2001, 102, 'art', '2024-02-01', 2.0), (2002, 102, 'music', '2024-02-02', 2.0), (2003, 102, 'art', '2024-02-03', 2.0), (2004, 102, 'music', '2024-02-04', 2.0), (2005, 102, 'art', '2024-02-05', 2.0), (2006, 102, 'music', '2024-02-06', 2.0), (3001, 103, 'logic', '2024-03-01', 1.0), (3002, 103, 'music', '2024-03-02', 1.0), (3003, 103, 'science', '2024-03-03', 1.0), (3004, 103, 'logic', '2024-03-04', 1.0), (3005, 103, 'music', '2024-03-05', 1.0), (3006, 103, 'art', '2024-03-06', 1.0), (4001, 104, 'botany', '2024-04-01', 1.0), (4002, 104, 'chemistry', '2024-04-02', 1.0), (4003, 104, 'physics', '2024-04-03', 1.0), (4004, 104, 'botany', '2024-04-07', 1.0), (4005, 104, 'chemistry', '2024-04-08', 1.0), (4006, 104, 'physics', '2024-04-09', 1.0), (5001, 105, 'design', '2024-05-01', 0.8), (5002, 105, 'history', '2024-05-02', 1.1), (5003, 105, 'language', '2024-05-03', 1.4), (5004, 105, 'design', '2024-05-04', 0.8), (5005, 105, 'history', '2024-05-05', 1.1), (5006, 105, 'language', '2024-05-06', 1.4)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH gap_groups AS (SELECT sl.session_id, sl.learner_id, sl.subject, sl.session_date, sl.hours_studied, CASE WHEN DATEDIFF(sl.session_date, LAG(sl.session_date) OVER (PARTITION BY sl.learner_id ORDER BY sl.session_date, sl.session_id)) > 2 OR LAG(sl.session_date) OVER (PARTITION BY sl.learner_id ORDER BY sl.session_date, sl.session_id) IS NULL THEN 1 ELSE 0 END AS starts_group FROM study_logs AS sl), session_groups AS (SELECT gg.*, SUM(gg.starts_group) OVER (PARTITION BY gg.learner_id ORDER BY gg.session_date, gg.session_id ROWS UNBOUNDED PRECEDING) AS group_id FROM gap_groups AS gg), pattern_groups AS (SELECT sg.learner_id, sg.group_id, GROUP_CONCAT(sg.subject ORDER BY sg.session_date, sg.session_id SEPARATOR '|') AS subject_sequence, COUNT(*) AS total_sessions, COUNT(DISTINCT sg.subject) AS cycle_length, ROUND(SUM(sg.hours_studied), 1) AS total_study_hours FROM session_groups AS sg GROUP BY sg.learner_id, sg.group_id HAVING total_sessions >= 6 AND cycle_length >= 3 AND total_sessions % cycle_length = 0 AND REPEAT(CONCAT(SUBSTRING_INDEX(subject_sequence, '|', cycle_length), '|'), total_sessions / cycle_length) = CONCAT(subject_sequence, '|')) SELECT pg.learner_id, l.learner_name, l.major, pg.cycle_length, pg.total_study_hours FROM pattern_groups AS pg INNER JOIN learners AS l ON l.learner_id = pg.learner_id ORDER BY pg.cycle_length DESC, pg.total_study_hours DESC, pg.learner_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT learner_id, COUNT(*) AS sessions FROM study_logs GROUP BY learner_id ORDER BY learner_id",
+      "ordered": true
+    }
+  ]
+}
