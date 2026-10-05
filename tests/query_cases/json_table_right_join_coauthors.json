@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "json_table_right_join_coauthors",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "dylanbien/CS61Lab2",
+      "commit": "651269f830f9a26a843263150e9af9f85e8c16dd",
+      "path": "viewsetup.sql",
+      "url": "https://github.com/dylanbien/CS61Lab2/blob/651269f830f9a26a843263150e9af9f85e8c16dd/viewsetup.sql",
+      "sha256": "e7c97bd697f3ddc1e76e9ae2fbfd3c1d62be0afe9d566cf77e2b236caa55199d",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "viewsetup.sql:15-42",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A derived JSON_TABLE expansion of comma-separated coauthors is preserved through a RIGHT JOIN to author identities, retaining coauthor rows without a matching author record.",
+      "mysql_mariadb_translation": "Translate the source view pattern into a standalone manuscript audit with a newly authored JSON array, FOR ORDINALITY, explicit author matching, NULL-preserving right-join output, and deterministic manuscript/position ordering."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "json-table-right-join",
+    "derived-json-expansion",
+    "json-table-ordinality",
+    "right-join-null-preservation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Known authors match two coauthor entries; one unknown coauthor must remain visible with NULL author metadata. Empty coauthor arrays produce no expanded rows.",
+  "determinism_notes": "Manuscript IDs, JSON array order, ordinal positions, join keys, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE manuscript_authors (author_id INT PRIMARY KEY, display_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE manuscripts (manuscript_id INT PRIMARY KEY, review_state VARCHAR(16) NOT NULL, coauthors JSON NOT NULL)",
+    "INSERT INTO manuscript_authors VALUES (1, 'Ada'), (2, 'Lin'), (3, 'Grace')",
+    "INSERT INTO manuscripts VALUES (101, 'ready', '[\"Lin\",\"Unknown\"]'), (102, 'held', '[\"Grace\"]'), (103, 'draft', '[]')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT expanded.manuscript_id, expanded.coauthor_position, manuscript_authors.author_id, manuscript_authors.display_name AS matched_author, expanded.coauthor_name, expanded.review_state FROM manuscript_authors RIGHT JOIN (SELECT m.manuscript_id, m.review_state, coauthor.coauthor_position, coauthor.coauthor_name FROM manuscripts AS m CROSS JOIN JSON_TABLE(m.coauthors, '$[*]' COLUMNS (coauthor_position FOR ORDINALITY, coauthor_name VARCHAR(32) PATH '$')) AS coauthor) AS expanded ON expanded.coauthor_name = manuscript_authors.display_name ORDER BY expanded.manuscript_id, expanded.coauthor_position",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
