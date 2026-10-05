@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "id": "delete_subquery_window_duplicates",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "pronad1/SQL",
+      "commit": "8895c9b771221c80b1653b110c68eaa960a159c2",
+      "path": "join.sql",
+      "url": "https://github.com/pronad1/SQL/blob/8895c9b771221c80b1653b110c68eaa960a159c2/join.sql",
+      "sha256": "29dbf674b042b4a25f55b386f58bd9a1572b412cd4aa53e38b5fe53c825d789a",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "join.sql:35-48",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL duplicate-cleanup example ranks duplicate rows with ROW_NUMBER in a derived subquery and deletes rows whose rank is greater than one through an outer IN predicate.",
+      "mysql_mariadb_translation": "Reauthor the pattern as a customer-alias cleanup: rank aliases per customer by stable alias ID, use the double-derived-row workaround inside DELETE ... WHERE IN, and retain only the first alias for each customer."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "delete-subquery-window",
+    "row-number-delete-filter",
+    "double-derived-delete-source",
+    "partitioned-deduplication",
+    "deterministic-tie-break"
+  ],
+  "fixture_notes": "Customers alpha and beta each have duplicate aliases. The smallest alias ID survives; the outer DELETE removes every row ranked above one, while gamma remains untouched.",
+  "determinism_notes": "Fixed alias IDs and customer keys determine ranking and final ordering; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE customer_aliases (alias_id INT PRIMARY KEY, customer_key VARCHAR(16) NOT NULL, alias_text VARCHAR(32) NOT NULL)",
+    "INSERT INTO customer_aliases VALUES (101, 'alpha', 'Aster'), (102, 'alpha', 'Aster A.'), (201, 'beta', 'Beryl'), (202, 'beta', 'Beryl B.'), (301, 'gamma', 'Cedar')"
+  ],
+  "steps": [
+    {
+      "sql": "DELETE FROM customer_aliases WHERE alias_id IN (SELECT alias_id FROM (SELECT alias_id, ROW_NUMBER() OVER (PARTITION BY customer_key ORDER BY alias_id ASC) AS duplicate_rank FROM customer_aliases) AS ranked WHERE duplicate_rank > 1)",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT alias_id, customer_key, alias_text FROM customer_aliases ORDER BY customer_key",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT alias_id, customer_key, alias_text FROM customer_aliases ORDER BY customer_key",
+      "ordered": true
+    }
+  ]
+}
