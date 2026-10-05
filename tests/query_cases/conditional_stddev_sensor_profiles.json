@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "conditional_stddev_sensor_profiles",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "DerKaiser7/field-service-predictive-maintenance",
+      "commit": "f48d81b3afdbf9b83062b50717666e7b612b5b30",
+      "path": "sql/features/build_features.sql",
+      "url": "https://github.com/DerKaiser7/field-service-predictive-maintenance/blob/f48d81b3afdbf9b83062b50717666e7b612b5b30/sql/features/build_features.sql",
+      "sha256": "5de4985aa8173bf10c01422b6a383472632bfb26aaa30449781637eeec2b2d5e",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "sql/features/build_features.sql:38-61",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A telemetry feature query computes multiple grouped statistics over conditionally selected readings, including AVG, STDDEV_POP(CASE WHEN ...), MIN, and MAX for a bounded sensor category and time window.",
+      "mysql_mariadb_translation": "The source's PostgreSQL interval-bounded self-join is reauthored as a deterministic grouped sensor profile. New machines, measurement names, values, and quality flags select usable readings through CASE expressions; MariaDB evaluates conditional population standard deviations alongside means and extrema without nondeterministic time functions."
+    },
+    "independently_authored": true
+  },
+  "features": ["conditional-stddev", "conditional-average", "conditional-min", "conditional-max", "grouped-statistics", "null-aggregate-input", "deterministic-order"],
+  "fixture_notes": "Only usable voltage readings contribute to the voltage statistics; rejected voltage readings are excluded by CASE. Alpha has usable voltage values 10, 12, and 14 plus a rejected 100, while beta has usable voltage values 20 and 24. Temperature statistics exercise a second conditional population standard deviation.",
+  "determinism_notes": "Machine labels, measurement kinds, quality flags, numeric values, conditional predicates, grouping key, and final ordering are fixed. No current time, interval arithmetic, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE sensor_readings (reading_id INT PRIMARY KEY, machine_code VARCHAR(12) NOT NULL, reading_kind VARCHAR(16) NOT NULL, quality_flag VARCHAR(12) NOT NULL, reading_value DECIMAL(8, 2) NULL)",
+    "INSERT INTO sensor_readings VALUES (101, 'alpha', 'voltage', 'usable', 10), (102, 'alpha', 'voltage', 'usable', 12), (103, 'alpha', 'voltage', 'usable', 14), (104, 'alpha', 'voltage', 'rejected', 100), (105, 'alpha', 'temperature', 'usable', 70), (106, 'alpha', 'temperature', 'usable', 74), (201, 'beta', 'voltage', 'usable', 20), (202, 'beta', 'voltage', 'usable', 24), (203, 'beta', 'voltage', 'rejected', 80), (204, 'beta', 'temperature', 'usable', 65)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT machine_code, AVG(CASE WHEN reading_kind = 'voltage' AND quality_flag = 'usable' THEN reading_value ELSE NULL END) AS voltage_mean, STDDEV_POP(CASE WHEN reading_kind = 'voltage' AND quality_flag = 'usable' THEN reading_value ELSE NULL END) AS voltage_stddev, MIN(CASE WHEN reading_kind = 'voltage' AND quality_flag = 'usable' THEN reading_value ELSE NULL END) AS voltage_min, MAX(CASE WHEN reading_kind = 'voltage' AND quality_flag = 'usable' THEN reading_value ELSE NULL END) AS voltage_max, STDDEV_POP(CASE WHEN reading_kind = 'temperature' AND quality_flag = 'usable' THEN reading_value ELSE NULL END) AS temperature_stddev FROM sensor_readings GROUP BY machine_code ORDER BY machine_code",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT reading_id, machine_code, reading_kind, quality_flag, reading_value FROM sensor_readings ORDER BY reading_id",
+      "ordered": true
+    }
+  ]
+}
