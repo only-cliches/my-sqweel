@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "distinct_aggregate_mix",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "mapr/drill-test-framework",
+      "commit": "9fffe6af74d4ce54e32cd48fd26a16c9d838aba2",
+      "path": "framework/resources/Functional/aggregates/aggregation/scalar/q9.sql",
+      "url": "https://github.com/mapr/drill-test-framework/blob/9fffe6af74d4ce54e32cd48fd26a16c9d838aba2/framework/resources/Functional/aggregates/aggregation/scalar/q9.sql",
+      "sha256": "cef93596437911ae225cead9b7fc43863f1e0db1d06272f76315d738f52c2ca4",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "framework/resources/Functional/aggregates/aggregation/scalar/q9.sql:1-14",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "One aggregate projection evaluates multiple SUM(DISTINCT ...) and AVG(DISTINCT ...) expressions over duplicate-bearing input rows.",
+      "mysql_mariadb_translation": "Reauthored as a grouped delivery-charge report. Each route contains repeated charge and weight values across distinct packages; the MariaDB-compatible projection combines SUM(DISTINCT), AVG(DISTINCT), and COUNT(DISTINCT) so duplicate elimination is independently observable for several aggregate operators and measures."
+    },
+    "independently_authored": true
+  },
+  "features": ["multi-distinct-aggregate", "sum-distinct", "avg-distinct", "count-distinct", "grouped-aggregation", "duplicate-value-elimination", "deterministic-order"],
+  "fixture_notes": "North has charges 12.50, 12.50, and 18.00 with three packages; South has charges 9.00, 15.00, and 15.00. Duplicate charge and weight values must count once within each route's distinct aggregates.",
+  "determinism_notes": "Delivery IDs, route codes, package codes, decimal measures, grouping, and final route ordering are fixed. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE delivery_charges (delivery_id INT PRIMARY KEY, route_code VARCHAR(8) NOT NULL, package_code VARCHAR(16) NOT NULL, charge DECIMAL(8,2) NOT NULL, package_weight DECIMAL(8,2) NOT NULL)",
+    "INSERT INTO delivery_charges VALUES (1, 'NORTH', 'PK-101', 12.50, 4.00), (2, 'NORTH', 'PK-102', 12.50, 6.00), (3, 'NORTH', 'PK-103', 18.00, 6.00), (4, 'SOUTH', 'PK-201', 9.00, 2.00), (5, 'SOUTH', 'PK-202', 15.00, 2.00), (6, 'SOUTH', 'PK-203', 15.00, 8.00)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT route_code, SUM(DISTINCT charge) AS distinct_charge_total, AVG(DISTINCT charge) AS distinct_charge_average, COUNT(DISTINCT package_code) AS package_count, SUM(DISTINCT package_weight) AS distinct_weight_total FROM delivery_charges GROUP BY route_code ORDER BY route_code",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT delivery_id, route_code, package_code, charge, package_weight FROM delivery_charges ORDER BY delivery_id",
+      "ordered": true
+    }
+  ]
+}
