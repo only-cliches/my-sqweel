@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "nested_distinct_json_lists_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "nested_distinct_json_lists",
+    "source": {
+      "kind": "github",
+      "repository": "kvarlamov/lessons",
+      "commit": "2f775605309ed44072278b0539d0aa57ecba6e79",
+      "path": "SqlPractice/Lesson6.sql",
+      "url": "https://github.com/kvarlamov/lessons/blob/2f775605309ed44072278b0539d0aa57ecba6e79/SqlPractice/Lesson6.sql",
+      "sha256": "e35011cee588eb08fe5ae93ea3824a98f06986da4428e549e05de94c35954ddf",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from nested_distinct_json_lists",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A JSON_OBJECT contains a correlated JSON_ARRAYAGG(DISTINCT ...) component; MariaDB reports the enclosing expression as LONG_BLOB while the current MySqweel metadata path reports MEDIUM_BLOB.",
+      "mysql_mariadb_translation": "Reduced to one parent row, one child table, and four distinct ordered JSON arrays inside JSON_OBJECT, retaining the grouped parent CTE and result metadata mismatch while removing unrelated relation lists."
+    },
+    "independently_authored": true
+  },
+  "features": ["grouped-cte", "nested-json-object", "correlated-distinct-json-array", "json-metadata-type", "minimized-regression"],
+  "fixture_notes": "One parent has two duplicate child identifiers; a grouped parent CTE supplies the outer row and four identical JSON arrays are nested under separate keys. The JSON value is identical across engines, but the enclosing JSON_OBJECT result-column type differs before the metadata fix.",
+  "determinism_notes": "Parent and child identifiers, aggregate ordering, JSON key, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE json_parent_min (parent_id INT PRIMARY KEY)",
+    "CREATE TABLE json_child_min (child_id INT PRIMARY KEY, parent_id INT NOT NULL, label_id INT NOT NULL)",
+    "INSERT INTO json_parent_min VALUES (10)",
+    "INSERT INTO json_child_min VALUES (1, 10, 501), (2, 10, 501)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH parent_metrics AS (SELECT p.parent_id, COUNT(DISTINCT c.label_id) AS label_count FROM json_parent_min AS p LEFT JOIN json_child_min AS c ON c.parent_id = p.parent_id GROUP BY p.parent_id) SELECT m.parent_id, JSON_OBJECT('label_ids', (SELECT JSON_ARRAYAGG(DISTINCT c2.label_id ORDER BY c2.label_id) FROM json_child_min AS c2 WHERE c2.parent_id = m.parent_id), 'label_ids_copy_1', (SELECT JSON_ARRAYAGG(DISTINCT c3.label_id ORDER BY c3.label_id) FROM json_child_min AS c3 WHERE c3.parent_id = m.parent_id), 'label_ids_copy_2', (SELECT JSON_ARRAYAGG(DISTINCT c4.label_id ORDER BY c4.label_id) FROM json_child_min AS c4 WHERE c4.parent_id = m.parent_id), 'label_ids_copy_3', (SELECT JSON_ARRAYAGG(DISTINCT c5.label_id ORDER BY c5.label_id) FROM json_child_min AS c5 WHERE c5.parent_id = m.parent_id)) AS payload FROM parent_metrics AS m ORDER BY m.parent_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT parent_id FROM json_parent_min ORDER BY parent_id",
+      "ordered": true
+    }
+  ]
+}

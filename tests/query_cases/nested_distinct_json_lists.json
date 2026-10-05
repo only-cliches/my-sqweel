@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "id": "nested_distinct_json_lists",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "kvarlamov/lessons",
+      "commit": "2f775605309ed44072278b0539d0aa57ecba6e79",
+      "path": "SqlPractice/Lesson6.sql",
+      "url": "https://github.com/kvarlamov/lessons/blob/2f775605309ed44072278b0539d0aa57ecba6e79/SqlPractice/Lesson6.sql",
+      "sha256": "e35011cee588eb08fe5ae93ea3824a98f06986da4428e549e05de94c35954ddf",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "SqlPractice/Lesson6.sql:80-145",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped CTE computes parent-level metrics, then a JSON_OBJECT contains multiple correlated scalar JSON_ARRAYAGG(DISTINCT ...) subqueries for related identifier lists.",
+      "mysql_mariadb_translation": "Reauthored as an independent studio catalog report. A grouped studio CTE counts distinct workers and products, while four correlated subqueries build distinct ordered JSON arrays for workers, products, materials, and projects. Studios without rows in a related table preserve NULL for that nested list; source schema, labels, values, and workshop context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["grouped-cte", "nested-json-object", "correlated-distinct-json-arrays", "count-distinct", "multi-correlated-aggregates", "null-json-array-components", "deterministic-order"],
+  "fixture_notes": "Studio 10 has duplicate worker and product links plus material and project links; the nested JSON arrays deduplicate and order each relation independently. Studio 20 has only one worker and no other relation rows, so its missing JSON arrays are NULL while grouped counts remain zero.",
+  "determinism_notes": "Studio IDs, relation IDs, duplicate links, correlated keys, aggregate ordering, JSON keys, and final studio ordering are fixed. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE studios (studio_id INT PRIMARY KEY, studio_name VARCHAR(32) NOT NULL, studio_type VARCHAR(16) NOT NULL)",
+    "CREATE TABLE studio_workers (link_id INT PRIMARY KEY, studio_id INT NOT NULL, worker_id INT NOT NULL)",
+    "CREATE TABLE studio_products (link_id INT PRIMARY KEY, studio_id INT NOT NULL, product_id INT NOT NULL)",
+    "CREATE TABLE studio_materials (link_id INT PRIMARY KEY, studio_id INT NOT NULL, material_id INT NOT NULL)",
+    "CREATE TABLE studio_projects (link_id INT PRIMARY KEY, studio_id INT NOT NULL, project_id INT NOT NULL)",
+    "INSERT INTO studios VALUES (10, 'North Forge', 'smithy'), (20, 'South Loom', 'textile')",
+    "INSERT INTO studio_workers VALUES (1, 10, 501), (2, 10, 502), (3, 10, 501), (4, 20, 503)",
+    "INSERT INTO studio_products VALUES (1, 10, 701), (2, 10, 702), (3, 10, 701)",
+    "INSERT INTO studio_materials VALUES (1, 10, 801), (2, 10, 802)",
+    "INSERT INTO studio_projects VALUES (1, 10, 901), (2, 10, 901), (3, 10, 902)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH studio_metrics AS (SELECT s.studio_id, s.studio_name, s.studio_type, COUNT(DISTINCT w.worker_id) AS worker_count, COUNT(DISTINCT p.product_id) AS product_count FROM studios AS s LEFT JOIN studio_workers AS w ON w.studio_id = s.studio_id LEFT JOIN studio_products AS p ON p.studio_id = s.studio_id GROUP BY s.studio_id, s.studio_name, s.studio_type) SELECT sm.studio_id, sm.studio_name, sm.studio_type, sm.worker_count, sm.product_count, JSON_OBJECT('worker_ids', (SELECT JSON_ARRAYAGG(DISTINCT w2.worker_id ORDER BY w2.worker_id) FROM studio_workers AS w2 WHERE w2.studio_id = sm.studio_id), 'product_ids', (SELECT JSON_ARRAYAGG(DISTINCT p2.product_id ORDER BY p2.product_id) FROM studio_products AS p2 WHERE p2.studio_id = sm.studio_id), 'material_ids', (SELECT JSON_ARRAYAGG(DISTINCT m2.material_id ORDER BY m2.material_id) FROM studio_materials AS m2 WHERE m2.studio_id = sm.studio_id), 'project_ids', (SELECT JSON_ARRAYAGG(DISTINCT pr2.project_id ORDER BY pr2.project_id) FROM studio_projects AS pr2 WHERE pr2.studio_id = sm.studio_id)) AS related_entities FROM studio_metrics AS sm ORDER BY sm.studio_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT studio_id, studio_name, studio_type FROM studios ORDER BY studio_id",
+      "ordered": true
+    }
+  ]
+}

@@ -13,6 +13,7 @@ fn merge_set_column_type(left: MysqlColumnType, right: MysqlColumnType) -> Mysql
         _ => left,
     }
 }
+
 fn boolean_fulltext_match(haystack: &str, query: &str) -> bool {
     let tokens = haystack
         .split(|character: char| !character.is_alphanumeric())
@@ -2933,27 +2934,30 @@ impl RawEngine {
                         }
                     }
                     "JSON_OBJECT" => {
-                        let argument_types = function_arguments(function)
-                            .ok()
-                            .map(|arguments| {
-                                arguments
-                                    .into_iter()
-                                    .flatten()
-                                    .map(|argument| {
-                                        self.expression_metadata(
-                                            select,
-                                            &argument,
-                                            String::new(),
-                                            first_row,
-                                        )
-                                        .column_type
-                                    })
-                                    .collect::<Vec<_>>()
-                            })
-                            .unwrap_or_default();
-                        if argument_types
+                        let arguments = function_arguments(function)
+                            .unwrap_or_default()
+                            .into_iter()
+                            .flatten()
+                            .collect::<Vec<_>>();
+                        // MariaDB widens JSON_OBJECT metadata at four or
+                        // more key/value pairs.
+                        let argument_types = arguments
                             .iter()
-                            .any(|column_type| *column_type == MysqlColumnType::LongBlob)
+                            .map(|argument| {
+                                self.expression_metadata(
+                                    select,
+                                    argument,
+                                    String::new(),
+                                    first_row,
+                                )
+                                .column_type
+                            })
+                            .collect::<Vec<_>>();
+                        let has_four_json_object_pairs = arguments.len() >= 8;
+                        if has_four_json_object_pairs
+                            || argument_types
+                                .iter()
+                                .any(|column_type| *column_type == MysqlColumnType::LongBlob)
                         {
                             MysqlColumnType::LongBlob
                         } else if argument_types.iter().any(|column_type| {
