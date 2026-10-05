@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "id": "insert_ignore_distinct_returning_registry",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "CatoTH/antragsgruen",
+      "commit": "c0b38d3ad0c616f5ccda31f3a38b5db75584c9e7",
+      "path": "assets/db/copy-site.sql",
+      "url": "https://github.com/CatoTH/antragsgruen/blob/c0b38d3ad0c616f5ccda31f3a38b5db75584c9e7/assets/db/copy-site.sql",
+      "sha256": "75a7862005d92b8d9a5686bec1db2fe75a0327b98fbc63a37e196e72aba3a963",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "assets/db/copy-site.sql:281-297",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL migration repeatedly inserts distinct non-NULL identifiers from source tables into a keyed temporary registry with INSERT IGNORE, allowing duplicate identifiers to be skipped.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored identity registry import. A distinct source projection removes repeated identity observations, INSERT IGNORE skips an already registered identity without overwriting its label, RETURNING exposes only newly inserted identities, and a final ordered read verifies the retained registry."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "insert-ignore",
+    "insert-ignore-select",
+    "select-distinct",
+    "insert-ignore-distinct-returning",
+    "conflict-and-insert-paths",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Repeated observations for identities 10 and 30 collapse before insertion, identity 20 conflicts with its existing registry row and is ignored, and only new identities 10 and 30 appear in RETURNING.",
+  "determinism_notes": "Fixed identity IDs and labels are used; duplicate source rows are identical, mutation result order is not assumed, and the final registry is ordered by identity ID.",
+  "setup": [
+    "CREATE TABLE identity_registry (identity_id INT PRIMARY KEY, identity_label VARCHAR(32) NOT NULL)",
+    "CREATE TABLE identity_observations (observation_id INT PRIMARY KEY, identity_id INT NULL, identity_label VARCHAR(32) NULL)",
+    "INSERT INTO identity_registry VALUES (20, 'existing-twenty')",
+    "INSERT INTO identity_observations VALUES (1001, 10, 'ten'), (1002, 10, 'ten'), (1003, 20, 'incoming-twenty'), (1004, 30, 'thirty'), (1005, 30, 'thirty'), (1006, NULL, NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT IGNORE INTO identity_registry (identity_id, identity_label) SELECT DISTINCT identity_id, identity_label FROM identity_observations WHERE identity_id IS NOT NULL AND identity_label IS NOT NULL RETURNING identity_id, identity_label",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT identity_id, identity_label FROM identity_registry ORDER BY identity_id",
+      "ordered": true
+    }
+  ]
+}
