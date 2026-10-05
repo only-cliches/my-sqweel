@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "conditional_max_period_pivot",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "fishercoder1534/Leetcode",
+      "commit": "d8ca810282786616c485c41fd0c9bb4652ee5904",
+      "path": "database/_1179.sql",
+      "url": "https://github.com/fishercoder1534/Leetcode/blob/d8ca810282786616c485c41fd0c9bb4652ee5904/database/_1179.sql",
+      "sha256": "a03a4b60f78f604e2ef0de1fa1fc9a443b47adc48bd74f3bfcc76989279e4ba1",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "database/_1179.sql:1-16",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped report pivots period-labelled rows into one result row per entity with one MAX(CASE WHEN period = ...) expression per period, allowing missing period values to remain NULL.",
+      "mysql_mariadb_translation": "Reauthored as a regional performance snapshot with new table names, periods, measures, and rows. Each region reports its best score for each quarter through conditional MAX aggregates; a missing quarter remains NULL and duplicate snapshots are resolved by MAX rather than assumed to be unique."
+    },
+    "independently_authored": true
+  },
+  "features": ["conditional-max", "period-pivot", "grouped-aggregate", "null-pivot-cell", "duplicate-period-resolution", "deterministic-order"],
+  "fixture_notes": "North has two Q1 snapshots and one Q2 snapshot but no Q3 snapshot. South has one Q1 snapshot, two Q2 snapshots, and one Q3 snapshot. MAX chooses the higher duplicate-period score and missing periods produce NULL cells.",
+  "determinism_notes": "Region labels, period labels, scores, grouping key, pivot columns, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE regional_score_snapshots (snapshot_id INT PRIMARY KEY, region_code VARCHAR(12) NOT NULL, period_code VARCHAR(2) NOT NULL, score INT NULL)",
+    "INSERT INTO regional_score_snapshots VALUES (1001, 'north', 'Q1', 81), (1002, 'north', 'Q1', 88), (1003, 'north', 'Q2', 90), (2001, 'south', 'Q1', 74), (2002, 'south', 'Q2', 79), (2003, 'south', 'Q2', 83), (2004, 'south', 'Q3', 77)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT region_code, MAX(CASE WHEN period_code = 'Q1' THEN score ELSE NULL END) AS q1_best_score, MAX(CASE WHEN period_code = 'Q2' THEN score ELSE NULL END) AS q2_best_score, MAX(CASE WHEN period_code = 'Q3' THEN score ELSE NULL END) AS q3_best_score FROM regional_score_snapshots GROUP BY region_code ORDER BY region_code",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT snapshot_id, region_code, period_code, score FROM regional_score_snapshots ORDER BY snapshot_id",
+      "ordered": true
+    }
+  ]
+}
