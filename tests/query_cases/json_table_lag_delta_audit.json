@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "id": "json_table_lag_delta_audit",
+  "provenance": {
+    "kind": "github_sql_pattern",
+    "source": {
+      "kind": "github",
+      "repository": "snoyes/AoC",
+      "commit": "ab91a73fb5d28bb6ced2a33af69d177dbe22b2b3",
+      "path": "2024/day02/day02.sql",
+      "url": "https://github.com/snoyes/AoC/blob/ab91a73fb5d28bb6ced2a33af69d177dbe22b2b3/2024/day02/day02.sql",
+      "sha256": "3bbee0a75f638c07c3162855164ae354ac2480ddd5c46a462cdda91f3e3074e",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "2024/day02/day02.sql:8-21",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A query converts a delimited numeric string into JSON_TABLE rows with FOR ORDINALITY, computes adjacent differences with partitioned LAG, groups the differences into minimum and maximum bounds, and filters or classifies sequences by allowable step ranges.",
+      "mysql_mariadb_translation": "Reauthored as a sensor-batch delta audit. Space-delimited readings are expanded into typed rows, adjacent readings are compared per batch, grouped extrema classify ascending, descending, mixed, and single-reading batches, and the final report is ordered by batch ID. The source table, data format values, labels, and puzzle context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "json-table",
+    "nested-json-table-path",
+    "for-ordinality",
+    "partitioned-lag",
+    "grouped-min-max",
+    "conditional-range-classification",
+    "cte",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Two batches have uniformly ascending or descending steps within the allowed range, one has an out-of-range step, and one has only a single reading with no delta. The report exposes all four classifications.",
+  "determinism_notes": "Batch IDs, names, space-delimited readings, JSON_TABLE ordinality, step bounds, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE sensor_reading_batches (batch_id INT PRIMARY KEY, batch_name VARCHAR(32) NOT NULL, readings_csv VARCHAR(128) NOT NULL)",
+    "INSERT INTO sensor_reading_batches VALUES (501, 'alpha', '10 12 15 18'), (502, 'beta', '30 28 25 23'), (503, 'gamma', '7 9 13 14'), (504, 'delta', '5')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH reading_deltas AS (SELECT batches.batch_id, batches.batch_name, jt.position, jt.reading - LAG(jt.reading) OVER (PARTITION BY batches.batch_id ORDER BY jt.position) AS step_delta FROM sensor_reading_batches AS batches INNER JOIN JSON_TABLE(CONCAT('[', REPLACE(batches.readings_csv, ' ', ','), ']'), '$' COLUMNS (NESTED PATH '$[*]' COLUMNS (position FOR ORDINALITY, reading INT PATH '$'))) AS jt ON TRUE), grouped_bounds AS (SELECT batch_id, batch_name, COUNT(step_delta) AS measured_steps, MIN(step_delta) AS minimum_step, MAX(step_delta) AS maximum_step FROM reading_deltas GROUP BY batch_id, batch_name) SELECT batch_id, batch_name, measured_steps, minimum_step, maximum_step, CASE WHEN measured_steps = 0 THEN 'insufficient' WHEN minimum_step >= 1 AND maximum_step <= 3 THEN 'steady_up' WHEN minimum_step >= -3 AND maximum_step <= -1 THEN 'steady_down' ELSE 'mixed' END AS batch_class FROM grouped_bounds ORDER BY batch_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT batch_id, batch_name, readings_csv FROM sensor_reading_batches ORDER BY batch_id",
+      "ordered": true
+    }
+  ]
+}
