@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "id": "intersect_returning_catalog_tags",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "PacktPublishing/Learn-PostgreSQL",
+      "commit": "221cc200e5d0e44d3292ad1fabdba6c2eb7ae6e0",
+      "path": "Chapter05/chapter5_script.sql",
+      "url": "https://github.com/PacktPublishing/Learn-PostgreSQL/blob/221cc200e5d0e44d3292ad1fabdba6c2eb7ae6e0/Chapter05/chapter5_script.sql",
+      "sha256": "b5a9b2ef005a22d51822a06d220e91331d23b7e36b96182ff34e5feaa0438d52",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "Chapter05/chapter5_script.sql:139,155-158",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A PostgreSQL tutorial intersects category and tag labels and separately uses INSERT RETURNING for joined-tag rows.",
+      "mysql_mariadb_translation": "Combine those behaviors in an independently authored catalog fixture: return generated tag-event IDs from a multi-row insert, then retain only labels present in both category and tag catalogs through INTERSECT."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "intersect-returning",
+    "insert-returning",
+    "generated-key-returning",
+    "set-intersection",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Only fruit and shared appear in both catalogs; vegetable and seasonal are excluded by INTERSECT.",
+  "determinism_notes": "Fixed catalog and event values, explicit set-result ordering, and auto-increment event IDs created in source order; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE categories (category_id INT PRIMARY KEY, category_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE tags (tag_id INT PRIMARY KEY, tag_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE tag_events (event_id INT AUTO_INCREMENT PRIMARY KEY, tag_id INT NOT NULL, event_name VARCHAR(32) NOT NULL)",
+    "INSERT INTO categories VALUES (1, 'fruit'), (2, 'vegetable'), (3, 'shared')",
+    "INSERT INTO tags VALUES (10, 'fruit'), (20, 'seasonal'), (30, 'shared')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO tag_events (tag_id, event_name) VALUES (10, 'indexed'), (30, 'indexed') RETURNING event_id, tag_id, event_name",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT category_name FROM categories INTERSECT SELECT tag_name FROM tags ORDER BY category_name",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT event_id, tag_id, event_name FROM tag_events ORDER BY event_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT category_id, category_name FROM categories ORDER BY category_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT tag_id, tag_name FROM tags ORDER BY tag_id",
+      "ordered": true
+    }
+  ]
+}
