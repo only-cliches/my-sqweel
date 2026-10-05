@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "delete_ranked_returning_slots",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "hatchet-dev/hatchet",
+      "commit": "be1964f25c0bd72ec8cbcd0c81c29b86d1da0bec",
+      "path": "pkg/repository/sqlcv1/concurrency.sql",
+      "url": "https://github.com/hatchet-dev/hatchet/blob/be1964f25c0bd72ec8cbcd0c81c29b86d1da0bec/pkg/repository/sqlcv1/concurrency.sql",
+      "sha256": "c0433ab8597a765db1ed2be8f04f9213fb1ac138583f22f85b7ea78498b14634",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "pkg/repository/sqlcv1/concurrency.sql:363-534",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A queue-maintenance query ranks eligible rows within each concurrency key with ROW_NUMBER and deletes selected rows while returning the deleted records.",
+      "mysql_mariadb_translation": "Reauthored as a deterministic workflow-slot cleanup. A derived ranked relation partitions queued slots by workflow key and orders by score, the outer DELETE removes only rows ranked below the winner, and RETURNING exposes the deleted slot IDs and scores. PostgreSQL casts, lock clauses, source tables, and application identifiers are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "delete",
+    "delete-subquery-window",
+    "delete-returning",
+    "delete-window-returning",
+    "row-number-window",
+    "deterministic-order"
+  ],
+  "fixture_notes": "For alpha and beta, the lower-scoring queued slot is deleted and returned; cancelled alpha and the single gamma slot are untouched. The final table check confirms the retained winners and unrelated rows.",
+  "determinism_notes": "Fixed slot IDs, workflow keys, states, scores, and explicit window ordering are used; mutation result order is not assumed and the final read is ordered by slot ID.",
+  "setup": [
+    "CREATE TABLE workflow_slots (slot_id INT PRIMARY KEY, workflow_key VARCHAR(16) NOT NULL, slot_state VARCHAR(16) NOT NULL, score INT NOT NULL)",
+    "INSERT INTO workflow_slots VALUES (1001, 'alpha', 'queued', 90), (1002, 'alpha', 'queued', 80), (1003, 'alpha', 'cancelled', 70), (2001, 'beta', 'queued', 60), (2002, 'beta', 'queued', 55), (3001, 'gamma', 'queued', 40)"
+  ],
+  "steps": [
+    {
+      "sql": "DELETE FROM workflow_slots WHERE slot_id IN (SELECT slot_id FROM (SELECT slot_id, ROW_NUMBER() OVER (PARTITION BY workflow_key ORDER BY score DESC, slot_id ASC) AS slot_rank FROM workflow_slots WHERE slot_state = 'queued') AS ranked_slots WHERE slot_rank > 1) RETURNING slot_id, workflow_key, score",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT slot_id, workflow_key, slot_state, score FROM workflow_slots ORDER BY slot_id",
+      "ordered": true
+    }
+  ]
+}
