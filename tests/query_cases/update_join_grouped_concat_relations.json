@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "update_join_grouped_concat_relations",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "zwChan/Clinical-Text-Mining",
+      "commit": "268caeeee8a0a57835a8c6263cf5d5d54cf85c6e",
+      "path": "sql-script/1018.sql",
+      "url": "https://github.com/zwChan/Clinical-Text-Mining/blob/268caeeee8a0a57835a8c6263cf5d5d54cf85c6e/sql-script/1018.sql",
+      "sha256": "b0db70543eb9f86af9f93ca3681c7bce5658980f1e220856e7102265de60c320",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql-script/1018.sql:156-164",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "An UPDATE JOIN fills missing target summaries from a grouped derived relation, using GROUP_CONCAT(DISTINCT ... IFNULL(...) SEPARATOR ...) and symmetric key matching in both the derived join and target join.",
+      "mysql_mariadb_translation": "Reauthored as a compact relation-summary refresh with new target, edge, and pending-pair tables. Bidirectional edge matches are grouped by endpoint, distinct labeled relations are concatenated in deterministic order, and only NULL target summaries are updated; unrelated prefilled summaries remain unchanged."
+    },
+    "independently_authored": true
+  },
+  "features": ["update-join", "grouped-derived-table", "group-concat-distinct", "symmetric-match", "ifnull-aggregate-input", "null-guarded-update", "deterministic-order"],
+  "fixture_notes": "Targets 101 and 102 receive summaries from opposite- and same-direction edges respectively; target 103 is prefilled and must not be overwritten. Pending pairs limit the derived aggregate to the two refresh targets.",
+  "determinism_notes": "Endpoint codes, relation labels, fixed GROUP_CONCAT ordering, primary keys, pending pairs, and final target ordering are fixed. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE relation_targets (target_id INT PRIMARY KEY, source_code VARCHAR(12) NOT NULL, related_code VARCHAR(12) NOT NULL, relation_summary VARCHAR(255) NULL)",
+    "CREATE TABLE relation_edges (edge_id INT PRIMARY KEY, left_code VARCHAR(12) NOT NULL, right_code VARCHAR(12) NOT NULL, relation_kind VARCHAR(16) NOT NULL, relation_label VARCHAR(16) NULL)",
+    "CREATE TABLE pending_relations (source_code VARCHAR(12) NOT NULL, related_code VARCHAR(12) NOT NULL, PRIMARY KEY (source_code, related_code))",
+    "INSERT INTO relation_targets VALUES (101, 'alpha', 'beta', NULL), (102, 'alpha', 'gamma', NULL), (103, 'alpha', 'delta', 'locked')",
+    "INSERT INTO relation_edges VALUES (1, 'beta', 'alpha', 'linked', 'peer'), (2, 'beta', 'alpha', 'parent', NULL), (3, 'alpha', 'gamma', 'owner', 'primary'), (4, 'gamma', 'alpha', 'linked', 'peer'), (5, 'alpha', 'delta', 'ignored', 'old')",
+    "INSERT INTO pending_relations VALUES ('alpha', 'beta'), ('alpha', 'gamma')"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE relation_targets AS t INNER JOIN (SELECT e.left_code, e.right_code, GROUP_CONCAT(DISTINCT CONCAT(e.relation_kind, ' ', IFNULL(e.relation_label, 'unknown')) ORDER BY e.relation_kind, e.relation_label SEPARATOR ',') AS relation_summary FROM relation_edges AS e INNER JOIN pending_relations AS p ON (e.left_code = p.source_code AND e.right_code = p.related_code) OR (e.left_code = p.related_code AND e.right_code = p.source_code) GROUP BY e.left_code, e.right_code) AS grouped ON (grouped.left_code = t.source_code AND grouped.right_code = t.related_code) OR (grouped.left_code = t.related_code AND grouped.right_code = t.source_code) SET t.relation_summary = grouped.relation_summary WHERE t.relation_summary IS NULL",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT target_id, source_code, related_code, relation_summary FROM relation_targets ORDER BY target_id",
+      "ordered": true
+    }
+  ]
+}
