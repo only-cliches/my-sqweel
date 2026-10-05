@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "id": "window_insert_returning_ranked_tasks",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "uxbox/uxbox-backend",
+      "commit": "036c42db8424be3ac34c38be80577ee279141681",
+      "path": "resources/sql/pages.sql",
+      "url": "https://github.com/uxbox/uxbox-backend/blob/036c42db8424be3ac34c38be80577ee279141681/resources/sql/pages.sql",
+      "sha256": "ce7525ab68e6a2bd5ca7a1765adacc38dbbf1797678e8b8126af4b860254b5f0",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "resources/sql/pages.sql:1-15,45-60",
+      "source_dialect": "postgresql",
+      "observed_pattern": "The public query file uses RETURNING for write results and ROW_NUMBER() OVER (ORDER BY ...) to expose stable positional rankings in page reads.",
+      "mysql_mariadb_translation": "Combine those patterns in an independently authored MariaDB fixture: rank ready tasks within each team using ROW_NUMBER() in an INSERT ... SELECT, then return the generated archive IDs and copied ranks from the inserted rows."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "window-function",
+    "insert-select-returning",
+    "partitioned-ranking",
+    "generated-key-returning",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Ready tasks are archived with one-based priority ranks per team; the delayed task is excluded, and RETURNING exposes each generated archive ID with its rank.",
+  "determinism_notes": "Fixed task IDs, priorities, team names, and explicit ROW_NUMBER tie-breakers by task ID; returned and final rows are ordered by generated/archive IDs. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE pending_tasks (task_id INT PRIMARY KEY, team_name VARCHAR(32) NOT NULL, task_name VARCHAR(32) NOT NULL, priority INT NOT NULL, ready TINYINT NOT NULL)",
+    "CREATE TABLE task_archive (archive_id INT AUTO_INCREMENT PRIMARY KEY, task_id INT NOT NULL, team_name VARCHAR(32) NOT NULL, rank_no INT NOT NULL, task_name VARCHAR(32) NOT NULL)",
+    "INSERT INTO pending_tasks VALUES (501, 'alpha', 'index', 20, 1), (502, 'alpha', 'backup', 10, 1), (503, 'beta', 'deploy', 30, 1), (504, 'beta', 'review', 5, 0)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO task_archive (task_id, team_name, rank_no, task_name) SELECT task_id, team_name, ROW_NUMBER() OVER (PARTITION BY team_name ORDER BY priority DESC, task_id), task_name FROM pending_tasks WHERE ready = 1 RETURNING archive_id, task_id, team_name, rank_no",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT archive_id, task_id, team_name, rank_no, task_name FROM task_archive ORDER BY archive_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT task_id, team_name, task_name, priority, ready FROM pending_tasks ORDER BY task_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT archive_id, task_id, team_name, rank_no, task_name FROM task_archive ORDER BY archive_id",
+      "ordered": true
+    }
+  ]
+}
