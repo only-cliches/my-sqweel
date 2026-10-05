@@ -1,0 +1,78 @@
+{
+  "version": 1,
+  "id": "savepoint_skip_locked_retry_claim",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wenshao/sql-dialects",
+      "commit": "acc6698bf87709c16156862d295b2a4bb290cec1",
+      "path": "advanced/transactions/mysql.sql",
+      "url": "https://github.com/wenshao/sql-dialects/blob/acc6698bf87709c16156862d295b2a4bb290cec1/advanced/transactions/mysql.sql",
+      "sha256": "609ee05b4509ed9a042cff1a8162b7dd8d2f92ecfe468fcbb00a4c4b3afdf732",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "advanced/transactions/mysql.sql:28-35,91-93",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "The MySQL transaction reference demonstrates a savepoint for partial rollback and a bounded FOR UPDATE SKIP LOCKED queue read for selecting an unlocked task.",
+      "mysql_mariadb_translation": "Reauthored as an independent dispatch retry. A fixed ready task is selected with deterministic priority ordering and FOR UPDATE SKIP LOCKED, claimed inside the transaction, then a temporary post-claim annotation is rolled back to a savepoint while the claim itself remains committed."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "savepoint",
+    "rollback-to-savepoint",
+    "for-update",
+    "skip-locked",
+    "transaction-claim",
+    "deterministic-order",
+    "transaction-final-state"
+  ],
+  "fixture_notes": "Task 201 is the earliest ready task and is claimed. Task 202 remains ready because the bounded claim selects one row; task 203 is paused and excluded. The temporary claim annotation is rolled back without undoing the claim.",
+  "determinism_notes": "Task IDs, priorities, states, attempt counts, claim limit, and ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE dispatch_tasks (task_id INT PRIMARY KEY, task_name VARCHAR(32) NOT NULL, task_priority INT NOT NULL, task_state VARCHAR(16) NOT NULL, attempt_count INT NOT NULL, claim_note VARCHAR(32) NULL)",
+    "INSERT INTO dispatch_tasks VALUES (201, 'rebuild-search', 1, 'ready', 0, NULL), (202, 'refresh-index', 2, 'ready', 1, NULL), (203, 'paused-export', 1, 'paused', 0, NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "START TRANSACTION",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT task_id, task_name, task_priority FROM dispatch_tasks WHERE task_state = 'ready' ORDER BY task_priority ASC, task_id ASC LIMIT 1 FOR UPDATE SKIP LOCKED",
+      "ordered": true
+    },
+    {
+      "sql": "UPDATE dispatch_tasks SET task_state = 'claimed', attempt_count = attempt_count + 1 WHERE task_id = 201",
+      "ordered": false
+    },
+    {
+      "sql": "SAVEPOINT after_claim",
+      "ordered": false
+    },
+    {
+      "sql": "UPDATE dispatch_tasks SET claim_note = 'temporary-validation' WHERE task_id = 201",
+      "ordered": false
+    },
+    {
+      "sql": "ROLLBACK TO SAVEPOINT after_claim",
+      "ordered": false
+    },
+    {
+      "sql": "RELEASE SAVEPOINT after_claim",
+      "ordered": false
+    },
+    {
+      "sql": "COMMIT",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT task_id, task_name, task_priority, task_state, attempt_count, claim_note FROM dispatch_tasks ORDER BY task_id",
+      "ordered": true
+    }
+  ]
+}
