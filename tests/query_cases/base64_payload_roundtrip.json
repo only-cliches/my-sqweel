@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "base64_payload_roundtrip",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "base64decode/examples",
+      "commit": "03b7817c393210159763512e42fd82b07af4b43c",
+      "path": "base64decode.sql",
+      "url": "https://github.com/base64decode/examples/blob/03b7817c393210159763512e42fd82b07af4b43c/base64decode.sql",
+      "sha256": "2738c4a49343ef52ca12023ceedd1f4228ebff7f1e6f12d170807f7a1a6dd5f2",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "base64decode.sql:1",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL query decodes a fixed Base64 literal with FROM_BASE64 and returns the binary payload.",
+      "mysql_mariadb_translation": "Reauthored as an encoded-message audit. Stored Base64 payloads are decoded, measured, and re-encoded with TO_BASE64 so binary content and canonical round trips are observable without copying the source literal or schema."
+    },
+    "independently_authored": true
+  },
+  "features": ["from-base64", "to-base64", "binary-payload", "base64-roundtrip", "deterministic-order"],
+  "fixture_notes": "The audit includes an ASCII message, a punctuation-bearing message, and a fixed binary payload containing zero and high-bit bytes. Each row must decode to the expected byte length and re-encode to its canonical Base64 text.",
+  "determinism_notes": "Message IDs, labels, Base64 literals, projection expressions, and ordering are fixed. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE encoded_messages (message_id INT PRIMARY KEY, message_label VARCHAR(32) NOT NULL, payload_b64 TEXT NOT NULL)",
+    "INSERT INTO encoded_messages VALUES (601, 'greeting', 'SGVsbG8sIFdvcmxkIQ=='), (602, 'punctuation', 'cXVlcnktY292ZXJhZ2UgIzQ='), (603, 'binary', 'AAEC/w==')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT message_id, message_label, OCTET_LENGTH(FROM_BASE64(payload_b64)) AS payload_bytes, TO_BASE64(FROM_BASE64(payload_b64)) AS canonical_b64 FROM encoded_messages ORDER BY message_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT message_id, message_label, payload_b64 FROM encoded_messages ORDER BY message_id",
+      "ordered": true
+    }
+  ]
+}
