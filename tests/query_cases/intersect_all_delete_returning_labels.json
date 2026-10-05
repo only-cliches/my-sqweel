@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "id": "intersect_all_delete_returning_labels",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "zettadb/cloudnative",
+      "commit": "0bbcb7dbfef25893d65c43e7cca90f87d36108b2",
+      "path": "kunlun-pg-regress/sql/with.sql",
+      "url": "https://github.com/zettadb/cloudnative/blob/0bbcb7dbfef25893d65c43e7cca90f87d36108b2/kunlun-pg-regress/sql/with.sql",
+      "sha256": "3b4439dfc45f2adb3649e001318eb33472876bde4995709d1b16641aa430a8a3",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "kunlun-pg-regress/sql/with.sql:398-403,413-418,714-720",
+      "source_dialect": "postgresql",
+      "observed_pattern": "The public regression SQL exercises INTERSECT ALL set-operation syntax and DELETE ... RETURNING write results.",
+      "mysql_mariadb_translation": "Combine those constructs in an independently authored MariaDB cleanup: derive shared labels with INTERSECT ALL from separate event streams, delete matching catalog rows, and return their identifiers and labels."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "intersect-all",
+    "delete-returning",
+    "delete-subquery",
+    "multiset-intersection",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The current stream contains alpha twice, beta once, and gamma once; the observed stream contains alpha twice, beta once, and delta once. INTERSECT ALL selects alpha and beta for deletion, while gamma and delta remain outside the catalog target set.",
+  "determinism_notes": "Fixed catalog IDs, stream labels, duplicate counts, and a single derived shared-label set; returned and final rows are ordered by primary key. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE label_catalog (label_id INT PRIMARY KEY, label_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE current_stream (stream_id INT PRIMARY KEY, label_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE observed_stream (stream_id INT PRIMARY KEY, label_name VARCHAR(32) NOT NULL)",
+    "INSERT INTO label_catalog VALUES (801, 'alpha'), (802, 'beta'), (803, 'gamma'), (804, 'delta')",
+    "INSERT INTO current_stream VALUES (1, 'alpha'), (2, 'alpha'), (3, 'beta'), (4, 'gamma')",
+    "INSERT INTO observed_stream VALUES (11, 'alpha'), (12, 'alpha'), (13, 'beta'), (14, 'delta')"
+  ],
+  "steps": [
+    {
+      "sql": "DELETE FROM label_catalog WHERE label_name IN (SELECT shared.label_name FROM (SELECT label_name FROM current_stream INTERSECT ALL SELECT label_name FROM observed_stream) AS shared) RETURNING label_id, label_name",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT label_id, label_name FROM label_catalog ORDER BY label_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT label_id, label_name FROM label_catalog ORDER BY label_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT stream_id, label_name FROM current_stream ORDER BY stream_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT stream_id, label_name FROM observed_stream ORDER BY stream_id",
+      "ordered": true
+    }
+  ]
+}
