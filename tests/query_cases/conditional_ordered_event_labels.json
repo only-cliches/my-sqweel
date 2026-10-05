@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "conditional_ordered_event_labels",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "natoromano/deep-patient",
+      "commit": "20070bacec258efc93e930148ce129863ada4263",
+      "path": "sql/load_notes2.sql",
+      "url": "https://github.com/natoromano/deep-patient/blob/20070bacec258efc93e930148ce129863ada4263/sql/load_notes2.sql",
+      "sha256": "422b349f5a2851f277fe844e1d92b5007d77b024a450c6a937ff6e48a04076af",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/load_notes2.sql:1-8",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A derived grouped query uses GROUP_CONCAT(CASE WHEN ... ELSE CONCAT(...) END SEPARATOR ...) to encode conditional labels into one delimited string, filters source rows before aggregation, and joins the grouped result back to parent records.",
+      "mysql_mariadb_translation": "Reauthored as a shipment event-label report with new parent and child tables, identifiers, labels, conditions, separator, and purpose. Active events are grouped in a derived table, normal events retain their code while exceptional events receive a prefix, and event order is made deterministic with ORDER BY inside GROUP_CONCAT before joining to shipments."
+    },
+    "independently_authored": true
+  },
+  "features": ["conditional-ordered-group-concat", "custom-group-concat-separator", "derived-grouped-subquery", "conditional-string-expression", "parent-child-join", "deterministic-order"],
+  "fixture_notes": "Active normal events retain their code; active warning or critical events receive a ! prefix. Inactive events are excluded before aggregation. Event IDs define the deterministic concatenation order, and shipments without active events are excluded by the inner join.",
+  "determinism_notes": "Shipment IDs, event IDs, active flags, severities, labels, concatenation order, separator, join key, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE shipments (shipment_id INT PRIMARY KEY, route_code VARCHAR(16) NOT NULL)",
+    "CREATE TABLE shipment_events (event_id INT PRIMARY KEY, shipment_id INT NOT NULL, event_code VARCHAR(16) NOT NULL, severity VARCHAR(12) NOT NULL, active TINYINT NOT NULL)",
+    "INSERT INTO shipments VALUES (1, 'east-loop'), (2, 'west-loop'), (3, 'north-loop')",
+    "INSERT INTO shipment_events VALUES (101, 1, 'pickup', 'normal', 1), (102, 1, 'customs', 'warning', 1), (103, 1, 'internal', 'normal', 0), (201, 2, 'pickup', 'normal', 1), (202, 2, 'damage', 'critical', 1), (301, 3, 'pickup', 'normal', 0)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT s.shipment_id, s.route_code, e.event_labels FROM shipments s JOIN (SELECT shipment_id, GROUP_CONCAT(CASE WHEN severity = 'normal' THEN event_code ELSE CONCAT('!', event_code) END ORDER BY event_id SEPARATOR '|') AS event_labels FROM shipment_events WHERE active = 1 GROUP BY shipment_id) e ON s.shipment_id = e.shipment_id ORDER BY s.shipment_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT event_id, shipment_id, event_code, severity, active FROM shipment_events ORDER BY event_id",
+      "ordered": true
+    }
+  ]
+}
