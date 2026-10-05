@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "id": "cte_skip_locked_job_claim",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "oban-bg/oban-py",
+      "commit": "de1ca451a10bedfe7f5444f7a89aae95eae100c0",
+      "path": "oban/queries/fetch_jobs.sql",
+      "url": "https://github.com/oban-bg/oban-py/blob/de1ca451a10bedfe7f5444f7a89aae95eae100c0/oban/queries/fetch_jobs.sql",
+      "sha256": "642fa5c97e57e104f3cfe2f69d40accb0447c66f369259ea173739f2473b8440",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "oban/queries/fetch_jobs.sql:1-17",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A bounded common-table expression selects the earliest eligible jobs and applies FOR UPDATE SKIP LOCKED before a state-changing claim returns the selected rows.",
+      "mysql_mariadb_translation": "Reauthored as a deterministic reservation claim. The PostgreSQL parameter markers, timezone expression, UPDATE ... FROM form, and application columns are replaced with fixed independently authored MariaDB rows; a read-only CTE performs the ordered FOR UPDATE SKIP LOCKED selection, followed by an explicit claim update in the same transaction."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "common-table-expression",
+    "cte-filter",
+    "for-update",
+    "skip-locked",
+    "limit",
+    "transaction-claim",
+    "deterministic-order",
+    "transaction-final-state"
+  ],
+  "fixture_notes": "Ready jobs 101 and 102 are the two earliest eligible rows and are claimed; cancelled job 103 and already-running job 104 are excluded, while later ready job 105 remains queued.",
+  "determinism_notes": "Job IDs, priorities, schedule values, states, claim limit, and ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE job_queue (job_id INT PRIMARY KEY, job_name VARCHAR(32) NOT NULL, job_priority INT NOT NULL, scheduled_at DATETIME NOT NULL, job_state VARCHAR(16) NOT NULL, attempt_count INT NOT NULL)",
+    "INSERT INTO job_queue VALUES (101, 'rebuild-index', 1, '2024-01-01 09:00:00', 'ready', 0), (102, 'refresh-cache', 1, '2024-01-01 09:05:00', 'ready', 1), (103, 'cancelled-export', 1, '2024-01-01 09:06:00', 'cancelled', 0), (104, 'running-report', 2, '2024-01-01 08:00:00', 'running', 2), (105, 'send-digest', 3, '2024-01-01 08:00:00', 'ready', 0)"
+  ],
+  "steps": [
+    {
+      "sql": "START TRANSACTION",
+      "ordered": false
+    },
+    {
+      "sql": "WITH eligible_jobs AS (SELECT job_id, job_name, job_priority, scheduled_at FROM job_queue WHERE job_state = 'ready' ORDER BY job_priority ASC, scheduled_at ASC, job_id ASC LIMIT 2) SELECT job_id, job_name, job_priority, scheduled_at FROM eligible_jobs ORDER BY job_priority ASC, scheduled_at ASC, job_id ASC FOR UPDATE SKIP LOCKED",
+      "ordered": true
+    },
+    {
+      "sql": "UPDATE job_queue SET job_state = 'running', attempt_count = attempt_count + 1 WHERE job_id IN (101, 102)",
+      "ordered": false
+    },
+    {
+      "sql": "COMMIT",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT job_id, job_name, job_priority, scheduled_at, job_state, attempt_count FROM job_queue ORDER BY job_id",
+      "ordered": true
+    }
+  ]
+}
