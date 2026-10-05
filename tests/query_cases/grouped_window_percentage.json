@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "grouped_window_percentage",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "LETHAL-FORENSICS/Microsoft-Analyzer-Suite",
+      "commit": "2937dc8c77bfba2911ead45eef5702c48d95365e",
+      "path": "Queries/Stats/RecordType-RecordId.sql",
+      "url": "https://github.com/LETHAL-FORENSICS/Microsoft-Analyzer-Suite/blob/2937dc8c77bfba2911ead45eef5702c48d95365e/Queries/Stats/RecordType-RecordId.sql",
+      "sha256": "e7bcbf030712f5bce4d9130530092ea0db0a07259f2d190f56d92ca76ade0429",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Queries/Stats/RecordType-RecordId.sql:5-14",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped report computes a percentage by applying a window SUM over grouped COUNT results, using GROUP BY ALL to include every non-aggregate projection column.",
+      "mysql_mariadb_translation": "Reauthored as an event-category distribution report. GROUP BY ALL is translated to an explicit category group, while SUM(COUNT(*)) OVER () supplies the total grouped-event denominator for a deterministic percentage calculation over filtered rows. The source schema, names, and forensic domain are new."
+    },
+    "independently_authored": true
+  },
+  "features": ["grouped-window-denominator", "window-over-grouped-aggregate", "percentage-of-total", "filtered-grouping", "rounding", "deterministic-order"],
+  "fixture_notes": "Enabled events produce category counts of three, two, and one, so the report percentages are 50.00, 33.33, and 16.67. Disabled events are excluded before both grouped counts and the window denominator.",
+  "determinism_notes": "Event IDs, categories, enabled flags, filters, grouped counts, window denominator, rounding precision, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE event_distribution (event_id INT PRIMARY KEY, event_category VARCHAR(24) NOT NULL, enabled TINYINT NOT NULL)",
+    "INSERT INTO event_distribution VALUES (701, 'login', 1), (702, 'login', 1), (703, 'login', 1), (704, 'upload', 1), (705, 'upload', 1), (706, 'download', 1), (707, 'login', 0), (708, 'upload', 0)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT event_category, COUNT(*) AS event_count, ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER (), 2) AS percent_of_events FROM event_distribution WHERE enabled = 1 GROUP BY event_category ORDER BY event_category",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT event_id, event_category, enabled FROM event_distribution ORDER BY event_id",
+      "ordered": true
+    }
+  ]
+}
