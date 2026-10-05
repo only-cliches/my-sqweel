@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "except_grouped_region_counts",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "bigbigwatermalon/C3SQL",
+      "commit": "3fb33a61e458f4f67c2b8b59c1c4b4e20b4a7461",
+      "path": "dev_gold.sql",
+      "url": "https://github.com/bigbigwatermalon/C3SQL/blob/3fb33a61e458f4f67c2b8b59c1c4b4e20b4a7461/dev_gold.sql",
+      "sha256": "0b14e99791ebc59741608e68d1d73a6dbb75556c435faa3f4dce816b90c96661",
+      "source_dialect": "sql-standard"
+    },
+    "inspiration": {
+      "source_location": "dev_gold.sql:174-177",
+      "source_dialect": "sql-standard",
+      "observed_pattern": "A SQL benchmark file demonstrates EXCEPT set difference alongside grouped aggregate branches in related set-operation queries.",
+      "mysql_mariadb_translation": "Combine those standard patterns in an independently authored regional reconciliation: group order counts separately for sales and returns, use EXCEPT to keep regions whose grouped count differs, and order the resulting count rows deterministically."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "except-grouped-aggregate",
+    "set-difference",
+    "grouped-count",
+    "branch-local-grouping",
+    "deterministic-order"
+  ],
+  "fixture_notes": "North and West have sales counts absent from the matching returns-count relation; South has an equal count on both sides and is removed by EXCEPT.",
+  "determinism_notes": "Fixed regional rows, branch-local grouping, and explicit result ordering; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE regional_sales (sale_id INT PRIMARY KEY, region_code VARCHAR(16) NOT NULL)",
+    "CREATE TABLE regional_returns (return_id INT PRIMARY KEY, region_code VARCHAR(16) NOT NULL)",
+    "INSERT INTO regional_sales VALUES (101, 'North'), (102, 'North'), (103, 'North'), (201, 'South'), (202, 'South'), (301, 'West')",
+    "INSERT INTO regional_returns VALUES (401, 'North'), (501, 'South'), (502, 'South')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT region_code, COUNT(*) AS region_count FROM regional_sales GROUP BY region_code EXCEPT SELECT region_code, COUNT(*) AS region_count FROM regional_returns GROUP BY region_code ORDER BY region_code",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
