@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "id": "insert_select_upsert_returning_images",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "zeitwork/zeitwork",
+      "commit": "13fb5b8529c0c8dec8f9c5724fa0ae74a32be7fa",
+      "path": "internal/database/sql/image.sql",
+      "url": "https://github.com/zeitwork/zeitwork/blob/13fb5b8529c0c8dec8f9c5724fa0ae74a32be7fa/internal/database/sql/image.sql",
+      "sha256": "f14037e7385c7867532be45793bfa951e261c8ca5eba45e618b59d09456175c1",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "internal/database/sql/image.sql:21-33",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A get-or-create query inserts an image candidate, then unions the inserted row with an existing matching row when the insert conflict path does nothing.",
+      "mysql_mariadb_translation": "Reauthored as a batch image catalog refresh. An independently authored request relation feeds INSERT ... SELECT, a unique registry/repository/tag key updates an existing image label through ON DUPLICATE KEY UPDATE, and RETURNING exposes both the refreshed existing image and the newly inserted image in deterministic request order. PostgreSQL CTE DML, ON CONFLICT syntax, parameters, and source identifiers are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "insert-select",
+    "insert-select-upsert",
+    "insert-select-returning",
+    "upsert-returning",
+    "conflict-and-insert-paths",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The existing stable base image is refreshed from the request batch, while the new edge latest image is inserted. RETURNING reports the updated and inserted rows in request order, and the final catalog retains exactly both images.",
+  "determinism_notes": "Fixed request IDs, registry names, repository names, tags, labels, and request ordering are used; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE image_catalog (image_id INT PRIMARY KEY, registry_name VARCHAR(64) NOT NULL, repository_name VARCHAR(64) NOT NULL, image_tag VARCHAR(32) NOT NULL, image_label VARCHAR(64) NOT NULL, UNIQUE KEY image_identity (registry_name, repository_name, image_tag))",
+    "CREATE TABLE image_requests (request_id INT PRIMARY KEY, registry_name VARCHAR(64) NOT NULL, repository_name VARCHAR(64) NOT NULL, image_tag VARCHAR(32) NOT NULL, image_label VARCHAR(64) NOT NULL)",
+    "INSERT INTO image_catalog VALUES (7001, 'registry.example', 'base', 'stable', 'base-v1'), (7002, 'registry.example', 'tools', 'old', 'tools-v2')",
+    "INSERT INTO image_requests VALUES (8001, 'registry.example', 'base', 'stable', 'base-v2'), (8002, 'registry.example', 'edge', 'latest', 'edge-v1')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO image_catalog (image_id, registry_name, repository_name, image_tag, image_label) SELECT request_id, registry_name, repository_name, image_tag, image_label FROM image_requests ORDER BY request_id ON DUPLICATE KEY UPDATE image_label = VALUES(image_label) RETURNING image_id, registry_name, repository_name, image_tag, image_label",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT image_id, registry_name, repository_name, image_tag, image_label FROM image_catalog ORDER BY image_id",
+      "ordered": true
+    }
+  ]
+}
