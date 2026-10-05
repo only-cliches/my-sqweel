@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "json_table_parameter_update_join",
+  "provenance": {
+    "kind": "github_sql_pattern",
+    "source": {
+      "kind": "github",
+      "repository": "be-framework/BeMart",
+      "commit": "bd012d9e527ee42803ec85f8431d4a082d2fe4ea",
+      "path": "var/sql/product_status_bulk_update.sql",
+      "url": "https://github.com/be-framework/BeMart/blob/bd012d9e527ee42803ec85f8431d4a082d2fe4ea/var/sql/product_status_bulk_update.sql",
+      "sha256": "7d3b025864d17e182eeff6025628d0eb1911e89cf6df5897179483372d4d51aa",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "var/sql/product_status_bulk_update.sql:1-19",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "An UPDATE JOIN consumes a JSON_TABLE relation supplied as a JSON document parameter, changes only rows whose current state differs, and reports the changed-row count with ROW_COUNT().",
+      "mysql_mariadb_translation": "Reauthored as an inventory state import. A literal JSON batch supplies item identifiers, next states, and notes through JSON_TABLE; the joined update ignores unknown items, skips an already matching state, and exposes the affected-row count before an ordered final-state check."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "update-join",
+    "json-table-parameter",
+    "json-table-column-projection",
+    "changed-row-guard",
+    "row-count-after-update",
+    "unknown-key-ignore",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Items 301 and 303 change state and note, item 302 matches the incoming state and is skipped, item 304 has no incoming row, and input item 999 has no target. ROW_COUNT() must report two changed rows.",
+  "determinism_notes": "All item IDs, JSON input values, update predicates, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE inventory_items (item_id INT PRIMARY KEY, item_code VARCHAR(16) NOT NULL, item_state VARCHAR(16) NOT NULL, status_note VARCHAR(32) NOT NULL)",
+    "INSERT INTO inventory_items VALUES (301, 'A-100', 'queued', 'awaiting stock'), (302, 'B-200', 'active', 'serving orders'), (303, 'C-300', 'retired', 'archived'), (304, 'D-400', 'queued', 'awaiting review')"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE inventory_items AS i INNER JOIN JSON_TABLE('[{\"id\":301,\"state\":\"active\",\"note\":\"restocked\"},{\"id\":302,\"state\":\"active\",\"note\":\"still serving\"},{\"id\":303,\"state\":\"available\",\"note\":\"relisted\"},{\"id\":999,\"state\":\"active\",\"note\":\"not present\"}]', '$[*]' COLUMNS (item_id INT PATH '$.id', new_state VARCHAR(16) PATH '$.state', status_note VARCHAR(32) PATH '$.note')) AS incoming ON incoming.item_id = i.item_id SET i.item_state = incoming.new_state, i.status_note = incoming.status_note WHERE i.item_state <> incoming.new_state",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT ROW_COUNT() AS changed_count",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT item_id, item_code, item_state, status_note FROM inventory_items ORDER BY item_id",
+      "ordered": true
+    }
+  ]
+}
