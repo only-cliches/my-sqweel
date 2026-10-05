@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "bidirectional_voltage_gap_fill",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "microsoft/bobsql",
+      "commit": "90fb8be01973db901939f5635bd34d789ecd4ada",
+      "path": "sql2022book/ch08_tsql/timeseries/gapfilling.sql",
+      "url": "https://github.com/microsoft/bobsql/blob/90fb8be01973db901939f5635bd34d789ecd4ada/sql2022book/ch08_tsql/timeseries/gapfilling.sql",
+      "sha256": "618029ddb2d33d9a3b137ddbc40b933886119f0af8c6c4d596cbd2289d3985d3",
+      "source_dialect": "sql-server"
+    },
+    "inspiration": {
+      "source_location": "sql2022book/ch08_tsql/timeseries/gapfilling.sql:4-13",
+      "source_dialect": "sql-server",
+      "observed_pattern": "FIRST_VALUE and LAST_VALUE with IGNORE NULLS fill telemetry gaps from the nearest non-null readings in both time directions within an ordered series.",
+      "mysql_mariadb_translation": "Reauthored as a deterministic sensor-voltage report. Correlated scalar lookups select the nearest non-null reading at or before and at or after each sample using station, timestamp, and sample-ID ordering; COALESCE preserves an existing reading and fills only NULL gaps without copying the source schema or SQL Server syntax."
+    },
+    "independently_authored": true
+  },
+  "features": ["window-ignore-nulls", "bidirectional-gap-fill", "correlated-scalar-lookup", "null-ignoring-window", "partitioned-time-series", "deterministic-order"],
+  "fixture_notes": "Station 61 has two consecutive missing voltage readings between known values; station 62 starts with a missing reading and fills from its later observation. Existing readings remain unchanged, while each gap receives the nearest directional value.",
+  "determinism_notes": "Station IDs, sample IDs, integer timestamps, fixed decimal readings, NULL gaps, lookup bounds, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE sensor_voltage_samples (sample_id INT PRIMARY KEY, station_id INT NOT NULL, sample_time INT NOT NULL, voltage DECIMAL(6,2) NULL)",
+    "INSERT INTO sensor_voltage_samples VALUES (6101, 61, 1, 3.10), (6102, 61, 2, NULL), (6103, 61, 3, NULL), (6104, 61, 4, 3.40), (6201, 62, 1, NULL), (6202, 62, 2, 4.80)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT s.sample_id, s.station_id, s.sample_time, s.voltage, (SELECT prior.voltage FROM sensor_voltage_samples AS prior WHERE prior.station_id = s.station_id AND prior.sample_time <= s.sample_time AND prior.voltage IS NOT NULL ORDER BY prior.sample_time DESC, prior.sample_id DESC LIMIT 1) AS previous_voltage, (SELECT future.voltage FROM sensor_voltage_samples AS future WHERE future.station_id = s.station_id AND future.sample_time >= s.sample_time AND future.voltage IS NOT NULL ORDER BY future.sample_time ASC, future.sample_id ASC LIMIT 1) AS next_voltage, COALESCE(s.voltage, (SELECT future.voltage FROM sensor_voltage_samples AS future WHERE future.station_id = s.station_id AND future.sample_time >= s.sample_time AND future.voltage IS NOT NULL ORDER BY future.sample_time ASC, future.sample_id ASC LIMIT 1), (SELECT prior.voltage FROM sensor_voltage_samples AS prior WHERE prior.station_id = s.station_id AND prior.sample_time <= s.sample_time AND prior.voltage IS NOT NULL ORDER BY prior.sample_time DESC, prior.sample_id DESC LIMIT 1)) AS filled_voltage FROM sensor_voltage_samples AS s ORDER BY s.station_id, s.sample_time, s.sample_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT sample_id, station_id, sample_time, voltage FROM sensor_voltage_samples ORDER BY station_id, sample_time, sample_id",
+      "ordered": true
+    }
+  ]
+}
