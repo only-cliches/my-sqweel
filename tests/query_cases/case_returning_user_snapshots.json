@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "id": "case_returning_user_snapshots",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "saalikmubeen/go-grpc-implementation",
+      "commit": "8f67b3a59c0eaa02e70d7236ebc3a5829b843f20",
+      "path": "db/query/user.sql",
+      "url": "https://github.com/saalikmubeen/go-grpc-implementation/blob/8f67b3a59c0eaa02e70d7236ebc3a5829b843f20/db/query/user.sql",
+      "sha256": "37102670c531513a2e60d215d03bfa2a55b0c07430f844d2f17ec488aa517060",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "db/query/user.sql:37-44,48-57",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A PostgreSQL application updates user fields conditionally with CASE expressions and returns the changed user rows with RETURNING.",
+      "mysql_mariadb_translation": "Combine those behaviors in an independently authored snapshot archive: INSERT ... SELECT uses CASE to map active users to live or paused labels, returns generated snapshot IDs, and preserves deterministic source order."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "case-returning",
+    "insert-select-returning",
+    "generated-key-returning",
+    "conditional-projection",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Active Alice remains live while inactive Bob receives a paused label and state through CASE branches; both snapshots are returned with generated IDs.",
+  "determinism_notes": "Fixed user IDs and statuses, explicit source ordering, and auto-increment snapshot IDs created in that order; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE users (user_id INT PRIMARY KEY, username VARCHAR(32) NOT NULL, active TINYINT NOT NULL)",
+    "CREATE TABLE user_snapshots (snapshot_id INT AUTO_INCREMENT PRIMARY KEY, user_id INT NOT NULL, display_label VARCHAR(64) NOT NULL, lifecycle_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO users VALUES (10, 'Alice', 1), (20, 'Bob', 0)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO user_snapshots (user_id, display_label, lifecycle_state) SELECT user_id, CASE WHEN active = 1 THEN username ELSE CONCAT(username, ' (paused)') END, CASE WHEN active = 1 THEN 'live' ELSE 'paused' END FROM users ORDER BY user_id RETURNING snapshot_id, user_id, display_label, lifecycle_state",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT snapshot_id, user_id, display_label, lifecycle_state FROM user_snapshots ORDER BY snapshot_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT user_id, username, active FROM users ORDER BY user_id",
+      "ordered": true
+    }
+  ]
+}
