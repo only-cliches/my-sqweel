@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "id": "exists_returning_account_archive",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "picosh/pico",
+      "commit": "487045831ace66d9c0db502d69e1848a4f24a578",
+      "path": "scripts/reap.sql",
+      "url": "https://github.com/picosh/pico/blob/487045831ace66d9c0db502d69e1848a4f24a578/scripts/reap.sql",
+      "sha256": "19e1164edbfba6e322547406ca88b95f65354180fbddbcc0acb0b12e3c2ec8cc",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "scripts/reap.sql:1-11",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A PostgreSQL cleanup script uses correlated NOT EXISTS predicates to select orphaned rows and a separate data-changing CTE with RETURNING to count deleted rows.",
+      "mysql_mariadb_translation": "Combine those portable behaviors in an independently authored archive insert: correlated EXISTS admits only accounts with enabled entitlements, inserts them in deterministic ID order, and returns generated archive IDs."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "exists-returning",
+    "correlated-exists",
+    "insert-select-returning",
+    "generated-key-returning",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Accounts with at least one enabled entitlement are archived; an account with only disabled entitlements and an account with no entitlements are excluded by EXISTS.",
+  "determinism_notes": "Fixed account and entitlement values, explicit source ordering, and auto-increment archive IDs created in that order; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE accounts (account_id INT PRIMARY KEY, account_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE entitlements (account_id INT NOT NULL, entitlement_name VARCHAR(32) NOT NULL, enabled TINYINT NOT NULL)",
+    "CREATE TABLE account_archive (archive_id INT AUTO_INCREMENT PRIMARY KEY, account_id INT NOT NULL, account_name VARCHAR(32) NOT NULL)",
+    "INSERT INTO accounts VALUES (10, 'Acme'), (20, 'Beta'), (30, 'Gamma')",
+    "INSERT INTO entitlements VALUES (10, 'reports', 1), (10, 'exports', 0), (20, 'reports', 0)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO account_archive (account_id, account_name) SELECT a.account_id, a.account_name FROM accounts AS a WHERE EXISTS (SELECT 1 FROM entitlements AS e WHERE e.account_id = a.account_id AND e.enabled = 1) ORDER BY a.account_id RETURNING archive_id, account_id, account_name",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT archive_id, account_id, account_name FROM account_archive ORDER BY archive_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT account_id, entitlement_name, enabled FROM entitlements ORDER BY account_id, entitlement_name",
+      "ordered": true
+    }
+  ]
+}
