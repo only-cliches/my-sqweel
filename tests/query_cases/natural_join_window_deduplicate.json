@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "natural_join_window_deduplicate",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "dbt-labs/dbt-utils",
+      "commit": "2a8f07bcbd02fb7a8c011298a1bdaf3e92759c14",
+      "path": "macros/sql/deduplicate.sql",
+      "url": "https://github.com/dbt-labs/dbt-utils/blob/2a8f07bcbd02fb7a8c011298a1bdaf3e92759c14/macros/sql/deduplicate.sql",
+      "sha256": "09ff9ab4aa97349d8ada33a88aeb8ef373b01ebb29d6097cd1880296f0c72685",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "macros/sql/deduplicate.sql:7-27",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "The MySQL-compatible dbt_utils default deduplication macro ranks rows with ROW_NUMBER partitioned by a key, then NATURAL JOINs the original relation to the ranked relation and filters to rank one.",
+      "mysql_mariadb_translation": "Translate the macro's relation-level pattern into an independently authored latest-reading report: rank device readings by timestamp and reading ID, NATURAL JOIN the source table to the ranked CTE, and retain only each device's newest reading."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "natural-join-window",
+    "row-number-deduplication",
+    "cte-ranked-source",
+    "deterministic-tie-break",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Each device has multiple readings. The latest timestamp wins, and the higher reading ID breaks a same-timestamp tie; older readings must not appear.",
+  "determinism_notes": "Fixed device readings, explicit timestamp and ID ordering, and no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE device_readings (reading_id INT PRIMARY KEY, device_code VARCHAR(16) NOT NULL, recorded_at DATETIME NOT NULL, reading_value INT NOT NULL)",
+    "INSERT INTO device_readings VALUES (101, 'alpha', '2025-01-01 08:00:00', 18), (102, 'alpha', '2025-01-02 08:00:00', 21), (103, 'alpha', '2025-01-02 08:00:00', 22), (201, 'beta', '2025-01-03 09:00:00', 31), (202, 'beta', '2025-01-01 09:00:00', 28)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH ranked AS (SELECT _inner.*, ROW_NUMBER() OVER (PARTITION BY device_code ORDER BY recorded_at DESC, reading_id DESC) AS rn FROM device_readings AS _inner) SELECT data.device_code, data.reading_id, data.reading_value, ranked.rn FROM device_readings AS data NATURAL JOIN ranked WHERE ranked.rn = 1 ORDER BY data.device_code",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
