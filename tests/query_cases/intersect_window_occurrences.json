@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "intersect_window_occurrences",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "ckchesire/sqlverse",
+      "commit": "a75ceb9156e92c50a36d08ae020fb677e9ebc525",
+      "path": "Set Operators/Intersect Operator.sql",
+      "url": "https://github.com/ckchesire/sqlverse/blob/a75ceb9156e92c50a36d08ae020fb677e9ebc525/Set%20Operators/Intersect%20Operator.sql",
+      "sha256": "dde24b0d0fd7dac7043e4da56dc75aa59ad86f479663ec411765848a79cff6dd",
+      "source_dialect": "tsql"
+    },
+    "inspiration": {
+      "source_location": "Set Operators/Intersect Operator.sql:36-74",
+      "source_dialect": "tsql",
+      "observed_pattern": "A set-operator lesson assigns ROW_NUMBER within duplicate groups on both input relations, then INTERSECTs the occurrence number and grouping columns to preserve the lower duplicate count.",
+      "mysql_mariadb_translation": "Translate the standard set-operation pattern to MariaDB by ranking fixed warehouse and store shipment occurrences with deterministic IDs, intersecting occurrence numbers with region and item keys, and ordering the shared multiset explicitly."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "intersect-window",
+    "window-occurrence-number",
+    "intersect-all-emulation",
+    "duplicate-multiset-matching",
+    "deterministic-order"
+  ],
+  "fixture_notes": "North/bolt occurs twice in each source, North/nut once in each, and South/clamp once versus twice; the intersection preserves two, one, and one occurrences respectively.",
+  "determinism_notes": "Fixed shipment IDs provide deterministic window ordering, and the final set-operation result is explicitly ordered; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE warehouse_shipments (shipment_id INT PRIMARY KEY, region_code VARCHAR(16) NOT NULL, item_code VARCHAR(16) NOT NULL)",
+    "CREATE TABLE store_shipments (shipment_id INT PRIMARY KEY, region_code VARCHAR(16) NOT NULL, item_code VARCHAR(16) NOT NULL)",
+    "INSERT INTO warehouse_shipments VALUES (101, 'North', 'bolt'), (102, 'North', 'bolt'), (103, 'North', 'nut'), (201, 'South', 'clamp')",
+    "INSERT INTO store_shipments VALUES (301, 'North', 'bolt'), (302, 'North', 'bolt'), (303, 'North', 'bolt'), (304, 'North', 'nut'), (401, 'South', 'clamp'), (402, 'South', 'clamp')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH warehouse_occurrences AS (SELECT ROW_NUMBER() OVER (PARTITION BY region_code, item_code ORDER BY shipment_id) AS occurrence_no, region_code, item_code FROM warehouse_shipments), store_occurrences AS (SELECT ROW_NUMBER() OVER (PARTITION BY region_code, item_code ORDER BY shipment_id) AS occurrence_no, region_code, item_code FROM store_shipments), shared_occurrences AS (SELECT occurrence_no, region_code, item_code FROM warehouse_occurrences INTERSECT SELECT occurrence_no, region_code, item_code FROM store_occurrences) SELECT occurrence_no, region_code, item_code FROM shared_occurrences ORDER BY region_code, item_code, occurrence_no",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
