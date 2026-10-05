@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "json_table_left_join_fulfillments",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "developkariyer/iwapim",
+      "commit": "23ba54a9f54a265f53c676706910b17ffdf70847",
+      "path": "src/SQL/OrderTable/Transfer/iwa_marketplace_orders_transfer_shopify_old.sql",
+      "url": "https://github.com/developkariyer/iwapim/blob/23ba54a9f54a265f53c676706910b17ffdf70847/src/SQL/OrderTable/Transfer/iwa_marketplace_orders_transfer_shopify_old.sql",
+      "sha256": "482dfe912fed5098861c821bcca3b143dca45812fe2596b668311ba4274b5b72",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "src/SQL/OrderTable/Transfer/iwa_marketplace_orders_transfer_shopify_old.sql:31-40",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "An order payload is expanded with CROSS JOIN JSON_TABLE for line items and LEFT JOIN JSON_TABLE for an optional fulfillment array, preserving a line item as a NULL-extended row when no fulfillment element exists.",
+      "mysql_mariadb_translation": "Reauthored as a shipment-document report with new table and payload names. The line-item array is expanded with CROSS JOIN JSON_TABLE and the optional fulfillment array is expanded with LEFT JOIN JSON_TABLE ... ON TRUE; one document has no fulfillments to exercise NULL preservation, while another has one fulfillment row to verify repeated outer expansion across line items."
+    },
+    "independently_authored": true
+  },
+  "features": ["json-table", "json-table-array-expansion", "json-table-left-join", "outer-json-expansion", "null-preserving-join", "deterministic-order"],
+  "fixture_notes": "Document 9101 has two line items and one fulfillment, so the fulfillment values repeat for each expanded line item. Document 9102 has one line item and an empty fulfillment array, producing one NULL-extended fulfillment row.",
+  "determinism_notes": "Document IDs, JSON arrays, extracted paths, column types, outer-join condition, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE shipment_documents (document_id INT PRIMARY KEY, payload JSON NOT NULL)",
+    "INSERT INTO shipment_documents VALUES (9101, '{\"line_items\":[{\"line_id\":1,\"sku\":\"A-10\",\"quantity\":2},{\"line_id\":2,\"sku\":\"B-20\",\"quantity\":1}],\"fulfillments\":[{\"status\":\"shipped\",\"tracking_company\":\"ParcelPost\"}]}'), (9102, '{\"line_items\":[{\"line_id\":3,\"sku\":\"C-30\",\"quantity\":4}],\"fulfillments\":[]}')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT d.document_id, li.line_id, li.sku, li.quantity, f.status, f.tracking_company FROM shipment_documents AS d CROSS JOIN JSON_TABLE(d.payload, '$.line_items[*]' COLUMNS (line_id INT PATH '$.line_id', sku VARCHAR(16) PATH '$.sku', quantity INT PATH '$.quantity')) AS li LEFT JOIN JSON_TABLE(d.payload, '$.fulfillments[*]' COLUMNS (status VARCHAR(16) PATH '$.status', tracking_company VARCHAR(32) PATH '$.tracking_company')) AS f ON TRUE ORDER BY d.document_id, li.line_id, f.status",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT document_id, payload FROM shipment_documents ORDER BY document_id",
+      "ordered": true
+    }
+  ]
+}
