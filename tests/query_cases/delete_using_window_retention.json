@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "delete_using_window_retention",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "karadaisy/woodwind",
+      "commit": "82fc01dbf489185feda2e7c2037c76d1f44f4b85",
+      "path": "vacuum.sql",
+      "url": "https://github.com/karadaisy/woodwind/blob/82fc01dbf489185feda2e7c2037c76d1f44f4b85/vacuum.sql",
+      "sha256": "db918336b1bc5022d88eef3960dd98eae0caa2b53cb6bfa00e6dd5b2a1b9813b",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "vacuum.sql:1-9",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "DELETE ... USING targets rows through a derived table that assigns ROW_NUMBER within each feed, then removes rows beyond a retention rank or older than a cutoff date.",
+      "mysql_mariadb_translation": "Reauthored as an event-retention cleanup with new stream identifiers, event labels, dates, and a fixed cutoff. The derived window result is joined back to the delete target by primary key; rank and date predicates remove excess history while preserving the newest two events per stream that are not stale."
+    },
+    "independently_authored": true
+  },
+  "features": ["delete-using", "derived-window-table", "row-number", "retention-cutoff", "deterministic-tiebreak", "final-state-check"],
+  "fixture_notes": "Stream 10 keeps its two newest events and deletes its older pair; stream 20 keeps its recent event and deletes its older cutoff-violating event. Event labels make the retained and deleted rows observable.",
+  "determinism_notes": "The primary key is a descending ROW_NUMBER tiebreaker after the fixed recorded_on ordering. All dates, stream IDs, event IDs, and the cutoff literal are fixed; there are no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE retention_events (event_id INT PRIMARY KEY, stream_id INT NOT NULL, recorded_on DATE NOT NULL, event_label VARCHAR(24) NOT NULL)",
+    "INSERT INTO retention_events VALUES (1001, 10, '2024-01-10', 'stream10-newest'), (1002, 10, '2024-01-09', 'stream10-second'), (1003, 10, '2024-01-08', 'stream10-third'), (1004, 10, '2023-12-20', 'stream10-stale'), (2001, 20, '2024-01-05', 'stream20-newest'), (2002, 20, '2023-12-15', 'stream20-stale')"
+  ],
+  "steps": [
+    {
+      "sql": "DELETE FROM e USING retention_events AS e, (SELECT event_id, ROW_NUMBER() OVER (PARTITION BY stream_id ORDER BY recorded_on DESC, event_id DESC) AS event_rank FROM retention_events) AS ranked WHERE e.event_id = ranked.event_id AND (ranked.event_rank > 2 OR e.recorded_on < '2024-01-01')",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT event_id, stream_id, recorded_on, event_label FROM retention_events ORDER BY event_id",
+      "ordered": true
+    }
+  ]
+}
