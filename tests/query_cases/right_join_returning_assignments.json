@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "id": "right_join_returning_assignments",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "PacktPublishing/Learn-PostgreSQL",
+      "commit": "221cc200e5d0e44d3292ad1fabdba6c2eb7ae6e0",
+      "path": "Chapter05/chapter5_script.sql",
+      "url": "https://github.com/PacktPublishing/Learn-PostgreSQL/blob/221cc200e5d0e44d3292ad1fabdba6c2eb7ae6e0/Chapter05/chapter5_script.sql",
+      "sha256": "b5a9b2ef005a22d51822a06d220e91331d23b7e36b96182ff34e5feaa0438d52",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "Chapter05/chapter5_script.sql:80,153-182",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A PostgreSQL tutorial demonstrates RIGHT JOIN null preservation and DML RETURNING result rows as separate query patterns.",
+      "mysql_mariadb_translation": "Combine those portable behaviors in an independently authored assignment archive: preserve an empty active department through RIGHT JOIN, insert the joined rows in deterministic department order, and return generated assignment IDs with the joined department and worker values."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "right-join-returning",
+    "right-join-null-preservation",
+    "insert-select-returning",
+    "generated-key-returning",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The active Support department has no worker and must still produce a returned NULL worker row; inactive Research is filtered out.",
+  "determinism_notes": "Fixed department and worker IDs, explicit source ordering, and auto-increment IDs created in that order; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE departments (department_id INT PRIMARY KEY, department_name VARCHAR(32) NOT NULL, active TINYINT NOT NULL)",
+    "CREATE TABLE workers (worker_id INT PRIMARY KEY, department_id INT NOT NULL, worker_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE assignment_archive (assignment_id INT AUTO_INCREMENT PRIMARY KEY, department_id INT NOT NULL, department_name VARCHAR(32) NOT NULL, worker_name VARCHAR(32))",
+    "INSERT INTO departments VALUES (10, 'Platform', 1), (20, 'Support', 1), (30, 'Sales', 1), (40, 'Research', 0)",
+    "INSERT INTO workers VALUES (101, 10, 'Ada'), (102, 30, 'Linus')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO assignment_archive (department_id, department_name, worker_name) SELECT d.department_id, d.department_name, w.worker_name FROM workers AS w RIGHT JOIN departments AS d ON d.department_id = w.department_id WHERE d.active = 1 ORDER BY d.department_id, w.worker_id RETURNING assignment_id, department_id, department_name, worker_name",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT assignment_id, department_id, department_name, worker_name FROM assignment_archive ORDER BY assignment_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT department_id, active FROM departments ORDER BY department_id",
+      "ordered": true
+    }
+  ]
+}
