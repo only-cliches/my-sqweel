@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "id": "json_table_grouped_threshold_join",
+  "provenance": {
+    "kind": "github_sql_pattern",
+    "source": {
+      "kind": "github",
+      "repository": "openpodcast/api",
+      "commit": "37b2f20191919aeb7acc716d64d9e17c35d7290f",
+      "path": "db_schema/views.sql",
+      "url": "https://github.com/openpodcast/api/blob/37b2f20191919aeb7acc716d64d9e17c35d7290f/db_schema/views.sql",
+      "sha256": "d2ab77b136ced326295e82edf7277e33dbbdab57791fce10874bbbc26d678e6b",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "db_schema/views.sql:118-170",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "Two CTE branches expand JSON arrays with CROSS JOIN JSON_TABLE, group by the ordinality bucket, discard groups below a COUNT threshold with HAVING, and join the surviving summaries by account and bucket.",
+      "mysql_mariadb_translation": "Reauthored as a channel reach comparison. Latest per-channel capture dates are collected from two source tables, stream and download sample arrays are expanded and averaged only when each bucket has repeated observations, and a left join preserves stream buckets without enough download observations."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "union-latest-date-cte",
+    "multiple-json-table-aggregates",
+    "json-table-ordinality-grouping",
+    "aggregate-having-threshold",
+    "left-join-grouped-branches",
+    "null-preserving-summary",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Channel 10 has two latest stream and download observations in both buckets. Channel 20 has two stream observations but only one download observation, so its download summary is NULL. Older channel 10 data and download-only channel 30 must not enter the latest joined report.",
+  "determinism_notes": "Channel IDs, capture dates, JSON arrays, thresholds, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE stream_snapshots (channel_id INT NOT NULL, capture_day DATE NOT NULL, peak_listeners INT NOT NULL, samples JSON NOT NULL)",
+    "CREATE TABLE download_snapshots (channel_id INT NOT NULL, capture_day DATE NOT NULL, peak_listeners INT NOT NULL, samples JSON NOT NULL)",
+    "INSERT INTO stream_snapshots VALUES (10, '2026-08-01', 100, '[50,50]'), (10, '2026-08-02', 100, '[80,60]'), (10, '2026-08-02', 100, '[100,80]'), (20, '2026-08-03', 200, '[100,50]'), (20, '2026-08-03', 200, '[120,70]')",
+    "INSERT INTO download_snapshots VALUES (10, '2026-08-02', 200, '[160,100]'), (10, '2026-08-02', 200, '[180,120]'), (20, '2026-08-03', 200, '[150,80]'), (30, '2026-08-04', 100, '[70,40]'), (30, '2026-08-04', 100, '[90,60]')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH latest_dates AS (SELECT channel_id, MAX(capture_day) AS capture_day FROM stream_snapshots GROUP BY channel_id UNION SELECT channel_id, MAX(capture_day) AS capture_day FROM download_snapshots GROUP BY channel_id), stream_summary AS (SELECT s.channel_id, samples.sample_no AS bucket_no, COUNT(*) AS stream_observations, AVG(samples.listeners / s.peak_listeners) AS stream_ratio FROM stream_snapshots AS s INNER JOIN latest_dates AS latest ON latest.channel_id = s.channel_id AND latest.capture_day = s.capture_day CROSS JOIN JSON_TABLE(s.samples, '$[*]' COLUMNS (sample_no FOR ORDINALITY, listeners INT PATH '$')) AS samples GROUP BY s.channel_id, samples.sample_no HAVING COUNT(*) > 1), download_summary AS (SELECT d.channel_id, samples.sample_no AS bucket_no, COUNT(*) AS download_observations, AVG(samples.listeners / d.peak_listeners) AS download_ratio FROM download_snapshots AS d INNER JOIN latest_dates AS latest ON latest.channel_id = d.channel_id AND latest.capture_day = d.capture_day CROSS JOIN JSON_TABLE(d.samples, '$[*]' COLUMNS (sample_no FOR ORDINALITY, listeners INT PATH '$')) AS samples GROUP BY d.channel_id, samples.sample_no HAVING COUNT(*) > 1) SELECT stream_summary.channel_id, stream_summary.bucket_no, stream_summary.stream_observations, stream_summary.stream_ratio, download_summary.download_observations, download_summary.download_ratio FROM stream_summary LEFT JOIN download_summary ON download_summary.channel_id = stream_summary.channel_id AND download_summary.bucket_no = stream_summary.bucket_no ORDER BY stream_summary.channel_id, stream_summary.bucket_no",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}

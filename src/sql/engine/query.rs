@@ -270,9 +270,9 @@ impl RawEngine {
                             let mut seen = HashSet::new();
                             left_result
                                 .rows
-                                .retain(|row| seen.insert(encode_json_row(row)));
+                                .retain(|row| seen.insert(encode_set_row(row, &result_columns)));
                             for row in right_rows {
-                                let row_key = encode_json_row(&row);
+                                let row_key = encode_set_row(&row, &result_columns);
                                 if seen.insert(row_key) {
                                     left_result.rows.push(row);
                                 }
@@ -284,11 +284,11 @@ impl RawEngine {
                     }
                     sqlparser::ast::SetOperator::Intersect => {
                         let all = *set_quantifier == sqlparser::ast::SetQuantifier::All;
-                        set_intersection(left_result.rows, right_rows, all)
+                        set_intersection(left_result.rows, right_rows, all, &result_columns)
                     }
                     sqlparser::ast::SetOperator::Except => {
                         let all = *set_quantifier == sqlparser::ast::SetQuantifier::All;
-                        set_difference(left_result.rows, right_rows, all)
+                        set_difference(left_result.rows, right_rows, all, &result_columns)
                     }
                 }
             }
@@ -433,11 +433,11 @@ impl RawEngine {
                     let mut seen = accumulated
                         .rows
                         .iter()
-                        .map(encode_json_row)
+                        .map(|row| encode_set_row(row, &accumulated.columns))
                         .collect::<HashSet<_>>();
                     for row in next.rows {
                         let row = remap_set_row(&row, &next.columns, &accumulated.columns)?;
-                        if seen.insert(encode_json_row(&row)) {
+                        if seen.insert(encode_set_row(&row, &accumulated.columns)) {
                             fresh.push(row);
                         }
                     }
@@ -8761,6 +8761,14 @@ fn metadata_table_name(selection: Option<&Expr>) -> Option<Value> {
     }
 }
 
+fn encode_set_row(row: &Map<String, Value>, columns: &[String]) -> String {
+    row_keys_for_columns(columns)
+        .into_iter()
+        .map(|key| encode_json_value(row.get(&key).unwrap_or(&Value::Null)))
+        .collect::<Vec<_>>()
+        .join("\u{1d}")
+}
+
 fn remap_set_row(
     row: &Map<String, Value>,
     source_columns: &[String],
@@ -9644,15 +9652,18 @@ fn set_intersection(
     left: Vec<Map<String, Value>>,
     right: Vec<Map<String, Value>>,
     all: bool,
+    columns: &[String],
 ) -> Vec<Map<String, Value>> {
     let mut right_counts = HashMap::<String, usize>::new();
     for row in right {
-        *right_counts.entry(encode_json_row(&row)).or_default() += 1;
+        *right_counts
+            .entry(encode_set_row(&row, columns))
+            .or_default() += 1;
     }
     let mut emitted = HashSet::new();
     let mut output = Vec::new();
     for row in left {
-        let key = encode_json_row(&row);
+        let key = encode_set_row(&row, columns);
         if right_counts.get(&key).copied().unwrap_or(0) == 0 {
             continue;
         }
@@ -9670,15 +9681,18 @@ fn set_difference(
     left: Vec<Map<String, Value>>,
     right: Vec<Map<String, Value>>,
     all: bool,
+    columns: &[String],
 ) -> Vec<Map<String, Value>> {
     let mut right_counts = HashMap::<String, usize>::new();
     for row in right {
-        *right_counts.entry(encode_json_row(&row)).or_default() += 1;
+        *right_counts
+            .entry(encode_set_row(&row, columns))
+            .or_default() += 1;
     }
     let mut emitted = HashSet::new();
     let mut output = Vec::new();
     for row in left {
-        let key = encode_json_row(&row);
+        let key = encode_set_row(&row, columns);
         if all {
             if let Some(count) = right_counts.get_mut(&key)
                 && *count > 0

@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "json_table_grouped_threshold_join_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "json_table_grouped_threshold_join",
+    "source": {
+      "kind": "github",
+      "repository": "openpodcast/api",
+      "commit": "37b2f20191919aeb7acc716d64d9e17c35d7290f",
+      "path": "db_schema/views.sql",
+      "url": "https://github.com/openpodcast/api/blob/37b2f20191919aeb7acc716d64d9e17c35d7290f/db_schema/views.sql",
+      "sha256": "d2ab77b136ced326295e82edf7277e33dbbdab57791fce10874bbbc26d678e6b",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from json_table_grouped_threshold_join",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A UNION of identical latest-key rows feeds two JSON_TABLE grouped branches; duplicate set rows must not multiply aggregate counts.",
+      "mysql_mariadb_translation": "Reduced to one channel, two stream rows, and one download row with one bucket so UNION distinct semantics alone determine whether the download branch passes HAVING COUNT(*) > 1."
+    },
+    "independently_authored": true,
+    "minimized_from": "json_table_grouped_threshold_join"
+  },
+  "features": [
+    "union-distinct-regression",
+    "json-table-grouped-having",
+    "minimized-regression"
+  ],
+  "fixture_notes": "The stream branch has two observations and passes the threshold. The download branch has one observation and must be filtered out; a duplicated UNION key incorrectly makes it appear twice.",
+  "determinism_notes": "The single channel, capture date, JSON arrays, threshold, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE mini_stream_snapshots (channel_id INT NOT NULL, capture_day DATE NOT NULL, samples JSON NOT NULL)",
+    "CREATE TABLE mini_download_snapshots (channel_id INT NOT NULL, capture_day DATE NOT NULL, samples JSON NOT NULL)",
+    "INSERT INTO mini_stream_snapshots VALUES (7, '2026-09-01', '[10]'), (7, '2026-09-01', '[20]')",
+    "INSERT INTO mini_download_snapshots VALUES (7, '2026-09-01', '[30]')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH latest_dates AS (SELECT channel_id, MAX(capture_day) AS capture_day FROM mini_stream_snapshots GROUP BY channel_id UNION SELECT channel_id, MAX(capture_day) AS capture_day FROM mini_download_snapshots GROUP BY channel_id), stream_summary AS (SELECT s.channel_id, samples.bucket_no, COUNT(*) AS observation_count FROM mini_stream_snapshots AS s INNER JOIN latest_dates AS latest ON latest.channel_id = s.channel_id AND latest.capture_day = s.capture_day CROSS JOIN JSON_TABLE(s.samples, '$[*]' COLUMNS (bucket_no FOR ORDINALITY, value INT PATH '$')) AS samples GROUP BY s.channel_id, samples.bucket_no HAVING COUNT(*) > 1), download_summary AS (SELECT d.channel_id, samples.bucket_no, COUNT(*) AS observation_count FROM mini_download_snapshots AS d INNER JOIN latest_dates AS latest ON latest.channel_id = d.channel_id AND latest.capture_day = d.capture_day CROSS JOIN JSON_TABLE(d.samples, '$[*]' COLUMNS (bucket_no FOR ORDINALITY, value INT PATH '$')) AS samples GROUP BY d.channel_id, samples.bucket_no HAVING COUNT(*) > 1) SELECT stream_summary.channel_id, stream_summary.bucket_no, stream_summary.observation_count AS stream_observations, download_summary.observation_count AS download_observations FROM stream_summary LEFT JOIN download_summary ON download_summary.channel_id = stream_summary.channel_id AND download_summary.bucket_no = stream_summary.bucket_no ORDER BY stream_summary.channel_id, stream_summary.bucket_no",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
