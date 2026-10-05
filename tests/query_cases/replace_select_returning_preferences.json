@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "replace_select_returning_preferences",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "sqlpage/SQLPage",
+      "commit": "6199e6f5e32a6fc152cec9be167427e64f24e65a",
+      "path": "examples/rich-text-editor/edit.sql",
+      "url": "https://github.com/sqlpage/SQLPage/blob/6199e6f5e32a6fc152cec9be167427e64f24e65a/examples/rich-text-editor/edit.sql",
+      "sha256": "31defff6ab755c1fed70034bb66f1b6ee2dd658cb34d46d96aed08551c2499e5",
+      "source_dialect": "sqlite"
+    },
+    "inspiration": {
+      "source_location": "examples/rich-text-editor/edit.sql:1-5",
+      "source_dialect": "sqlite",
+      "observed_pattern": "A filtered INSERT OR REPLACE ... SELECT writes a row only when input values are present and returns a redirect-shaped projection from the mutation.",
+      "mysql_mariadb_translation": "Reauthored as a MariaDB preference import. SQLite INSERT OR REPLACE becomes REPLACE INTO, SQLite string concatenation is avoided, the SELECT reads independently authored approved import rows, a unique-key conflict exercises replacement semantics, a new key exercises insertion, and RETURNING exposes the affected preference rows."
+    },
+    "independently_authored": true
+  },
+  "features": ["replace-select", "replace-returning", "filtered-source-select", "unique-key-replacement", "dml-result-rows", "dml-final-state", "deterministic-final-state"],
+  "fixture_notes": "Approved import 101 replaces the existing account-700 preference through its unique account key, approved import 102 inserts account 702, and unapproved import 103 leaves account 701 unchanged. RETURNING is unordered; the final read is ordered by preference ID.",
+  "determinism_notes": "Preference IDs, unique account keys, import approval flags, fixed source rows, and final primary-key ordering are fixed. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE account_preferences (preference_id INT PRIMARY KEY, account_id INT NOT NULL UNIQUE, preference_name VARCHAR(32) NOT NULL, preference_value VARCHAR(64) NOT NULL)",
+    "CREATE TABLE preference_imports (import_id INT PRIMARY KEY, account_id INT NOT NULL, preference_name VARCHAR(32) NOT NULL, preference_value VARCHAR(64) NOT NULL, approved TINYINT NOT NULL)",
+    "INSERT INTO account_preferences VALUES (41, 700, 'timezone', 'old'), (42, 701, 'theme', 'light')",
+    "INSERT INTO preference_imports VALUES (101, 700, 'timezone', 'UTC', 1), (102, 702, 'theme', 'dark', 1), (103, 701, 'theme', 'dark', 0)"
+  ],
+  "steps": [
+    {
+      "sql": "REPLACE INTO account_preferences (preference_id, account_id, preference_name, preference_value) SELECT import_id, account_id, preference_name, preference_value FROM preference_imports WHERE approved = 1 RETURNING preference_id, account_id, preference_name, preference_value",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT preference_id, account_id, preference_name, preference_value FROM account_preferences ORDER BY preference_id",
+      "ordered": true
+    }
+  ]
+}
