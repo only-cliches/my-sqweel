@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "id": "delete_window_deduplicate_contacts",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "Shreya-leo/Shreya-DA",
+      "commit": "f1428930295a8c9b52ab831ab1239ae1f0d17985",
+      "path": "delete.sql",
+      "url": "https://github.com/Shreya-leo/Shreya-DA/blob/f1428930295a8c9b52ab831ab1239ae1f0d17985/delete.sql",
+      "sha256": "5cd31d13080829fe82a14f0ef7b32184d675d2301c8acb2e77ed7eaac5cffe17",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "delete.sql:20-33,45-49",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL cleanup script materializes ROW_NUMBER rankings into a staging table, selects duplicate ranks, and deletes rows whose rank is greater than one.",
+      "mysql_mariadb_translation": "Reauthor the cleanup as a contact-import deduplication flow: rank repeated customer keys by earliest acceptance, materialize the ranking, delete later duplicates, and retain one deterministic contact per customer."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "delete-window-deduplication",
+    "row-number-materialization",
+    "delete-ranked-duplicates",
+    "partitioned-deduplication",
+    "deterministic-tie-break"
+  ],
+  "fixture_notes": "Customer keys alpha and beta each have duplicate imports. The earliest accepted import survives; the later rows are removed by DELETE against the materialized window rank.",
+  "determinism_notes": "Fixed event IDs, customer keys, timestamps, partition ordering, and final ordering; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE contact_imports (import_id INT PRIMARY KEY, customer_key VARCHAR(16) NOT NULL, contact_name VARCHAR(32) NOT NULL, accepted_at DATETIME NOT NULL)",
+    "CREATE TABLE ranked_contact_imports (import_id INT PRIMARY KEY, customer_key VARCHAR(16) NOT NULL, contact_name VARCHAR(32) NOT NULL, accepted_at DATETIME NOT NULL, duplicate_rank INT NOT NULL)",
+    "INSERT INTO contact_imports VALUES (11, 'alpha', 'Aster', '2025-03-01 08:00:00'), (12, 'alpha', 'Aster Updated', '2025-03-02 08:00:00'), (21, 'beta', 'Beryl Later', '2025-03-03 09:00:00'), (22, 'beta', 'Beryl', '2025-03-01 09:00:00'), (31, 'gamma', 'Cedar', '2025-03-04 10:00:00')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO ranked_contact_imports (import_id, customer_key, contact_name, accepted_at, duplicate_rank) SELECT import_id, customer_key, contact_name, accepted_at, ROW_NUMBER() OVER (PARTITION BY customer_key ORDER BY accepted_at ASC, import_id ASC) AS duplicate_rank FROM contact_imports",
+      "ordered": false
+    },
+    {
+      "sql": "DELETE FROM ranked_contact_imports WHERE duplicate_rank > 1",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT import_id, customer_key, contact_name, duplicate_rank FROM ranked_contact_imports ORDER BY customer_key",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT import_id, customer_key, contact_name, duplicate_rank FROM ranked_contact_imports ORDER BY customer_key",
+      "ordered": true
+    }
+  ]
+}
