@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "right_join_rollup_departments",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "neeru0303/learnings",
+      "commit": "4095f606c68312b56a3ce3ee07f88cb3fc95fad5",
+      "path": "mysql/basic.sql",
+      "url": "https://github.com/neeru0303/learnings/blob/4095f606c68312b56a3ce3ee07f88cb3fc95fad5/mysql/basic.sql",
+      "sha256": "2b8525474fc135918e1abe514383a1188aa30f28e56f940e61290700ee96b19d",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "mysql/basic.sql:41-42,57-65",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL practice file documents RIGHT JOIN as an outer-join form and separately demonstrates GROUP BY WITH ROLLUP for summary information.",
+      "mysql_mariadb_translation": "Combine the documented patterns in an independently authored department report: RIGHT JOIN departments to students so an empty department remains visible, count students per department, and append a grand total with WITH ROLLUP."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "right-join-rollup",
+    "right-join-null-preservation",
+    "grouped-rollup-total",
+    "empty-group-count",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The Engineering department has no students and must remain in the grouped result with a zero count; the final NULL department row is the grand total from WITH ROLLUP.",
+  "determinism_notes": "Fixed department and student rows, explicit NULL-aware ordering, and no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE departments (department_id INT PRIMARY KEY, department_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE department_students (student_id INT PRIMARY KEY, department_id INT NOT NULL, student_name VARCHAR(32) NOT NULL)",
+    "INSERT INTO departments VALUES (10, 'Art'), (20, 'Engineering'), (30, 'Science')",
+    "INSERT INTO department_students VALUES (101, 10, 'Aster'), (102, 10, 'Beryl'), (301, 30, 'Cedar')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT department_name, student_count FROM (SELECT d.department_name, COUNT(s.student_id) AS student_count FROM department_students AS s RIGHT JOIN departments AS d ON d.department_id = s.department_id GROUP BY d.department_name WITH ROLLUP) AS rolled ORDER BY (department_name IS NULL), department_name",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
