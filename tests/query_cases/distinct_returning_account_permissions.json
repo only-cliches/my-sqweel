@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "id": "distinct_returning_account_permissions",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "tesseral-labs/tesseral",
+      "commit": "de5d3348380b820b2670c96728d36e456f696538",
+      "path": "sqlc/queries-frontend.sql",
+      "url": "https://github.com/tesseral-labs/tesseral/blob/de5d3348380b820b2670c96728d36e456f696538/sqlc/queries-frontend.sql",
+      "sha256": "3b2ae3f4e5b8a680e9b10254bd9e73bf5eca6aee5bbe1e8e5c1f06a3e5cd529b",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "sqlc/queries-frontend.sql:10-14,725-735",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A PostgreSQL application creates records with INSERT RETURNING and reads effective permissions with SELECT DISTINCT across joined relations.",
+      "mysql_mariadb_translation": "Combine those application behaviors in an independently authored account fixture: return generated account IDs from a multi-row insert, then collapse duplicate permission grants with DISTINCT for one account while retaining deterministic ordering."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "distinct-returning",
+    "insert-returning",
+    "generated-key-returning",
+    "duplicate-elimination",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Acme has duplicate read grants that DISTINCT must collapse while retaining its separate write grant; Beta's permissions remain unchanged.",
+  "determinism_notes": "Fixed account and permission values, explicit DISTINCT result ordering, and no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE accounts (account_pk INT AUTO_INCREMENT PRIMARY KEY, account_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE account_permissions (account_pk INT NOT NULL, permission_name VARCHAR(32) NOT NULL)",
+    "INSERT INTO account_permissions VALUES (1, 'read'), (1, 'read'), (1, 'write'), (2, 'read'), (2, 'read')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO accounts (account_name) VALUES ('Acme'), ('Beta') RETURNING account_pk, account_name",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT DISTINCT permission_name FROM account_permissions WHERE account_pk = 1 ORDER BY permission_name",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT account_pk, account_name FROM accounts ORDER BY account_pk",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT account_pk, permission_name FROM account_permissions ORDER BY account_pk, permission_name",
+      "ordered": true
+    }
+  ]
+}
