@@ -365,6 +365,49 @@ fn json_constructors_preserve_typed_column_values_when_nested() {
 }
 
 #[test]
+fn nested_json_objectagg_reports_blob_metadata() {
+    let engine = Engine::new(EngineConfig::mysql_strict());
+    engine
+        .execute_sql(
+            "CREATE TABLE nested_json_services (\
+                service_id INT PRIMARY KEY, service_name VARCHAR(24) NOT NULL\
+             ); \
+             CREATE TABLE nested_json_components (\
+                component_id INT PRIMARY KEY, service_id INT NOT NULL, \
+                component_name VARCHAR(16), component_limit INT NOT NULL\
+             ); \
+             INSERT INTO nested_json_services VALUES \
+                (10, 'billing'), (20, 'search'), (30, 'archive'); \
+             INSERT INTO nested_json_components VALUES \
+                (1001, 10, 'cache', 2), (1002, 10, 'worker', 4), (2001, 20, NULL, 7)",
+        )
+        .unwrap();
+
+    let result = engine
+        .execute_sql(
+            "SELECT s.service_id, \
+                JSON_OBJECT(\
+                    'name', s.service_name, \
+                    'components', IF(\
+                        COUNT(c.component_id) > 0, \
+                        JSON_OBJECTAGG(IFNULL(c.component_name, 'unknown'), c.component_limit), \
+                        NULL\
+                    )\
+                ) AS service_payload \
+             FROM nested_json_services s \
+             LEFT JOIN nested_json_components c ON s.service_id = c.service_id \
+             GROUP BY s.service_id, s.service_name \
+             ORDER BY s.service_id",
+        )
+        .unwrap();
+
+    assert_eq!(
+        result[0].column_metadata[1].column_type,
+        super::MysqlColumnType::MediumBlob
+    );
+}
+
+#[test]
 fn json_equals_requires_documents_and_recursive_ctes_preserve_json_values() {
     let engine = Engine::new(EngineConfig::mysql_strict());
     let equality = engine

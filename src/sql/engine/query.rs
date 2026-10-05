@@ -2112,7 +2112,31 @@ impl RawEngine {
                             self.expression_metadata(select, branch, String::new(), first_row)
                         })
                         .collect::<Vec<_>>();
-                        if !branch_metadata.is_empty()
+                        if branch_metadata.iter().any(|branch| {
+                            matches!(
+                                branch.column_type,
+                                MysqlColumnType::Blob
+                                    | MysqlColumnType::MediumBlob
+                                    | MysqlColumnType::LongBlob
+                                    | MysqlColumnType::Json
+                            )
+                        }) {
+                            if branch_metadata
+                                .iter()
+                                .any(|branch| branch.column_type == MysqlColumnType::LongBlob)
+                            {
+                                MysqlColumnType::LongBlob
+                            } else if branch_metadata.iter().any(|branch| {
+                                matches!(
+                                    branch.column_type,
+                                    MysqlColumnType::MediumBlob | MysqlColumnType::Json
+                                )
+                            }) {
+                                MysqlColumnType::MediumBlob
+                            } else {
+                                MysqlColumnType::Blob
+                            }
+                        } else if !branch_metadata.is_empty()
                             && branch_metadata
                                 .iter()
                                 .all(|branch| numeric_type_rank(branch.column_type) > 0)
@@ -2908,7 +2932,43 @@ impl RawEngine {
                             MysqlColumnType::Json
                         }
                     }
-                    "JSON_OBJECT" => MysqlColumnType::VarChar,
+                    "JSON_OBJECT" => {
+                        let argument_types = function_arguments(function)
+                            .ok()
+                            .map(|arguments| {
+                                arguments
+                                    .into_iter()
+                                    .flatten()
+                                    .map(|argument| {
+                                        self.expression_metadata(
+                                            select,
+                                            &argument,
+                                            String::new(),
+                                            first_row,
+                                        )
+                                        .column_type
+                                    })
+                                    .collect::<Vec<_>>()
+                            })
+                            .unwrap_or_default();
+                        if argument_types
+                            .iter()
+                            .any(|column_type| *column_type == MysqlColumnType::LongBlob)
+                        {
+                            MysqlColumnType::LongBlob
+                        } else if argument_types.iter().any(|column_type| {
+                            matches!(
+                                column_type,
+                                MysqlColumnType::Blob
+                                    | MysqlColumnType::MediumBlob
+                                    | MysqlColumnType::Json
+                            )
+                        }) {
+                            MysqlColumnType::MediumBlob
+                        } else {
+                            MysqlColumnType::VarChar
+                        }
+                    }
                     "JSON_INSERT"
                     | "JSON_MERGE_PATCH"
                     | "JSON_REMOVE"

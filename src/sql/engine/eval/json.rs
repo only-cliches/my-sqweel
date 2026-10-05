@@ -158,6 +158,10 @@ fn mysql_json_text(value: &Value) -> Result<String> {
         Value::Null => Ok("null".to_string()),
         Value::Bool(value) => Ok(value.to_string()),
         Value::Number(value) => Ok(value.to_string()),
+        Value::String(value) if value.starts_with(JSON_AGGREGATE_TEXT_SENTINEL) => Ok(value
+            .strip_prefix(JSON_AGGREGATE_TEXT_SENTINEL)
+            .unwrap_or_default()
+            .to_string()),
         Value::String(value) if is_json_null(value) => Ok("null".to_string()),
         Value::String(value) => {
             serde_json::to_string(value).map_err(|error| anyhow!("invalid JSON string: {error}"))
@@ -303,18 +307,11 @@ pub(super) fn eval_json_object(
 pub(super) fn eval_json_object_values(values: &[Value]) -> Result<Value> {
     let mut object = Map::new();
     for pair in values.chunks(2) {
-        let key = pair
-            .first()
-            .map(json_scalar_to_string)
-            .unwrap_or_default();
+        let key = pair.first().map(json_scalar_to_string).unwrap_or_default();
         if pair.first().is_some_and(Value::is_null) {
             return Ok(Value::Null);
         }
-        let value = pair
-            .get(1)
-            .cloned()
-            .map(normalize_json_object_value)
-            .unwrap_or(Value::Null);
+        let value = pair.get(1).cloned().unwrap_or(Value::Null);
         object.insert(
             key,
             if value == Value::Null {
@@ -327,17 +324,6 @@ pub(super) fn eval_json_object_values(values: &[Value]) -> Result<Value> {
     Ok(Value::Object(object))
 }
 
-fn normalize_json_object_value(value: Value) -> Value {
-    let Value::String(text) = &value else {
-        return value;
-    };
-    let Some(json_text) = text.strip_prefix(JSON_AGGREGATE_TEXT_SENTINEL) else {
-        return value;
-    };
-    serde_json::from_str(json_text)
-        .map(mark_json_nulls)
-        .unwrap_or(value)
-}
 pub(super) fn eval_json_array(
     args: &[String],
     data: &Map<String, Value>,

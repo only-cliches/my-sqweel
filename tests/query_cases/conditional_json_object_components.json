@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "conditional_json_object_components",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "dwmorrin/material-calendar-api",
+      "commit": "7b765ff584af006f9697a645f69510d5e3920edd",
+      "path": "sql/views/event_view.sql",
+      "url": "https://github.com/dwmorrin/material-calendar-api/blob/7b765ff584af006f9697a645f69510d5e3920edd/sql/views/event_view.sql",
+      "sha256": "94020feef964ce3435498905592eba1fef11d1d24fe9948eea136339e5d7f9cc",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/views/event_view.sql:1-71",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A left-joined parent report conditionally embeds a JSON_OBJECTAGG result inside a larger JSON_OBJECT when related child data exists; the child aggregate uses IFNULL to normalize missing JSON object keys.",
+      "mysql_mariadb_translation": "Reauthored as a service component configuration report with new parent and child tables, fields, JSON labels, and rows. Every service remains in the grouped left join; services with components receive a nested JSON object keyed by component name, including an unknown-key fallback, while services without components receive a NULL nested value."
+    },
+    "independently_authored": true
+  },
+  "features": ["conditional-json-objectagg", "nested-json-object", "left-join-aggregate", "null-preserving-parent", "ifnull-json-key", "deterministic-order"],
+  "fixture_notes": "Billing receives one cache component limit, search receives one component with a NULL name that becomes the unknown key, and archive has no components so its nested components value is NULL.",
+  "determinism_notes": "Service IDs, component IDs, component names, limits, grouping key, conditional presence test, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE monitored_services (service_id INT PRIMARY KEY, service_name VARCHAR(24) NOT NULL)",
+    "CREATE TABLE service_components (component_id INT PRIMARY KEY, service_id INT NOT NULL, component_name VARCHAR(16) NULL, component_limit INT NOT NULL)",
+    "INSERT INTO monitored_services VALUES (10, 'billing'), (20, 'search'), (30, 'archive')",
+    "INSERT INTO service_components VALUES (1001, 10, 'cache', 2), (2001, 20, NULL, 7)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT s.service_id, JSON_OBJECT('name', s.service_name, 'components', IF(COUNT(c.component_id) > 0, JSON_OBJECTAGG(IFNULL(c.component_name, 'unknown'), c.component_limit), NULL)) AS service_payload FROM monitored_services s LEFT JOIN service_components c ON s.service_id = c.service_id GROUP BY s.service_id, s.service_name ORDER BY s.service_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT component_id, service_id, component_name, component_limit FROM service_components ORDER BY component_id",
+      "ordered": true
+    }
+  ]
+}

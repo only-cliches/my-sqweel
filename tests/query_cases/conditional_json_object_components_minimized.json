@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "conditional_json_object_components_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "conditional_json_object_components",
+    "source": {
+      "repository": "dwmorrin/material-calendar-api",
+      "commit": "7b765ff584af006f9697a645f69510d5e3920edd",
+      "path": "sql/views/event_view.sql",
+      "url": "https://github.com/dwmorrin/material-calendar-api/blob/7b765ff584af006f9697a645f69510d5e3920edd/sql/views/event_view.sql",
+      "sha256": "94020feef964ce3435498905592eba1fef11d1d24fe9948eea136339e5d7f9cc",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from conditional_json_object_components",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A JSON_OBJECT contains an IF branch whose non-NULL result is JSON_OBJECTAGG; MariaDB reports the enclosing expression as MEDIUM_BLOB while the current MySqweel metadata path reports VAR_STRING.",
+      "mysql_mariadb_translation": "Reduced to one parent row and one child row, removing unrelated service columns and JSON keys while retaining the conditional JSON_OBJECTAGG branch and the metadata comparison."
+    },
+    "independently_authored": true,
+    "minimized_from": "conditional_json_object_components"
+  },
+  "features": ["conditional-json-objectagg", "json-metadata-type", "minimized-regression"],
+  "fixture_notes": "The result value is identical across engines; the regression is the reported result-column type for the enclosing JSON_OBJECT expression.",
+  "determinism_notes": "The scalar aggregate input and JSON keys are fixed and have no clocks, randomness, sleeps, or concurrent connections.",
+  "setup": [
+    "CREATE TABLE metadata_components (component_id INT PRIMARY KEY, component_name VARCHAR(16) NOT NULL, component_limit INT NOT NULL)",
+    "INSERT INTO metadata_components VALUES (1, 'cache', 2)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT JSON_OBJECT('components', IF(COUNT(component_id) > 0, JSON_OBJECTAGG(component_name, component_limit), NULL)) AS payload FROM metadata_components",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
