@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "id": "window_insert_upsert_latest_status",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "ocoda/event-sourcing",
+      "commit": "874e790829e424a4f5552cdf4aeda85398bc9e9d",
+      "path": "packages/integration/mariadb/migrations/4.0.sql",
+      "url": "https://github.com/ocoda/event-sourcing/blob/874e790829e424a4f5552cdf4aeda85398bc9e9d/packages/integration/mariadb/migrations/4.0.sql",
+      "sha256": "4fcb1824d26ab7e573bb090cfa32371aece636da581ad7d69a7674b8ba16b919",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "packages/integration/mariadb/migrations/4.0.sql:46-57,88-90",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB migration uses window-ranked rows inside INSERT ... SELECT statements and separately refreshes a catalog row through ON DUPLICATE KEY UPDATE.",
+      "mysql_mariadb_translation": "Combine those patterns in an independently authored status refresh: rank each account's incoming status events by timestamp and event ID, insert only the latest row into a keyed snapshot table, and update an existing snapshot or insert a new account through ON DUPLICATE KEY UPDATE."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "window-insert-upsert",
+    "row-number-latest-per-key",
+    "insert-select",
+    "on-duplicate-key-update",
+    "deterministic-tie-break",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Account 10 has two same-timestamp events, so the larger event ID must win; its stale snapshot is updated. Account 30 has no snapshot and must be inserted.",
+  "determinism_notes": "Fixed event timestamps, event IDs, account keys, and explicit final ordering; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE account_status_events (event_id INT PRIMARY KEY, account_id INT NOT NULL, status_code VARCHAR(16) NOT NULL, occurred_at DATETIME NOT NULL)",
+    "CREATE TABLE account_status_snapshots (account_id INT PRIMARY KEY, status_code VARCHAR(16) NOT NULL, event_id INT NOT NULL, occurred_at DATETIME NOT NULL)",
+    "INSERT INTO account_status_events VALUES (1001, 10, 'queued', '2025-02-01 08:00:00'), (1002, 10, 'ready', '2025-02-02 09:00:00'), (1003, 10, 'paused', '2025-02-02 09:00:00'), (3001, 30, 'ready', '2025-02-03 10:00:00'), (3000, 30, 'queued', '2025-02-01 10:00:00')",
+    "INSERT INTO account_status_snapshots VALUES (10, 'queued', 1001, '2025-02-01 08:00:00')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO account_status_snapshots (account_id, status_code, event_id, occurred_at) SELECT ranked.account_id, ranked.status_code, ranked.event_id, ranked.occurred_at FROM (SELECT account_id, status_code, event_id, occurred_at, ROW_NUMBER() OVER (PARTITION BY account_id ORDER BY occurred_at DESC, event_id DESC) AS rn FROM account_status_events) AS ranked WHERE ranked.rn = 1 ON DUPLICATE KEY UPDATE status_code = VALUES(status_code), event_id = VALUES(event_id), occurred_at = VALUES(occurred_at)",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT account_id, status_code, event_id, occurred_at FROM account_status_snapshots ORDER BY account_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT account_id, status_code, event_id, occurred_at FROM account_status_snapshots ORDER BY account_id",
+      "ordered": true
+    }
+  ]
+}
