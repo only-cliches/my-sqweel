@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "update_join_window_ranking",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "KiRiSv/F1AltChamps",
+      "commit": "26cc299c0bf17c0118ab18262a70d1db5c6277d1",
+      "path": "update.sql",
+      "url": "https://github.com/KiRiSv/F1AltChamps/blob/26cc299c0bf17c0118ab18262a70d1db5c6277d1/update.sql",
+      "sha256": "c2376eabf917117a94b22b1265eb3aeacd4c980b1992a04b52beac0a52492168",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "update.sql:50-56",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL/MariaDB script computes ROW_NUMBER per season in a derived relation and uses an UPDATE INNER JOIN to copy each derived rank into a standings table.",
+      "mysql_mariadb_translation": "Reauthor the pattern as a static standings refresh: rank fixed driver points by season with deterministic point and driver ordering, then UPDATE JOIN the derived ranks into a separate season standings table."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "update-join-window",
+    "row-number-ranking",
+    "derived-window-relation",
+    "partitioned-ranking",
+    "deterministic-tie-break"
+  ],
+  "fixture_notes": "The standings table starts with zero ranks. The update must assign ranks independently within each season, with driver ID breaking equal-point ties.",
+  "determinism_notes": "Fixed seasons, driver IDs, points, partition ordering, and final ordering; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE season_driver_points (season_year INT NOT NULL, driver_id INT NOT NULL, points INT NOT NULL, PRIMARY KEY (season_year, driver_id))",
+    "CREATE TABLE season_standings (season_year INT NOT NULL, driver_id INT NOT NULL, rank_no INT NOT NULL, PRIMARY KEY (season_year, driver_id))",
+    "INSERT INTO season_driver_points VALUES (2024, 7, 180), (2024, 12, 210), (2024, 19, 210), (2025, 7, 95), (2025, 12, 120), (2025, 19, 80)",
+    "INSERT INTO season_standings VALUES (2024, 7, 0), (2024, 12, 0), (2024, 19, 0), (2025, 7, 0), (2025, 12, 0), (2025, 19, 0)"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE season_standings AS s INNER JOIN (SELECT season_year, driver_id, ROW_NUMBER() OVER (PARTITION BY season_year ORDER BY points DESC, driver_id ASC) AS rank_no FROM season_driver_points) AS ranked ON ranked.season_year = s.season_year AND ranked.driver_id = s.driver_id SET s.rank_no = ranked.rank_no",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT s.season_year, s.driver_id, p.points, s.rank_no FROM season_standings AS s INNER JOIN season_driver_points AS p ON p.season_year = s.season_year AND p.driver_id = s.driver_id ORDER BY s.season_year, s.rank_no",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT season_year, driver_id, rank_no FROM season_standings ORDER BY season_year, driver_id",
+      "ordered": true
+    }
+  ]
+}
