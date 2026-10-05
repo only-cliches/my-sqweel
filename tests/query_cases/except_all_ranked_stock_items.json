@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "except_all_ranked_stock_items",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "ila/openivm",
+      "commit": "9f657576d1e47440d7e62de1befd47bf76b4a83e",
+      "path": "benchmark/queries/tpcc/query_2059.sql",
+      "url": "https://github.com/ila/openivm/blob/9f657576d1e47440d7e62de1befd47bf76b4a83e/benchmark/queries/tpcc/query_2059.sql",
+      "sha256": "48f49e756657661fcaf0360f417aaeb202a6cfbaec436c140be435235b670c2f",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "benchmark/queries/tpcc/query_2059.sql:1",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A benchmark query ranks rows independently in two relations with RANK partitioned by warehouse and subtracts the ranked relations with EXCEPT ALL.",
+      "mysql_mariadb_translation": "Use independently authored stock-candidate and fulfillment tables, rank each warehouse partition by quantity, and apply EXCEPT ALL to retain candidate rows whose ranked item occurrence is not covered by fulfillment rows; explicit ordering makes the multiset result deterministic."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "except-all",
+    "except-window",
+    "rank-window",
+    "multiset-difference",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Warehouse 10 leaves one duplicate ranked C row after one matching fulfillment row is removed; warehouse 20 leaves item E because the unmatched fulfillment item has a different identity; warehouse 30 has no fulfillment rows and remains in the result.",
+  "determinism_notes": "Fixed row identifiers and quantities, explicit warehouse partitions, RANK ordering, and final ordering; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE stock_candidates (row_id INT PRIMARY KEY, warehouse_id INT NOT NULL, item_code VARCHAR(16) NOT NULL, available_qty INT NOT NULL)",
+    "CREATE TABLE fulfilled_lines (row_id INT PRIMARY KEY, warehouse_id INT NOT NULL, item_code VARCHAR(16) NOT NULL, shipped_qty INT NOT NULL)",
+    "INSERT INTO stock_candidates VALUES (1001, 10, 'A', 90), (1002, 10, 'B', 90), (1003, 10, 'C', 70), (1004, 10, 'C', 70), (2001, 20, 'D', 60), (2002, 20, 'E', 40), (3001, 30, 'F', 50)",
+    "INSERT INTO fulfilled_lines VALUES (5001, 10, 'A', 90), (5002, 10, 'B', 90), (5003, 10, 'C', 70), (6001, 20, 'D', 60), (6002, 20, 'Z', 50)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH stock_ranked AS (SELECT warehouse_id, item_code, RANK() OVER (PARTITION BY warehouse_id ORDER BY available_qty DESC) AS quantity_rank FROM stock_candidates), fulfilled_ranked AS (SELECT warehouse_id, item_code, RANK() OVER (PARTITION BY warehouse_id ORDER BY shipped_qty DESC) AS quantity_rank FROM fulfilled_lines) SELECT warehouse_id, item_code, quantity_rank FROM stock_ranked EXCEPT ALL SELECT warehouse_id, item_code, quantity_rank FROM fulfilled_ranked ORDER BY warehouse_id, quantity_rank, item_code",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
