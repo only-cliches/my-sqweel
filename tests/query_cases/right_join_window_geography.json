@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "right_join_window_geography",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "shawlu95/Beyond-LeetCode-SQL",
+      "commit": "8ab7f0ad60b85ab9dff18da6fc760211335d0fb0",
+      "path": "LeetCode/others/618_Students_Report_By_Geography.sql",
+      "url": "https://github.com/shawlu95/Beyond-LeetCode-SQL/blob/8ab7f0ad60b85ab9dff18da6fc760211335d0fb0/LeetCode/others/618_Students_Report_By_Geography.sql",
+      "sha256": "4c95db116ce7f1ecf6eecb21195e02958d82ee8eacdb4bfea06b54ebef5ed753",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "LeetCode/others/618_Students_Report_By_Geography.sql:1-44",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "Geography-specific ranked subqueries align ordered populations through an outer join, preserving every row from the largest geography while optionally attaching shorter populations.",
+      "mysql_mariadb_translation": "Translate the pattern into three newly authored ranked CTEs, use a RIGHT JOIN from the shorter Asia population to America, attach Europe through a NULL-tolerant positional predicate, and expose stable position and name columns."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "right-join-window",
+    "row-number-window",
+    "ranked-cte-branches",
+    "null-preserving-positional-join",
+    "deterministic-order"
+  ],
+  "fixture_notes": "America has three ranked rows, Asia has two, and Europe has four. The RIGHT JOIN preserves America's third row with NULL Asia, while the final positional join attaches Europe only where an America position exists.",
+  "determinism_notes": "Names, continent membership, row-number ordering, join positions, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE geography_students (student_id INT PRIMARY KEY, student_name VARCHAR(32) NOT NULL, continent VARCHAR(16) NOT NULL)",
+    "INSERT INTO geography_students VALUES (1, 'Aster', 'America'), (2, 'Beryl', 'America'), (3, 'Cedar', 'America'), (4, 'Lumen', 'Asia'), (5, 'Mica', 'Asia'), (6, 'Orchid', 'Europe'), (7, 'Pine', 'Europe'), (8, 'Quartz', 'Europe'), (9, 'River', 'Europe')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH america_ranked AS (SELECT student_name AS america_name, ROW_NUMBER() OVER (ORDER BY student_name) AS position_no FROM geography_students WHERE continent = 'America'), asia_ranked AS (SELECT student_name AS asia_name, ROW_NUMBER() OVER (ORDER BY student_name) AS position_no FROM geography_students WHERE continent = 'Asia'), europe_ranked AS (SELECT student_name AS europe_name, ROW_NUMBER() OVER (ORDER BY student_name) AS position_no FROM geography_students WHERE continent = 'Europe') SELECT america.position_no, america.america_name, asia.asia_name, europe.europe_name FROM asia_ranked AS asia RIGHT JOIN america_ranked AS america ON asia.position_no = america.position_no LEFT JOIN europe_ranked AS europe ON europe.position_no = asia.position_no OR europe.position_no = america.position_no ORDER BY america.position_no",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
