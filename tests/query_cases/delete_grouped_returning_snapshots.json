@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "id": "delete_grouped_returning_snapshots",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "jamespfennell/transiter",
+      "commit": "c75400f6b578e8a5b9eae68f586c3367984c209e",
+      "path": "db/queries/trip_queries.sql",
+      "url": "https://github.com/jamespfennell/transiter/blob/c75400f6b578e8a5b9eae68f586c3367984c209e/db/queries/trip_queries.sql",
+      "sha256": "c71f3b48967028edc747a8acbe4fbcd5e4a2e2289fef0ca9193afd662817bf76",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "db/queries/trip_queries.sql:1-14,124-133",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A grouped query computes one maximum stop sequence per trip, while a related cleanup query deletes stale trip rows and returns an identifying column from the deleted rows.",
+      "mysql_mariadb_translation": "Reauthored as a route-snapshot cleanup. A grouped MAX subquery finds the latest active sequence for each route, a double-derived DELETE removes older stale snapshots only for routes with an active snapshot, and RETURNING exposes the deleted snapshot IDs and sequences. PostgreSQL array parameters and source tables, identifiers, and values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "delete",
+    "delete-subquery",
+    "delete-grouped-returning",
+    "aggregate-max",
+    "grouped-aggregate",
+    "delete-returning",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Route 10 has two stale snapshots before active sequence 3, route 20 has one stale snapshot before active sequence 5, route 30 has no active snapshot and is preserved, and route 40 has only an active snapshot and is preserved.",
+  "determinism_notes": "Fixed route IDs, snapshot sequences, states, and labels are used; the grouped mutation result is not order-dependent and the final read is ordered by snapshot ID.",
+  "setup": [
+    "CREATE TABLE route_snapshots (snapshot_id INT PRIMARY KEY, route_id INT NOT NULL, snapshot_seq INT NOT NULL, snapshot_state VARCHAR(16) NOT NULL, snapshot_label VARCHAR(32) NOT NULL)",
+    "INSERT INTO route_snapshots VALUES (1001, 10, 1, 'stale', 'route10-oldest'), (1002, 10, 2, 'stale', 'route10-old'), (1003, 10, 3, 'active', 'route10-current'), (2001, 20, 4, 'stale', 'route20-old'), (2002, 20, 5, 'active', 'route20-current'), (3001, 30, 1, 'stale', 'route30-only'), (4001, 40, 7, 'active', 'route40-current')"
+  ],
+  "steps": [
+    {
+      "sql": "DELETE FROM route_snapshots WHERE snapshot_id IN (SELECT snapshot_id FROM (SELECT s.snapshot_id FROM route_snapshots AS s INNER JOIN (SELECT route_id, MAX(snapshot_seq) AS latest_seq FROM route_snapshots WHERE snapshot_state = 'active' GROUP BY route_id) AS latest ON latest.route_id = s.route_id WHERE s.snapshot_state = 'stale' AND s.snapshot_seq < latest.latest_seq) AS stale_snapshots) RETURNING snapshot_id, route_id, snapshot_seq",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT snapshot_id, route_id, snapshot_seq, snapshot_state, snapshot_label FROM route_snapshots ORDER BY snapshot_id",
+      "ordered": true
+    }
+  ]
+}
