@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "union_all_delete_subquery_stale_records",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "Actyx/ipfs-sqlite-block-store",
+      "commit": "8b54ee3c34d41bd790309229bdb70ba271540d32",
+      "path": "tables.sql",
+      "url": "https://github.com/Actyx/ipfs-sqlite-block-store/blob/8b54ee3c34d41bd790309229bdb70ba271540d32/tables.sql",
+      "sha256": "d6441314e1110544408200a71aba9ba209219294b7d593c5812eb73421dd4959",
+      "source_dialect": "sqlite"
+    },
+    "inspiration": {
+      "source_location": "tables.sql:110-157",
+      "source_dialect": "sqlite",
+      "observed_pattern": "A SQLite block-store script builds recursive UNION ALL candidate sets and feeds a derived identifier subquery into DELETE cleanup statements.",
+      "mysql_mariadb_translation": "Translate that cleanup shape into an independently authored stale-record purge: UNION ALL selects stale records from two partitions inside a double-derived subquery, and DELETE removes exactly those candidates."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "union-all-delete-subquery",
+    "direct-union-all",
+    "delete-in-subquery",
+    "double-derived-delete-source",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Only stale records from partitions 10 and 20 are deleted; a fresh record and a stale record from unrelated partition 30 remain.",
+  "determinism_notes": "Fixed record IDs and partition values, explicit result ordering, and no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE records (record_id INT PRIMARY KEY, partition_id INT NOT NULL, record_name VARCHAR(32) NOT NULL, stale TINYINT NOT NULL)",
+    "INSERT INTO records VALUES (1, 10, 'old-alpha', 1), (2, 10, 'fresh-alpha', 0), (3, 20, 'old-beta', 1), (4, 20, 'fresh-beta', 0), (5, 30, 'old-gamma', 1)"
+  ],
+  "steps": [
+    {
+      "sql": "DELETE FROM records WHERE record_id IN (SELECT record_id FROM (SELECT record_id FROM records WHERE partition_id = 10 AND stale = 1 UNION ALL SELECT record_id FROM records WHERE partition_id = 20 AND stale = 1) AS stale_candidates)",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT record_id, partition_id, record_name, stale FROM records ORDER BY record_id",
+      "ordered": true
+    }
+  ]
+}
