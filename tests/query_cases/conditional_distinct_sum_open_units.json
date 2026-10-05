@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "conditional_distinct_sum_open_units",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "openboxes/openboxes",
+      "commit": "573af8c1848b13ed7c26c8b26f96b9101c945e0a",
+      "path": "grails-app/migrations/views/on-order-order-item-summary.sql",
+      "url": "https://github.com/openboxes/openboxes/blob/573af8c1848b13ed7c26c8b26f96b9101c945e0a/grails-app/migrations/views/on-order-order-item-summary.sql",
+      "sha256": "783d6159384012cc2ebce76335ed848b1e80717d021cd884730056a607af9a07",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "grails-app/migrations/views/on-order-order-item-summary.sql:10-35",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A join-heavy derived aggregation uses SUM(DISTINCT CASE ...) to avoid repeated joined rows while conditionally including order quantities, then an outer grouped query derives open quantities from the intermediate ordered and shipped totals.",
+      "mysql_mariadb_translation": "Reauthored as a purchase fulfillment report with new tables and rows. A per-line derived query uses SUM(DISTINCT CASE ...) for non-pending ordered units and a conditional shipment sum across duplicate-prone left joins; an outer grouping computes positive open units by product and destination. The source view, schema, names, and inventory domain are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": ["conditional-distinct-sum", "derived-aggregate", "left-join", "nested-aggregate", "status-filter", "deterministic-order"],
+  "fixture_notes": "Confirmed lines contribute ordered units once despite repeated shipment rows. Pending lines contribute no ordered units, cancelled lines are filtered out, and only shipped-like statuses contribute shipped units. Product alpha at dock-1 reports three open units; product beta at dock-2 reports four.",
+  "determinism_notes": "Line IDs, order statuses, quantities, unit sizes, shipment statuses, filters, grouping keys, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE fulfillment_lines (line_id INT PRIMARY KEY, product_code VARCHAR(16) NOT NULL, destination_code VARCHAR(16) NOT NULL, order_status VARCHAR(16) NOT NULL, line_status VARCHAR(16) NOT NULL, ordered_quantity INT NOT NULL, units_per_quantity INT NOT NULL)",
+    "CREATE TABLE fulfillment_events (event_id INT PRIMARY KEY, line_id INT NOT NULL, shipped_quantity INT NOT NULL, event_status VARCHAR(20) NOT NULL)",
+    "INSERT INTO fulfillment_lines VALUES (101, 'alpha', 'dock-1', 'confirmed', 'open', 3, 2), (102, 'alpha', 'dock-1', 'pending', 'open', 5, 1), (103, 'alpha', 'dock-1', 'confirmed', 'cancelled', 4, 1), (201, 'beta', 'dock-2', 'confirmed', 'open', 4, 1)",
+    "INSERT INTO fulfillment_events VALUES (1001, 101, 2, 'SHIPPED'), (1002, 101, 1, 'RECEIVED'), (1003, 101, 1, 'LABEL_CREATED'), (1004, 102, 1, 'SHIPPED'), (2001, 201, 2, 'LABEL_CREATED')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT product_code, destination_code, SUM(CASE WHEN ordered_units - shipped_units > 0 THEN ordered_units - shipped_units ELSE 0 END) AS open_units, SUM(shipped_units) AS shipped_units FROM (SELECT l.product_code, l.line_id, l.destination_code, SUM(DISTINCT CASE WHEN l.order_status <> 'pending' THEN l.ordered_quantity * l.units_per_quantity ELSE 0 END) AS ordered_units, SUM(CASE WHEN e.event_status IN ('SHIPPED', 'PARTIALLY_RECEIVED', 'RECEIVED') THEN e.shipped_quantity ELSE 0 END) AS shipped_units FROM fulfillment_lines AS l LEFT JOIN fulfillment_events AS e ON e.line_id = l.line_id WHERE l.line_status <> 'cancelled' GROUP BY l.product_code, l.line_id, l.destination_code) AS line_totals GROUP BY product_code, destination_code ORDER BY product_code, destination_code",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT l.line_id, l.product_code, l.destination_code, l.order_status, l.line_status, l.ordered_quantity, l.units_per_quantity, e.event_id, e.shipped_quantity, e.event_status FROM fulfillment_lines AS l LEFT JOIN fulfillment_events AS e ON e.line_id = l.line_id ORDER BY l.line_id, e.event_id",
+      "ordered": true
+    }
+  ]
+}
