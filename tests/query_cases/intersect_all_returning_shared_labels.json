@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "id": "intersect_all_returning_shared_labels",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "zettadb/cloudnative",
+      "commit": "0bbcb7dbfef25893d65c43e7cca90f87d36108b2",
+      "path": "kunlun-pg-regress/sql/with.sql",
+      "url": "https://github.com/zettadb/cloudnative/blob/0bbcb7dbfef25893d65c43e7cca90f87d36108b2/kunlun-pg-regress/sql/with.sql",
+      "sha256": "3b4439dfc45f2adb3649e001318eb33472876bde4995709d1b16641aa430a8a3",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "kunlun-pg-regress/sql/with.sql:383-387,413-418,684-699",
+      "source_dialect": "postgresql",
+      "observed_pattern": "The public regression SQL exercises INSERT ... RETURNING together with INTERSECT ALL set-operation syntax.",
+      "mysql_mariadb_translation": "Combine those constructs in an independently authored MariaDB fixture: intersect two deliberately duplicated label streams with INTERSECT ALL, insert the shared multiset into an auto-increment archive in deterministic order, and return each generated archive ID."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "intersect-all",
+    "insert-select-returning",
+    "generated-key-returning",
+    "multiset-intersection",
+    "derived-set-operation",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The current stream contains alpha twice and beta once; the observed stream contains alpha three times and beta once. INTERSECT ALL retains alpha twice and beta once, while gamma and delta are excluded.",
+  "determinism_notes": "All source labels and duplicate counts are fixed; the derived multiset is ordered by label before insertion, and returned/final rows are ordered by archive ID. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE current_labels (label_id INT PRIMARY KEY, label_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE observed_labels (label_id INT PRIMARY KEY, label_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE shared_label_archive (archive_id INT AUTO_INCREMENT PRIMARY KEY, label_name VARCHAR(32) NOT NULL)",
+    "INSERT INTO current_labels VALUES (1, 'alpha'), (2, 'alpha'), (3, 'beta'), (4, 'gamma')",
+    "INSERT INTO observed_labels VALUES (11, 'alpha'), (12, 'alpha'), (13, 'alpha'), (14, 'beta'), (15, 'delta')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO shared_label_archive (label_name) SELECT shared.label_name FROM (SELECT label_name FROM current_labels INTERSECT ALL SELECT label_name FROM observed_labels) AS shared ORDER BY shared.label_name RETURNING archive_id, label_name",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT archive_id, label_name FROM shared_label_archive ORDER BY archive_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT label_id, label_name FROM current_labels ORDER BY label_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT label_id, label_name FROM observed_labels ORDER BY label_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT archive_id, label_name FROM shared_label_archive ORDER BY archive_id",
+      "ordered": true
+    }
+  ]
+}
