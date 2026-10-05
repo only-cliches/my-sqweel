@@ -5028,6 +5028,43 @@ impl RawEngine {
                     );
                     return Ok(value);
                 }
+                if matches!(
+                    function_name.as_str(),
+                    "JSON_SET"
+                        | "JSON_INSERT"
+                        | "JSON_REPLACE"
+                        | "JSON_ARRAY_APPEND"
+                        | "JSON_ARRAY_INSERT"
+                        | "JSON_REMOVE"
+                        | "JSON_MERGE"
+                        | "JSON_MERGE_PATCH"
+                        | "JSON_MERGE_PRESERVE"
+                ) && let sqlparser::ast::FunctionArguments::List(arguments) = &function.args
+                {
+                    let values = arguments
+                        .args
+                        .iter()
+                        .map(|argument| match argument {
+                            sqlparser::ast::FunctionArg::Unnamed(
+                                sqlparser::ast::FunctionArgExpr::Expr(expr),
+                            )
+                            | sqlparser::ast::FunctionArg::Named {
+                                arg: sqlparser::ast::FunctionArgExpr::Expr(expr),
+                                ..
+                            }
+                            | sqlparser::ast::FunctionArg::ExprNamed {
+                                arg: sqlparser::ast::FunctionArgExpr::Expr(expr),
+                                ..
+                            } => self.eval_expr_ctx(expr, data, last_insert_id),
+                            _ => Ok(Value::Null),
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    if let Some(value) =
+                        eval::eval_insert_update_json_function(function_name.as_str(), &values)?
+                    {
+                        return Ok(value);
+                    }
+                }
                 if let Some(value) = data.iter().find_map(|(key, value)| {
                     key.eq_ignore_ascii_case(&projection_expr_column_name(expr))
                         .then_some(value)

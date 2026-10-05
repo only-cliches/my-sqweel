@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "json_table_object_backfill_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "json_table_object_backfill",
+    "source": {
+      "kind": "github",
+      "repository": "open-metadata/OpenMetadata",
+      "commit": "73c0cb6c27c0b1e8cbe7a34e292a242b63f708ad",
+      "path": "bootstrap/sql/migrations/native/1.13.3/mysql/postDataMigrationSQLScript.sql",
+      "url": "https://github.com/open-metadata/OpenMetadata/blob/73c0cb6c27c0b1e8cbe7a34e292a242b63f708ad/bootstrap/sql/migrations/native/1.13.3/mysql/postDataMigrationSQLScript.sql",
+      "sha256": "07fa1ded5801b0dd5b7e49a0fa65cdbe3a863c494b0e5ea0ea6af6f5708d457e",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from json_table_object_backfill",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A correlated UPDATE rebuilds one missing JSON array from one legacy object through JSON_TABLE, JSON_SET, and JSON_ARRAYAGG.",
+      "mysql_mariadb_translation": "Reduced to one independently authored profile and one object item while retaining the correlated JSON_TABLE update and JSON array reconstruction."
+    },
+    "independently_authored": true,
+    "minimized_from": "json_table_object_backfill"
+  },
+  "features": [
+    "correlated-json-table-update",
+    "json-arrayagg-json-set",
+    "json-path-presence-guards",
+    "minimized-regression"
+  ],
+  "fixture_notes": "One profile has one legacy object and no target items field, isolating the failing correlated JSON_TABLE aggregate update.",
+  "determinism_notes": "The profile ID, JSON document, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE mini_migration_profiles (profile_id INT PRIMARY KEY, profile JSON NOT NULL)",
+    "INSERT INTO mini_migration_profiles VALUES (201, '{\"pendingItems\":[{\"code\":\"m1\",\"label\":\"mini\"}]}')"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE mini_migration_profiles AS p SET profile = JSON_SET(profile, '$.items', COALESCE((SELECT JSON_ARRAYAGG(JSON_SET(item_row.item_json, '$.migrated', TRUE) ORDER BY item_row.position) FROM JSON_TABLE(CASE WHEN JSON_TYPE(JSON_EXTRACT(p.profile, '$.pendingItems')) = 'ARRAY' THEN JSON_EXTRACT(p.profile, '$.pendingItems') ELSE JSON_ARRAY() END, '$[*]' COLUMNS (position FOR ORDINALITY, item_json JSON PATH '$')) AS item_row WHERE JSON_TYPE(item_row.item_json) = 'OBJECT'), JSON_ARRAY())) WHERE JSON_CONTAINS_PATH(profile, 'one', '$.pendingItems') AND NOT JSON_CONTAINS_PATH(profile, 'one', '$.items')",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT profile_id, JSON_UNQUOTE(JSON_EXTRACT(profile, '$.items')) AS items FROM mini_migration_profiles ORDER BY profile_id",
+      "ordered": true
+    }
+  ]
+}

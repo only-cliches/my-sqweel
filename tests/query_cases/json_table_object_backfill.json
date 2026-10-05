@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "id": "json_table_object_backfill",
+  "provenance": {
+    "kind": "github_sql_pattern",
+    "source": {
+      "kind": "github",
+      "repository": "open-metadata/OpenMetadata",
+      "commit": "73c0cb6c27c0b1e8cbe7a34e292a242b63f708ad",
+      "path": "bootstrap/sql/migrations/native/1.13.3/mysql/postDataMigrationSQLScript.sql",
+      "url": "https://github.com/open-metadata/OpenMetadata/blob/73c0cb6c27c0b1e8cbe7a34e292a242b63f708ad/bootstrap/sql/migrations/native/1.13.3/mysql/postDataMigrationSQLScript.sql",
+      "sha256": "07fa1ded5801b0dd5b7e49a0fa65cdbe3a863c494b0e5ea0ea6af6f5708d457e",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "bootstrap/sql/migrations/native/1.13.3/mysql/postDataMigrationSQLScript.sql:6-25",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A correlated UPDATE backfills a missing JSON array from a legacy field only when the legacy value is an array, expands its elements through JSON_TABLE, filters for object elements, annotates each object with JSON_SET, and rebuilds the result with JSON_ARRAYAGG while using COALESCE for empty output.",
+      "mysql_mariadb_translation": "Reauthored as a profile migration audit. Legacy pending items are accepted only when they are arrays, object entries are marked migrated and reassembled in source order, scalar or NULL legacy values become empty arrays, and profiles that already have the target field remain unchanged. The source table, field names, object properties, values, and application context are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "correlated-json-table-update",
+    "json-type-array-guard",
+    "json-table-object-projection",
+    "json-table-ordinality",
+    "json-arrayagg-json-set",
+    "coalesce-json-array-fallback",
+    "json-path-presence-guards",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Profile 101 receives a migrated object array, with a scalar element filtered out. Profiles 102, 103, and 104 already have the target, contain NULL legacy data, or contain a scalar legacy value and are not updated. Profile 106 has no legacy field and is not updated.",
+  "determinism_notes": "Profile IDs, JSON documents, JSON_TABLE ordinality, aggregate ordering, and final profile ordering are fixed. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE migration_profiles (profile_id INT PRIMARY KEY, profile_name VARCHAR(32) NOT NULL, profile JSON NOT NULL)",
+    "INSERT INTO migration_profiles VALUES (101, 'alpha', '{\"pendingItems\":[{\"code\":\"a1\",\"label\":\"alpha\"},1,{\"code\":\"a2\",\"label\":\"beta\"}]}'), (102, 'beta', '{\"pendingItems\":[{\"code\":\"b1\",\"label\":\"gamma\"}],\"items\":[{\"code\":\"old\",\"label\":\"kept\"}]}'), (103, 'gamma', '{\"pendingItems\":null}'), (104, 'delta', '{\"pendingItems\":\"not-an-array\"}'), (106, 'zeta', '{\"settings\":{\"mode\":\"legacy\"}}')"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE migration_profiles AS p SET profile = JSON_SET(profile, '$.items', COALESCE((SELECT JSON_ARRAYAGG(JSON_SET(item_row.item_json, '$.migrated', TRUE) ORDER BY item_row.position) FROM JSON_TABLE(CASE WHEN JSON_TYPE(JSON_EXTRACT(p.profile, '$.pendingItems')) = 'ARRAY' THEN JSON_EXTRACT(p.profile, '$.pendingItems') ELSE JSON_ARRAY() END, '$[*]' COLUMNS (position FOR ORDINALITY, item_json JSON PATH '$')) AS item_row WHERE JSON_TYPE(item_row.item_json) = 'OBJECT'), JSON_ARRAY())) WHERE JSON_CONTAINS_PATH(profile, 'one', '$.pendingItems') AND JSON_TYPE(JSON_EXTRACT(profile, '$.pendingItems')) = 'ARRAY' AND NOT JSON_CONTAINS_PATH(profile, 'one', '$.items')",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT profile_id, profile_name, JSON_UNQUOTE(JSON_EXTRACT(profile, '$.items')) AS items, JSON_UNQUOTE(JSON_EXTRACT(profile, '$.pendingItems')) AS pending_items FROM migration_profiles ORDER BY profile_id",
+      "ordered": true
+    }
+  ]
+}
