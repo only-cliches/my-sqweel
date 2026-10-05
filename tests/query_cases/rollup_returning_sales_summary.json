@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "id": "rollup_returning_sales_summary",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "slats55/TheCommandDeck",
+      "commit": "1efd6d0a225fa566fa5dcbb7612eb2c35d318243",
+      "path": "server/pkg/db/queries/runtime.sql",
+      "url": "https://github.com/slats55/TheCommandDeck/blob/1efd6d0a225fa566fa5dcbb7612eb2c35d318243/server/pkg/db/queries/runtime.sql",
+      "sha256": "b82b8c6a56c3eaddf2d37b809b2a31229f51e537af2e95724ff3e64ea2e94488",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "server/pkg/db/queries/runtime.sql:38,95-118",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "The public SQL source contains a MySQL WITH ROLLUP grouping pattern and application INSERT RETURNING statements as separate query patterns.",
+      "mysql_mariadb_translation": "Combine those patterns in an independently authored sales fixture: return generated import IDs from a multi-row insert, then produce detail, regional subtotal, and grand-total rows with GROUP BY ... WITH ROLLUP."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "rollup-returning",
+    "insert-returning",
+    "generated-key-returning",
+    "grouping-sets",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The rollup result includes North detail rows, a North subtotal, South detail, and a grand total; the returned import IDs are generated in source order.",
+  "determinism_notes": "Fixed sale IDs and amounts, explicit source ordering for returned rows and checks, and auto-increment import IDs created in that order; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE sales (sale_id INT PRIMARY KEY, region_name VARCHAR(32) NOT NULL, product_name VARCHAR(32) NOT NULL, amount INT NOT NULL)",
+    "CREATE TABLE sales_imports (import_id INT AUTO_INCREMENT PRIMARY KEY, batch_name VARCHAR(32) NOT NULL, source_count INT NOT NULL)",
+    "INSERT INTO sales VALUES (1, 'North', 'Basic', 10), (2, 'North', 'Premium', 15), (3, 'South', 'Basic', 20)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO sales_imports (batch_name, source_count) VALUES ('morning', 3), ('evening', 0) RETURNING import_id, batch_name, source_count",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT region_name, product_name, SUM(amount) AS total_amount FROM sales GROUP BY region_name, product_name WITH ROLLUP",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT import_id, batch_name, source_count FROM sales_imports ORDER BY import_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT sale_id, region_name, product_name, amount FROM sales ORDER BY sale_id",
+      "ordered": true
+    }
+  ]
+}
