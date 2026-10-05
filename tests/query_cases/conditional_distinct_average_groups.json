@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "conditional_distinct_average_groups",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "linq2db/linq2db.baselines",
+      "commit": "15b93f1d89f961e01bd4e99d4c23f1a7fc4bc2f0",
+      "path": "MariaDB.11/Tests/Linq/GroupByTests/Tests.Linq.GroupByTests.AverageInGroup(MariaDB.11).sql",
+      "url": "https://github.com/linq2db/linq2db.baselines/blob/15b93f1d89f961e01bd4e99d4c23f1a7fc4bc2f0/MariaDB.11/Tests/Linq/GroupByTests/Tests.Linq.GroupByTests.AverageInGroup%28MariaDB.11%29.sql",
+      "sha256": "3926b1ff1a9fb8d44f73957de0007a96077e0739cc414791412548478c01d03c",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MariaDB.11/Tests/Linq/GroupByTests/Tests.Linq.GroupByTests.AverageInGroup(MariaDB.11).sql:2-28",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped aggregate report compares ordinary AVG, conditional AVG(CASE ...), AVG(DISTINCT), and AVG(DISTINCT CASE ...) values over the same group, excluding NULL inputs before aggregation.",
+      "mysql_mariadb_translation": "Reauthored as a cohort metric report with new names, rows, and purpose. Each cohort reports the all-value average, the duplicate-sensitive even-value average, the distinct-value average, and the conditional distinct even-value average; NULL observations are filtered before grouping."
+    },
+    "independently_authored": true
+  },
+  "features": ["conditional-distinct-average", "avg-distinct", "conditional-average", "grouped-aggregate", "null-aggregate-input", "deterministic-order"],
+  "fixture_notes": "Cohort alpha contains duplicate even value 2 plus values 3 and 4, making the ordinary even average 2.6667 while the distinct even average is 3. Cohort beta contains duplicate odd value 5, even value 6, and one NULL; its distinct average is 5.5 and conditional distinct even average is 6.",
+  "determinism_notes": "Observation IDs, cohort labels, metric values, parity condition, NULL input, grouping key, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE cohort_metrics (observation_id INT PRIMARY KEY, cohort_code VARCHAR(12) NOT NULL, metric_value DECIMAL(8, 2) NULL)",
+    "INSERT INTO cohort_metrics VALUES (1101, 'alpha', 2), (1102, 'alpha', 2), (1103, 'alpha', 3), (1104, 'alpha', 4), (2201, 'beta', 5), (2202, 'beta', 5), (2203, 'beta', 6), (2204, 'beta', NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT cohort_code, AVG(metric_value) AS average_value, AVG(CASE WHEN metric_value % 2 = 0 THEN metric_value ELSE NULL END) AS average_even_value, AVG(DISTINCT metric_value) AS average_distinct_value, AVG(DISTINCT CASE WHEN metric_value % 2 = 0 THEN metric_value ELSE NULL END) AS average_distinct_even_value FROM cohort_metrics WHERE metric_value IS NOT NULL GROUP BY cohort_code ORDER BY cohort_code",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT observation_id, cohort_code, metric_value FROM cohort_metrics ORDER BY observation_id",
+      "ordered": true
+    }
+  ]
+}
