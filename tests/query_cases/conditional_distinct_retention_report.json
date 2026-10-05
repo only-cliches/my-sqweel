@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "conditional_distinct_retention_report",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "deltaDNA/sql-cookbook",
+      "commit": "3b55f905879ac4486cc0d77e5fc71b1d6b8da515",
+      "path": "KPIs/churn.sql",
+      "url": "https://github.com/deltaDNA/sql-cookbook/blob/3b55f905879ac4486cc0d77e5fc71b1d6b8da515/KPIs/churn.sql",
+      "sha256": "7d9544b85d9405d5b5277ad9ed13bf23c59e88cc0b58bc0f58c49a1a3f0ffe5c",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "KPIs/churn.sql:4-20",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A cohort report first deduplicates user activity by cohort date, activity date, and user in a CTE, then uses COUNT(DISTINCT CASE WHEN ...) to count users reaching a retention threshold and derives retention and churn percentages from the grouped counts.",
+      "mysql_mariadb_translation": "Reauthored as a fixed-window engagement report with new table names, dates, users, and a three-day threshold. Duplicate activity events are collapsed in a CTE; the outer query counts enrolled users and retained users with conditional distinct counts, then computes deterministic percentage and inverse-churn metrics without current-date dependence."
+    },
+    "independently_authored": true
+  },
+  "features": ["conditional-distinct-count", "cte-deduplication", "date-difference", "grouped-ratio", "retention-threshold", "deterministic-order"],
+  "fixture_notes": "The alpha cohort has three users and only one reaches the three-day threshold. The beta cohort has two users and one reaches the threshold. Duplicate same-day events are present for both retained users and are removed by the CTE before the conditional distinct count.",
+  "determinism_notes": "All dates, identifiers, thresholds, filters, grouping keys, decimal rounding, and ordering are fixed. No current-date functions, randomness, clocks, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE engagement_events (event_id INT PRIMARY KEY, user_id INT NOT NULL, cohort_date DATE NOT NULL, activity_date DATE NOT NULL, event_kind VARCHAR(16) NOT NULL)",
+    "INSERT INTO engagement_events VALUES (101, 1, '2025-01-01', '2025-01-01', 'open'), (102, 1, '2025-01-01', '2025-01-01', 'click'), (103, 1, '2025-01-01', '2025-01-04', 'open'), (104, 2, '2025-01-01', '2025-01-01', 'open'), (105, 2, '2025-01-01', '2025-01-03', 'open'), (106, 3, '2025-01-01', '2025-01-01', 'open'), (201, 4, '2025-01-02', '2025-01-02', 'open'), (202, 4, '2025-01-02', '2025-01-05', 'open'), (203, 4, '2025-01-02', '2025-01-05', 'click'), (204, 5, '2025-01-02', '2025-01-02', 'open'), (205, 5, '2025-01-02', '2025-01-03', 'open')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH activity_days AS (SELECT cohort_date, activity_date, user_id FROM engagement_events WHERE cohort_date >= '2025-01-01' AND cohort_date < '2025-01-03' AND activity_date <= '2025-01-08' GROUP BY cohort_date, activity_date, user_id) SELECT cohort_date, COUNT(DISTINCT user_id) AS enrolled_users, COUNT(DISTINCT CASE WHEN DATEDIFF(activity_date, cohort_date) >= 3 THEN user_id ELSE NULL END) AS retained_users, ROUND(COUNT(DISTINCT CASE WHEN DATEDIFF(activity_date, cohort_date) >= 3 THEN user_id ELSE NULL END) / COUNT(DISTINCT user_id) * 100, 2) AS retention_percent, ROUND(100 - COUNT(DISTINCT CASE WHEN DATEDIFF(activity_date, cohort_date) >= 3 THEN user_id ELSE NULL END) / COUNT(DISTINCT user_id) * 100, 2) AS churn_percent FROM activity_days GROUP BY cohort_date ORDER BY cohort_date",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT event_id, user_id, cohort_date, activity_date, event_kind FROM engagement_events ORDER BY event_id",
+      "ordered": true
+    }
+  ]
+}
