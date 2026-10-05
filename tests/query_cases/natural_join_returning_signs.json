@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "id": "natural_join_returning_signs",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "CityofToronto/bdit_data-sources",
+      "commit": "19fb18f0a872765aa5b88ff8410bd4ef504ee897",
+      "path": "wys/api/sql/insert-mobile_sign_installations.sql",
+      "url": "https://github.com/CityofToronto/bdit_data-sources/blob/19fb18f0a872765aa5b88ff8410bd4ef504ee897/wys/api/sql/insert-mobile_sign_installations.sql",
+      "sha256": "653f838540d5e99018b46d868f1a8bbcbd5e331479a8dce3066f1b36985741d9",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "wys/api/sql/insert-mobile_sign_installations.sql:34-49",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A data-loading statement uses NATURAL JOIN to associate staged rows with duplicate metadata and RETURNING to expose the affected keys.",
+      "mysql_mariadb_translation": "Translate the portable join-and-return behavior to a direct MariaDB INSERT ... SELECT: naturally join incoming signs to a code catalog, archive only active rows, and return generated archive IDs and joined attributes."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "natural-join-returning",
+    "insert-select-returning",
+    "generated-key-returning",
+    "dml-join",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Only active signs are archived; the inactive sign remains in the source table, while returned archive IDs follow source sign order.",
+  "determinism_notes": "Fixed source IDs, explicit source ordering, and auto-increment IDs created in that order; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE sign_codes (sign_code VARCHAR(16) PRIMARY KEY, sign_class VARCHAR(16) NOT NULL)",
+    "CREATE TABLE incoming_signs (sign_id INT PRIMARY KEY, sign_code VARCHAR(16) NOT NULL, location_name VARCHAR(32) NOT NULL, active TINYINT NOT NULL)",
+    "CREATE TABLE archived_signs (archive_id INT AUTO_INCREMENT PRIMARY KEY, sign_code VARCHAR(16) NOT NULL, sign_class VARCHAR(16) NOT NULL, location_name VARCHAR(32) NOT NULL)",
+    "INSERT INTO sign_codes VALUES ('STOP', 'regulatory'), ('BIKE', 'guidance'), ('PARK', 'parking')",
+    "INSERT INTO incoming_signs VALUES (10, 'BIKE', 'Queen', 1), (20, 'STOP', 'King', 1), (30, 'PARK', 'Yonge', 0)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO archived_signs (sign_code, sign_class, location_name) SELECT sign_code, sign_class, location_name FROM incoming_signs NATURAL JOIN sign_codes WHERE active = 1 ORDER BY sign_id RETURNING archive_id, sign_code, sign_class, location_name",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT archive_id, sign_code, sign_class, location_name FROM archived_signs ORDER BY archive_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT sign_id, active FROM incoming_signs ORDER BY sign_id",
+      "ordered": true
+    }
+  ]
+}
