@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "id": "except_window_event_diff",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "hdus/pgversion",
+      "commit": "25effae0eaf5ea4ea8a47210af8986a1d1fd671e",
+      "path": "sql/diff.sql",
+      "url": "https://github.com/hdus/pgversion/blob/25effae0eaf5ea4ea8a47210af8986a1d1fd671e/sql/diff.sql",
+      "sha256": "03f8aafa8392459f9c69d0312d4c62925c1154ba8e70e80eb6516cb0bb8e4e9e",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "sql/diff.sql:7-20",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A version-difference query uses EXCEPT to subtract one snapshot from another and applies ROW_NUMBER in the enclosing result.",
+      "mysql_mariadb_translation": "Use two independently ranked event snapshots with ROW_NUMBER partitioned by account, subtract the archived snapshot from the current snapshot with EXCEPT, and order changed rows by account and event rank."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "except-window",
+    "set-difference",
+    "cte-window-ranking",
+    "snapshot-diff",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The current snapshot adds account 3 and changes account 1's SMS event ID; unchanged account 1 email and account 2 push rows are removed by EXCEPT.",
+  "determinism_notes": "Fixed event IDs, explicit partition and rank ordering, and explicit final ordering; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE current_events (event_id INT PRIMARY KEY, account_id INT NOT NULL, event_code VARCHAR(16) NOT NULL)",
+    "CREATE TABLE archived_events (event_id INT PRIMARY KEY, account_id INT NOT NULL, event_code VARCHAR(16) NOT NULL)",
+    "INSERT INTO current_events VALUES (101, 1, 'email'), (102, 1, 'sms'), (201, 2, 'push'), (301, 3, 'email')",
+    "INSERT INTO archived_events VALUES (101, 1, 'email'), (103, 1, 'sms'), (201, 2, 'push'), (401, 4, 'email')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH current_ranked AS (SELECT event_id, account_id, event_code, ROW_NUMBER() OVER (PARTITION BY account_id ORDER BY event_id) AS event_rank FROM current_events), archived_ranked AS (SELECT event_id, account_id, event_code, ROW_NUMBER() OVER (PARTITION BY account_id ORDER BY event_id) AS event_rank FROM archived_events) SELECT account_id, event_code, event_id, event_rank FROM current_ranked EXCEPT SELECT account_id, event_code, event_id, event_rank FROM archived_ranked ORDER BY account_id, event_rank",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
