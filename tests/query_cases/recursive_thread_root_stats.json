@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "recursive_thread_root_stats",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "multica-ai/multica",
+      "commit": "b4ca5b4a23e68b26292a680dca7689a952bb1cd5",
+      "path": "server/pkg/db/queries/comment.sql",
+      "url": "https://github.com/multica-ai/multica/blob/b4ca5b4a23e68b26292a680dca7689a952bb1cd5/server/pkg/db/queries/comment.sql",
+      "sha256": "6989922f72d3e8a8890dee744885a1bdbf5eb30f4a316cd5ede92f642076626b",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "server/pkg/db/queries/comment.sql:82-117",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A recursive CTE first selects a bounded newest set of parent rows, recursively labels descendants with their root, aggregates per-root reply counts and latest activity, then joins the statistics back to the selected roots while restoring chronological output order.",
+      "mysql_mariadb_translation": "Reauthored as a support-ticket note report with independently named tables, concrete board and ticket filters, and a fixed newest-root limit. The recursive membership walk is tenant-scoped, the grouped statistics include each root's descendant count and latest note date, and the final ascending order demonstrates restoration after newest-first bounded selection."
+    },
+    "independently_authored": true
+  },
+  "features": ["recursive-cte", "recursive-self-join", "bounded-root-selection", "inner-order-limit", "grouped-thread-statistics", "max-activity", "outer-restored-order", "tenant-scoped-parent-join", "deterministic-final-state"],
+  "fixture_notes": "Ticket 700 on board 9 has three roots; the two newest roots are selected, their descendants are counted recursively, and output is restored to chronological root order. A child with a matching parent ID on board 8 is excluded by the board predicate. Ticket 701 and unrelated board 10 rows exercise the scope filters without affecting the report.",
+  "determinism_notes": "Note IDs, board and ticket filters, timestamps, root limit, recursive join predicates, aggregate columns, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE support_notes (note_id INT PRIMARY KEY, board_id INT NOT NULL, ticket_id INT NOT NULL, parent_id INT NULL, author VARCHAR(32) NOT NULL, body VARCHAR(128) NOT NULL, created_at DATETIME NOT NULL)",
+    "INSERT INTO support_notes VALUES (101, 9, 700, NULL, 'Ari', 'old root', '2024-06-01 09:00:00'), (102, 9, 700, NULL, 'Bea', 'middle root', '2024-06-02 09:00:00'), (103, 9, 700, NULL, 'Cy', 'new root', '2024-06-03 09:00:00'), (104, 9, 700, 103, 'Dee', 'new root reply one', '2024-06-04 09:00:00'), (105, 9, 700, 103, 'Eli', 'new root reply two', '2024-06-05 09:00:00'), (106, 9, 700, 102, 'Fay', 'middle root reply', '2024-06-06 09:00:00'), (107, 8, 700, 103, 'Gus', 'cross-board reply excluded', '2024-06-07 09:00:00'), (108, 9, 701, NULL, 'Hal', 'other ticket root', '2024-06-08 09:00:00'), (109, 10, 700, NULL, 'Ira', 'other board root', '2024-06-09 09:00:00'), (110, 9, 700, 101, 'Jae', 'old root reply excluded by root limit', '2024-06-10 09:00:00')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH RECURSIVE selected_roots AS (SELECT n.note_id, n.created_at FROM support_notes AS n WHERE n.board_id = 9 AND n.ticket_id = 700 AND n.parent_id IS NULL ORDER BY n.created_at DESC, n.note_id DESC LIMIT 2), membership(note_id, root_id, note_created_at) AS (SELECT sr.note_id, sr.note_id AS root_id, sr.created_at FROM selected_roots AS sr UNION ALL SELECT child.note_id, m.root_id, child.created_at FROM support_notes AS child INNER JOIN membership AS m ON child.parent_id = m.note_id WHERE child.board_id = 9 AND child.ticket_id = 700), thread_stats AS (SELECT root_id, COUNT(*) - 1 AS reply_count, MAX(note_created_at) AS last_activity_at FROM membership GROUP BY root_id) SELECT n.note_id, n.ticket_id, n.author, ts.reply_count, ts.last_activity_at FROM selected_roots AS sr INNER JOIN support_notes AS n ON n.note_id = sr.note_id INNER JOIN thread_stats AS ts ON ts.root_id = sr.note_id WHERE n.board_id = 9 AND n.ticket_id = 700 ORDER BY n.created_at ASC, n.note_id ASC",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT note_id, board_id, ticket_id, parent_id FROM support_notes ORDER BY note_id",
+      "ordered": true
+    }
+  ]
+}

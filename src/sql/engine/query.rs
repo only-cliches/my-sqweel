@@ -9430,6 +9430,13 @@ fn recursive_value_cast(expr: Expr, metadata: &ColumnMetadata) -> Expr {
             }
         }
         MysqlColumnType::Date => sqlparser::ast::DataType::Date,
+        MysqlColumnType::Time => {
+            sqlparser::ast::DataType::Time(None, sqlparser::ast::TimezoneInfo::None)
+        }
+        MysqlColumnType::DateTime => sqlparser::ast::DataType::Datetime(None),
+        MysqlColumnType::Timestamp => {
+            sqlparser::ast::DataType::Timestamp(None, sqlparser::ast::TimezoneInfo::None)
+        }
         MysqlColumnType::Json => sqlparser::ast::DataType::JSON,
         _ => return expr,
     };

@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "recursive_thread_root_stats_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "recursive_thread_root_stats",
+    "source": {
+      "kind": "github",
+      "repository": "multica-ai/multica",
+      "commit": "b4ca5b4a23e68b26292a680dca7689a952bb1cd5",
+      "path": "server/pkg/db/queries/comment.sql",
+      "url": "https://github.com/multica-ai/multica/blob/b4ca5b4a23e68b26292a680dca7689a952bb1cd5/server/pkg/db/queries/comment.sql",
+      "sha256": "6989922f72d3e8a8890dee744885a1bdbf5eb30f4a316cd5ede92f642076626b",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from recursive_thread_root_stats",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A recursive parent walk feeds MAX over a datetime column; MariaDB preserves DATETIME metadata while the current MySqweel path reports VAR_STRING despite identical datetime bytes.",
+      "mysql_mariadb_translation": "Reduced to one root and one child row in a single table, removing bounded root selection, tenant filters, grouped reply counts, and the final join while retaining recursive datetime propagation into MAX and the metadata mismatch."
+    },
+    "independently_authored": true
+  },
+  "features": ["recursive-cte", "recursive-datetime", "max-aggregate", "metadata-regression", "minimized-regression"],
+  "fixture_notes": "A two-row parent chain is sufficient to expose the datetime metadata mismatch; the MAX value is identical across engines.",
+  "determinism_notes": "Fixed IDs, parent relationship, datetime literals, recursive anchor, and aggregate projection; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE thread_notes_min (note_id INT PRIMARY KEY, parent_id INT NULL, created_at DATETIME NOT NULL)",
+    "INSERT INTO thread_notes_min VALUES (1, NULL, '2024-07-01 08:00:00'), (2, 1, '2024-07-02 08:00:00')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH RECURSIVE note_walk(note_id, note_created_at) AS (SELECT n.note_id, n.created_at FROM thread_notes_min AS n WHERE n.parent_id IS NULL UNION ALL SELECT child.note_id, child.created_at FROM thread_notes_min AS child INNER JOIN note_walk AS parent ON child.parent_id = parent.note_id) SELECT MAX(note_created_at) AS last_activity_at FROM note_walk",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT note_id, parent_id, created_at FROM thread_notes_min ORDER BY note_id",
+      "ordered": true
+    }
+  ]
+}
