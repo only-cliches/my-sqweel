@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "distinct_concatenated_run_metrics",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "GoogleCloudPlatform/professional-services",
+      "commit": "8f6f2262fc09e35a4c962a214cdf7b2868e869c7",
+      "path": "tools/airflow-states-collector/examples/queries/dag_stats.sql",
+      "url": "https://github.com/GoogleCloudPlatform/professional-services/blob/8f6f2262fc09e35a4c962a214cdf7b2868e869c7/tools/airflow-states-collector/examples/queries/dag_stats.sql",
+      "sha256": "b36969f42d29d7710fe4ba905e8867fef78aa84788d06de9a8fb849f94231fc8",
+      "source_dialect": "bigquery"
+    },
+    "inspiration": {
+      "source_location": "tools/airflow-states-collector/examples/queries/dag_stats.sql:1-20",
+      "source_dialect": "bigquery",
+      "observed_pattern": "A grouped run report counts distinct composite run identities with COUNT(DISTINCT CONCAT(...)), counts successful and failed states with conditional SUM(CASE ...), and computes minimum, maximum, and average durations with a fixed end-time fallback.",
+      "mysql_mariadb_translation": "Reauthored as a service-run metrics report with new names, rows, and integer ticks. The BigQuery CONCAT and timestamp-difference forms are translated to MariaDB-compatible CONCAT and fixed tick subtraction; an open run uses a deterministic COALESCE fallback instead of the source's current timestamp."
+    },
+    "independently_authored": true
+  },
+  "features": ["count-distinct-concat", "conditional-status-count", "coalesced-duration", "grouped-run-statistics", "min-max-average", "deterministic-order"],
+  "fixture_notes": "Alpha has three distinct run tokens, two successful and one failed; the open third run uses fixed fallback tick 200. Beta has two distinct runs, one successful and one failed. Durations are derived from end_tick or the fixed fallback, and the composite CONCAT identity is counted distinctly per service.",
+  "determinism_notes": "Service codes, run tokens, states, ticks, fallback value, aggregate expressions, grouping key, and ordering are fixed. No current timestamps, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE service_runs (run_id INT PRIMARY KEY, service_code VARCHAR(12) NOT NULL, run_token VARCHAR(16) NOT NULL, run_state VARCHAR(12) NOT NULL, start_tick INT NOT NULL, end_tick INT NULL)",
+    "INSERT INTO service_runs VALUES (1001, 'alpha', 'r1', 'success', 10, 40), (1002, 'alpha', 'r2', 'failed', 20, 80), (1003, 'alpha', 'r3', 'success', 50, NULL), (2001, 'beta', 'b1', 'success', 100, 145), (2002, 'beta', 'b2', 'failed', 110, 125)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT service_code, COUNT(DISTINCT CONCAT(service_code, '-', run_token)) AS total_runs, SUM(CASE WHEN run_state = 'success' THEN 1 ELSE 0 END) AS successful_runs, SUM(CASE WHEN run_state = 'failed' THEN 1 ELSE 0 END) AS failed_runs, MIN(COALESCE(end_tick, 200) - start_tick) AS min_duration_ticks, MAX(COALESCE(end_tick, 200) - start_tick) AS max_duration_ticks, AVG(COALESCE(end_tick, 200) - start_tick) AS avg_duration_ticks FROM service_runs GROUP BY service_code ORDER BY service_code",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT run_id, service_code, run_token, run_state, start_tick, end_tick FROM service_runs ORDER BY run_id",
+      "ordered": true
+    }
+  ]
+}
