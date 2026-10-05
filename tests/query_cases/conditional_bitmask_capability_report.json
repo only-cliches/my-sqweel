@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "conditional_bitmask_capability_report",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Gimini-3/algorithm",
+      "commit": "9df9e3cca6be6f25a9805cd7994c50d6a9260e46",
+      "path": "프로그래머스/4/276036. 언어별 개발자 분류하기/언어별 개발자 분류하기.sql",
+      "url": "https://github.com/Gimini-3/algorithm/blob/9df9e3cca6be6f25a9805cd7994c50d6a9260e46/%ED%94%84%EB%A1%9C%EA%B7%B8%EB%9E%98%EB%A8%B8%EC%8A%A4/4/276036.%E2%80%85%EC%96%B8%EC%96%B4%EB%B3%84%E2%80%85%EA%B0%9C%EB%B0%9C%EC%9E%90%E2%80%85%EB%B6%84%EB%A5%98%ED%95%98%EA%B8%B0/%EC%96%B8%EC%96%B4%EB%B3%84%E2%80%85%EA%B0%9C%EB%B0%9C%EC%9E%90%E2%80%85%EB%B6%84%EB%A5%98%ED%95%98%EA%B8%B0.sql",
+      "sha256": "e0be1bc642facd15bc1f359d04eb872a314651ea147ca63381499069bbb61f1b",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "프로그래머스/4/276036. 언어별 개발자 분류하기/언어별 개발자 분류하기.sql:1-23",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A CTE builds conditional bit masks with MAX(CASE ...) and BIT_OR(CASE ...), then a CROSS JOIN applies bitwise membership tests in a prioritized CASE classification and repeats those predicates in WHERE.",
+      "mysql_mariadb_translation": "Reauthored as a capability classification report with new catalog and subject tables, masks, labels, and rows. Communication and operations masks are conditionally aggregated, then each agent is classified by bitwise intersection; unmatched agents are filtered out and results have deterministic ordering."
+    },
+    "independently_authored": true
+  },
+  "features": ["conditional-bit-or", "conditional-mask-aggregate", "bitwise-and", "cte", "cross-join-single-row", "prioritized-case", "deterministic-order"],
+  "fixture_notes": "Capability bits are mail=1, chat=2, export=4, audit=8, and admin=16. Alice has mail plus export and is classified hybrid; Bob has chat and is communication; Carol has export plus audit and is operations; Dave has only admin and is filtered out.",
+  "determinism_notes": "Capability masks, agent identifiers, classification precedence, repeated predicates, and ordering are fixed. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE capability_catalog (capability_name VARCHAR(16) PRIMARY KEY, capability_group VARCHAR(16) NOT NULL, capability_mask INT NOT NULL)",
+    "CREATE TABLE capability_agents (agent_id INT PRIMARY KEY, agent_email VARCHAR(64) NOT NULL, capability_mask INT NOT NULL)",
+    "INSERT INTO capability_catalog VALUES ('mail', 'communication', 1), ('chat', 'communication', 2), ('export', 'operations', 4), ('audit', 'operations', 8), ('admin', 'governance', 16)",
+    "INSERT INTO capability_agents VALUES (201, 'alice@example.test', 5), (202, 'bob@example.test', 2), (203, 'carol@example.test', 12), (204, 'dave@example.test', 16)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH masks AS (SELECT MAX(CASE WHEN capability_name = 'mail' THEN capability_mask ELSE NULL END) AS mail_mask, BIT_OR(CASE WHEN capability_group = 'communication' THEN capability_mask ELSE 0 END) AS communication_mask, BIT_OR(CASE WHEN capability_group = 'operations' THEN capability_mask ELSE 0 END) AS operations_mask FROM capability_catalog) SELECT CASE WHEN (a.capability_mask & m.mail_mask) != 0 AND (a.capability_mask & m.operations_mask) != 0 THEN 'hybrid' WHEN (a.capability_mask & m.communication_mask) != 0 THEN 'communication' WHEN (a.capability_mask & m.operations_mask) != 0 THEN 'operations' END AS classification, a.agent_id, a.agent_email FROM capability_agents a CROSS JOIN masks m WHERE ((a.capability_mask & m.mail_mask) != 0 AND (a.capability_mask & m.operations_mask) != 0) OR ((a.capability_mask & m.communication_mask) != 0) OR ((a.capability_mask & m.operations_mask) != 0) ORDER BY classification, a.agent_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT agent_id, agent_email, capability_mask FROM capability_agents ORDER BY agent_id",
+      "ordered": true
+    }
+  ]
+}
