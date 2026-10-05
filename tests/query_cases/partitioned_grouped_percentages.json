@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "partitioned_grouped_percentages",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "HTTPArchive/almanac.httparchive.org",
+      "commit": "fd72f16119d86960bc4b8631afa49099725aba5c",
+      "path": "sql/2019/markup/03_02b.sql",
+      "url": "https://github.com/HTTPArchive/almanac.httparchive.org/blob/fd72f16119d86960bc4b8631afa49099725aba5c/sql/2019/markup/03_02b.sql",
+      "sha256": "ab6dc573393bd7c492b8152e2da6e4b11d4ef59570e57da8a01c28c1d68d35ec",
+      "source_dialect": "bigquery"
+    },
+    "inspiration": {
+      "source_location": "sql/2019/markup/03_02b.sql:15-29",
+      "source_dialect": "bigquery",
+      "observed_pattern": "A grouped frequency report computes each element's share within its client partition by applying SUM(SUM(value)) OVER (PARTITION BY client) to the grouped aggregate, then rounds the percentage and orders by the grouped-to-partition ratio.",
+      "mysql_mariadb_translation": "Reauthored as a regional metric report over ordinary relational rows. The source BigQuery JavaScript UDF and UNNEST expansion are omitted; the retained semantic pattern is grouped SUM followed by a partitioned window SUM over those grouped results. Filtered rows are excluded before both grouping and partition totals, and deterministic region/metric ordering replaces the source ratio sort."
+    },
+    "independently_authored": true
+  },
+  "features": ["partitioned-grouped-denominator", "window-over-grouped-aggregate", "percentage-within-partition", "filtered-grouping", "rounding", "deterministic-order"],
+  "fixture_notes": "Included East metrics total six units and included West metrics total six units. East percentages are 50.00, 33.33, and 16.67; West percentages are 66.67 and 33.33. Excluded rows do not affect either regional total.",
+  "determinism_notes": "Sample IDs, regions, metric names, values, inclusion flags, grouping keys, partition keys, rounding precision, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE regional_metric_samples (sample_id INT PRIMARY KEY, region_code VARCHAR(8) NOT NULL, metric_name VARCHAR(24) NOT NULL, metric_value INT NOT NULL, included TINYINT NOT NULL)",
+    "INSERT INTO regional_metric_samples VALUES (1001, 'east', 'errors', 1, 1), (1002, 'east', 'latency', 3, 1), (1003, 'east', 'latency', 2, 1), (1004, 'east', 'warnings', 4, 0), (2001, 'west', 'errors', 2, 1), (2002, 'west', 'latency', 4, 1), (2003, 'west', 'warnings', 5, 0)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT region_code, metric_name, SUM(metric_value) AS metric_total, SUM(SUM(metric_value)) OVER (PARTITION BY region_code) AS region_total, ROUND(100.0 * SUM(metric_value) / SUM(SUM(metric_value)) OVER (PARTITION BY region_code), 2) AS percent_of_region FROM regional_metric_samples WHERE included = 1 GROUP BY region_code, metric_name ORDER BY region_code, metric_name",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT sample_id, region_code, metric_name, metric_value, included FROM regional_metric_samples ORDER BY sample_id",
+      "ordered": true
+    }
+  ]
+}
