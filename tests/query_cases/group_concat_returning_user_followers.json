@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "id": "group_concat_returning_user_followers",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "BerkeleyTrue/conduit-go-htmx",
+      "commit": "4c0990a478f786b4f0f60746f590d19ada70b5dc",
+      "path": "internal/app/driven/userRepo/sql/queries.sql",
+      "url": "https://github.com/BerkeleyTrue/conduit-go-htmx/blob/4c0990a478f786b4f0f60746f590d19ada70b5dc/internal/app/driven/userRepo/sql/queries.sql",
+      "sha256": "8967de653adb3f168dea89f90aad90f79a69e7f7f79f4b51e53c921b6ac1eb42",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "internal/app/driven/userRepo/sql/queries.sql:1-29,79-90",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL/MariaDB application query file inserts and updates users with RETURNING while its user reads aggregate follower IDs with GROUP_CONCAT over a LEFT JOIN.",
+      "mysql_mariadb_translation": "Combine those application behaviors in an independently authored user import: return generated user IDs from a multi-row INSERT, then aggregate follower IDs with ordered GROUP_CONCAT while preserving a user with no followers as an empty string."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "group-concat-returning",
+    "insert-returning",
+    "generated-key-returning",
+    "left-join-null-preservation",
+    "ordered-aggregation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Carol has no followers and must produce an empty follower list through COALESCE; Alice's follower IDs must be ordered numerically.",
+  "determinism_notes": "Fixed user and follower IDs, explicit GROUP_CONCAT and result ordering, and no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE users (user_id INT AUTO_INCREMENT PRIMARY KEY, username VARCHAR(32) NOT NULL, email VARCHAR(64) NOT NULL)",
+    "CREATE TABLE followers (author_id INT NOT NULL, follower_id INT NOT NULL, PRIMARY KEY (author_id, follower_id))",
+    "INSERT INTO users (username, email) VALUES ('Alice', 'alice@example.test'), ('Bob', 'bob@example.test')",
+    "INSERT INTO followers VALUES (1, 3), (1, 2), (2, 4)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO users (username, email) VALUES ('Carol', 'carol@example.test'), ('Dora', 'dora@example.test') RETURNING user_id, username, email",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT u.user_id, u.username, COALESCE(GROUP_CONCAT(f.follower_id ORDER BY f.follower_id SEPARATOR ','), '') AS follower_ids FROM users AS u LEFT JOIN followers AS f ON f.author_id = u.user_id GROUP BY u.user_id, u.username ORDER BY u.user_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT user_id, username, email FROM users ORDER BY user_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT author_id, follower_id FROM followers ORDER BY author_id, follower_id",
+      "ordered": true
+    }
+  ]
+}
