@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "union_by_name_returns_summary",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "ralforion/orionbelt-semantic-layer",
+      "commit": "bf3ed17c32152bf6fe71940f4b3be70fc61bf4cf",
+      "path": "examples/tpcds_queries/sql/duckdb/Q83.sql",
+      "url": "https://github.com/ralforion/orionbelt-semantic-layer/blob/bf3ed17c32152bf6fe71940f4b3be70fc61bf4cf/examples/tpcds_queries/sql/duckdb/Q83.sql",
+      "sha256": "8569228927f7f7391f8839713a86558f45d80d61b1af2f370ebccf12fb217137",
+      "source_dialect": "duckdb"
+    },
+    "inspiration": {
+      "source_location": "examples/tpcds_queries/sql/duckdb/Q83.sql:4-47,49-80",
+      "source_dialect": "duckdb",
+      "observed_pattern": "Several source-specific SELECT branches use UNION ALL BY NAME to align differently named measures, then aggregate the aligned nullable columns and retain only entities represented by every branch.",
+      "mysql_mariadb_translation": "Reauthored as a returns-channel summary. DuckDB's name-based union is represented with an explicit common projection and NULL placeholders in a MariaDB-compatible UNION ALL CTE; grouped sums, per-channel presence counts, and deterministic ordering preserve the all-channel reporting contract without copying the benchmark schema or values."
+    },
+    "independently_authored": true
+  },
+  "features": ["union-by-name", "branch-column-alignment", "null-preserving-union", "multi-source-aggregate", "conditional-presence-having", "deterministic-order"],
+  "fixture_notes": "SKU-A and SKU-D appear in store, catalog, and web return feeds and are summarized; SKU-B lacks a web row and SKU-C lacks store and catalog rows, so the all-channel HAVING filter excludes both.",
+  "determinism_notes": "SKU codes, source IDs, quantities, branch projections, presence conditions, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE store_returns_summary (return_id INT PRIMARY KEY, sku VARCHAR(16) NOT NULL, units INT NOT NULL)",
+    "CREATE TABLE catalog_returns_summary (return_id INT PRIMARY KEY, sku VARCHAR(16) NOT NULL, units INT NOT NULL)",
+    "CREATE TABLE web_returns_summary (return_id INT PRIMARY KEY, sku VARCHAR(16) NOT NULL, units INT NOT NULL)",
+    "INSERT INTO store_returns_summary VALUES (9001, 'SKU-A', 4), (9002, 'SKU-B', 6), (9003, 'SKU-A', 2), (9004, 'SKU-D', 1)",
+    "INSERT INTO catalog_returns_summary VALUES (9101, 'SKU-A', 3), (9102, 'SKU-B', 1), (9103, 'SKU-D', 2)",
+    "INSERT INTO web_returns_summary VALUES (9201, 'SKU-A', 5), (9202, 'SKU-C', 8), (9203, 'SKU-D', 4)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH channel_rollup AS (SELECT sku, units AS store_units, NULL AS catalog_units, NULL AS web_units FROM store_returns_summary UNION ALL SELECT sku, NULL, units, NULL FROM catalog_returns_summary UNION ALL SELECT sku, NULL, NULL, units FROM web_returns_summary) SELECT sku, COALESCE(SUM(store_units), 0) AS store_units, COALESCE(SUM(catalog_units), 0) AS catalog_units, COALESCE(SUM(web_units), 0) AS web_units, COUNT(store_units) AS store_rows, COUNT(catalog_units) AS catalog_rows, COUNT(web_units) AS web_rows FROM channel_rollup GROUP BY sku HAVING COUNT(store_units) > 0 AND COUNT(catalog_units) > 0 AND COUNT(web_units) > 0 ORDER BY sku",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT 'store' AS source_name, return_id, sku, units FROM store_returns_summary UNION ALL SELECT 'catalog', return_id, sku, units FROM catalog_returns_summary UNION ALL SELECT 'web', return_id, sku, units FROM web_returns_summary ORDER BY source_name, return_id",
+      "ordered": true
+    }
+  ]
+}
