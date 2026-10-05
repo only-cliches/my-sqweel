@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "temporary_staging_update_join",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Tom-BUXDAO/BUXDAO3.0",
+      "commit": "4c728a53184208b7ad249e0ab15e1c6e1701f2dc",
+      "path": "update_balances.sql",
+      "url": "https://github.com/Tom-BUXDAO/BUXDAO3.0/blob/4c728a53184208b7ad249e0ab15e1c6e1701f2dc/update_balances.sql",
+      "sha256": "c05e78cc1be2ab34ac8f7e1351e719b9a9459d9b95afd6e989bc0bbf1fd28807",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "update_balances.sql:1-5,71-78",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A staging table is populated with replacement values, a target table is updated by matching normalized text keys, and the staging table is dropped after the update.",
+      "mysql_mariadb_translation": "Reauthored as a MariaDB temporary-score refresh. PostgreSQL CREATE TEMP TABLE and UPDATE ... FROM are translated to CREATE TEMPORARY TABLE and UPDATE ... INNER JOIN; fixed aliases are normalized with REPLACE, an active-row guard protects retired records, and the temporary staging table is explicitly dropped."
+    },
+    "independently_authored": true
+  },
+  "features": ["temporary-table", "temporary-staging", "joined-update", "string-replace", "active-row-guard", "temporary-table-cleanup", "final-state-check"],
+  "fixture_notes": "Staged aliases without separators update active members after normalization. A retired member has a matching staged alias but remains unchanged, and a staged alias without a target is ignored.",
+  "determinism_notes": "Member IDs, aliases, staged scores, normalization character, active flag, update order, and final primary-key ordering are fixed. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE member_scores (member_id INT PRIMARY KEY, member_alias VARCHAR(32) NOT NULL, score INT NOT NULL, active TINYINT NOT NULL)",
+    "INSERT INTO member_scores VALUES (1, 'north-star', 10, 1), (2, 'south-star', 20, 1), (3, 'retired-star', 30, 0), (4, 'exact', 40, 1)"
+  ],
+  "steps": [
+    {
+      "sql": "CREATE TEMPORARY TABLE staged_scores (member_alias VARCHAR(32) NOT NULL, score INT NOT NULL)",
+      "ordered": false
+    },
+    {
+      "sql": "INSERT INTO staged_scores VALUES ('northstar', 91), ('south-star', 82), ('retiredstar', 73), ('missing', 64)",
+      "ordered": false
+    },
+    {
+      "sql": "UPDATE member_scores AS m INNER JOIN staged_scores AS s ON REPLACE(m.member_alias, '-', '') = REPLACE(s.member_alias, '-', '') SET m.score = s.score WHERE m.active = 1",
+      "ordered": false
+    },
+    {
+      "sql": "DROP TEMPORARY TABLE staged_scores",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT member_id, member_alias, score, active FROM member_scores ORDER BY member_id",
+      "ordered": true
+    }
+  ]
+}
