@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "json_table_rollup_inventory",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "ajay6186/Interview",
+      "commit": "8780d3b49770b32ff2a574d0a840a86dea7f6bc7",
+      "path": "mysql_practice_queries.sql",
+      "url": "https://github.com/ajay6186/Interview/blob/8780d3b49770b32ff2a574d0a840a86dea7f6bc7/mysql_practice_queries.sql",
+      "sha256": "9b359bf4484791c91591f0f14e8942d76a25de807c685df24bf9d6d3adc5a8f1",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "mysql_practice_queries.sql:160-170,496-506",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL practice file pairs JSON_TABLE array expansion with grouped summaries and WITH ROLLUP subtotal reporting.",
+      "mysql_mariadb_translation": "Translate the separate practice patterns into one independently authored inventory snapshot report: expand each batch's JSON item array, aggregate item counts and units by warehouse and aisle, then emit aisle subtotals and a grand total with ROLLUP."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "json-table-rollup",
+    "json-table-array-expansion",
+    "grouped-rollup-subtotals",
+    "warehouse-aisle-summary",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Each inventory batch contains a JSON array of item quantities. Detail rows, per-warehouse subtotals, and one grand total must all include the expanded item counts and unit sums.",
+  "determinism_notes": "The batches, JSON item order, grouping dimensions, rollup levels, and explicit NULL-aware ordering are fixed. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE inventory_batches (batch_id INT PRIMARY KEY, warehouse_code VARCHAR(8) NOT NULL, aisle_code VARCHAR(8) NOT NULL, items JSON NOT NULL)",
+    "INSERT INTO inventory_batches VALUES (1, 'W1', 'A1', '[{\"sku\":\"PEN\",\"units\":3},{\"sku\":\"PAD\",\"units\":2}]'), (2, 'W1', 'A2', '[{\"sku\":\"BOX\",\"units\":5}]'), (3, 'W2', 'A1', '[{\"sku\":\"TAPE\",\"units\":4},{\"sku\":\"CLIP\",\"units\":1}]'), (4, 'W2', 'A2', '[{\"sku\":\"LABEL\",\"units\":6}]')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH expanded AS (SELECT b.warehouse_code, b.aisle_code, item.sku, item.units FROM inventory_batches AS b CROSS JOIN JSON_TABLE(b.items, '$[*]' COLUMNS (sku VARCHAR(16) PATH '$.sku', units INT PATH '$.units')) AS item), rolled AS (SELECT warehouse_code, aisle_code, COUNT(*) AS item_count, SUM(units) AS total_units FROM expanded GROUP BY warehouse_code, aisle_code WITH ROLLUP) SELECT warehouse_code, aisle_code, item_count, total_units FROM rolled ORDER BY (warehouse_code IS NULL), warehouse_code, (aisle_code IS NULL), aisle_code",
+      "ordered": true
+    }
+  ],
+  "checks": []
+}
