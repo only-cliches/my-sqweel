@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "id": "json_table_delete_replace",
+  "provenance": {
+    "kind": "github_sql_pattern",
+    "source": {
+      "kind": "github",
+      "repository": "sqlpage/SQLPage",
+      "commit": "6199e6f5e32a6fc152cec9be167427e64f24e65a",
+      "path": "examples/custom form component/form_action.sql",
+      "url": "https://github.com/sqlpage/SQLPage/blob/6199e6f5e32a6fc152cec9be167427e64f24e65a/examples/custom%20form%20component/form_action.sql",
+      "sha256": "6e22fc4c216be9f21c1d6036d2952ab70dbd4118eff7a97e95d036461de4ae25",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "examples/custom form component/form_action.sql:1-16",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A replacement action deletes all existing members for one parent, expands a submitted JSON array with JSON_TABLE, and inserts the selected members back into the relation.",
+      "mysql_mariadb_translation": "Reauthored as a workspace membership replacement. One workspace's old seats are removed, a literal JSON selection supplies new user IDs, roles, and seat numbers through JSON_TABLE, and another workspace proves that the replacement is scoped to its parent."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "scoped-delete-then-insert",
+    "json-table-parameter",
+    "json-table-object-columns",
+    "replacement-child-set",
+    "parent-scope-preservation",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Workspace 44 replaces its two old memberships with three JSON-selected seats. Workspace 45 remains unchanged, proving the delete is scoped; all selected rows, roles, and seat numbers must survive the JSON_TABLE insert.",
+  "determinism_notes": "All workspace IDs, membership rows, JSON values, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE workspace_memberships (workspace_id INT NOT NULL, user_id INT NOT NULL, member_role VARCHAR(16) NOT NULL, seat_no INT NOT NULL, PRIMARY KEY (workspace_id, user_id))",
+    "INSERT INTO workspace_memberships VALUES (44, 801, 'editor', 1), (44, 802, 'viewer', 2), (45, 801, 'owner', 1)"
+  ],
+  "steps": [
+    {
+      "sql": "DELETE FROM workspace_memberships WHERE workspace_id = 44",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO workspace_memberships (workspace_id, user_id, member_role, seat_no) SELECT 44, submitted.user_id, submitted.member_role, submitted.seat_no FROM JSON_TABLE('[{\"id\":901,\"role\":\"owner\",\"seat\":1},{\"id\":903,\"role\":\"editor\",\"seat\":2},{\"id\":904,\"role\":\"viewer\",\"seat\":3}]', '$[*]' COLUMNS (user_id INT PATH '$.id', member_role VARCHAR(16) PATH '$.role', seat_no INT PATH '$.seat')) AS submitted",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT workspace_id, user_id, member_role, seat_no FROM workspace_memberships ORDER BY workspace_id, seat_no, user_id",
+      "ordered": true
+    }
+  ]
+}
