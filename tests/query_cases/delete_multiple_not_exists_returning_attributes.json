@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "id": "delete_multiple_not_exists_returning_attributes",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "innogames/serveradmin",
+      "commit": "6d423d65babd649253fb30b6b34ee5bcdc237d1f",
+      "path": "db/integrity.sql",
+      "url": "https://github.com/innogames/serveradmin/blob/6d423d65babd649253fb30b6b34ee5bcdc237d1f/db/integrity.sql",
+      "sha256": "dadd8d805393ca70eb2b1903d55bb7a006e286fc65b7f35afd80e99817abf23e",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "db/integrity.sql:9-23,25-39,41-55,57-71,73-87",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "Integrity cleanup deletes typed server-attribute rows when either the referenced attribute is absent or the server's type does not permit that attribute, using two correlated NOT EXISTS predicates joined by OR and returning the deleted rows.",
+      "mysql_mariadb_translation": "Reauthored as a numeric configuration cleanup. A DELETE ... RETURNING removes rows with a missing or wrong-kind attribute, or with no nullable relationship in the server type's allow-list; valid rows remain and the returned deletion order is fixed by entry ID."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "delete-returning",
+    "multiple-correlated-not-exists",
+    "or-guarded-delete",
+    "correlated-join-subquery",
+    "nullable-relationship-filter",
+    "deterministic-final-state"
+  ],
+  "fixture_notes": "Entries 9001 and 9003 are valid and remain. Entry 9002 is disallowed for its server type, entry 9004 uses a string attribute, and entry 9005 references a missing attribute; all three are returned and deleted.",
+  "determinism_notes": "Server, type, attribute, allow-list, entry IDs, and final ordering are fixed; there are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE server_catalog (server_id INT PRIMARY KEY, server_name VARCHAR(32) NOT NULL, server_type_id INT NOT NULL)",
+    "CREATE TABLE attribute_catalog (attribute_id INT PRIMARY KEY, attribute_name VARCHAR(32) NOT NULL, attribute_kind VARCHAR(16) NOT NULL)",
+    "CREATE TABLE server_type_attributes (server_type_id INT NOT NULL, attribute_id INT NOT NULL, related_via_attribute_id INT NULL, PRIMARY KEY (server_type_id, attribute_id))",
+    "CREATE TABLE server_number_attributes (entry_id INT PRIMARY KEY, server_id INT NOT NULL, attribute_id INT NOT NULL, numeric_value INT NOT NULL)",
+    "INSERT INTO server_catalog VALUES (2101, 'alpha-node', 31), (2102, 'beta-node', 31), (2103, 'gamma-node', 32)",
+    "INSERT INTO attribute_catalog VALUES (401, 'latency', 'number'), (402, 'retries', 'number'), (403, 'label', 'string')",
+    "INSERT INTO server_type_attributes VALUES (31, 401, NULL), (31, 402, 777), (32, 402, NULL), (32, 403, NULL)",
+    "INSERT INTO server_number_attributes VALUES (9001, 2101, 401, 12), (9002, 2101, 402, 3), (9003, 2102, 401, 18), (9004, 2103, 403, 9), (9005, 2102, 499, 27)"
+  ],
+  "steps": [
+    {
+      "sql": "DELETE FROM server_number_attributes WHERE NOT EXISTS (SELECT 1 FROM attribute_catalog AS attribute WHERE attribute.attribute_id = server_number_attributes.attribute_id AND attribute.attribute_kind = 'number') OR NOT EXISTS (SELECT 1 FROM server_catalog AS server JOIN server_type_attributes AS allowed ON allowed.server_type_id = server.server_type_id WHERE server.server_id = server_number_attributes.server_id AND allowed.attribute_id = server_number_attributes.attribute_id AND allowed.related_via_attribute_id IS NULL) RETURNING entry_id, server_id, attribute_id, numeric_value",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT entry_id, server_id, attribute_id, numeric_value FROM server_number_attributes ORDER BY entry_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT entry_id, server_id, attribute_id, numeric_value FROM server_number_attributes ORDER BY entry_id",
+      "ordered": true
+    }
+  ]
+}
