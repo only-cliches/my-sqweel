@@ -1,0 +1,73 @@
+{
+  "version": 1,
+  "id": "grouped_duplicate_merge_batch",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "PROFESSOR-DJ/DBMS_Backend",
+      "commit": "24c903dfcb81d61838d5a4f74b30448e72272309",
+      "path": "scripts/merge_duplicate_authors_mysql.sql",
+      "url": "https://github.com/PROFESSOR-DJ/DBMS_Backend/blob/24c903dfcb81d61838d5a4f74b30448e72272309/scripts/merge_duplicate_authors_mysql.sql",
+      "sha256": "cf947a7f3b3aa17eb7c0d1eae9cc01fea5c07bd37c27a15a63993a5ecb110cc9",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "scripts/merge_duplicate_authors_mysql.sql:9-24",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A bounded temporary batch identifies duplicate parent rows with grouped MIN and HAVING logic, updates child foreign keys through UPDATE IGNORE JOIN, then deletes now-unreferenced duplicate parents through a joined cleanup.",
+      "mysql_mariadb_translation": "Use independently authored vendor and product tables with a temporary duplicate-vendor batch ordered and limited by vendor ID; move products through UPDATE IGNORE JOIN, delete the unreferenced duplicate vendor through DELETE JOIN, and verify the surviving relationships."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "temporary-table",
+    "grouped-derived-table",
+    "aggregate-min",
+    "aggregate-having",
+    "order-by-limit",
+    "update-ignore-join",
+    "delete-join",
+    "joined-delete",
+    "foreign-key-rekey",
+    "post-update-state",
+    "post-delete-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The lower-ID Northwind vendor is retained; products from duplicate vendor 902 are rekeyed to vendor 901, then vendor 902 is deleted. The unique Southridge vendor and its product remain untouched.",
+  "determinism_notes": "Fixed vendor IDs, duplicate names, product relationships, one-row batch limit, and all output ordering are explicit. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE vendors (vendor_id INT PRIMARY KEY, vendor_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE vendor_products (product_id INT PRIMARY KEY, vendor_id INT NOT NULL, product_name VARCHAR(32) NOT NULL, FOREIGN KEY (vendor_id) REFERENCES vendors (vendor_id))",
+    "INSERT INTO vendors VALUES (901, 'Northwind'), (902, 'Northwind'), (903, 'Southridge')",
+    "INSERT INTO vendor_products VALUES (9101, 902, 'cedar soap'), (9102, 903, 'linen brush')"
+  ],
+  "steps": [
+    {
+      "sql": "CREATE TEMPORARY TABLE duplicate_vendor_batch AS SELECT v.vendor_id AS duplicate_vendor_id, keepers.keep_vendor_id FROM vendors AS v INNER JOIN (SELECT MIN(vendor_id) AS keep_vendor_id, vendor_name FROM vendors WHERE TRIM(vendor_name) <> '' GROUP BY vendor_name HAVING COUNT(*) > 1) AS keepers ON keepers.vendor_name = v.vendor_name WHERE v.vendor_id <> keepers.keep_vendor_id ORDER BY v.vendor_id LIMIT 1",
+      "ordered": false
+    },
+    {
+      "sql": "UPDATE IGNORE vendor_products AS p INNER JOIN duplicate_vendor_batch AS b ON b.duplicate_vendor_id = p.vendor_id SET p.vendor_id = b.keep_vendor_id",
+      "ordered": false
+    },
+    {
+      "sql": "DELETE v FROM vendors AS v INNER JOIN duplicate_vendor_batch AS b ON b.duplicate_vendor_id = v.vendor_id LEFT JOIN vendor_products AS p ON p.vendor_id = v.vendor_id WHERE p.vendor_id IS NULL",
+      "ordered": false
+    },
+    {
+      "sql": "DROP TEMPORARY TABLE duplicate_vendor_batch",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT vendor_id, vendor_name FROM vendors ORDER BY vendor_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT product_id, vendor_id, product_name FROM vendor_products ORDER BY product_id",
+      "ordered": true
+    }
+  ]
+}
