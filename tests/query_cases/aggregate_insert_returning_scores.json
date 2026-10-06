@@ -1,0 +1,67 @@
+{
+  "version": 1,
+  "id": "aggregate_insert_returning_scores",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "ajeetdsouza/clidle",
+      "commit": "e0e2cb1d3c71d52f7f7294f52c497bf558a605d1",
+      "path": "query.sql",
+      "url": "https://github.com/ajeetdsouza/clidle/blob/e0e2cb1d3c71d52f7f7294f52c497bf558a605d1/query.sql",
+      "sha256": "1f1c19038f98bf26ffdc7f133f7364b24c3e261f90d4478325979bc0d171baa4",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "query.sql:1-17",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A small application schema inserts rows with INSERT ... RETURNING and separately calculates per-entity scores with a CTE that joins event rows and groups the aggregate result.",
+      "mysql_mariadb_translation": "Use an independently authored ordered INSERT ... SELECT ... RETURNING to create scorecard rows, followed by a CTE that inner-joins contestants to predictions, counts correct answers, and computes a grouped score with CASE expressions."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "insert-select-returning",
+    "generated-key-returning",
+    "cte",
+    "inner-join",
+    "aggregate",
+    "aggregate-count",
+    "conditional-aggregate",
+    "group-by",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Contestant scorecard rows are inserted in contestant order and returned with generated IDs; the following grouped CTE reports each contestant's correct prediction count and score.",
+  "determinism_notes": "All contestants and predictions are fixed, INSERT source order and every output order are explicit, and no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE contestants (contestant_id INT PRIMARY KEY, display_name VARCHAR(32) NOT NULL, answer VARCHAR(16) NOT NULL)",
+    "CREATE TABLE predictions (prediction_id INT PRIMARY KEY, contestant_id INT NOT NULL, predicted_answer VARCHAR(16) NOT NULL, FOREIGN KEY (contestant_id) REFERENCES contestants (contestant_id))",
+    "CREATE TABLE scorecards (scorecard_id INT AUTO_INCREMENT PRIMARY KEY, contestant_id INT NOT NULL, status_label VARCHAR(32) NOT NULL, FOREIGN KEY (contestant_id) REFERENCES contestants (contestant_id))",
+    "INSERT INTO contestants VALUES (11, 'Aster', 'red'), (22, 'Beryl', 'blue'), (33, 'Cobalt', 'green')",
+    "INSERT INTO predictions VALUES (101, 11, 'red'), (102, 11, 'blue'), (201, 22, 'blue'), (202, 22, 'blue'), (301, 33, 'yellow')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO scorecards (contestant_id, status_label) SELECT contestant_id, CONCAT(display_name, ' pending') FROM contestants ORDER BY contestant_id RETURNING scorecard_id, contestant_id, status_label",
+      "ordered": true
+    },
+    {
+      "sql": "WITH contestant_scores AS (SELECT c.contestant_id, c.display_name, COUNT(p.prediction_id) AS prediction_count, SUM(CASE WHEN p.predicted_answer = c.answer THEN 1 ELSE 0 END) AS correct_count FROM contestants AS c INNER JOIN predictions AS p ON p.contestant_id = c.contestant_id GROUP BY c.contestant_id, c.display_name) SELECT contestant_id, display_name, prediction_count, correct_count, correct_count * 10 AS score FROM contestant_scores ORDER BY contestant_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT scorecard_id, contestant_id, status_label FROM scorecards ORDER BY scorecard_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT contestant_id, display_name, answer FROM contestants ORDER BY contestant_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT prediction_id, contestant_id, predicted_answer FROM predictions ORDER BY prediction_id",
+      "ordered": true
+    }
+  ]
+}
