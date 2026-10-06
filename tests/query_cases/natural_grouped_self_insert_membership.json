@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "natural_grouped_self_insert_membership",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "mariadb-corporation/mariadb-qa",
+      "commit": "1bd169e44678639e2f82ab9097bfadc78aa7174e",
+      "path": "BUGS/MDEV-38801.sql",
+      "url": "https://github.com/mariadb-corporation/mariadb-qa/blob/1bd169e44678639e2f82ab9097bfadc78aa7174e/BUGS/MDEV-38801.sql",
+      "sha256": "aac7421137d79c332fe600d0bf993c8b45023667e23625cff0b8c8af3f855d24",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "BUGS/MDEV-38801.sql:1-2",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "An INSERT computes a value from a membership predicate over a grouped derived table naturally joined to another read of the same target table.",
+      "mysql_mariadb_translation": "Use independently authored signal-marker rows and insert one derived marker whose integer flag is calculated by an IN predicate over a grouped signal-code relation NATURAL JOINed to the existing target projection."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "self-referential-insert",
+    "natural-join",
+    "grouped-derived-table",
+    "membership-subquery",
+    "insert-expression",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Existing signal codes 10 and 20 are reduced to distinct grouped values before the natural join; the inserted marker records whether code 20 was present and leaves the original markers unchanged.",
+  "determinism_notes": "Fixed marker IDs, signal codes, derived membership value, and final ordering are used. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE signal_markers (marker_id INT PRIMARY KEY, signal_code INT NOT NULL, marker_label VARCHAR(32) NOT NULL)",
+    "INSERT INTO signal_markers VALUES (1, 10, 'baseline'), (2, 20, 'priority'), (3, 20, 'priority-duplicate')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO signal_markers (marker_id, signal_code, marker_label) VALUES (4, (20 IN (SELECT signal_code FROM (SELECT signal_code FROM signal_markers GROUP BY signal_code) AS grouped_codes NATURAL JOIN (SELECT signal_code FROM signal_markers) AS observed_codes)), 'derived-membership')",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT marker_id, signal_code, marker_label FROM signal_markers ORDER BY marker_id",
+      "ordered": true
+    }
+  ]
+}
