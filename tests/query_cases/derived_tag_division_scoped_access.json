@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "derived_tag_division_scoped_access",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Cosmian/kms",
+      "commit": "20aa0b940fdc948a550b4c077d87418cf5daa8d8",
+      "path": "crate/server_database/src/stores/sql/query_mysql.sql",
+      "url": "https://github.com/Cosmian/kms/blob/20aa0b940fdc948a550b4c077d87418cf5daa8d8/crate/server_database/src/stores/sql/query_mysql.sql",
+      "sha256": "16cf2d23fa32585bed0d9d684903f4292364172bc0ed8807778466f589d03a3d",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "crate/server_database/src/stores/sql/query_mysql.sql:190-200",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped derived table uses COUNT(DISTINCT ...) in HAVING to require every requested tag, then joins the qualifying IDs to parent rows and preserves optional access rows through a scoped LEFT JOIN with a user-or-wildcard predicate.",
+      "mysql_mariadb_translation": "Reauthored as a project catalog access report. A fixed requested-tag set is applied in a grouped derived table, duplicate tag observations are collapsed with COUNT(DISTINCT), and qualifying projects retain either the requested principal's permission, a wildcard permission, or a deterministic no-access row through a scoped LEFT JOIN. The source placeholders, object schema, and access domain are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "derived-table-relational-division",
+    "count-distinct-having",
+    "duplicate-tag-suppression",
+    "scoped-left-join",
+    "wildcard-or-principal-match",
+    "coalesce-null-extension",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Projects 1001, 1002, 1004, and 1005 have both requested tags; project 1002 has a duplicate tag observation and project 1004 has an unrelated third tag. Project 1003 lacks one requested tag and is excluded. Project 1001 uses the requested principal permission, project 1002 uses wildcard permission, and project 1004 has no access row while project 1005 has only another principal; both retain a deterministic no-access value.",
+  "determinism_notes": "Project IDs, tag codes, duplicate observations, principal IDs, permission values, requested tags, and final ordering are fixed; there are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE access_projects (project_id INT PRIMARY KEY, project_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE project_tags (tag_observation_id INT PRIMARY KEY, project_id INT NOT NULL, tag_code VARCHAR(16) NOT NULL)",
+    "CREATE TABLE project_access (access_id INT PRIMARY KEY, project_id INT NOT NULL, principal_id INT NOT NULL, permission_level VARCHAR(16) NOT NULL)",
+    "INSERT INTO access_projects VALUES (1001, 'Atlas'), (1002, 'Beacon'), (1003, 'Cedar'), (1004, 'Delta'), (1005, 'Ember')",
+    "INSERT INTO project_tags VALUES (1, 1001, 'gold'), (2, 1001, 'pci'), (3, 1002, 'gold'), (4, 1002, 'pci'), (5, 1002, 'pci'), (6, 1003, 'gold'), (7, 1004, 'gold'), (8, 1004, 'pci'), (9, 1004, 'internal'), (10, 1005, 'gold'), (11, 1005, 'pci')",
+    "INSERT INTO project_access VALUES (101, 1001, 42, 'read'), (102, 1002, 0, 'admin'), (103, 1005, 7, 'write')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT p.project_id, p.project_name, COALESCE(a.permission_level, 'none') AS permission_level FROM access_projects AS p INNER JOIN (SELECT project_id FROM project_tags WHERE tag_code IN ('gold', 'pci') GROUP BY project_id HAVING COUNT(DISTINCT tag_code) = 2) AS matched_tags ON p.project_id = matched_tags.project_id LEFT JOIN project_access AS a ON a.project_id = p.project_id AND (a.principal_id = 42 OR a.principal_id = 0) ORDER BY p.project_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT p.project_id, p.project_name, COALESCE(a.permission_level, 'none') AS permission_level FROM access_projects AS p INNER JOIN (SELECT project_id FROM project_tags WHERE tag_code IN ('gold', 'pci') GROUP BY project_id HAVING COUNT(DISTINCT tag_code) = 2) AS matched_tags ON p.project_id = matched_tags.project_id LEFT JOIN project_access AS a ON a.project_id = p.project_id AND (a.principal_id = 42 OR a.principal_id = 0) ORDER BY p.project_id",
+      "ordered": true
+    }
+  ]
+}
