@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "id": "partial_conflict_target_upsert",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "inngest/inngest",
+      "commit": "d1efc409975e0eb3b5daa0850f4cd74f56de3b34",
+      "path": "pkg/db/postgres/sqlc/queries.sql",
+      "url": "https://github.com/inngest/inngest/blob/d1efc409975e0eb3b5daa0850f4cd74f56de3b34/pkg/db/postgres/sqlc/queries.sql",
+      "sha256": "2e58cdfb97fb41bb6708db6a2353fbc895a9ed10b30274d2f3f09f745f4f7a22",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "pkg/db/postgres/sqlc/queries.sql:25-48",
+      "source_dialect": "postgresql",
+      "observed_pattern": "An application upsert targets a partial unique index through ON CONFLICT (name) WHERE name <> '', updates an existing row including clearing its archived marker, and returns the preserved row identity.",
+      "mysql_mariadb_translation": "Reauthored as an app catalog. MariaDB models the partial unique conflict target with an explicitly maintained nullable active-name key: nonblank names conflict and blank names remain independently insertable. ON DUPLICATE KEY UPDATE refreshes the existing row, clears archived_at to revive it, and RETURNING exposes the preserved or new ID. The source schema, identifiers, payload, and SDK workflow are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "partial-conflict-target-translation",
+    "nullable-unique-conflict-key",
+    "conditional-conflict-membership",
+    "upsert-returning",
+    "archived-row-revival",
+    "blank-key-nonconflict",
+    "preserved-primary-key"
+  ],
+  "fixture_notes": "Atlas conflicts with an existing active row and must preserve ID 101 while refreshing its version. Retired conflicts with an archived row and must revive ID 102 by clearing archived_at. Two blank-name inserts must both create rows because their maintained conflict keys are NULL. Beacon is a new nonblank name and must insert normally.",
+  "determinism_notes": "App IDs, names, versions, endpoints, archived timestamps, maintained conflict keys, conflict updates, and ordered final reads are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE app_catalog (app_id INT PRIMARY KEY, app_name VARCHAR(64) NOT NULL, sdk_version VARCHAR(16) NOT NULL, endpoint VARCHAR(128) NOT NULL, archived_at DATETIME NULL, active_name VARCHAR(64) NULL, UNIQUE KEY uq_app_active_name (active_name))",
+    "INSERT INTO app_catalog (app_id, app_name, sdk_version, endpoint, archived_at, active_name) VALUES (101, 'atlas', '1.0', '/atlas/v1', NULL, 'atlas'), (102, 'retired', '0.9', '/retired/v1', '2026-01-10 00:00:00', 'retired'), (103, '', '0.5', '/blank/old', '2026-01-11 00:00:00', NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO app_catalog (app_id, app_name, sdk_version, endpoint, archived_at, active_name) VALUES (900, 'atlas', '2.0', '/atlas/v2', NULL, 'atlas') ON DUPLICATE KEY UPDATE sdk_version = VALUES(sdk_version), endpoint = VALUES(endpoint), archived_at = NULL, active_name = VALUES(active_name) RETURNING app_id, app_name, sdk_version, endpoint, archived_at, active_name",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO app_catalog (app_id, app_name, sdk_version, endpoint, archived_at, active_name) VALUES (901, 'retired', '1.1', '/retired/v2', NULL, 'retired') ON DUPLICATE KEY UPDATE sdk_version = VALUES(sdk_version), endpoint = VALUES(endpoint), archived_at = NULL, active_name = VALUES(active_name) RETURNING app_id, app_name, sdk_version, endpoint, archived_at, active_name",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO app_catalog (app_id, app_name, sdk_version, endpoint, archived_at, active_name) VALUES (104, '', '0.6', '/blank/new-a', NULL, NULL) ON DUPLICATE KEY UPDATE sdk_version = VALUES(sdk_version), endpoint = VALUES(endpoint), archived_at = NULL, active_name = VALUES(active_name) RETURNING app_id, app_name, sdk_version, endpoint, archived_at, active_name",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO app_catalog (app_id, app_name, sdk_version, endpoint, archived_at, active_name) VALUES (105, '', '0.7', '/blank/new-b', NULL, NULL) ON DUPLICATE KEY UPDATE sdk_version = VALUES(sdk_version), endpoint = VALUES(endpoint), archived_at = NULL, active_name = VALUES(active_name) RETURNING app_id, app_name, sdk_version, endpoint, archived_at, active_name",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO app_catalog (app_id, app_name, sdk_version, endpoint, archived_at, active_name) VALUES (106, 'beacon', '1.0', '/beacon/v1', NULL, 'beacon') ON DUPLICATE KEY UPDATE sdk_version = VALUES(sdk_version), endpoint = VALUES(endpoint), archived_at = NULL, active_name = VALUES(active_name) RETURNING app_id, app_name, sdk_version, endpoint, archived_at, active_name",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT app_id, app_name, sdk_version, endpoint, archived_at, active_name FROM app_catalog ORDER BY app_id",
+      "ordered": true
+    }
+  ]
+}
