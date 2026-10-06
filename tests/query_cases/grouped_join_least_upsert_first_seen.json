@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "id": "grouped_join_least_upsert_first_seen",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "pingcap/ossinsight",
+      "commit": "d98a10e7244cfc9e2d1da02bace1c2a9fe9d7738",
+      "path": "configs/pipelines/sync_org_repo_countries_issue_creator_role/process.sql",
+      "url": "https://github.com/pingcap/ossinsight/blob/d98a10e7244cfc9e2d1da02bace1c2a9fe9d7738/configs/pipelines/sync_org_repo_countries_issue_creator_role/process.sql",
+      "sha256": "2203696ea559be9877ccbb3e4f3ce32f72a2c5799f359eed217652429cb3c17f",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "configs/pipelines/sync_org_repo_countries_issue_creator_role/process.sql:1-17",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped INSERT ... SELECT joins event rows to a directory, computes the earliest date per entity and region with MIN, and uses ON DUPLICATE KEY UPDATE with LEAST to preserve the earliest previously observed date.",
+      "mysql_mariadb_translation": "Reauthored as a project-region first-seen summary. Fixed ticket events are joined to a participant directory, filtered to opened events in a bounded date range, grouped by project and region, and upserted so an existing summary retains the earlier date through LEAST. Source parameters and storage hints are replaced with concrete fixture literals."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "grouped-join-upsert",
+    "minimum-aggregate",
+    "least-upsert-merge",
+    "filtered-source-upsert",
+    "bounded-date-filter",
+    "duplicate-key-update",
+    "deterministic-final-state"
+  ],
+  "fixture_notes": "Project 501's north summary moves back to the earliest qualifying ticket date; project 501 south and project 502 north are inserted. Comment events, closed actions, zero-workspace events, blank regions, and out-of-range dates are excluded.",
+  "determinism_notes": "Project IDs, participant regions, event dates, event classifications, and summary ordering are fixed; there are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE project_events (event_id INT PRIMARY KEY, project_id INT NOT NULL, participant_id INT NOT NULL, occurred_on DATE NOT NULL, event_kind VARCHAR(16) NOT NULL, action_code VARCHAR(16) NOT NULL, workspace_id INT NOT NULL)",
+    "CREATE TABLE participant_directory (participant_id INT PRIMARY KEY, region_code VARCHAR(16) NOT NULL)",
+    "CREATE TABLE project_region_first_seen (project_id INT NOT NULL, region_code VARCHAR(16) NOT NULL, first_seen_on DATE NOT NULL, PRIMARY KEY (project_id, region_code))",
+    "INSERT INTO participant_directory VALUES (71, 'north'), (72, 'south'), (73, ''), (74, 'UNK')",
+    "INSERT INTO project_events VALUES (1001, 501, 71, '2026-08-04', 'ticket', 'opened', 9), (1002, 501, 71, '2026-08-07', 'ticket', 'opened', 9), (1003, 501, 72, '2026-08-05', 'ticket', 'opened', 9), (1004, 502, 71, '2026-08-06', 'ticket', 'opened', 9), (1005, 503, 71, '2026-08-08', 'ticket', 'closed', 9), (1006, 504, 71, '2026-08-09', 'comment', 'opened', 9), (1007, 505, 71, '2026-08-09', 'ticket', 'opened', 0), (1008, 506, 73, '2026-08-09', 'ticket', 'opened', 9), (1009, 507, 74, '2026-08-09', 'ticket', 'opened', 9), (1010, 508, 72, '2026-08-10', 'ticket', 'opened', 9), (1011, 509, 71, '2026-08-11', 'ticket', 'opened', 9), (1012, 501, 71, '2026-08-12', 'ticket', 'opened', 9)",
+    "INSERT INTO project_region_first_seen VALUES (501, 'north', '2026-08-10'), (510, 'west', '2026-08-02')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO project_region_first_seen (project_id, region_code, first_seen_on) SELECT e.project_id, p.region_code, MIN(e.occurred_on) AS new_first_seen_on FROM project_events AS e INNER JOIN participant_directory AS p ON p.participant_id = e.participant_id WHERE e.event_kind = 'ticket' AND e.action_code = 'opened' AND e.workspace_id <> 0 AND e.occurred_on BETWEEN '2026-08-01' AND '2026-08-31' AND p.region_code NOT IN ('', 'UNK') GROUP BY e.project_id, p.region_code ON DUPLICATE KEY UPDATE first_seen_on = LEAST(first_seen_on, VALUES(first_seen_on))",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT project_id, region_code, first_seen_on FROM project_region_first_seen ORDER BY project_id, region_code",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT project_id, region_code, first_seen_on FROM project_region_first_seen ORDER BY project_id, region_code",
+      "ordered": true
+    }
+  ]
+}
