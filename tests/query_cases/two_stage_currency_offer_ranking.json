@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "id": "two_stage_currency_offer_ranking",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "wikimedia/wikimedia-fundraising-tools",
+      "commit": "06bcea4c314a359e51a604924e9a6e24bef2b1dc",
+      "path": "silverpop_export/update_table.sql",
+      "url": "https://github.com/wikimedia/wikimedia-fundraising-tools/blob/06bcea4c314a359e51a604924e9a6e24bef2b1dc/silverpop_export/update_table.sql",
+      "sha256": "266dbe5f141379837478ebf6ea8e5c5b5c0c957df6144f323e2f9a5328b7c1a7",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "silverpop_export/update_table.sql:430-479",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A two-stage windowed ranking first keeps the highest-valued row per entity and currency, then ranks those currency winners per entity using a different converted-value and recency precedence before retaining one overall winner.",
+      "mysql_mariadb_translation": "Reauthored as a currency offer selector. Accepted offers are ranked independently within each customer and currency by quoted amount, recency, and ID; the surviving currency rows are then ranked per customer by converted total, recency, and ID. The original donation tables, currencies, values, and export workflow are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "two-stage-partitioned-ranking",
+    "nested-row-number-windows",
+    "per-currency-deduplication",
+    "cross-currency-precedence",
+    "filtered-window-input",
+    "mixed-tie-break-order",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Customer 901 selects the newer tied USD offer over an equally converted EUR offer; customer 902 selects EUR because its converted total is higher; customer 903 selects USD despite EUR having the larger quoted amount because USD converts higher; customer 904 ignores a declined USD offer and selects EUR; customer 905 resolves equal converted totals by recency.",
+  "determinism_notes": "Customer IDs, currencies, quoted and converted amounts, acceptance flags, dates, offer IDs, window orderings, and final ordering are fixed; there are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE currency_offers (offer_id INT PRIMARY KEY, customer_id INT NOT NULL, currency_code CHAR(3) NOT NULL, quoted_amount DECIMAL(10,2) NOT NULL, converted_total DECIMAL(10,2) NOT NULL, offered_on DATE NOT NULL, accepted TINYINT NOT NULL)",
+    "INSERT INTO currency_offers VALUES (1, 901, 'USD', 80.00, 80.00, '2026-01-02', 1), (2, 901, 'USD', 80.00, 80.00, '2026-01-05', 1), (3, 901, 'EUR', 70.00, 80.00, '2026-01-03', 1), (4, 902, 'USD', 100.00, 100.00, '2026-02-01', 1), (5, 902, 'EUR', 90.00, 110.00, '2026-02-02', 1), (6, 902, 'EUR', 90.00, 110.00, '2026-01-30', 1), (7, 903, 'USD', 120.00, 120.00, '2026-03-01', 1), (8, 903, 'EUR', 200.00, 110.00, '2026-03-02', 1), (9, 904, 'USD', 50.00, 50.00, '2026-04-01', 1), (10, 904, 'USD', 100.00, 100.00, '2026-04-02', 0), (11, 904, 'EUR', 45.00, 55.00, '2026-04-03', 1), (12, 905, 'USD', 70.00, 70.00, '2026-05-01', 1), (13, 905, 'EUR', 70.00, 70.00, '2026-05-02', 1)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT customer_id, currency_code, quoted_amount, converted_total, offered_on FROM (SELECT customer_id, currency_code, quoted_amount, converted_total, offered_on, offer_id, ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY converted_total DESC, offered_on DESC, offer_id DESC) AS overall_rank FROM (SELECT customer_id, currency_code, quoted_amount, converted_total, offered_on, offer_id, ROW_NUMBER() OVER (PARTITION BY customer_id, currency_code ORDER BY quoted_amount DESC, offered_on DESC, offer_id DESC) AS currency_rank FROM currency_offers WHERE accepted = 1) AS currency_ranked WHERE currency_rank = 1) AS overall_ranked WHERE overall_rank = 1 ORDER BY customer_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT customer_id, currency_code, quoted_amount, converted_total, offered_on FROM (SELECT customer_id, currency_code, quoted_amount, converted_total, offered_on, offer_id, ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY converted_total DESC, offered_on DESC, offer_id DESC) AS overall_rank FROM (SELECT customer_id, currency_code, quoted_amount, converted_total, offered_on, offer_id, ROW_NUMBER() OVER (PARTITION BY customer_id, currency_code ORDER BY quoted_amount DESC, offered_on DESC, offer_id DESC) AS currency_rank FROM currency_offers WHERE accepted = 1) AS currency_ranked WHERE currency_rank = 1) AS overall_ranked WHERE overall_rank = 1 ORDER BY customer_id",
+      "ordered": true
+    }
+  ]
+}
