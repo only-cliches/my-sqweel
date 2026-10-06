@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "id": "latest_score_null_order_leaderboard",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "odota/core",
+      "commit": "e0847d8edcf33b7467860689b3277f91c1062103",
+      "path": "sql/leaderboard.sql",
+      "url": "https://github.com/odota/core/blob/e0847d8edcf33b7467860689b3277f91c1062103/sql/leaderboard.sql",
+      "sha256": "f559abd201a77d9dc7beb9ff13ccc34111b4869942a6fabc205431bcb455d488",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "sql/leaderboard.sql:1-11",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A leaderboard joins each entity to a grouped MAX timestamp subquery to retain its latest history row, joins display metadata, orders a nullable score with NULLS LAST, and applies a deterministic top-N limit.",
+      "mysql_mariadb_translation": "Reauthored as a member score board. A grouped latest-timestamp relation joins back to score history and member metadata, while MariaDB replaces NULLS LAST with (score IS NULL) ASC before descending score and member-ID tie ordering. The source schema, identifiers, rows, ranking field, and game context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "grouped-max-latest-row",
+    "latest-history-join",
+    "metadata-inner-join",
+    "nulls-last-translation",
+    "ordered-top-n",
+    "deterministic-tie-break"
+  ],
+  "fixture_notes": "Member 601 has an older and a newer score, member 603 has a newer NULL score, and members 602 and 604 have high numeric scores. The latest row join must discard member 601's old score; the NULL score sorts after numeric scores and falls outside the top three.",
+  "determinism_notes": "Member IDs, score timestamps, score values, grouped MAX selection, NULL ordering expression, tie-breaker, and LIMIT are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE member_directory (member_id INT PRIMARY KEY, member_name VARCHAR(64) NOT NULL)",
+    "CREATE TABLE member_scores (score_id INT PRIMARY KEY, member_id INT NOT NULL, score INT NULL, recorded_at DATETIME NOT NULL)",
+    "INSERT INTO member_directory VALUES (601, 'Aster'), (602, 'Beryl'), (603, 'Cedar'), (604, 'Dune')",
+    "INSERT INTO member_scores VALUES (7001, 601, 100, '2026-04-01 09:00:00'), (7002, 601, 180, '2026-04-02 09:00:00'), (7003, 602, 210, '2026-04-03 09:00:00'), (7004, 603, 170, '2026-04-01 09:00:00'), (7005, 603, NULL, '2026-04-04 09:00:00'), (7006, 604, 190, '2026-04-02 12:00:00')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT s.member_id, s.score, s.recorded_at, m.member_name FROM member_scores AS s INNER JOIN (SELECT member_id, MAX(recorded_at) AS latest_recorded_at FROM member_scores GROUP BY member_id) AS latest ON latest.member_id = s.member_id AND latest.latest_recorded_at = s.recorded_at INNER JOIN member_directory AS m ON m.member_id = s.member_id ORDER BY (s.score IS NULL) ASC, s.score DESC, s.member_id ASC LIMIT 3",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT s.member_id, s.score, s.recorded_at, m.member_name FROM member_scores AS s INNER JOIN member_directory AS m ON m.member_id = s.member_id ORDER BY s.member_id, s.recorded_at",
+      "ordered": true
+    }
+  ]
+}
