@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "id": "lateral_document_summary",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "ManifoldScholar/manifold",
+      "commit": "9b7f4a8bbdf33d0e20d6394119b195702e40a059",
+      "path": "api/db/views/text_summaries_v07.sql",
+      "url": "https://github.com/ManifoldScholar/manifold/blob/9b7f4a8bbdf33d0e20d6394119b195702e40a059/api/db/views/text_summaries_v07.sql",
+      "sha256": "3bffba7cfc6907274cca4b87265f390bb171c3dee972b581a5671e4c082b89d8",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "api/db/views/text_summaries_v07.sql:1-60",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A document summary starts from a parent table and uses correlated LEFT JOIN LATERAL subqueries for conditional child counts, the first ordered matching section, and ordered role-specific contributor names, while preserving parents with no matching children.",
+      "mysql_mariadb_translation": "Reauthored as a document digest. MariaDB replaces the correlated lateral aggregates with grouped derived relations, replaces the lateral LIMIT-one section with a ROW_NUMBER-filtered derived relation, and replaces PostgreSQL FILTER/string_agg with CASE/GROUP_CONCAT while retaining optional metadata through LEFT JOINs. The source schema, identifiers, rows, and publishing domain are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "lateral-translation",
+    "correlated-child-aggregate",
+    "conditional-aggregate",
+    "ordered-group-concat",
+    "derived-aggregate-left-joins",
+    "partitioned-top-one",
+    "optional-child-preservation",
+    "null-coalesced-counts"
+  ],
+  "fixture_notes": "Document 801 has all four note categories, two navigation sections where the older section must win, and contributors in both roles with positions that determine concatenation order. Document 802 has one navigation section and one non-orphaned highlight. Document 803 has no notes, navigation section, or contributors and must remain in the digest with zero counts and NULL optional fields.",
+  "determinism_notes": "Document IDs, section IDs, note IDs, contributor positions, row-number ordering, CASE predicates, GROUP_CONCAT ordering, and final document ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE digest_documents (document_id INT PRIMARY KEY, title VARCHAR(64) NOT NULL)",
+    "CREATE TABLE digest_sections (section_id INT PRIMARY KEY, document_id INT NOT NULL, section_kind VARCHAR(16) NOT NULL, created_at DATETIME NOT NULL)",
+    "CREATE TABLE digest_notes (note_id INT PRIMARY KEY, section_id INT NOT NULL, note_kind VARCHAR(16) NOT NULL, orphaned TINYINT NOT NULL)",
+    "CREATE TABLE digest_people (person_id INT PRIMARY KEY, display_name VARCHAR(64) NOT NULL)",
+    "CREATE TABLE digest_contributors (document_id INT NOT NULL, person_id INT NOT NULL, contributor_role VARCHAR(16) NOT NULL, position_no INT NOT NULL, PRIMARY KEY (document_id, person_id))",
+    "INSERT INTO digest_documents VALUES (801, 'Atlas'), (802, 'Beacon'), (803, 'Cinder')",
+    "INSERT INTO digest_sections VALUES (9001, 801, 'navigation', '2026-06-01 09:00:00'), (9002, 801, 'body', '2026-06-01 10:00:00'), (9003, 801, 'navigation', '2026-06-02 09:00:00'), (9010, 802, 'body', '2026-06-03 09:00:00'), (9011, 802, 'navigation', '2026-06-04 09:00:00'), (9020, 803, 'body', '2026-06-05 09:00:00')",
+    "INSERT INTO digest_notes VALUES (9101, 9002, 'annotation', 0), (9102, 9002, 'annotation', 1), (9103, 9002, 'highlight', 0), (9104, 9002, 'highlight', 1), (9110, 9010, 'highlight', 0)",
+    "INSERT INTO digest_people VALUES (1, 'Ada'), (2, 'Bo'), (3, 'Cy')",
+    "INSERT INTO digest_contributors VALUES (801, 1, 'creator', 2), (801, 3, 'collaborator', 1), (802, 2, 'creator', 1)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT d.document_id, d.title, COALESCE(ns.annotation_count, 0) AS annotation_count, COALESCE(ns.highlight_count, 0) AS highlight_count, nav.section_id AS first_navigation_section_id, names.creator_names, names.collaborator_names FROM digest_documents AS d LEFT JOIN (SELECT s.document_id, SUM(CASE WHEN n.note_kind = 'annotation' AND n.orphaned = 0 THEN 1 ELSE 0 END) AS annotation_count, SUM(CASE WHEN n.note_kind = 'highlight' AND n.orphaned = 0 THEN 1 ELSE 0 END) AS highlight_count FROM digest_sections AS s INNER JOIN digest_notes AS n ON n.section_id = s.section_id GROUP BY s.document_id) AS ns ON ns.document_id = d.document_id LEFT JOIN (SELECT ranked.document_id, ranked.section_id FROM (SELECT s.document_id, s.section_id, ROW_NUMBER() OVER (PARTITION BY s.document_id ORDER BY s.created_at ASC, s.section_id ASC) AS row_no FROM digest_sections AS s WHERE s.section_kind = 'navigation') AS ranked WHERE ranked.row_no = 1) AS nav ON nav.document_id = d.document_id LEFT JOIN (SELECT c.document_id, GROUP_CONCAT(CASE WHEN c.contributor_role = 'creator' THEN p.display_name END ORDER BY c.position_no ASC SEPARATOR ', ') AS creator_names, GROUP_CONCAT(CASE WHEN c.contributor_role = 'collaborator' THEN p.display_name END ORDER BY c.position_no ASC SEPARATOR ', ') AS collaborator_names FROM digest_contributors AS c INNER JOIN digest_people AS p ON p.person_id = c.person_id GROUP BY c.document_id) AS names ON names.document_id = d.document_id ORDER BY d.document_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT d.document_id, s.section_id, n.note_id, c.person_id FROM digest_documents AS d LEFT JOIN digest_sections AS s ON s.document_id = d.document_id LEFT JOIN digest_notes AS n ON n.section_id = s.section_id LEFT JOIN digest_contributors AS c ON c.document_id = d.document_id ORDER BY d.document_id, s.section_id, n.note_id, c.person_id",
+      "ordered": true
+    }
+  ]
+}
