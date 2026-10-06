@@ -3893,6 +3893,8 @@ where
             Ok(eval_quote_value(value))
         })()),
 
+        "GREATEST" => Some(eval_extreme_values(args.iter().map(eval_arg), true)),
+        "LEAST" => Some(eval_extreme_values(args.iter().map(eval_arg), false)),
         "CONV" => Some((|| {
             let values = args.iter().map(eval_arg).collect::<Result<Vec<_>>>()?;
             eval_conv_values(&values)

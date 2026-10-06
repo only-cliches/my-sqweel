@@ -4935,6 +4935,21 @@ impl RawEngine {
                     .last()
                     .map(|name| name.value.to_ascii_uppercase())
                     .unwrap_or_default();
+                if matches!(function_name.as_str(), "GREATEST" | "LEAST") {
+                    let values = function_arguments(function)?
+                        .into_iter()
+                        .map(|argument| {
+                            argument
+                                .map(|argument| self.eval_expr_ctx(&argument, data, last_insert_id))
+                                .transpose()
+                                .map(|value| value.unwrap_or(Value::Null))
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    return eval::eval_extreme_values(
+                        values.into_iter().map(Ok),
+                        function_name == "GREATEST",
+                    );
+                }
                 if function_name == "DEFAULT"
                     && let Some(argument) = function_argument(function, 0)
                 {

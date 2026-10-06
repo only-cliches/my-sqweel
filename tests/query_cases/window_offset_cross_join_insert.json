@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "id": "window_offset_cross_join_insert",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "en-wl/wordlist",
+      "commit": "1e5b7d3a72f47a71da5d28686c1dd4b397178485",
+      "path": "libscowl/adjust_proc.sql",
+      "url": "https://github.com/en-wl/wordlist/blob/1e5b7d3a72f47a71da5d28686c1dd4b397178485/libscowl/adjust_proc.sql",
+      "sha256": "a8a2b7a32c9aa2f5076b83ed54fe65f3655088beb6523564bab19a0f7108032f",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "libscowl/adjust_proc.sql:38-54",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "An INSERT ... SELECT creates staged surrogate IDs by adding a global ROW_NUMBER window to the greater of two scalar MAX values, while joining batch rows and cross joining a one-row context source.",
+      "mysql_mariadb_translation": "Reauthored as a label-allocation staging load. Active batch items are joined to their batch groups and a single allocation context row, then receive deterministic IDs above both the existing generated-ID maximum and source-item maximum. The source word-list schema, names, values, and SQLite operators are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "windowed-surrogate-offset",
+    "multiple-scalar-maxima",
+    "greatest-coalesced-offset",
+    "batch-key-join",
+    "cross-join-context",
+    "case-derived-flag",
+    "insert-select",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Existing generated ID 100 and source item ID 90 establish an offset of 100. Three active batch items receive IDs 101 through 103 in group/item order; an inactive item is excluded. The canonical-item comparison emits one primary flag without relying on source boolean syntax.",
+  "determinism_notes": "Batch codes, group IDs, item IDs, source maxima, active flags, labels, one-row context, window ordering, and final ordering are fixed; there are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE split_batches (batch_code VARCHAR(16) PRIMARY KEY, group_id INT NOT NULL, active TINYINT NOT NULL)",
+    "CREATE TABLE batch_items (batch_code VARCHAR(16) NOT NULL, item_id INT NOT NULL, canonical_item_id INT NOT NULL, label_text VARCHAR(32) NOT NULL, active TINYINT NOT NULL, PRIMARY KEY (batch_code, item_id))",
+    "CREATE TABLE source_items (item_id INT PRIMARY KEY, source_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE allocation_context (context_id INT PRIMARY KEY, context_name VARCHAR(16) NOT NULL)",
+    "CREATE TABLE generated_labels (generated_id INT PRIMARY KEY, group_id INT NOT NULL, item_id INT NOT NULL, label_text VARCHAR(32) NOT NULL, is_primary TINYINT NOT NULL)",
+    "INSERT INTO split_batches VALUES ('batch-a', 10, 1), ('batch-b', 20, 1), ('batch-off', 30, 0)",
+    "INSERT INTO batch_items VALUES ('batch-a', 11, 11, 'alpha', 1), ('batch-a', 12, 11, 'beta', 1), ('batch-b', 21, 21, 'gamma', 1), ('batch-b', 22, 21, 'hidden', 0), ('batch-off', 31, 31, 'ignored', 1)",
+    "INSERT INTO source_items VALUES (11, 'source-alpha'), (12, 'source-beta'), (21, 'source-gamma'), (90, 'source-ceiling')",
+    "INSERT INTO allocation_context VALUES (1, 'staging')",
+    "INSERT INTO generated_labels VALUES (100, 0, 0, 'existing', 0)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO generated_labels (generated_id, group_id, item_id, label_text, is_primary) SELECT ROW_NUMBER() OVER (ORDER BY b.group_id, i.item_id) + GREATEST(COALESCE((SELECT MAX(generated_id) FROM generated_labels), 0), COALESCE((SELECT MAX(item_id) FROM source_items), 0)) AS generated_id, b.group_id, i.item_id, i.label_text, CASE WHEN i.item_id = i.canonical_item_id THEN 1 ELSE 0 END FROM split_batches AS b INNER JOIN batch_items AS i ON i.batch_code = b.batch_code CROSS JOIN allocation_context AS c WHERE b.active = 1 AND i.active = 1 AND c.context_id = 1",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT generated_id, group_id, item_id, label_text, is_primary FROM generated_labels ORDER BY generated_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT generated_id, group_id, item_id, label_text, is_primary FROM generated_labels ORDER BY generated_id",
+      "ordered": true
+    }
+  ]
+}
