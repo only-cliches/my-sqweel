@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "id": "distinct_on_latest_log_metadata",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "dwyl/auth",
+      "commit": "fbaaadad0800c2eddf15e81061b3b027a1857e91",
+      "path": "priv/repo/scratch.sql",
+      "url": "https://github.com/dwyl/auth/blob/fbaaadad0800c2eddf15e81061b3b027a1857e91/priv/repo/scratch.sql",
+      "sha256": "b6076204ab85fdd6ec49e5f59cf3ddd6dfe148d11147a269d0605d0c98f9e1d4",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "priv/repo/scratch.sql:94-109",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A people query selects each person's latest log with DISTINCT ON, joins required person metadata, preserves optional status and role metadata with LEFT JOINs, filters by application, and orders the latest activity with NULLS LAST.",
+      "mysql_mariadb_translation": "Reauthored as an account activity report. A ROW_NUMBER window selects one latest log per account with a deterministic log-ID tie-break; MariaDB uses LEFT JOINs for optional status and role metadata and (inserted_at IS NULL) ASC for the source NULLS LAST ordering. The source schema, identifiers, rows, applications, and authentication domain are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "distinct-on-translation",
+    "row-number",
+    "latest-row-filter",
+    "metadata-inner-join",
+    "optional-metadata-left-joins",
+    "nullable-ordering",
+    "nulls-last-translation",
+    "application-filter",
+    "deterministic-tie-break"
+  ],
+  "fixture_notes": "Account 11 has an older and newer activity in the selected application, so the newer row wins. Account 12's newest activity is in an excluded application, so its older selected-application row must not leak through. Account 13 has NULL status and no role to exercise both optional joins. Account 14 has only a NULL timestamp, which must sort last.",
+  "determinism_notes": "Account IDs, log IDs, application IDs, timestamps, row-number ordering, metadata rows, filter values, NULL ordering expression, and final tie-break are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE activity_accounts (account_id INT PRIMARY KEY, display_name VARCHAR(64) NOT NULL, status_id INT NULL)",
+    "CREATE TABLE activity_logs (log_id INT PRIMARY KEY, account_id INT NOT NULL, app_id INT NOT NULL, inserted_at DATETIME NULL)",
+    "CREATE TABLE activity_status (status_id INT PRIMARY KEY, status_text VARCHAR(32) NOT NULL)",
+    "CREATE TABLE activity_account_roles (account_id INT PRIMARY KEY, role_id INT NOT NULL)",
+    "CREATE TABLE activity_roles (role_id INT PRIMARY KEY, role_name VARCHAR(32) NOT NULL)",
+    "INSERT INTO activity_accounts VALUES (11, 'Arden', 1), (12, 'Briar', 2), (13, 'Cato', NULL), (14, 'Dara', 1)",
+    "INSERT INTO activity_logs VALUES (1101, 11, 10, '2026-05-01 09:00:00'), (1102, 11, 10, '2026-05-02 09:00:00'), (1201, 12, 10, '2026-05-03 08:00:00'), (1202, 12, 20, '2026-05-04 08:00:00'), (1301, 13, 10, '2026-05-01 12:00:00'), (1401, 14, 10, NULL)",
+    "INSERT INTO activity_status VALUES (1, 'active'), (2, 'paused')",
+    "INSERT INTO activity_account_roles VALUES (11, 101), (12, 102)",
+    "INSERT INTO activity_roles VALUES (101, 'editor'), (102, 'viewer')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH ranked_logs AS (SELECT l.log_id, l.account_id, l.app_id, l.inserted_at, ROW_NUMBER() OVER (PARTITION BY l.account_id ORDER BY l.inserted_at DESC, l.log_id DESC) AS row_no FROM activity_logs AS l) SELECT l.app_id, l.account_id, a.display_name, a.status_id, st.status_text, r.role_name, l.inserted_at FROM ranked_logs AS l INNER JOIN activity_accounts AS a ON l.account_id = a.account_id LEFT JOIN activity_status AS st ON a.status_id = st.status_id LEFT JOIN activity_account_roles AS ar ON a.account_id = ar.account_id LEFT JOIN activity_roles AS r ON ar.role_id = r.role_id WHERE l.row_no = 1 AND l.app_id IN (10, 20) ORDER BY (l.inserted_at IS NULL) ASC, l.inserted_at DESC, l.account_id ASC",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT log_id, account_id, app_id, inserted_at FROM activity_logs ORDER BY account_id, inserted_at IS NULL, inserted_at, log_id",
+      "ordered": true
+    }
+  ]
+}
