@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "id": "skip_locked_claim_delete_returning",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "NikolayS/PgQue",
+      "commit": "58d754456ed9ca36f67dff66d40b05ddd446839e",
+      "path": "benchmark/consumers/consumer_pgboss.sql",
+      "url": "https://github.com/NikolayS/PgQue/blob/58d754456ed9ca36f67dff66d40b05ddd446839e/benchmark/consumers/consumer_pgboss.sql",
+      "sha256": "592201b502434ea71262ec74647be123910fa836cd4492660de3c770cd6b2a99",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "benchmark/consumers/consumer_pgboss.sql:1-17",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A bounded ordered claim is selected with FOR UPDATE SKIP LOCKED, then DELETE ... USING removes the claimed rows and RETURNING exposes the deleted identifiers.",
+      "mysql_mariadb_translation": "Materialize the independently authored ordered SKIP LOCKED candidate IDs in a temporary claim table, then use a single-target MariaDB DELETE with an IN subquery and RETURNING inside an explicit transaction; this preserves the claim and returned-row semantics without relying on PostgreSQL's data-modifying CTE."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "delete-returning",
+    "delete-subquery",
+    "skip-locked",
+    "for-update",
+    "derived-table",
+    "ordered-delete",
+    "limit",
+    "temporary-claim-table",
+    "transaction-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Two highest-priority ready work items in the alpha queue are deleted and returned; the lower-priority ready item, a different queue, and a non-ready item remain.",
+  "determinism_notes": "Fixed queue names, states, priorities, IDs, claim limit, and ordering are used. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE work_items (item_id INT PRIMARY KEY, queue_name VARCHAR(16) NOT NULL, item_state VARCHAR(16) NOT NULL, priority INT NOT NULL, description VARCHAR(64) NOT NULL)",
+    "INSERT INTO work_items VALUES (401, 'alpha', 'ready', 90, 'rebuild catalog'), (402, 'alpha', 'ready', 70, 'refresh index'), (403, 'alpha', 'ready', 40, 'send digest'), (404, 'alpha', 'paused', 100, 'await approval'), (405, 'beta', 'ready', 120, 'other queue')",
+    "CREATE TEMPORARY TABLE claimed_items (item_id INT PRIMARY KEY)"
+  ],
+  "steps": [
+    {
+      "sql": "START TRANSACTION",
+      "ordered": false
+    },
+    {
+      "sql": "INSERT INTO claimed_items (item_id) WITH eligible_items AS (SELECT item_id FROM work_items WHERE queue_name = 'alpha' AND item_state = 'ready' ORDER BY priority DESC, item_id ASC LIMIT 2) SELECT item_id FROM eligible_items ORDER BY item_id FOR UPDATE SKIP LOCKED",
+      "ordered": false
+    },
+    {
+      "sql": "DELETE FROM work_items WHERE item_id IN (SELECT item_id FROM claimed_items) RETURNING item_id, queue_name, item_state, priority, description",
+      "ordered": true
+    },
+    {
+      "sql": "COMMIT",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT item_id, queue_name, item_state, priority, description FROM work_items ORDER BY item_id",
+      "ordered": true
+    }
+  ]
+}
