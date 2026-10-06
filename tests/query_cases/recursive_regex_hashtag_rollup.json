@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "id": "recursive_regex_hashtag_rollup",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "walkccc/LeetCode",
+      "commit": "9b85aa15e086d0b5dc1ead7184bca547942e6ff6",
+      "path": "solutions/3103. Find Trending Hashtags II/3103.sql",
+      "url": "https://github.com/walkccc/LeetCode/blob/9b85aa15e086d0b5dc1ead7184bca547942e6ff6/solutions/3103.%20Find%20Trending%20Hashtags%20II/3103.sql",
+      "sha256": "b475ab5dacd66f59e29bbfef925dcabcee6f46f3482b63d431bfb4d0e758a79f",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "solutions/3103. Find Trending Hashtags II/3103.sql:1-24",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A recursive CTE repeatedly extracts the first hashtag with REGEXP_SUBSTR, removes that occurrence with REGEXP_REPLACE, then groups the emitted tokens and returns a deterministic top-N frequency list.",
+      "mysql_mariadb_translation": "Reauthored as a monthly bulletin-tag rollup. A date-filtered seed CTE feeds recursive regex extraction, fixed March posts emit repeated tags, and the grouped counts are ordered by frequency and tag text before LIMIT 3. The source table, date window, rows, labels, and social-media context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "recursive-cte",
+    "recursive-regex-tokenization",
+    "regexp-substr",
+    "regexp-replace",
+    "grouped-frequency",
+    "ordered-top-n",
+    "deterministic-order"
+  ],
+  "fixture_notes": "March posts emit alpha three times and beta, delta, and gamma once each; a no-tag March post exercises the empty branch and an April post proves the month filter. The top-three tie order must retain gamma and delta while excluding beta.",
+  "determinism_notes": "Post IDs, fixed dates, month filter, regex pattern, tag counts, tie ordering, and LIMIT are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE bulletin_posts (post_id INT PRIMARY KEY, published_on DATE NOT NULL, body VARCHAR(255) NOT NULL)",
+    "INSERT INTO bulletin_posts VALUES (501, '2026-03-02', 'Release #alpha #beta'), (502, '2026-03-11', '#alpha fixes'), (503, '2026-03-18', 'No tag this week'), (504, '2026-03-25', '#gamma notes #alpha'), (505, '2026-04-01', '#alpha outside month')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH RECURSIVE march_posts AS (SELECT body FROM bulletin_posts WHERE YEAR(published_on) = 2026 AND MONTH(published_on) = 3), extracted_tags (tag_value, remaining_body) AS (SELECT REGEXP_SUBSTR(body, '#[^[:space:]]+'), REGEXP_REPLACE(body, '^[^#]*#[^[:space:]]+[[:space:]]*', '') FROM march_posts WHERE POSITION('#' IN body) > 0 UNION ALL SELECT REGEXP_SUBSTR(remaining_body, '#[^[:space:]]+'), REGEXP_REPLACE(remaining_body, '^[^#]*#[^[:space:]]+[[:space:]]*', '') FROM extracted_tags WHERE POSITION('#' IN remaining_body) > 0) SELECT tag_value, COUNT(*) AS tag_count FROM extracted_tags WHERE tag_value IS NOT NULL GROUP BY tag_value ORDER BY tag_count DESC, tag_value DESC LIMIT 3",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT post_id, published_on, body FROM bulletin_posts ORDER BY post_id",
+      "ordered": true
+    }
+  ]
+}
