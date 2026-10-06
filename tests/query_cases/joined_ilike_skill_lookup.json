@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "id": "joined_ilike_skill_lookup",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "nicollasprado/Faculdade-ADS",
+      "commit": "b4c4c47e8dfa93d1d4f7b674f5bd25f4ac7fd613",
+      "path": "DB/DQL/JOIN.sql",
+      "url": "https://github.com/nicollasprado/Faculdade-ADS/blob/b4c4c47e8dfa93d1d4f7b674f5bd25f4ac7fd613/DB/DQL/JOIN.sql",
+      "sha256": "a6fe5973c5a9952ce1bd171d91dbfce9dfecd2418832a8f76ffe668d3d4bf2a8",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "DB/DQL/JOIN.sql:18-22",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A case-insensitive ILIKE predicate filters a lookup label after two INNER JOINs connect a primary entity to a many-to-many association and its label table.",
+      "mysql_mariadb_translation": "Reauthored as a staff-skill lookup. MariaDB expresses the case-insensitive predicate with LOWER(skill_name) LIKE LOWER('data%') after joining staff through a skill membership table, while NULL and nonmatching skill labels are excluded by the predicate. The schema, identifiers, rows, and domain are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "inner-join",
+    "many-to-many-join",
+    "case-insensitive-pattern",
+    "lower-like-translation",
+    "null-no-match",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Staff 101 and 102 have skill labels beginning with mixed-case Data and must be returned. Staff 103 has a NULL skill label and staff 104 has a nonmatching Design label; both must be excluded even though their join rows exist.",
+  "determinism_notes": "Staff IDs, skill IDs, association rows, fixed pattern, and final ordering are deterministic; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE staff_directory (staff_id INT PRIMARY KEY, display_name VARCHAR(64) NOT NULL, contact_email VARCHAR(96) NOT NULL)",
+    "CREATE TABLE staff_skills (staff_id INT NOT NULL, skill_id INT NOT NULL, PRIMARY KEY (staff_id, skill_id))",
+    "CREATE TABLE skill_catalog (skill_id INT PRIMARY KEY, skill_name VARCHAR(64) NULL)",
+    "INSERT INTO staff_directory VALUES (101, 'Ana Ribeiro', 'ana@example.invalid'), (102, 'Bruno Costa', 'bruno@example.invalid'), (103, 'Cora Lima', 'cora@example.invalid'), (104, 'Davi Nunes', 'davi@example.invalid')",
+    "INSERT INTO skill_catalog VALUES (201, 'Data Pipelines'), (202, 'dATA Quality'), (203, NULL), (204, 'Design Systems')",
+    "INSERT INTO staff_skills VALUES (101, 201), (102, 202), (103, 203), (104, 204)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT s.staff_id, s.display_name, c.skill_name FROM staff_directory AS s INNER JOIN staff_skills AS ss ON ss.staff_id = s.staff_id INNER JOIN skill_catalog AS c ON c.skill_id = ss.skill_id WHERE LOWER(c.skill_name) LIKE LOWER('data%') ORDER BY s.staff_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT s.staff_id, s.display_name, c.skill_name FROM staff_directory AS s INNER JOIN staff_skills AS ss ON ss.staff_id = s.staff_id INNER JOIN skill_catalog AS c ON c.skill_id = ss.skill_id ORDER BY s.staff_id",
+      "ordered": true
+    }
+  ]
+}
