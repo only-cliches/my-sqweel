@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "id": "consistent_snapshot_shared_lock_inventory",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "dowenliu-xyz/geektime-mysql-practice",
+      "commit": "42bd0f0add2c9cf989adb5572426f01d442afc38",
+      "path": "ch08/case2/sessions/session1.sql",
+      "url": "https://github.com/dowenliu-xyz/geektime-mysql-practice/blob/42bd0f0add2c9cf989adb5572426f01d442afc38/ch08/case2/sessions/session1.sql",
+      "sha256": "bf0a64803731e40e9752b531d6d87a4ee989d03cabc87f8dfdcce319ea99e905",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "ch08/case2/sessions/session1.sql:1-3",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A transaction starts with WITH CONSISTENT SNAPSHOT, performs a LOCK IN SHARE MODE read, and commits the snapshot-backed shared-lock inspection.",
+      "mysql_mariadb_translation": "Reauthored as an independent inventory inspection. Fixed stock lots are filtered and ordered deterministically inside START TRANSACTION WITH CONSISTENT SNAPSHOT, read with LOCK IN SHARE MODE, committed without mutation, and checked afterward for unchanged state."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "consistent-snapshot",
+    "lock-in-share-mode",
+    "transactional-read",
+    "deterministic-order",
+    "transaction-final-state"
+  ],
+  "fixture_notes": "Ready lots 501 and 502 are returned by the shared-lock inspection; held lot 503 is filtered out. The transaction commits without changing any lot.",
+  "determinism_notes": "Lot IDs, SKUs, quantities, states, and ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE inventory_lots (lot_id INT PRIMARY KEY, sku VARCHAR(16) NOT NULL, quantity INT NOT NULL, lot_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO inventory_lots VALUES (501, 'WIDGET-A', 12, 'ready'), (502, 'WIDGET-B', 8, 'ready'), (503, 'WIDGET-C', 5, 'held')"
+  ],
+  "steps": [
+    {
+      "sql": "START TRANSACTION WITH CONSISTENT SNAPSHOT",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT lot_id, sku, quantity FROM inventory_lots WHERE lot_state = 'ready' ORDER BY lot_id LOCK IN SHARE MODE",
+      "ordered": true
+    },
+    {
+      "sql": "COMMIT",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT lot_id, sku, quantity, lot_state FROM inventory_lots ORDER BY lot_id",
+      "ordered": true
+    }
+  ]
+}
