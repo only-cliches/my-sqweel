@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "id": "update_join_post_state_snapshot",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "ManojBasavaiah/SQL-concepts-postgresql-",
+      "commit": "73c4794d95bdaa7acecc35aeca99960df44f1523",
+      "path": "update.sql",
+      "url": "https://github.com/ManojBasavaiah/SQL-concepts-postgresql-/blob/73c4794d95bdaa7acecc35aeca99960df44f1523/update.sql",
+      "sha256": "aebb0a5c4c5535164c40305dc955f79bdfb9c9f4bb9a3e15360ed45afa21aee",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "update.sql:1-18",
+      "source_dialect": "postgresql",
+      "observed_pattern": "An UPDATE changes rows from a related table through PostgreSQL's UPDATE ... FROM form and exposes the changed columns with RETURNING.",
+      "mysql_mariadb_translation": "Use an independently authored MariaDB UPDATE INNER JOIN against a fixed event table, then issue an ordered post-update SELECT of the changed rows as the portable equivalent of the unsupported UPDATE RETURNING form."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "update-join",
+    "inner-join-update",
+    "post-update-state",
+    "conditional-update",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Only profiles with a successful newer login event and no prior login timestamp are refreshed; an already-seen profile and a failed event remain unchanged. The ordered snapshot exposes the rows affected by the join update.",
+  "determinism_notes": "Fixed profile IDs, dates, event outcomes, update predicate, and output ordering are used. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE profiles (profile_id INT PRIMARY KEY, display_name VARCHAR(32) NOT NULL, last_login DATE NULL, account_state VARCHAR(16) NOT NULL)",
+    "CREATE TABLE login_events (event_id INT PRIMARY KEY, profile_id INT NOT NULL, login_day DATE NOT NULL, successful TINYINT NOT NULL, FOREIGN KEY (profile_id) REFERENCES profiles (profile_id))",
+    "INSERT INTO profiles VALUES (601, 'Iris', NULL, 'pending'), (602, 'Jules', '2025-03-01', 'active'), (603, 'Kian', NULL, 'pending')",
+    "INSERT INTO login_events VALUES (7001, 601, '2025-03-05', 1), (7002, 602, '2025-03-06', 1), (7003, 603, '2025-03-07', 0)"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE profiles AS p INNER JOIN login_events AS e ON e.profile_id = p.profile_id SET p.last_login = e.login_day, p.account_state = CASE WHEN e.successful = 1 THEN 'active' ELSE p.account_state END WHERE p.last_login IS NULL AND e.successful = 1",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT p.profile_id, p.display_name, p.last_login, p.account_state FROM profiles AS p INNER JOIN login_events AS e ON e.profile_id = p.profile_id WHERE e.successful = 1 AND p.last_login = e.login_day ORDER BY p.profile_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT profile_id, display_name, last_login, account_state FROM profiles ORDER BY profile_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT event_id, profile_id, login_day, successful FROM login_events ORDER BY event_id",
+      "ordered": true
+    }
+  ]
+}
