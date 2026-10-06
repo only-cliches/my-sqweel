@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "id": "chained_join_delete_cleanup",
+  "provenance": {
+    "kind": "github",
+    "source": {
+      "kind": "github",
+      "repository": "crystalchan2001/Singing-Contest-Database-SQL",
+      "commit": "142cc79bd778f79d81eef9e097506f59a6579a36",
+      "path": "delete.sql",
+      "url": "https://github.com/crystalchan2001/Singing-Contest-Database-SQL/blob/142cc79bd778f79d81eef9e097506f59a6579a36/delete.sql",
+      "sha256": "8db15a55490f6989bf7b015f452660fdf77ab9c2b42faf55a504dce6e1b514d4",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "delete.sql:7-17",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A cleanup script removes dependent rows with DELETE target FROM target INNER JOIN parent, then removes the parent row in a separate statement.",
+      "mysql_mariadb_translation": "Reauthor the dependency cleanup with three deterministic MariaDB DELETE ... USING joins against a retirement list: child attendance, profile metadata, and the retired performer are removed in foreign-key-safe order while an unrelated performer remains."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "delete-using",
+    "delete-join",
+    "joined-delete",
+    "multi-step-dml",
+    "referential-cleanup",
+    "foreign-key-order",
+    "post-delete-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Retired performer 801 and all dependent rows listed for retirement are removed in child-to-parent order; performer 802 and all of its rows remain.",
+  "determinism_notes": "Fixed performer IDs, retirement membership, dependent rows, deletion order, and final ordering are used. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE performers (performer_id INT PRIMARY KEY, stage_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE performer_profiles (profile_id INT PRIMARY KEY, performer_id INT NOT NULL, biography VARCHAR(64) NOT NULL, FOREIGN KEY (performer_id) REFERENCES performers (performer_id))",
+    "CREATE TABLE show_attendance (attendance_id INT PRIMARY KEY, performer_id INT NOT NULL, show_code VARCHAR(16) NOT NULL, FOREIGN KEY (performer_id) REFERENCES performers (performer_id))",
+    "CREATE TABLE retirement_list (performer_id INT PRIMARY KEY)",
+    "INSERT INTO performers VALUES (801, 'Nova'), (802, 'Orchid')",
+    "INSERT INTO performer_profiles VALUES (8801, 801, 'retired profile'), (8802, 802, 'active profile')",
+    "INSERT INTO show_attendance VALUES (8901, 801, 'SHOW-A'), (8902, 801, 'SHOW-B'), (8903, 802, 'SHOW-C')",
+    "INSERT INTO retirement_list VALUES (801)"
+  ],
+  "steps": [
+    {
+      "sql": "DELETE a FROM show_attendance AS a INNER JOIN retirement_list AS r ON r.performer_id = a.performer_id",
+      "ordered": false
+    },
+    {
+      "sql": "DELETE p FROM performer_profiles AS p INNER JOIN retirement_list AS r ON r.performer_id = p.performer_id",
+      "ordered": false
+    },
+    {
+      "sql": "DELETE p FROM performers AS p INNER JOIN retirement_list AS r ON r.performer_id = p.performer_id",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT performer_id, stage_name FROM performers ORDER BY performer_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT profile_id, performer_id, biography FROM performer_profiles ORDER BY profile_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT attendance_id, performer_id, show_code FROM show_attendance ORDER BY attendance_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT performer_id FROM retirement_list ORDER BY performer_id",
+      "ordered": true
+    }
+  ]
+}
