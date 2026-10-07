@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "id": "cte_grouped_insert_returning_awards",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "boringcollege/postgres-by-example",
+      "commit": "ffde0d358722498e37982b57bdbd711871a61c43",
+      "path": "source/cte.sql",
+      "url": "https://github.com/boringcollege/postgres-by-example/blob/ffde0d358722498e37982b57bdbd711871a61c43/source/cte.sql",
+      "sha256": "31c120f373b2c1307f7b48c1d0c80eaa54f757e321b419453880222f41128fb6",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "source/cte.sql:12-24",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "Multiple CTEs first aggregate per-customer facts and then filter the aggregate before joining it to customer metadata for a deterministic report.",
+      "mysql_mariadb_translation": "Reauthored as a customer-award archive: grouped purchase totals and counts flow through two CTEs into INSERT ... SELECT, qualifying customers receive a CASE-derived award label, and RETURNING exposes generated archive IDs and aggregate values. The source schema, names, thresholds, and report purpose are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "multi-cte-insert-returning",
+    "grouped-aggregate-cte",
+    "filtered-aggregate-cte",
+    "insert-select-returning",
+    "generated-key-returning",
+    "joined-metadata",
+    "case-derived-label",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Customers 11 and 13 meet the total-spend threshold and receive archive rows. Customer 12 is below the threshold and remains absent; customer 14 has no purchases and is also absent.",
+  "determinism_notes": "Fixed customer and purchase IDs, explicit customer ordering before generated archive IDs, fixed numeric thresholds, and ordered final-state checks; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE customer_directory (customer_id INT PRIMARY KEY, customer_name VARCHAR(32) NOT NULL, segment_code VARCHAR(16) NOT NULL)",
+    "CREATE TABLE purchase_events (purchase_id INT PRIMARY KEY, customer_id INT NOT NULL, amount INT NOT NULL)",
+    "CREATE TABLE spend_awards (award_id INT AUTO_INCREMENT PRIMARY KEY, customer_id INT NOT NULL, customer_name VARCHAR(32) NOT NULL, total_spent INT NOT NULL, purchase_count INT NOT NULL, award_label VARCHAR(16) NOT NULL)",
+    "INSERT INTO customer_directory VALUES (11, 'Ada', 'gold'), (12, 'Bo', 'silver'), (13, 'Cy', 'gold'), (14, 'Dee', 'bronze')",
+    "INSERT INTO purchase_events VALUES (501, 11, 20), (502, 11, 40), (503, 12, 45), (504, 13, 30), (505, 13, 50)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO spend_awards (customer_id, customer_name, total_spent, purchase_count, award_label) WITH per_customer AS (SELECT customer_id, SUM(amount) AS total_spent, COUNT(*) AS purchase_count FROM purchase_events GROUP BY customer_id), qualifying AS (SELECT customer_id, total_spent, purchase_count FROM per_customer WHERE total_spent >= 50) SELECT q.customer_id, d.customer_name, q.total_spent, q.purchase_count, CASE WHEN q.total_spent >= 80 THEN 'priority' ELSE 'standard' END FROM qualifying AS q INNER JOIN customer_directory AS d ON d.customer_id = q.customer_id ORDER BY q.customer_id RETURNING award_id, customer_id, customer_name, total_spent, purchase_count, award_label",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT award_id, customer_id, customer_name, total_spent, purchase_count, award_label FROM spend_awards ORDER BY award_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT customer_id, customer_name, segment_code FROM customer_directory ORDER BY customer_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT purchase_id, customer_id, amount FROM purchase_events ORDER BY purchase_id",
+      "ordered": true
+    }
+  ]
+}
