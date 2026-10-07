@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "id": "percent_rank_rollup_summary",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "PSU-Security-Universe/sqlright",
+      "commit": "9457f0311b70562a3423ee86ac7e2ebdaaa6664b",
+      "path": "MySQL/docker/fuzz_root/mysql_initlib/4868.sql",
+      "url": "https://github.com/PSU-Security-Universe/sqlright/blob/9457f0311b70562a3423ee86ac7e2ebdaaa6664b/MySQL/docker/fuzz_root/mysql_initlib/4868.sql",
+      "sha256": "1a6179f3a1ffe5e499d8ad594cda8861296a8fcf04a09af3a40bbfbeb7233eef",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/docker/fuzz_root/mysql_initlib/4868.sql:5-6",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL window report computes PERCENT_RANK over grouped rows that include a WITH ROLLUP total, with the same query shape also exercised through a view.",
+      "mysql_mariadb_translation": "Reauthored as a regional sales summary. Fixed sales are aggregated by region with a rollup total in a derived relation, and an outer PERCENT_RANK window ranks the grouped rows while a deterministic final order places the total last. The source table, rows, names, and reporting domain are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "percent-rank-rollup",
+    "window-over-derived-rollup",
+    "group-by-rollup",
+    "sum-aggregate",
+    "rollup-total",
+    "deterministic-order",
+    "dml-final-state"
+  ],
+  "fixture_notes": "North, South, and West sales form three detail groups; the rollup total is included in the ranked relation and ordered after detail rows. Amounts are fixed integers to make the aggregate and ranking outputs stable.",
+  "determinism_notes": "Region labels, sales amounts, grouping, window ordering, rollup inclusion, and final NULL-last ordering are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE regional_sales (sale_id INT PRIMARY KEY, region_code VARCHAR(16) NOT NULL, amount INT NOT NULL)",
+    "INSERT INTO regional_sales VALUES (101, 'north', 40), (102, 'north', 60), (103, 'south', 25), (104, 'south', 35), (105, 'west', 80)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT region_code, total_amount, PERCENT_RANK() OVER (ORDER BY region_code) AS region_rank FROM (SELECT region_code, SUM(amount) AS total_amount FROM regional_sales GROUP BY region_code WITH ROLLUP) AS rollup_totals ORDER BY (region_code IS NULL), region_code",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT sale_id, region_code, amount FROM regional_sales ORDER BY sale_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT sale_id, region_code, amount FROM regional_sales ORDER BY sale_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT region_code, SUM(amount) AS total_amount FROM regional_sales GROUP BY region_code ORDER BY region_code",
+      "ordered": true
+    }
+  ]
+}
