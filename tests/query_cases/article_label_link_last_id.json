@@ -1,0 +1,78 @@
+{
+  "version": 1,
+  "id": "article_label_link_last_id",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Mayank0255/Stackoverflow-Clone-Backend",
+      "commit": "2935f8917fa6f82118f7b54f51cdad8e964e5515",
+      "path": "data/posts.sql",
+      "url": "https://github.com/Mayank0255/Stackoverflow-Clone-Backend/blob/2935f8917fa6f82118f7b54f51cdad8e964e5515/data/posts.sql",
+      "sha256": "c180dddc083c4d2c971a426f45e4ea544f8621419ef37da8a644dea9f3c48b67",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "data/posts.sql:1-6",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL write sequence inserts a parent row, reads LAST_INSERT_ID on the same connection, inserts a uniquely named child with INSERT IGNORE, looks up the child's generated identifier, and writes the parent-child link.",
+      "mysql_mariadb_translation": "Reauthored as an article-to-label association flow. The new article identifier is captured in a session variable, a repeated label insert is ignored by its unique key, the label identifier is looked up by name, and one link row is created. The tables, columns, identifiers, values, and application domain are independently authored rather than copied from the source.",
+      "independently_authored": true
+    }
+  },
+  "features": [
+    "auto-increment",
+    "insert",
+    "last-insert-id",
+    "connection-state",
+    "session-user-variable",
+    "insert-ignore",
+    "unique-key-enforcement",
+    "many-to-many-link",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The article insert allocates article_id 1 and stores it in a same-connection variable. The first label is inserted, the duplicate label is ignored without creating a second label, and the link table receives exactly one association for the article and label.",
+  "determinism_notes": "The tables start empty, all literals are fixed, the generated identifiers are read through the current connection, and final rows are ordered by their generated keys. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE editorial_articles (article_id INT AUTO_INCREMENT PRIMARY KEY, slug VARCHAR(32) NOT NULL UNIQUE, headline VARCHAR(96) NOT NULL)",
+    "CREATE TABLE editorial_labels (label_id INT AUTO_INCREMENT PRIMARY KEY, label_name VARCHAR(32) NOT NULL UNIQUE, description VARCHAR(96) NOT NULL)",
+    "CREATE TABLE article_labels (article_id INT NOT NULL, label_id INT NOT NULL, PRIMARY KEY (article_id, label_id), FOREIGN KEY (article_id) REFERENCES editorial_articles(article_id), FOREIGN KEY (label_id) REFERENCES editorial_labels(label_id))"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO editorial_articles (slug, headline) VALUES ('query-plans', 'Reading query plans')"
+    },
+    {
+      "sql": "SET @article_id = LAST_INSERT_ID()",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT IGNORE INTO editorial_labels (label_name, description) VALUES ('optimization', 'Practical query tuning')"
+    },
+    {
+      "sql": "INSERT IGNORE INTO editorial_labels (label_name, description) VALUES ('optimization', 'Ignored duplicate label')"
+    },
+    {
+      "sql": "SET @label_id = (SELECT label_id FROM editorial_labels WHERE label_name = 'optimization')",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO article_labels (article_id, label_id) VALUES (@article_id, @label_id)"
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT article_id, slug, headline FROM editorial_articles ORDER BY article_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT label_id, label_name, description FROM editorial_labels ORDER BY label_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT article_id, label_id FROM article_labels ORDER BY article_id, label_id",
+      "ordered": true
+    }
+  ]
+}
