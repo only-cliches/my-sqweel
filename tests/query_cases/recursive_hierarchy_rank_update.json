@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "id": "recursive_hierarchy_rank_update",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "CatTrinket/porydex",
+      "commit": "535b8d7c89f2599630a8124746e2f96ab183a647",
+      "path": "extras/set_pokemon_order.sql",
+      "url": "https://github.com/CatTrinket/porydex/blob/535b8d7c89f2599630a8124746e2f96ab183a647/extras/set_pokemon_order.sql",
+      "sha256": "5ca835c2c2b1777c548daf430c6c13126f305f703d8347c169575d6e8f96cac0",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "extras/set_pokemon_order.sql:5-40",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A recursive hierarchy CTE builds ancestor-to-descendant paths, a grouped CTE establishes root ordering, and a RANK window over the paths feeds a correlated UPDATE that writes the computed ordinal back to the base table.",
+      "mysql_mariadb_translation": "Reauthored as a catalog hierarchy refresh. MariaDB recursive rows carry a zero-padded text path instead of PostgreSQL arrays, the minimum sort key across each hierarchy and RANK produce deterministic ordinals, and a derived CTE UPDATE JOIN writes those ordinals only for the selected collection. The source schema, identifiers, data, quoted order column, and array expressions are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "recursive-cte",
+    "recursive-hierarchy",
+    "recursive-path",
+    "rank-window",
+    "ranked-cte",
+    "cte-driven-update",
+    "update-join",
+    "deterministic-ranking",
+    "dml-final-state"
+  ],
+  "fixture_notes": "Collection 9 contains two roots and a three-level branch; display ranks follow each hierarchy's minimum sort key, path sort order, and item ID tie-breakers. Collection 10 is an untouched control row. Existing ranks in collection 9 are overwritten by the recursive ranking refresh.",
+  "determinism_notes": "All item IDs, parent links, sort keys, collection IDs, path segments, ranking order, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE catalog_items (item_id INT PRIMARY KEY, parent_item_id INT NULL, collection_id INT NOT NULL, sort_key INT NOT NULL, display_rank INT NULL)",
+    "INSERT INTO catalog_items VALUES (401, NULL, 9, 20, 90), (402, 401, 9, 30, 91), (403, 401, 9, 10, 92), (404, 403, 9, 5, 93), (405, NULL, 9, 40, 94), (406, 405, 9, 1, 95), (407, NULL, 9, 20, 96), (408, 407, 9, 2, 97), (499, NULL, 10, 1, 88)"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE catalog_items AS target JOIN (WITH RECURSIVE item_tree AS (SELECT item_id, parent_item_id, collection_id, sort_key, CAST(CONCAT(LPAD(sort_key, 4, '0'), '/', LPAD(item_id, 6, '0')) AS CHAR(255)) AS path, item_id AS root_id FROM catalog_items WHERE parent_item_id IS NULL UNION ALL SELECT child.item_id, child.parent_item_id, child.collection_id, child.sort_key, CAST(CONCAT(tree.path, '/', LPAD(child.sort_key, 4, '0'), '/', LPAD(child.item_id, 6, '0')) AS CHAR(255)), tree.root_id FROM item_tree AS tree JOIN catalog_items AS child ON child.parent_item_id = tree.item_id AND child.collection_id = tree.collection_id), root_order AS (SELECT tree.root_id, MIN(tree.sort_key) AS root_sort FROM item_tree AS tree GROUP BY tree.root_id), ranked_items AS (SELECT tree.item_id, RANK() OVER (ORDER BY roots.root_sort, tree.path) AS new_rank FROM item_tree AS tree JOIN root_order AS roots ON roots.root_id = tree.root_id WHERE tree.collection_id = 9) SELECT item_id, new_rank FROM ranked_items) AS ranked ON ranked.item_id = target.item_id SET target.display_rank = ranked.new_rank WHERE target.collection_id = 9",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT item_id, parent_item_id, collection_id, sort_key, display_rank FROM catalog_items ORDER BY item_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT item_id, display_rank FROM catalog_items ORDER BY item_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT item_id, display_rank FROM catalog_items WHERE collection_id = 10 ORDER BY item_id",
+      "ordered": true
+    }
+  ]
+}
