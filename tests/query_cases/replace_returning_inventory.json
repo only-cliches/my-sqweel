@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "id": "replace_returning_inventory",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "rahul-gill/NITH-Result",
+      "commit": "0731764893c7b94443dbbf4045afe7ad8336d16a",
+      "path": "scrape/db/sql/query.sql",
+      "url": "https://github.com/rahul-gill/NITH-Result/blob/0731764893c7b94443dbbf4045afe7ad8336d16a/scrape/db/sql/query.sql",
+      "sha256": "f24fb369769d0f5ff25a1c5f2c301429d39cc9af149108d85b6fb84520c986d1",
+      "source_dialect": "sqlite"
+    },
+    "inspiration": {
+      "source_location": "scrape/db/sql/query.sql:1-3",
+      "source_dialect": "sqlite",
+      "observed_pattern": "A SQLite INSERT OR REPLACE statement returns the complete row after inserting or replacing a keyed record.",
+      "mysql_mariadb_translation": "Reauthored as MariaDB REPLACE INTO ... RETURNING coverage over an inventory table. The scenario exercises replacement by primary-key conflict, replacement by a secondary unique-key conflict with a new identifier, and insertion of a new row; all schema, values, and assertions are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "replace",
+    "returning",
+    "replace-returning",
+    "primary-key-replacement",
+    "unique-conflict-replacement",
+    "dml-result-rows",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The first replacement keeps the primary key while changing the payload. The second conflicts on the unique cache key and replaces the prior identifier, proving that the old row is removed. A third operation inserts a new key without conflict.",
+  "determinism_notes": "All identifiers, keys, payloads, generations, replacement order, RETURNING projections, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE cache_entries (entry_id INT PRIMARY KEY, cache_key VARCHAR(32) NOT NULL UNIQUE, payload VARCHAR(64) NOT NULL, generation INT NOT NULL)",
+    "INSERT INTO cache_entries VALUES (1001, 'alpha', 'alpha-v1', 1), (1002, 'beta', 'beta-v1', 4)"
+  ],
+  "steps": [
+    {
+      "sql": "REPLACE INTO cache_entries (entry_id, cache_key, payload, generation) VALUES (1001, 'alpha', 'alpha-v2', 2) RETURNING entry_id, cache_key, payload, generation",
+      "ordered": true
+    },
+    {
+      "sql": "REPLACE INTO cache_entries (entry_id, cache_key, payload, generation) VALUES (1003, 'beta', 'beta-v2', 5) RETURNING entry_id, cache_key, payload, generation",
+      "ordered": true
+    },
+    {
+      "sql": "REPLACE INTO cache_entries (entry_id, cache_key, payload, generation) VALUES (1004, 'gamma', 'gamma-v1', 1) RETURNING entry_id, cache_key, payload, generation",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT entry_id, cache_key, payload, generation FROM cache_entries ORDER BY entry_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT COUNT(*) AS entry_count, COUNT(DISTINCT cache_key) AS distinct_keys FROM cache_entries",
+      "ordered": true
+    }
+  ]
+}
