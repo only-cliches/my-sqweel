@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "id": "union_branch_participation_threshold",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Aafreen29/SQL-Interview-Prep-Question",
+      "commit": "cb1eee0702d2c5a705c1165851fe9aac5063be06",
+      "path": "queries.sql",
+      "url": "https://github.com/Aafreen29/SQL-Interview-Prep-Question/blob/cb1eee0702d2c5a705c1165851fe9aac5063be06/queries.sql",
+      "sha256": "f49aaafd17d5978169f90b9df8a7a12e6d44a2f109d0073109991f30452038a1",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "queries.sql:284-293",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "Two directional projections of one interaction table are grouped independently, combined with UNION ALL to preserve both participation directions, then grouped again and filtered with HAVING on the summed branch counts.",
+      "mysql_mariadb_translation": "Reauthored as a route-hub participation report. Outbound and inbound shipment events are independently counted for one fixed business day, UNION ALL preserves each direction's contribution, a hub dimension join supplies labels, and the outer SUM plus HAVING retains hubs meeting the participation threshold. The source interaction schema, names, values, and interview context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "union-all-directional-branches",
+    "branch-local-grouping",
+    "aggregate-over-union",
+    "dimension-join",
+    "outer-grouped-sum",
+    "having-sum-threshold",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Hub 11 participates in four events on the report date, split across outbound and inbound branches, and is retained. Hubs 12 and 13 participate fewer than four times, hub 14 has no events, and one next-day event proves the fixed-date predicate is applied in both branches.",
+  "determinism_notes": "Hub IDs, event IDs, report date, direction columns, grouping keys, threshold, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE route_hubs (hub_id INT PRIMARY KEY, hub_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE shipment_events (event_id INT PRIMARY KEY, origin_hub_id INT NOT NULL, destination_hub_id INT NOT NULL, event_day DATE NOT NULL)",
+    "INSERT INTO route_hubs VALUES (11, 'North'), (12, 'Central'), (13, 'South'), (14, 'East')",
+    "INSERT INTO shipment_events VALUES (101, 11, 12, '2026-09-01'), (102, 11, 13, '2026-09-01'), (103, 12, 11, '2026-09-01'), (104, 13, 11, '2026-09-01'), (105, 12, 13, '2026-09-01'), (106, 11, 12, '2026-09-02')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT h.hub_id, h.hub_name, SUM(p.participation_count) AS participation_count FROM route_hubs AS h INNER JOIN (SELECT origin_hub_id AS hub_id, COUNT(*) AS participation_count FROM shipment_events WHERE event_day = '2026-09-01' GROUP BY origin_hub_id UNION ALL SELECT destination_hub_id AS hub_id, COUNT(*) AS participation_count FROM shipment_events WHERE event_day = '2026-09-01' GROUP BY destination_hub_id) AS p ON p.hub_id = h.hub_id GROUP BY h.hub_id, h.hub_name HAVING SUM(p.participation_count) >= 4 ORDER BY h.hub_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT hub_id, hub_name FROM route_hubs ORDER BY hub_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT event_id, origin_hub_id, destination_hub_id, event_day FROM shipment_events ORDER BY event_id",
+      "ordered": true
+    }
+  ]
+}
