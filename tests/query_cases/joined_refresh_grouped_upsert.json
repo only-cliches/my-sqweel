@@ -1,0 +1,74 @@
+{
+  "version": 1,
+  "id": "joined_refresh_grouped_upsert",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "greasyfork-org/greasyfork",
+      "commit": "ccb0d2c40f567f91cd306efa73d96db82ae4bc99",
+      "path": "shellscripts/update_install_counts.sql",
+      "url": "https://github.com/greasyfork-org/greasyfork/blob/ccb0d2c40f567f91cd306efa73d96db82ae4bc99/shellscripts/update_install_counts.sql",
+      "sha256": "ce7c6eced4d87055fcf35e164d096dab112e66af028301a5c9f68c52440ecff0",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "shellscripts/update_install_counts.sql:1-70",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL maintenance batch removes rows through a joined DELETE, refreshes parent counters from a grouped aggregate UPDATE JOIN, and folds grouped historical counts into a summary table with INSERT ... SELECT ... ON DUPLICATE KEY UPDATE.",
+      "mysql_mariadb_translation": "Reauthored as a catalog-event maintenance batch. It removes events belonging to retired catalog items, refreshes recent event counts on remaining catalog items from a grouped derived table, and upserts billable daily rollups from the surviving events. The source's scripts, bans, timestamps, and identifiers are replaced with fixed catalog data and deterministic dates."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "delete",
+    "joined-delete",
+    "aggregate-update-join",
+    "derived-aggregate",
+    "grouped-insert-select",
+    "on-duplicate-key-update",
+    "duplicate-key-update",
+    "upsert",
+    "multi-statement-dml-batch",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The retired item 103 loses its event through the joined delete. Recent counts refresh items 101 and 102; item 104 has only an older event and remains at its initial counter. The rollup for item 101/date 2026-07-01 is replaced by the grouped aggregate, and item 102 receives a new rollup.",
+  "determinism_notes": "All item IDs, event IDs, event dates, lifecycle states, predicates, grouping keys, aggregate values, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE catalog_items (item_id INT PRIMARY KEY, item_name VARCHAR(32) NOT NULL, lifecycle_state VARCHAR(16) NOT NULL, recent_event_count INT NOT NULL)",
+    "CREATE TABLE catalog_events (event_id INT PRIMARY KEY, item_id INT NOT NULL, event_day DATE NOT NULL, event_kind VARCHAR(16) NOT NULL, units INT NOT NULL)",
+    "CREATE TABLE daily_item_rollups (item_id INT NOT NULL, event_day DATE NOT NULL, event_count INT NOT NULL, total_units INT NOT NULL, PRIMARY KEY (item_id, event_day))",
+    "INSERT INTO catalog_items VALUES (101, 'amber', 'active', 0), (102, 'bravo', 'active', 0), (103, 'cobalt', 'retired', 7), (104, 'delta', 'active', 0)",
+    "INSERT INTO catalog_events VALUES (1, 101, '2026-07-01', 'billable', 3), (2, 101, '2026-07-01', 'billable', 5), (3, 102, '2026-07-01', 'billable', 2), (4, 103, '2026-07-01', 'billable', 9), (5, 104, '2026-06-01', 'billable', 11)",
+    "INSERT INTO daily_item_rollups VALUES (101, '2026-07-01', 1, 2)"
+  ],
+  "steps": [
+    {
+      "sql": "DELETE e FROM catalog_events AS e INNER JOIN catalog_items AS i ON i.item_id = e.item_id WHERE i.lifecycle_state = 'retired'",
+      "ordered": false
+    },
+    {
+      "sql": "UPDATE catalog_items AS i INNER JOIN (SELECT item_id, COUNT(*) AS event_count FROM catalog_events WHERE event_day >= '2026-07-01' GROUP BY item_id) AS recent ON recent.item_id = i.item_id SET i.recent_event_count = recent.event_count",
+      "ordered": false
+    },
+    {
+      "sql": "INSERT INTO daily_item_rollups (item_id, event_day, event_count, total_units) SELECT item_id, event_day, COUNT(*), SUM(units) FROM catalog_events WHERE event_kind = 'billable' AND event_day >= '2026-07-01' GROUP BY item_id, event_day ON DUPLICATE KEY UPDATE event_count = VALUES(event_count), total_units = VALUES(total_units)",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT item_id, item_name, lifecycle_state, recent_event_count FROM catalog_items ORDER BY item_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT event_id, item_id, event_day, event_kind, units FROM catalog_events ORDER BY event_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT item_id, event_day, event_count, total_units FROM daily_item_rollups ORDER BY item_id, event_day",
+      "ordered": true
+    }
+  ]
+}
