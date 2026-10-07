@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "id": "upsert_blank_preserving_locales",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "alexkulya/pandaria_5.4.8",
+      "commit": "e0a20613d73e2b9324ac13a4783c724fec1d4559",
+      "path": "sql/old/world/2026_08_06_12_world_quest_locale_data.sql",
+      "url": "https://github.com/alexkulya/pandaria_5.4.8/blob/e0a20613d73e2b9324ac13a4783c724fec1d4559/sql/old/world/2026_08_06_12_world_quest_locale_data.sql",
+      "sha256": "172b8ebe18382178f5c87c2de591c35eb28147585d03bd11f2e3dc80b1bb7aee",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/old/world/2026_08_06_12_world_quest_locale_data.sql:1496-1512",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL locale-data upsert uses one COALESCE(NULLIF(existing,''), NULLIF(VALUES(incoming),''), '') expression per duplicate-key column so nonblank existing text wins, blank incoming text cannot erase it, and empty new values fall back to an empty string.",
+      "mysql_mariadb_translation": "Reauthored as a release-localization registry. A multi-row upsert fills nonblank title and objective patches, preserves existing descriptions and completion text when incoming values are blank, leaves an all-blank duplicate unchanged, and inserts a new locale row. The source schema, identifiers, text, and game domain are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "insert",
+    "multi-row-insert",
+    "on-duplicate-key-update",
+    "coalesce",
+    "nullif",
+    "blank-preserving-upsert",
+    "multi-column-upsert",
+    "empty-string-default",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Locale row 7001 updates its nonblank title and objective while preserving existing details and completed text; row 7002 receives an all-blank duplicate and remains unchanged; row 7003 is inserted with a complete translation.",
+  "determinism_notes": "Fixed locale IDs, text values, duplicate-key rows, empty-string fallback, and final ordering are used; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE release_locales (locale_id INT PRIMARY KEY, locale_code VARCHAR(16) NOT NULL, title VARCHAR(64) NOT NULL, details VARCHAR(128) NOT NULL, objective VARCHAR(128) NOT NULL, completed_text VARCHAR(128) NOT NULL)",
+    "INSERT INTO release_locales VALUES (7001, 'fr-FR', 'Ancien titre', 'Description conservee', 'Objectif ancien', 'Texte final conserve'), (7002, 'de-DE', 'Titel bleibt', 'Details bleiben', 'Ziel bleibt', 'Abschluss bleibt')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO release_locales (locale_id, locale_code, title, details, objective, completed_text) VALUES (7001, 'fr-FR', 'Nouveau titre', '', 'Nouvel objectif', ''), (7002, 'de-DE', '', '', '', ''), (7003, 'es-ES', 'Titulo nuevo', 'Descripcion nueva', 'Objetivo nuevo', 'Texto final nuevo') ON DUPLICATE KEY UPDATE title = COALESCE(NULLIF(title, ''), NULLIF(VALUES(title), ''), ''), details = COALESCE(NULLIF(details, ''), NULLIF(VALUES(details), ''), ''), objective = COALESCE(NULLIF(objective, ''), NULLIF(VALUES(objective), ''), ''), completed_text = COALESCE(NULLIF(completed_text, ''), NULLIF(VALUES(completed_text), ''), '')",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT locale_id, locale_code, title, details, objective, completed_text FROM release_locales ORDER BY locale_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT locale_id, locale_code, title, details, objective, completed_text FROM release_locales ORDER BY locale_id",
+      "ordered": true
+    }
+  ]
+}
