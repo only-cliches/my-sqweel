@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "id": "json_table_view_nested_lines",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "felipebz/zpa",
+      "commit": "7899045332c5ace116a626f1220ba385bf4b8cec",
+      "path": "zpa-checks/src/integrationTest/resources/sources/oracle-database_26/adjsn/creating-view-json-data-using-json_table-0.sql",
+      "url": "https://github.com/felipebz/zpa/blob/7899045332c5ace116a626f1220ba385bf4b8cec/zpa-checks/src/integrationTest/resources/sources/oracle-database_26/adjsn/creating-view-json-data-using-json_table-0.sql",
+      "sha256": "ff3c6ade31e8b3dbf61d7010e8b73641881ba5e3de2e40350e0c81b6554e319f",
+      "source_dialect": "oracle"
+    },
+    "inspiration": {
+      "source_location": "zpa-checks/src/integrationTest/resources/sources/oracle-database_26/adjsn/creating-view-json-data-using-json_table-0.sql:2-36",
+      "source_dialect": "oracle",
+      "observed_pattern": "A view joins parent JSON documents to JSON_TABLE and exposes typed parent fields together with one row per nested line item.",
+      "mysql_mariadb_translation": "Reauthored as an order-line view over independently authored order payloads. MariaDB JSON_TABLE uses CROSS JOIN, typed VARCHAR/INT/DECIMAL columns, and a NESTED PATH with FOR ORDINALITY to expose each order item through a reusable view. Oracle NUMBER/VARCHAR2 types, purchase-order names, JSON values, and source schema are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "json-table-view",
+    "json-table-nested-path",
+    "view-over-json-table",
+    "json-table-ordinality",
+    "typed-json-projection",
+    "correlated-json-source",
+    "deterministic-order",
+    "dml-final-state"
+  ],
+  "fixture_notes": "Two order payloads contain two and one line items respectively. The view must repeat each order's customer code for every nested line, assign per-order ordinality, and preserve typed quantity and unit price values.",
+  "determinism_notes": "Order IDs, customer codes, JSON documents, nested item order, declared types, and final order-by keys are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE order_payloads (order_id INT PRIMARY KEY, customer_code VARCHAR(16) NOT NULL, payload JSON NOT NULL)",
+    "INSERT INTO order_payloads VALUES (501, 'aster', '{\"items\":[{\"sku\":\"K-10\",\"description\":\"Cable\",\"quantity\":2,\"unit_price\":4.50},{\"sku\":\"K-20\",\"description\":\"Adapter\",\"quantity\":1,\"unit_price\":12.00}]}'), (502, 'birch', '{\"items\":[{\"sku\":\"K-30\",\"description\":\"Bracket\",\"quantity\":4,\"unit_price\":3.25}]}')"
+  ],
+  "steps": [
+    {
+      "sql": "CREATE VIEW order_item_lines AS SELECT p.order_id, p.customer_code, jt.line_no, jt.sku, jt.description, jt.quantity, jt.unit_price FROM order_payloads AS p CROSS JOIN JSON_TABLE(p.payload, '$' COLUMNS (NESTED PATH '$.items[*]' COLUMNS (line_no FOR ORDINALITY, sku VARCHAR(16) PATH '$.sku', description VARCHAR(64) PATH '$.description', quantity INT PATH '$.quantity', unit_price DECIMAL(8,2) PATH '$.unit_price'))) AS jt",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT order_id, customer_code, line_no, sku, description, quantity, unit_price FROM order_item_lines ORDER BY order_id, line_no",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT order_id, customer_code, line_no, sku, quantity FROM order_item_lines ORDER BY order_id, line_no",
+      "ordered": true
+    }
+  ]
+}
