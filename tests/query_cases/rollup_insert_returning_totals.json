@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "id": "rollup_insert_returning_totals",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "PacktPublishing/learn-sql-database-programming",
+      "commit": "f1453b05c168dabd6400b107dc6a3eb8b8bd4882",
+      "path": "chapter-10/rollup.sql",
+      "url": "https://github.com/PacktPublishing/learn-sql-database-programming/blob/f1453b05c168dabd6400b107dc6a3eb8b8bd4882/chapter-10/rollup.sql",
+      "sha256": "5f7f108b1cb648946fabc01302c3add0f329d92dd450ad2cb2d589f0230c4780",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "chapter-10/rollup.sql:7-10",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A grouped aggregate uses WITH ROLLUP to emit detail rows, per-parent subtotal rows, and a grand-total row from a two-level relation.",
+      "mysql_mariadb_translation": "Reauthored as a batting aggregate archive: club-level and region-level at-bat totals plus the grand total are inserted into a nullable rollup table, and INSERT ... SELECT ... RETURNING exposes the archive rows. The source baseball schema, identifiers, values, and database selection are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "rollup-insert-returning",
+    "group-by-rollup",
+    "nullable-rollup-rows",
+    "insert-select-returning",
+    "aggregate-sum",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "East has two clubs and West has one; the inserted archive must contain three club details, two region subtotals, and one grand total. NULL grouping keys represent subtotal and grand-total rows, while source observations remain unchanged.",
+  "determinism_notes": "Fixed source IDs, region and club labels, integer measures, explicit final ordering that places details before subtotals and the grand total, and no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE club_at_bats (observation_id INT PRIMARY KEY, region_code VARCHAR(16) NOT NULL, club_code VARCHAR(16) NOT NULL, at_bats INT NOT NULL)",
+    "CREATE TABLE batting_rollups (region_code VARCHAR(16) NULL, club_code VARCHAR(16) NULL, total_at_bats INT NOT NULL)",
+    "INSERT INTO club_at_bats VALUES (1, 'East', 'Eagles', 10), (2, 'East', 'Eagles', 15), (3, 'East', 'Foxes', 7), (4, 'West', 'Hawks', 20), (5, 'West', 'Hawks', 5)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO batting_rollups (region_code, club_code, total_at_bats) SELECT region_code, club_code, SUM(at_bats) FROM club_at_bats GROUP BY region_code, club_code WITH ROLLUP RETURNING region_code, club_code, total_at_bats",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT region_code, club_code, total_at_bats FROM batting_rollups ORDER BY (region_code IS NULL), region_code, (club_code IS NULL), club_code",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT observation_id, region_code, club_code, at_bats FROM club_at_bats ORDER BY observation_id",
+      "ordered": true
+    }
+  ]
+}
