@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "id": "group_concat_json_object_derived_limit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "DreamPWJ/jenkins-shared-library",
+      "commit": "c49b5b8fe9ad6b5087927c4ed8471e5190805c90",
+      "path": "_database/sql/snippet.sql",
+      "url": "https://github.com/DreamPWJ/jenkins-shared-library/blob/c49b5b8fe9ad6b5087927c4ed8471e5190805c90/_database/sql/snippet.sql",
+      "sha256": "62a6d0b4aff15668db476840168e4c88252eb3e78f1497cca3457f35ec0b4bff",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "_database/sql/snippet.sql:1-8",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL report limits an ordered derived relation before joining it to its parent, then serializes distinct JSON_OBJECT values with ordered GROUP_CONCAT and wraps the concatenated objects as a JSON array string.",
+      "mysql_mariadb_translation": "Reauthored as a workspace document digest. The newest three documents for one workspace are selected by a deterministic derived-table ORDER BY/LIMIT, joined to the workspace, and emitted as an ordered distinct JSON-object array. The source post/comment schema, identifiers, and values are replaced with newly authored workspace data."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "inner-join",
+    "derived-table",
+    "derived-order-limit",
+    "ordered-derived-source",
+    "group-concat",
+    "group-concat-distinct",
+    "group-concat-ordering",
+    "group-concat-json-object",
+    "json-object",
+    "string-json-array",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The derived relation selects the three newest documents in workspace 501, excluding the older fourth document and all documents from workspace 502. The final JSON array orders the selected document objects by document ID, independently of recency selection order.",
+  "determinism_notes": "Workspace IDs, document IDs, publish sequence, derived ORDER BY/LIMIT, JSON keys, aggregate ordering, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE workspaces (workspace_id INT PRIMARY KEY, workspace_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE workspace_documents (document_id INT PRIMARY KEY, workspace_id INT NOT NULL, document_title VARCHAR(64) NOT NULL, publish_seq INT NOT NULL)",
+    "INSERT INTO workspaces VALUES (501, 'atlas'), (502, 'borealis')",
+    "INSERT INTO workspace_documents VALUES (9001, 501, 'old-plan', 10), (9002, 501, 'api-notes', 30), (9003, 501, 'runbook', 20), (9004, 501, 'release-map', 40), (9010, 502, 'other-space', 50)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT w.workspace_id, w.workspace_name, CONCAT('[', GROUP_CONCAT(DISTINCT JSON_OBJECT('id', d.document_id, 'title', d.document_title) ORDER BY d.document_id ASC SEPARATOR ','), ']') AS document_digest FROM workspaces AS w INNER JOIN (SELECT document_id, workspace_id, document_title FROM workspace_documents WHERE workspace_id = 501 ORDER BY publish_seq DESC, document_id ASC LIMIT 3) AS d ON d.workspace_id = w.workspace_id GROUP BY w.workspace_id, w.workspace_name ORDER BY w.workspace_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT workspace_id, workspace_name FROM workspaces ORDER BY workspace_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT document_id, workspace_id, document_title, publish_seq FROM workspace_documents ORDER BY document_id",
+      "ordered": true
+    }
+  ]
+}
