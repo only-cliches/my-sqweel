@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "id": "read_only_shared_lock_inventory",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Baeldung/sql-tutorials",
+      "commit": "ec66bb71c2581d92bcfa6d68116bf1b0092d9a1e",
+      "path": "sql-queries-11/lock-single-row-mysql/access-mode-significance.sql",
+      "url": "https://github.com/Baeldung/sql-tutorials/blob/ec66bb71c2581d92bcfa6d68116bf1b0092d9a1e/sql-queries-11/lock-single-row-mysql/access-mode-significance.sql",
+      "sha256": "94bd563396467d63774edc1cd314dc67b9a88fa22328be1f6be512d375ccc75c",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql-queries-11/lock-single-row-mysql/access-mode-significance.sql:10-16",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A transaction configured READ ONLY performs a shared locking read with FOR SHARE after the transaction begins.",
+      "mysql_mariadb_translation": "Reauthored as a shipment-lot availability audit. SET TRANSACTION READ ONLY is followed by START TRANSACTION and a deterministic LOCK IN SHARE MODE read, translating MySQL's FOR SHARE spelling to MariaDB syntax. A write attempt must fail and rollback must preserve the fixed lot inventory; schema, rows, labels, and purpose are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "read-only-transaction",
+    "lock-in-share-mode",
+    "read-only-shared-lock",
+    "transactional-locking-read",
+    "transaction-error",
+    "rollback-safety",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The read-only transaction locks and reads ready shipment lots, rejects a write, then rolls back. The final state confirms that the read-only shared-lock path did not mutate inventory.",
+  "determinism_notes": "Lot identifiers, states, quantities, ordering, transaction statements, and expected error are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE shipment_lots (lot_id INT PRIMARY KEY, sku VARCHAR(16) NOT NULL, lot_state VARCHAR(16) NOT NULL, quantity INT NOT NULL)",
+    "INSERT INTO shipment_lots VALUES (8101, 'sensor-a', 'ready', 12), (8102, 'sensor-b', 'held', 7), (8103, 'sensor-c', 'ready', 4)"
+  ],
+  "steps": [
+    {
+      "sql": "SET TRANSACTION READ ONLY",
+      "ordered": false
+    },
+    {
+      "sql": "START TRANSACTION",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT lot_id, sku, lot_state, quantity FROM shipment_lots WHERE lot_state = 'ready' ORDER BY lot_id LOCK IN SHARE MODE",
+      "ordered": true
+    },
+    {
+      "sql": "UPDATE shipment_lots SET quantity = quantity + 3 WHERE lot_id = 8101",
+      "expect_error": true
+    },
+    {
+      "sql": "ROLLBACK",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT lot_id, sku, lot_state, quantity FROM shipment_lots ORDER BY lot_id",
+      "ordered": true
+    }
+  ]
+}

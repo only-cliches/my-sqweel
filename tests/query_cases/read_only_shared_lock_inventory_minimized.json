@@ -1,0 +1,67 @@
+{
+  "version": 1,
+  "id": "read_only_shared_lock_inventory_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "read_only_shared_lock_inventory",
+    "source": {
+      "kind": "github",
+      "repository": "Baeldung/sql-tutorials",
+      "commit": "ec66bb71c2581d92bcfa6d68116bf1b0092d9a1e",
+      "path": "sql-queries-11/lock-single-row-mysql/access-mode-significance.sql",
+      "url": "https://github.com/Baeldung/sql-tutorials/blob/ec66bb71c2581d92bcfa6d68116bf1b0092d9a1e/sql-queries-11/lock-single-row-mysql/access-mode-significance.sql",
+      "sha256": "94bd563396467d63774edc1cd314dc67b9a88fa22328be1f6be512d375ccc75c",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from sql-queries-11/lock-single-row-mysql/access-mode-significance.sql:10-16",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "The smallest read-only transaction path configures READ ONLY before starting, performs a shared locking read, rejects a write, and rolls back.",
+      "mysql_mariadb_translation": "Reduced to one independently authored lot, one SET TRANSACTION READ ONLY, one START TRANSACTION, one MariaDB LOCK IN SHARE MODE read, one rejected update, and one rollback."
+    },
+    "independently_authored": true,
+    "minimized_from": "read_only_shared_lock_inventory"
+  },
+  "features": [
+    "read-only-transaction",
+    "lock-in-share-mode",
+    "read-only-shared-lock",
+    "transaction-error",
+    "minimized-regression",
+    "deterministic-order"
+  ],
+  "fixture_notes": "One ready lot isolates the pending READ ONLY transaction mode and shared-lock read before the rejected write.",
+  "determinism_notes": "The lot, statements, expected error, and final projection are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE shipment_lot_probe (lot_id INT PRIMARY KEY, sku VARCHAR(16) NOT NULL, quantity INT NOT NULL)",
+    "INSERT INTO shipment_lot_probe VALUES (8201, 'sensor-probe', 9)"
+  ],
+  "steps": [
+    {
+      "sql": "SET TRANSACTION READ ONLY",
+      "ordered": false
+    },
+    {
+      "sql": "START TRANSACTION",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT lot_id, sku, quantity FROM shipment_lot_probe ORDER BY lot_id LOCK IN SHARE MODE",
+      "ordered": true
+    },
+    {
+      "sql": "UPDATE shipment_lot_probe SET quantity = quantity + 1 WHERE lot_id = 8201",
+      "expect_error": true
+    },
+    {
+      "sql": "ROLLBACK",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT lot_id, sku, quantity FROM shipment_lot_probe ORDER BY lot_id",
+      "ordered": true
+    }
+  ]
+}

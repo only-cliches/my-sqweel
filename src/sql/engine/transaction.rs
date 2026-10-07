@@ -4,6 +4,7 @@ use super::catalog::{
 };
 use super::*;
 use anyhow::ensure;
+use sqlparser::ast::LockType;
 mod persistence;
 mod session;
 use parking_lot::Condvar;
@@ -72,6 +73,7 @@ pub(crate) struct SessionState {
     native_snapshot: Option<crate::storage::RocksDbSnapshot>,
     transaction_read: bool,
     transaction_read_only: bool,
+    next_transaction_read_only: bool,
     observed_tables: Option<BTreeSet<String>>,
     observed_columns: BTreeMap<String, Option<BTreeSet<String>>>,
     savepoints: Vec<(String, Committed)>,
@@ -519,6 +521,7 @@ impl SessionState {
             native_snapshot: None,
             transaction_read: false,
             transaction_read_only: false,
+            next_transaction_read_only: false,
             observed_tables: Some(BTreeSet::new()),
             observed_columns: BTreeMap::new(),
             savepoints: Vec::new(),
@@ -1120,7 +1123,8 @@ impl SessionState {
         self.transaction = Some((None, state));
         self.native_snapshot = None;
         self.transaction_read = false;
-        self.transaction_read_only = false;
+        self.transaction_read_only = self.next_transaction_read_only;
+        self.next_transaction_read_only = false;
         self.observed_columns.clear();
         self.observed_tables = Some(BTreeSet::new());
         Ok(())
@@ -1302,7 +1306,9 @@ impl SessionState {
                         ));
                     }
                     self.begin()?;
-                    self.transaction_read_only = read_only;
+                    if !modes.is_empty() {
+                        self.transaction_read_only = read_only;
+                    }
                 }
                 Some(Statement::Commit { chain }) => {
                     self.commit()?;
@@ -1476,14 +1482,21 @@ impl SessionState {
                 Some(Statement::SetTransaction {
                     modes, snapshot, ..
                 }) => {
-                    if self.is_in_transaction()
-                        || snapshot.is_some()
-                        || modes.len() != 1
-                        || modes[0].to_string() != "ISOLATION LEVEL REPEATABLE READ"
-                    {
+                    if self.is_in_transaction() || snapshot.is_some() {
                         return Err(anyhow!(
-                            "only REPEATABLE READ isolation is supported, before starting a transaction"
+                            "transaction characteristics must be set before starting a transaction"
                         ));
+                    }
+                    match modes.as_slice() {
+                        [TransactionMode::AccessMode(TransactionAccessMode::ReadOnly)] => {
+                            self.next_transaction_read_only = true;
+                        }
+                        [mode] if mode.to_string() == "ISOLATION LEVEL REPEATABLE READ" => {}
+                        _ => {
+                            return Err(anyhow!(
+                                "only READ ONLY or REPEATABLE READ transaction characteristics are supported"
+                            ));
+                        }
                     }
                 }
                 _ => control = false,
@@ -1519,7 +1532,14 @@ impl SessionState {
                 self.begin()?;
             }
             let read = session_only
-                || matches!(ast, Some(Statement::Query(query)) if query.locks.is_empty())
+                || matches!(
+                    ast,
+                    Some(Statement::Query(query))
+                        if query
+                            .locks
+                            .iter()
+                            .all(|lock| matches!(lock.lock_type, LockType::Share))
+                )
                 || matches!(
                     ast,
                     Some(
