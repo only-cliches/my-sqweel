@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "id": "upsert_last_insert_id_thread",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "langgraph4j/langgraph4j",
+      "commit": "9ad19234536ab3b374b97cff4b9171f528aace85",
+      "path": "langgraph4j-mysql-saver/src/main/resources/db/v2.0__commands.sql",
+      "url": "https://github.com/langgraph4j/langgraph4j/blob/9ad19234536ab3b374b97cff4b9171f528aace85/langgraph4j-mysql-saver/src/main/resources/db/v2.0__commands.sql",
+      "sha256": "86d31329ce7ec3ca39a40c921b691cb30bf22dc345511a91a0d7d76e78decb6f",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "langgraph4j-mysql-saver/src/main/resources/db/v2.0__commands.sql:23-29",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL saver inserts a uniquely named thread and uses ON DUPLICATE KEY UPDATE with LAST_INSERT_ID(existing_id), followed by SELECT LAST_INSERT_ID(), so insert and duplicate paths return the same logical identifier.",
+      "mysql_mariadb_translation": "Reauthored as an idempotent workspace-thread registry. A unique thread name is inserted or refreshed through ON DUPLICATE KEY UPDATE, the existing auto-increment ID is assigned to the session through LAST_INSERT_ID(existing_id), and both new and repeated names expose the logical ID. The source schema, identifiers, values, and checkpoint workflow are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "upsert-last-insert-id",
+    "duplicate-key-id-return",
+    "auto-increment-upsert",
+    "session-last-insert-id",
+    "idempotent-upsert",
+    "dml-final-state"
+  ],
+  "fixture_notes": "The first alpha insert allocates ID 1. Repeating alpha with a different owner returns ID 1 without overwriting the original owner; its ignored duplicate consumes auto-increment value 2. A new beta insert therefore allocates ID 3.",
+  "determinism_notes": "Fixed thread names and owner values, explicit unique-key conflict behavior, session ID reads after each write, and ordered final-state checks are used; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE workspace_threads (thread_id INT AUTO_INCREMENT PRIMARY KEY, thread_name VARCHAR(32) NOT NULL UNIQUE, owner_code VARCHAR(16) NOT NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO workspace_threads (thread_name, owner_code) VALUES ('alpha', 'owner-a') ON DUPLICATE KEY UPDATE thread_id = LAST_INSERT_ID(thread_id)"
+    },
+    {
+      "sql": "SELECT LAST_INSERT_ID() AS logical_thread_id",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO workspace_threads (thread_name, owner_code) VALUES ('alpha', 'owner-retry') ON DUPLICATE KEY UPDATE thread_id = LAST_INSERT_ID(thread_id)"
+    },
+    {
+      "sql": "SELECT LAST_INSERT_ID() AS logical_thread_id",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO workspace_threads (thread_name, owner_code) VALUES ('beta', 'owner-b') ON DUPLICATE KEY UPDATE thread_id = LAST_INSERT_ID(thread_id)"
+    },
+    {
+      "sql": "SELECT LAST_INSERT_ID() AS logical_thread_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT thread_id, thread_name, owner_code FROM workspace_threads ORDER BY thread_id",
+      "ordered": true
+    }
+  ]
+}
