@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "id": "regex_rollup_batch_filter",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "AutomatedTester/futurama-data",
+      "commit": "238b2e5a75054e170b9f06719cc7ae8082b64ea7",
+      "path": "inbound.sql",
+      "url": "https://github.com/AutomatedTester/futurama-data/blob/238b2e5a75054e170b9f06719cc7ae7/inbound.sql",
+      "sha256": "e4dde0f75c57db4db5e353c2272d00ffd0f0ed899f6f3fbe0a8ac772e2205e99",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "inbound.sql:1-12",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL/MariaDB report counts grouped activity identifiers after excluding any identifier with a matching related row whose text satisfies a merge or rollback predicate, and uses GROUP BY ... WITH ROLLUP inside the counted relation.",
+      "mysql_mariadb_translation": "Reauthored as a stable deployment batch report. Fixed deployment events are restricted to one lane and date range, batches with merge or whole-word rollback notes are removed through a correlated NOT EXISTS predicate, and the remaining batch identifiers are grouped with WITH ROLLUP before the outer count. The schema, rows, names, and operational domain are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "correlated-not-exists",
+    "regexp-filter",
+    "group-by-rollup",
+    "outer-count-over-rollup",
+    "like-filter",
+    "date-range-filter",
+    "anti-join",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Stable batches alpha and epsilon have no merge or whole-word rollback notes; beta is excluded by the rollback regex, gamma by the merge prefix, and delta by lane/date filters. The rollup row is intentionally counted by the outer relation, matching the source pattern.",
+  "determinism_notes": "All batch identifiers, lane values, dates, notes, regex boundaries, and predicates are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE deployment_events (event_id INT PRIMARY KEY, batch_code VARCHAR(16) NOT NULL, lane VARCHAR(16) NOT NULL, event_day DATE NOT NULL, note VARCHAR(255) NOT NULL)",
+    "INSERT INTO deployment_events VALUES (1, 'alpha', 'stable', '2026-10-01', 'deploy api'), (2, 'alpha', 'stable', '2026-10-01', 'health check'), (3, 'beta', 'stable', '2026-10-01', 'deploy worker'), (4, 'beta', 'stable', '2026-10-01', 'rollback rehearsal'), (5, 'gamma', 'stable', '2026-10-02', 'merge: release branch'), (6, 'delta', 'canary', '2026-10-02', 'deploy ui'), (7, 'epsilon', 'stable', '2026-10-03', 'deploy docs'), (8, 'epsilon', 'stable', '2026-10-03', 'verification complete'), (9, 'zeta', 'stable', '2026-10-04', 'deploy api')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT COUNT(*) AS clean_batch_rows FROM (SELECT e1.batch_code FROM deployment_events e1 WHERE e1.lane = 'stable' AND e1.event_day >= '2026-10-01' AND e1.event_day < '2026-10-04' AND NOT EXISTS (SELECT 1 FROM deployment_events e2 WHERE e2.batch_code = e1.batch_code AND (e2.note LIKE 'merge:%' OR e2.note REGEXP '(^|[[:space:]])rollback([[:space:]]|$)')) GROUP BY e1.batch_code WITH ROLLUP) AS clean_batches",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT batch_code, lane, event_day, note FROM deployment_events ORDER BY event_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT event_id, batch_code, lane, event_day, note FROM deployment_events ORDER BY event_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT batch_code, COUNT(*) AS event_count FROM deployment_events WHERE lane = 'stable' GROUP BY batch_code ORDER BY batch_code",
+      "ordered": true
+    }
+  ]
+}
