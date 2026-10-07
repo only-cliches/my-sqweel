@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "id": "aggregate_reset_update_join_counts",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "greasyfork-org/greasyfork",
+      "commit": "ccb0d2c40f567f91cd306efa73d96db82ae4bc99",
+      "path": "shellscripts/update_install_counts.sql",
+      "url": "https://github.com/greasyfork-org/greasyfork/blob/ccb0d2c40f567f91cd306efa73d96db82ae4bc99/shellscripts/update_install_counts.sql",
+      "sha256": "94db09854df08d18286059dfd78061d32e0077a0801b21038b9576b740c040be",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "shellscripts/update_install_counts.sql:4-11",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A maintenance refresh first resets a stored per-key count, then uses an UPDATE JOIN against a grouped derived table to repopulate counts from recent detail rows.",
+      "mysql_mariadb_translation": "Reauthored as a channel-event rollup: reset every channel's prior daily metrics, then use an aggregate UPDATE JOIN over accepted events to restore count, last event, and state. The source's time predicates, tables, identifiers, and operational domain are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "aggregate-update-join",
+    "derived-table-update-join",
+    "multi-column-update",
+    "reset-before-refresh",
+    "grouped-count-max",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Channels 11 and 12 have accepted events and receive refreshed metrics. Channel 13 has no accepted events and must retain the reset values; rejected events do not contribute. Existing stale metrics ensure the reset step is observable.",
+  "determinism_notes": "Fixed channel and event IDs, explicit accepted-state filtering, grouped count and maximum event ID, and ordered final-state checks; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE channel_rollups (channel_id INT PRIMARY KEY, daily_count INT NOT NULL, last_event_id INT NOT NULL, rollup_state VARCHAR(16) NOT NULL)",
+    "CREATE TABLE channel_events (event_id INT PRIMARY KEY, channel_id INT NOT NULL, event_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO channel_rollups VALUES (11, 99, 900, 'loaded'), (12, 88, 901, 'loaded'), (13, 77, 902, 'loaded')",
+    "INSERT INTO channel_events VALUES (1001, 11, 'accepted'), (1002, 11, 'accepted'), (1003, 11, 'rejected'), (1004, 12, 'rejected')"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE channel_rollups SET daily_count = 0, last_event_id = 0, rollup_state = 'empty'",
+      "ordered": true
+    },
+    {
+      "sql": "UPDATE channel_rollups AS r INNER JOIN (SELECT channel_id, COUNT(*) AS accepted_count, MAX(event_id) AS latest_event_id FROM channel_events WHERE event_state = 'accepted' GROUP BY channel_id) AS e ON e.channel_id = r.channel_id SET r.daily_count = e.accepted_count, r.last_event_id = e.latest_event_id, r.rollup_state = 'active'",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT channel_id, daily_count, last_event_id, rollup_state FROM channel_rollups ORDER BY channel_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT event_id, channel_id, event_state FROM channel_events ORDER BY event_id",
+      "ordered": true
+    }
+  ]
+}
