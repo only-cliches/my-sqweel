@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "id": "grouping_grid_zero_fill_ranked",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "compdemocracy/polis",
+      "commit": "7987554ffd6164ccaf24588e39dfc7aa4aaca141",
+      "path": "ci/probe_box/vote_census.sql",
+      "url": "https://github.com/compdemocracy/polis/blob/7987554ffd6164ccaf24588e39dfc7aa4aaca141/ci/probe_box/vote_census.sql",
+      "sha256": "b0080d7c7dcb2952e35f82547e192486041b12fbd34c1dea903e3b0b32d8c94e",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "ci/probe_box/vote_census.sql:4-20",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A CTE pipeline aggregates detail and subtotal counts with GROUPING SETS, then cross joins a complete dimension grid and left joins the aggregate relation so absent combinations report zero rather than disappearing.",
+      "mysql_mariadb_translation": "Reauthored as a survey-score report over fixed channel and sentiment dimensions. Because MariaDB 10.11.7 has no native GROUPING SETS, the detail and channel-total grouping sets are expressed as explicit UNION ALL branches. A CTE cross-joins the complete channel/sentiment grid, left joins both summary levels, fills missing counts and sums with COALESCE, and ranks each summary level with ROW_NUMBER. PostgreSQL casts, arrays, public-schema references, and vote-specific values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "grouping-sets-translation",
+    "grouping-set-zero-fill",
+    "cte-summary-grid",
+    "cross-join-dimension-grid",
+    "left-join-aggregate-fill",
+    "coalesce-missing-aggregate",
+    "row-number-summary-ranking",
+    "typed-aggregate-output",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The declared channel/sentiment grid contains six detail combinations, but the source table omits chat-neutral and email-negative observations. The report must retain both zero-valued combinations, add one total row per channel, and rank rows within detail and total levels by score total with deterministic tie-breakers.",
+  "determinism_notes": "Channels, sentiments, answer rows, summary levels, aggregate expressions, ranking keys, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE survey_answers (answer_id INT PRIMARY KEY, channel VARCHAR(16) NOT NULL, sentiment VARCHAR(16) NOT NULL, score INT NOT NULL)",
+    "INSERT INTO survey_answers VALUES (1, 'email', 'positive', 5), (2, 'email', 'neutral', 3), (3, 'chat', 'positive', 4), (4, 'chat', 'negative', 1), (5, 'chat', 'positive', 2)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH channels AS (SELECT 'email' AS channel UNION ALL SELECT 'chat'), sentiments AS (SELECT 'negative' AS sentiment UNION ALL SELECT 'neutral' UNION ALL SELECT 'positive'), levels AS (SELECT 1 AS level_order, 'detail' AS summary_level, c.channel, s.sentiment FROM channels AS c CROSS JOIN sentiments AS s UNION ALL SELECT 2, 'channel-total', c.channel, 'all' FROM channels AS c), summary AS (SELECT 1 AS level_order, channel, sentiment, COUNT(*) AS answer_count, SUM(score) AS score_total FROM survey_answers GROUP BY channel, sentiment UNION ALL SELECT 2, channel, 'all', COUNT(*), SUM(score) FROM survey_answers GROUP BY channel), filled AS (SELECT l.level_order, l.summary_level, l.channel, l.sentiment, COALESCE(s.answer_count, 0) AS answer_count, COALESCE(s.score_total, 0) AS score_total FROM levels AS l LEFT JOIN summary AS s ON s.level_order = l.level_order AND s.channel = l.channel AND s.sentiment = l.sentiment), ranked AS (SELECT level_order, summary_level, channel, sentiment, answer_count, score_total, ROW_NUMBER() OVER (PARTITION BY level_order ORDER BY score_total DESC, channel, sentiment) AS rank_in_level FROM filled) SELECT summary_level, channel, sentiment, answer_count, score_total, rank_in_level FROM ranked ORDER BY level_order, rank_in_level",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "WITH channels AS (SELECT 'email' AS channel UNION ALL SELECT 'chat'), sentiments AS (SELECT 'negative' AS sentiment UNION ALL SELECT 'neutral' UNION ALL SELECT 'positive'), levels AS (SELECT 1 AS level_order, 'detail' AS summary_level, c.channel, s.sentiment FROM channels AS c CROSS JOIN sentiments AS s UNION ALL SELECT 2, 'channel-total', c.channel, 'all' FROM channels AS c), summary AS (SELECT 1 AS level_order, channel, sentiment, COUNT(*) AS answer_count, SUM(score) AS score_total FROM survey_answers GROUP BY channel, sentiment UNION ALL SELECT 2, channel, 'all', COUNT(*), SUM(score) FROM survey_answers GROUP BY channel), filled AS (SELECT l.level_order, l.summary_level, l.channel, l.sentiment, COALESCE(s.answer_count, 0) AS answer_count, COALESCE(s.score_total, 0) AS score_total FROM levels AS l LEFT JOIN summary AS s ON s.level_order = l.level_order AND s.channel = l.channel AND s.sentiment = l.sentiment), ranked AS (SELECT level_order, summary_level, channel, sentiment, answer_count, score_total, ROW_NUMBER() OVER (PARTITION BY level_order ORDER BY score_total DESC, channel, sentiment) AS rank_in_level FROM filled) SELECT summary_level, channel, sentiment, answer_count, score_total, rank_in_level FROM ranked ORDER BY level_order, rank_in_level",
+      "ordered": true
+    }
+  ]
+}
