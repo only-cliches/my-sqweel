@@ -2946,6 +2946,9 @@ pub(super) fn json_to_f64(v: &Value) -> Result<f64> {
 }
 
 pub(super) fn json_to_f64_lossy(v: &Value) -> Result<f64> {
+    if let Some(value) = json_extract_value(v) {
+        return json_to_f64_lossy(&value);
+    }
     match v {
         Value::Null => Ok(0.0),
         Value::Bool(value) => Ok(if *value { 1.0 } else { 0.0 }),
@@ -3782,9 +3785,10 @@ fn decimal_binary(left: Value, right: Value, op: DecimalOp) -> Option<Value> {
 }
 
 fn decimal_operand(value: &Value) -> Option<(i128, usize)> {
+    let value = json_extract_value(value).unwrap_or_else(|| value.clone());
     let text = match value {
         Value::Number(number) => number.to_string(),
-        Value::String(text) => text.clone(),
+        Value::String(text) => text,
         _ => return None,
     };
     let (negative, text) = text

@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "id": "update_json_replace_delete_catalog",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "SOZ-Faut-etre-Sub/SOZ-FiveM-Server",
+      "commit": "3d69160411f08ce6831cc0463d0a99b7992e0bea",
+      "path": "resources/[soz]/soz-core/prisma/migrations/20250911154730_last_hc_partI_update/migration.sql",
+      "url": "https://github.com/SOZ-Faut-etre-Sub/SOZ-FiveM-Server/blob/3d69160411f08ce6831cc0463d0a99b7992e0bea/resources/%5Bsoz%5D/soz-core/prisma/migrations/20250911154730_last_hc_partI_update/migration.sql",
+      "sha256": "970d977167526bdbbf0c0c20ee1fcf624bc8906816cb3f0eb35e3c5d8d0313c0",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "migration.sql:1-2",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL migration rewrites a numeric field inside a JSON document with JSON_REPLACE and a calculated JSON_EXTRACT value, then removes obsolete rows in a separate DELETE statement.",
+      "mysql_mariadb_translation": "Reauthored as a catalog maintenance pass. Active catalog entries receive a 25 percent JSON price increase through JSON_REPLACE and JSON_EXTRACT, then retired entries are deleted; archived entries and their JSON documents remain unchanged. The source schema, identifiers, values, and application domain are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "update",
+    "json-replace",
+    "json-extract",
+    "numeric-expression",
+    "filtered-update",
+    "delete",
+    "sequential-dml",
+    "json-replace-delete-sequence",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Active catalog entries 9101 and 9102 have their JSON prices increased from 80 to 100 and from 40 to 50. Archived entry 9103 is not updated, and retired entry 9104 is removed by the later DELETE.",
+  "determinism_notes": "Fixed item IDs, lifecycle states, JSON prices, arithmetic, and final ordering are used; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE catalog_items (item_id INT PRIMARY KEY, lifecycle VARCHAR(16) NOT NULL, details JSON NOT NULL)",
+    "INSERT INTO catalog_items VALUES (9101, 'active', '{\"sku\":\"A-100\",\"price\":80,\"currency\":\"USD\"}'), (9102, 'active', '{\"sku\":\"B-200\",\"price\":40,\"currency\":\"EUR\"}'), (9103, 'archived', '{\"sku\":\"C-300\",\"price\":60,\"currency\":\"USD\"}'), (9104, 'retired', '{\"sku\":\"D-400\",\"price\":70,\"currency\":\"USD\"}')"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE catalog_items SET details = JSON_REPLACE(details, '$.price', JSON_EXTRACT(details, '$.price') * 1.25) WHERE lifecycle = 'active'",
+      "ordered": false
+    },
+    {
+      "sql": "DELETE FROM catalog_items WHERE lifecycle = 'retired'",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT item_id, lifecycle, details FROM catalog_items ORDER BY item_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT item_id, lifecycle, JSON_UNQUOTE(JSON_EXTRACT(details, '$.sku')) AS sku, JSON_UNQUOTE(JSON_EXTRACT(details, '$.price')) AS price FROM catalog_items ORDER BY item_id",
+      "ordered": true
+    }
+  ]
+}

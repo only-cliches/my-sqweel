@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "update_json_replace_delete_catalog_minimized",
+  "provenance": {
+    "kind": "github",
+    "source_url": "https://github.com/SOZ-Faut-etre-Sub/SOZ-FiveM-Server/blob/3d69160411f08ce6831cc0463d0a99b7992e0bea/resources/%5Bsoz%5D/soz-core/prisma/migrations/20250911154730_last_hc_partI_update/migration.sql",
+    "source_commit": "3d69160411f08ce6831cc0463d0a99b7992e0bea",
+    "source_location": "migration.sql:1",
+    "source_sha256": "970d977167526bdbbf0c0c20ee1fcf624bc8906816cb3f0eb35e3c5d8d0313c0",
+    "source_dialect": "mysql-mariadb",
+    "observed_pattern": "A JSON_REPLACE update uses a JSON_EXTRACT numeric value in arithmetic before storing the result back into the document.",
+    "mysql_mariadb_translation": "Minimized independently authored regression with one catalog JSON price; JSON_EXTRACT numeric coercion must produce 100 rather than zero when JSON_REPLACE stores the calculated value."
+  },
+  "features": [
+    "update",
+    "json-replace",
+    "json-extract",
+    "numeric-expression",
+    "minimized-regression"
+  ],
+  "fixture_notes": "The single catalog price must change from 80 to 100, isolating numeric arithmetic on a JSON_EXTRACT result inside JSON_REPLACE.",
+  "determinism_notes": "One fixed primary-key row and one ordered final-state read are used; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE json_price_probe (probe_id INT PRIMARY KEY, details JSON NOT NULL)",
+    "INSERT INTO json_price_probe VALUES (1, '{\"price\":80,\"currency\":\"USD\"}')"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE json_price_probe SET details = JSON_REPLACE(details, '$.price', JSON_EXTRACT(details, '$.price') * 1.25)"
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT probe_id, details, JSON_UNQUOTE(JSON_EXTRACT(details, '$.price')) AS price FROM json_price_probe ORDER BY probe_id",
+      "ordered": true
+    }
+  ]
+}
