@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "id": "json_table_ctas_defaults",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "CUBRID/cubrid-testcases",
+      "commit": "1f3aa6e8766706c1565a2819370abb0e0acda576",
+      "path": "sql/_31_cherry/issue_22162_more_json_functions/cases/json_table_create_table_as.sql",
+      "url": "https://github.com/CUBRID/cubrid-testcases/blob/1f3aa6e8766706c1565a2819370abb0e0acda576/sql/_31_cherry/issue_22162_more_json_functions/cases/json_table_create_table_as.sql",
+      "sha256": "6d6204fac08439d637be45e880e0a2d0a06a709a5d31e575015ce4a666ee42da",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/_31_cherry/issue_22162_more_json_functions/cases/json_table_create_table_as.sql:27-31",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A CREATE TABLE AS SELECT statement materializes typed columns projected by JSON_TABLE, including ON EMPTY and ON ERROR defaults.",
+      "mysql_mariadb_translation": "Reauthored as a dispatch staging table. JSON_TABLE expands a fixed shipment queue into an ordinal row number, SKU, and quantity; missing quantities use an ON EMPTY default, malformed quantities use an ON ERROR default, and a CASE expression is materialized alongside the parsed values. The source JSON, table names, values, and reporting purpose are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "json-table-ctas",
+    "json-table-default-on-empty",
+    "json-table-default-on-error",
+    "json-table-ordinality",
+    "create-table-as-select",
+    "case-derived-column",
+    "typed-json-projection",
+    "deterministic-order",
+    "dml-final-state"
+  ],
+  "fixture_notes": "The staging source contains one complete quantity, one missing quantity, and one malformed quantity. The CTAS result must preserve input order with FOR ORDINALITY, use zero for the missing quantity, use ninety-nine for the malformed quantity, and derive a priority label from the materialized quantity.",
+  "determinism_notes": "The JSON document, default literals, type declarations, CASE thresholds, ordinal projection, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "CREATE TABLE dispatch_stage AS SELECT jt.row_no, jt.sku, jt.requested_qty, CASE WHEN jt.requested_qty >= 50 THEN 'bulk' ELSE 'regular' END AS priority FROM JSON_TABLE('[{\"sku\":\"A-1\",\"qty\":12},{\"sku\":\"B-2\"},{\"sku\":\"C-3\",\"qty\":\"malformed\"}]', '$[*]' COLUMNS (row_no FOR ORDINALITY, sku VARCHAR(16) PATH '$.sku' DEFAULT '\"unknown\"' ON EMPTY, requested_qty INT PATH '$.qty' DEFAULT '0' ON EMPTY DEFAULT '99' ON ERROR)) AS jt",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT row_no, sku, requested_qty, priority FROM dispatch_stage ORDER BY row_no",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT row_no, sku, requested_qty, priority FROM dispatch_stage ORDER BY row_no",
+      "ordered": true
+    }
+  ]
+}

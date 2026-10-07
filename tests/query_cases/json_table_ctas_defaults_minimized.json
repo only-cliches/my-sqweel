@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "id": "json_table_ctas_defaults_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "source": {
+      "kind": "github",
+      "repository": "CUBRID/cubrid-testcases",
+      "commit": "1f3aa6e8766706c1565a2819370abb0e0acda576",
+      "path": "sql/_31_cherry/issue_22162_more_json_functions/cases/json_table_create_table_as.sql",
+      "url": "https://github.com/CUBRID/cubrid-testcases/blob/1f3aa6e8766706c1565a2819370abb0e0acda576/sql/_31_cherry/issue_22162_more_json_functions/cases/json_table_create_table_as.sql",
+      "sha256": "6d6204fac08439d637be45e880e0a2d0a06a709a5d31e575015ce4a666ee42da",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/_31_cherry/issue_22162_more_json_functions/cases/json_table_create_table_as.sql:27-31",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A CREATE TABLE AS SELECT statement materializes a typed column projected by JSON_TABLE.",
+      "mysql_mariadb_translation": "Reduced to one independently authored JSON object and one typed SKU projection. The minimized query isolates CREATE TABLE AS SELECT consuming JSON_TABLE without defaults, joins, CASE expressions, or later reads."
+    },
+    "independently_authored": true,
+    "minimized_from": "json_table_ctas_defaults"
+  },
+  "features": [
+    "json-table-ctas",
+    "create-table-as-select",
+    "typed-json-projection",
+    "dml-final-state"
+  ],
+  "fixture_notes": "One JSON object is projected into a CTAS-created table; the query isolates the parser and execution boundary that mismatched in the original case.",
+  "determinism_notes": "The JSON document and typed projection are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [],
+  "steps": [
+    {
+      "sql": "CREATE TABLE dispatch_stage AS SELECT jt.sku FROM JSON_TABLE('[{\"sku\":\"A-1\"}]', '$[*]' COLUMNS (sku VARCHAR(16) PATH '$.sku')) AS jt",
+      "ordered": false
+    }
+  ],
+  "checks": []
+}

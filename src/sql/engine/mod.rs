@@ -1071,6 +1071,13 @@ impl RawEngine {
                     out.push(result);
                     continue;
                 }
+                if let Some(result) = self.execute_create_table_json_table_compat(&raw)? {
+                    self.capture_eval_user_variables();
+                    self.record_found_rows(&raw, &result);
+                    self.store_last_rows_affected(&raw, &result);
+                    out.push(result);
+                    continue;
+                }
                 if let Some(result) = self.execute_compat_statement(&raw)? {
                     self.capture_eval_user_variables();
                     self.record_found_rows(&raw, &result);
@@ -1267,6 +1274,43 @@ impl RawEngine {
         };
         let result = self.replace_table_from_result(&table, result)?;
         Ok(Some(result))
+    }
+
+    fn execute_create_table_json_table_compat(&self, sql: &str) -> Result<Option<QueryResult>> {
+        let trimmed = sql.trim().trim_end_matches(';').trim();
+        let upper = trimmed.to_ascii_uppercase();
+        if !upper.starts_with("CREATE TABLE") || !upper.contains("JSON_TABLE") {
+            return Ok(None);
+        }
+        let Some(as_at) = find_top_level_keyword(trimmed, "AS") else {
+            return Ok(None);
+        };
+        let prefix = trimmed[..as_at].trim();
+        let query_sql = trimmed[as_at + "AS".len()..].trim();
+        let Some(Statement::CreateTable(create)) =
+            crate::sql::parse(&format!("{prefix} AS SELECT 1"))?
+                .into_iter()
+                .next()
+        else {
+            return Ok(None);
+        };
+        let sqlparser::ast::CreateTable {
+            name,
+            columns,
+            constraints,
+            if_not_exists,
+            temporary,
+            like,
+            ..
+        } = create;
+        if like.is_some() {
+            return Ok(None);
+        }
+        let Some(Statement::Query(query)) = crate::sql::parse(query_sql)?.into_iter().next() else {
+            return Ok(None);
+        };
+        self.create_table_as_select(name, columns, constraints, if_not_exists, temporary, *query)
+            .map(Some)
     }
 
     fn record_found_rows(&self, sql: &str, result: &QueryResult) {
