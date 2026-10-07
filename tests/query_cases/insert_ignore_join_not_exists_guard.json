@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "id": "insert_ignore_join_not_exists_guard",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "sunkaifei/FlyCms",
+      "commit": "3de55097f86066d4f04970a17af23020a912561a",
+      "path": "sql/migrations/2026-09-30-model-data-crud-buttons.sql",
+      "url": "https://github.com/sunkaifei/FlyCms/blob/3de55097f86066d4f04970a17af23020a912561a/sql/migrations/2026-09-30-model-data-crud-buttons.sql",
+      "sha256": "fe02388a8f1c5a4444976da6fbc98937687f594f903845f479aa6366f88c1c44",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/migrations/2026-09-30-model-data-crud-buttons.sql:68-81",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL migration inserts joined permission projections with INSERT IGNORE while a correlated NOT EXISTS guard suppresses destination pairs that are already present.",
+      "mysql_mariadb_translation": "Reauthored as a team-capability synchronizer. Active teams join enabled role capabilities, a correlated NOT EXISTS guard excludes an existing team-capability pair, and duplicate source capability rows are safely handled by INSERT IGNORE. The source tables, identifiers, action paths, and application context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "insert-ignore",
+    "insert-select",
+    "inner-join",
+    "correlated-not-exists",
+    "duplicate-source-projection",
+    "case-expression",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Team 10 already has capability 101 and must remain unchanged. Two duplicate role-capability rows for capability 102 produce one inserted target row because INSERT IGNORE skips the repeated primary key. Team 20 receives capability 201, while disabled capability 103 and inactive team 30 are excluded.",
+  "determinism_notes": "Team IDs, capability IDs, role mappings, enabled flags, duplicate source rows, grant labels, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE teams (team_id INT PRIMARY KEY, role_code VARCHAR(16) NOT NULL, active TINYINT NOT NULL)",
+    "CREATE TABLE role_capabilities (capability_row_id INT PRIMARY KEY, role_code VARCHAR(16) NOT NULL, capability_id INT NOT NULL, enabled TINYINT NOT NULL)",
+    "CREATE TABLE team_capabilities (team_id INT NOT NULL, capability_id INT NOT NULL, grant_mode VARCHAR(16) NOT NULL, PRIMARY KEY (team_id, capability_id))",
+    "INSERT INTO teams VALUES (10, 'ops', 1), (20, 'audit', 1), (30, 'ops', 0)",
+    "INSERT INTO role_capabilities VALUES (1, 'ops', 101, 1), (2, 'ops', 102, 1), (3, 'ops', 102, 1), (4, 'ops', 103, 0), (5, 'audit', 201, 1)",
+    "INSERT INTO team_capabilities VALUES (10, 101, 'existing')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT IGNORE INTO team_capabilities (team_id, capability_id, grant_mode) SELECT t.team_id, c.capability_id, CASE WHEN c.capability_id = 102 THEN 'review' ELSE 'use' END FROM teams AS t JOIN role_capabilities AS c ON c.role_code = t.role_code WHERE t.active = 1 AND c.enabled = 1 AND NOT EXISTS (SELECT 1 FROM team_capabilities AS existing WHERE existing.team_id = t.team_id AND existing.capability_id = c.capability_id)",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT team_id, capability_id, grant_mode FROM team_capabilities ORDER BY team_id, capability_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT role_code, capability_id, enabled FROM role_capabilities ORDER BY role_code, capability_id, enabled",
+      "ordered": true
+    }
+  ]
+}
