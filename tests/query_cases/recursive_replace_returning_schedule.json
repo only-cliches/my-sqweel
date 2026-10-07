@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "id": "recursive_replace_returning_schedule",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "phenax/sqlite-creative-coding",
+      "commit": "083c8918902a1bd89814a8deeff2988f0a3af44b",
+      "path": "src/rave.video.sql",
+      "url": "https://github.com/phenax/sqlite-creative-coding/blob/083c8918902a1bd89814a8deeff2988f0a3af44b/src/rave.video.sql",
+      "sha256": "72b6c6c5512050dda4484ce28ad4f1c08fcb16ad14ed01e6c6ac0dbef41bfcb4",
+      "source_dialect": "sqlite"
+    },
+    "inspiration": {
+      "source_location": "src/rave.video.sql:1-12",
+      "source_dialect": "sqlite",
+      "observed_pattern": "A SQLite script replaces a keyed parent row with RETURNING, then uses a recursive CTE to generate a bounded sequence that feeds an INSERT ... SELECT into a child table.",
+      "mysql_mariadb_translation": "Reauthored as a render-job schedule refresh. MariaDB REPLACE INTO ... RETURNING refreshes one keyed job, then a recursive CTE generates four deterministic segment numbers for an INSERT ... SELECT into the job's schedule. The source's video, image, frame, and pixel schema is replaced with newly authored job and segment data."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "replace",
+    "returning",
+    "replace-returning",
+    "recursive-cte",
+    "recursive-insert-select",
+    "generated-sequence",
+    "bounded-recursion",
+    "cross-feature-dml",
+    "dml-result-rows",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Job 700 is replaced with refreshed metadata and returns the replacement row. A recursive sequence then inserts segments 1 through 4 for that job, while unrelated job 701 remains unchanged.",
+  "determinism_notes": "Job IDs, replacement values, recursive upper bound, segment labels, primary keys, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE render_jobs (job_id INT PRIMARY KEY, job_name VARCHAR(32) NOT NULL, frame_interval INT NOT NULL)",
+    "CREATE TABLE render_segments (job_id INT NOT NULL, segment_no INT NOT NULL, segment_label VARCHAR(32) NOT NULL, PRIMARY KEY (job_id, segment_no))",
+    "INSERT INTO render_jobs VALUES (700, 'aurora-draft', 10), (701, 'borealis', 8)"
+  ],
+  "steps": [
+    {
+      "sql": "REPLACE INTO render_jobs (job_id, job_name, frame_interval) VALUES (700, 'aurora-refresh', 5) RETURNING job_id, job_name, frame_interval",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO render_segments (job_id, segment_no, segment_label) WITH RECURSIVE segment_numbers(segment_no) AS (SELECT 1 UNION ALL SELECT segment_no + 1 FROM segment_numbers WHERE segment_no < 4) SELECT 700, segment_no, CONCAT('segment-', segment_no) FROM segment_numbers ORDER BY segment_no",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT job_id, job_name, frame_interval FROM render_jobs ORDER BY job_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT job_id, segment_no, segment_label FROM render_segments ORDER BY job_id, segment_no",
+      "ordered": true
+    }
+  ]
+}
