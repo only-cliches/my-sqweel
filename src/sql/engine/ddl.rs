@@ -62,6 +62,23 @@ impl RawEngine {
         temporary: bool,
         query: sqlparser::ast::Query,
     ) -> Result<QueryResult> {
+        let ctas_blob_case_columns = query
+            .body
+            .as_ref()
+            .as_select()
+            .map(|select| {
+                select
+                    .projection
+                    .iter()
+                    .map(|item| match item {
+                        SelectItem::UnnamedExpr(expr) | SelectItem::ExprWithAlias { expr, .. } => {
+                            case_scalar_group_concat(expr)
+                        }
+                        SelectItem::Wildcard(_) | SelectItem::QualifiedWildcard(_, _) => false,
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
         let mut result = self.select_query(query)?;
         let table = object_name(&name)?;
         if self
@@ -93,7 +110,17 @@ impl RawEngine {
                 &mut schema,
                 column.clone(),
                 ColumnHint {
-                    sql_type: Some(inferred_sql_type_from_metadata(metadata, value)),
+                    sql_type: Some(
+                        if ctas_blob_case_columns.get(index).copied().unwrap_or(false)
+                            && metadata.is_some_and(|metadata| {
+                                metadata.column_type == MysqlColumnType::MediumBlob
+                            })
+                        {
+                            "BLOB".to_string()
+                        } else {
+                            inferred_sql_type_from_metadata(metadata, value)
+                        },
+                    ),
                     nullable: Some(
                         metadata.map_or(value.is_none_or(Value::is_null), |column| column.nullable),
                     ),
@@ -668,6 +695,51 @@ impl RawEngine {
         Ok(QueryResult::default())
     }
 }
+fn case_scalar_group_concat(expr: &Expr) -> bool {
+    let Expr::Case {
+        results,
+        else_result,
+        ..
+    } = expr
+    else {
+        return false;
+    };
+    results
+        .iter()
+        .chain(else_result.iter().map(|result| result.as_ref()))
+        .any(scalar_group_concat)
+}
+
+fn scalar_group_concat(expr: &Expr) -> bool {
+    match expr {
+        Expr::Nested(inner) => scalar_group_concat(inner),
+        Expr::Subquery(query) => match query.body.as_ref() {
+            SetExpr::Select(select) => select
+                .projection
+                .first()
+                .is_some_and(projection_group_concat),
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+fn projection_group_concat(item: &SelectItem) -> bool {
+    let expr = match item {
+        SelectItem::UnnamedExpr(expr) | SelectItem::ExprWithAlias { expr, .. } => expr,
+        SelectItem::Wildcard(_) | SelectItem::QualifiedWildcard(_, _) => return false,
+    };
+    matches!(
+        expr,
+        Expr::Function(function)
+            if function
+                .name
+                .0
+                .last()
+                .is_some_and(|name| name.value.eq_ignore_ascii_case("GROUP_CONCAT"))
+    )
+}
+
 fn inferred_sql_type_from_metadata(
     metadata: Option<&ColumnMetadata>,
     value: Option<&Value>,

@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "id": "session_title_refresh_ranked_json_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "session_title_refresh_ranked_json",
+    "source": {
+      "kind": "github",
+      "repository": "fastrepl/anarlog",
+      "commit": "25e0696a710dd93a5d0a6f194c0de5bba4d65e06",
+      "path": "crates/db-app/migrations/20260713164500_repair_empty_session_titles.sql",
+      "url": "https://github.com/fastrepl/anarlog/blob/25e0696a710dd93a5d0a6f194c0de5bba4d65e06/crates/db-app/migrations/20260713164500_repair_empty_session_titles.sql",
+      "sha256": "0c71d4b414b4e9ba93aa9183d60ebcc7b934a4d8785e8bc4fd78268c7d8fa44d",
+      "source_dialect": "sqlite"
+    },
+    "inspiration": {
+      "source_location": "Minimized from session_title_refresh_ranked_json",
+      "source_dialect": "sqlite",
+      "observed_pattern": "A CASE expression selects a scalar ordered GROUP_CONCAT result and exposes the aggregate's result metadata through the enclosing projection.",
+      "mysql_mariadb_translation": "Reduced to two fixed title fragments and one CASE-wrapped correlated scalar GROUP_CONCAT, isolating the MariaDB BLOB metadata from the original JSON, ranking, and update pipeline."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "group-concat",
+    "ordered-group-concat",
+    "scalar-subquery",
+    "case-expression",
+    "metadata-regression"
+  ],
+  "fixture_notes": "Two fragments produce one deterministic title; the CASE keeps the scalar aggregate on the selected branch and an empty string on the alternate branch.",
+  "determinism_notes": "Fragment IDs and ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE mini_title_fragments (fragment_id INT PRIMARY KEY, fragment_text VARCHAR(32) NOT NULL)",
+    "INSERT INTO mini_title_fragments VALUES (1, 'Route '), (2, 'review')"
+  ],
+  "steps": [
+    {
+      "sql": "CREATE TEMPORARY TABLE mini_ranked_titles AS SELECT CASE WHEN 1 = 1 THEN (SELECT GROUP_CONCAT(fragment_text ORDER BY fragment_id SEPARATOR '') FROM mini_title_fragments) ELSE '' END AS title",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT title FROM mini_ranked_titles",
+      "ordered": true
+    }
+  ]
+}

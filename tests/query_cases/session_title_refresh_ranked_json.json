@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "id": "session_title_refresh_ranked_json",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "fastrepl/anarlog",
+      "commit": "25e0696a710dd93a5d0a6f194c0de5bba4d65e06",
+      "path": "crates/db-app/migrations/20260713164500_repair_empty_session_titles.sql",
+      "url": "https://github.com/fastrepl/anarlog/blob/25e0696a710dd93a5d0a6f194c0de5bba4d65e06/crates/db-app/migrations/20260713164500_repair_empty_session_titles.sql",
+      "sha256": "0c71d4b414b4e9ba93aa9183d60ebcc7b934a4d8785e8bc4fd78268c7d8fa44d",
+      "source_dialect": "sqlite"
+    },
+    "inspiration": {
+      "source_location": "crates/db-app/migrations/20260713164500_repair_empty_session_titles.sql:1-82",
+      "source_dialect": "sqlite",
+      "observed_pattern": "A document-title repair pipeline uses CTEs to normalize source text, extracts title fragments from structured JSON with a correlated aggregate, filters placeholder labels, ranks candidates per session with ROW_NUMBER, and updates only sessions that still have blank titles.",
+      "mysql_mariadb_translation": "Reauthored as a notebook session-title refresh. A temporary ranked relation combines markdown and JSON heading entries, JSON_TABLE expands heading text fragments for ordered GROUP_CONCAT reconstruction, ROW_NUMBER chooses the earliest valid title per session, and a correlated scalar UPDATE fills only blank active sessions while preserving an existing and an archived session. SQLite string/time expressions and the source schema, labels, rows, and migration workflow are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "multi-cte",
+    "json-table",
+    "json-extract",
+    "correlated-group-concat",
+    "ordered-group-concat",
+    "row-number-window",
+    "correlated-scalar-update",
+    "null-preserving-update",
+    "dml-final-state"
+  ],
+  "fixture_notes": "Session 501 receives the first valid markdown title even though a later entry is also valid; session 502 reconstructs a JSON heading from two text fragments; session 503 keeps its existing title; archived session 504 remains unchanged; placeholder headings and deleted entries do not become candidates.",
+  "determinism_notes": "Session IDs, entry order, timestamps, JSON fragments, ranking order, update marker, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE notebook_sessions (session_id INT PRIMARY KEY, session_title VARCHAR(64) NOT NULL, archived TINYINT NOT NULL, refresh_state VARCHAR(16) NOT NULL)",
+    "CREATE TABLE notebook_entries (entry_id INT PRIMARY KEY, session_id INT NOT NULL, entry_order INT NOT NULL, created_at DATETIME NOT NULL, body_format VARCHAR(16) NOT NULL, body_text TEXT NOT NULL, deleted_flag TINYINT NOT NULL)",
+    "INSERT INTO notebook_sessions VALUES (501, '', 0, 'idle'), (502, '   ', 0, 'idle'), (503, 'Existing title', 0, 'idle'), (504, '', 1, 'idle')",
+    "INSERT INTO notebook_entries VALUES (7001, 501, 1, '2026-07-01 09:00:00', 'markdown', '# Quarterly planning', 0), (7002, 501, 2, '2026-07-01 10:00:00', 'markdown', '# Later candidate', 0), (7003, 501, 3, '2026-07-01 11:00:00', 'markdown', '# Summary', 0), (7004, 502, 1, '2026-07-02 09:00:00', 'json', '{\"content\":[{\"type\":\"heading\",\"attrs\":{\"level\":1},\"content\":[{\"type\":\"text\",\"text\":\"Route \"},{\"type\":\"text\",\"text\":\"review\"}]}]}', 0), (7005, 502, 2, '2026-07-02 10:00:00', 'markdown', '# Untitled', 0), (7006, 503, 1, '2026-07-03 09:00:00', 'markdown', '# Should not replace', 0), (7007, 504, 1, '2026-07-04 09:00:00', 'markdown', '# Archived candidate', 0), (7008, 501, 4, '2026-07-01 12:00:00', 'markdown', '# Deleted candidate', 1)"
+  ],
+  "steps": [
+    {
+      "sql": "CREATE TEMPORARY TABLE ranked_session_titles AS WITH normalized_entries AS (SELECT e.entry_id, e.session_id, e.entry_order, e.created_at, e.body_format, e.body_text, TRIM(REPLACE(REPLACE(REPLACE(e.body_text, CHAR(9), ' '), CHAR(10), ' '), CHAR(13), ' ')) AS normalized_body FROM notebook_entries AS e INNER JOIN notebook_sessions AS s ON s.session_id = e.session_id AND s.archived = 0 WHERE TRIM(s.session_title) = '' AND e.deleted_flag = 0), entry_titles AS (SELECT n.entry_id, n.session_id, n.entry_order, n.created_at, CASE WHEN n.body_format = 'markdown' AND LEFT(n.normalized_body, 2) = '# ' THEN SUBSTRING(n.normalized_body, 3) WHEN n.body_format = 'json' AND JSON_VALID(n.body_text) AND JSON_UNQUOTE(JSON_EXTRACT(n.body_text, '$.content[0].type')) = 'heading' AND JSON_EXTRACT(n.body_text, '$.content[0].attrs.level') = 1 THEN (SELECT GROUP_CONCAT(jt.node_text ORDER BY jt.position SEPARATOR '') FROM JSON_TABLE(n.body_text, '$.content[0].content[*]' COLUMNS (position FOR ORDINALITY, node_type VARCHAR(16) PATH '$.type', node_text VARCHAR(64) PATH '$.text')) AS jt WHERE jt.node_type = 'text') ELSE '' END AS candidate_title FROM normalized_entries AS n), valid_titles AS (SELECT entry_id, session_id, entry_order, created_at, TRIM(candidate_title) AS title FROM entry_titles WHERE TRIM(candidate_title) <> '' AND LOWER(TRIM(candidate_title)) NOT IN ('summary', 'untitled', 'untitled note')), ranked_titles AS (SELECT session_id, title, ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY entry_order, created_at, entry_id) AS title_rank FROM valid_titles) SELECT session_id, title, title_rank FROM ranked_titles",
+      "ordered": true
+    },
+    {
+      "sql": "UPDATE notebook_sessions AS s SET s.session_title = (SELECT r.title FROM ranked_session_titles AS r WHERE r.session_id = s.session_id AND r.title_rank = 1), s.refresh_state = 'derived' WHERE TRIM(s.session_title) = '' AND s.archived = 0 AND EXISTS (SELECT 1 FROM ranked_session_titles AS r WHERE r.session_id = s.session_id AND r.title_rank = 1)",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT session_id, session_title, archived, refresh_state FROM notebook_sessions ORDER BY session_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT session_id, session_title, refresh_state FROM notebook_sessions ORDER BY session_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT session_id, title, title_rank FROM ranked_session_titles ORDER BY session_id, title_rank",
+      "ordered": true
+    }
+  ]
+}
