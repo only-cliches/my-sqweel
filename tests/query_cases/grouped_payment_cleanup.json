@@ -1,0 +1,86 @@
+{
+  "version": 1,
+  "id": "grouped_payment_cleanup",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "naamavitman/databases",
+      "commit": "43ca8e08f6b408661c686536234021f40b6d66db",
+      "path": "delete.sql",
+      "url": "https://github.com/naamavitman/databases/blob/43ca8e08f6b408661c686536234021f40b6d66db/delete.sql",
+      "sha256": "07c223c7f945729659b1de2c10e95100b191de4bf26aebd19d6b7024b65cd43a",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "delete.sql:1-23",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A multi-step cleanup first selects parent rows through a joined subquery for a non-cash predicate, removes the related financial rows, and then uses a grouped HAVING subquery to remove a low-volume person's remaining records.",
+      "mysql_mariadb_translation": "Reauthored as a transactional pledge-payment cleanup. Labels for pledges with non-cash payments are removed through a joined subquery, non-cash payments are deleted, and a nested grouped HAVING subquery removes remaining payments for donors with at most two pledges. Source schemas, names, values, and donation domain are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "transaction",
+    "child-label-cleanup",
+    "joined-subquery-delete",
+    "non-cash-filter",
+    "nested-grouped-subquery",
+    "grouped-having-delete",
+    "multi-stage-cleanup",
+    "commit-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Non-cash payments belong to pledges 101, 102, and 301, so their labels are removed before the payments. Donor 1 has two pledges and donor 3 has one, so the grouped HAVING cleanup removes donor 1's remaining cash payment while donor 2's four cash payments remain. Pledges themselves remain in the ledger.",
+  "determinism_notes": "Donor, pledge, payment, label, cleanup predicates, transaction statements, and final ordering are fixed; there are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE pledge_donors (donor_id INT PRIMARY KEY, donor_name VARCHAR(64) NOT NULL)",
+    "CREATE TABLE pledges (pledge_id INT PRIMARY KEY, donor_id INT NOT NULL, pledge_label VARCHAR(64) NOT NULL)",
+    "CREATE TABLE pledge_payments (payment_id INT PRIMARY KEY, pledge_id INT NOT NULL, payment_method VARCHAR(16) NOT NULL, amount INT NOT NULL)",
+    "CREATE TABLE pledge_labels (label_id INT PRIMARY KEY, pledge_id INT NOT NULL, label_text VARCHAR(64) NOT NULL)",
+    "INSERT INTO pledge_donors VALUES (1, 'Aster'), (2, 'Birch'), (3, 'Cedar')",
+    "INSERT INTO pledges VALUES (101, 1, 'spring'), (102, 1, 'summer'), (201, 2, 'alpha'), (202, 2, 'beta'), (203, 2, 'gamma'), (204, 2, 'delta'), (301, 3, 'single')",
+    "INSERT INTO pledge_payments VALUES (1001, 101, 'cash', 20), (1002, 101, 'card', 25), (1003, 102, 'bank', 30), (2001, 201, 'cash', 10), (2002, 202, 'cash', 11), (2003, 203, 'cash', 12), (2004, 204, 'cash', 13), (3001, 301, 'card', 40)",
+    "INSERT INTO pledge_labels VALUES (1, 101, 'priority'), (2, 102, 'seasonal'), (3, 201, 'recurring'), (4, 202, 'recurring'), (5, 301, 'review')"
+  ],
+  "steps": [
+    {
+      "sql": "START TRANSACTION",
+      "ordered": true
+    },
+    {
+      "sql": "DELETE FROM pledge_labels WHERE pledge_id IN (SELECT p.pledge_id FROM pledge_payments AS pay INNER JOIN pledges AS p ON p.pledge_id = pay.pledge_id WHERE pay.payment_method <> 'cash')",
+      "ordered": true
+    },
+    {
+      "sql": "DELETE FROM pledge_payments WHERE payment_method <> 'cash'",
+      "ordered": true
+    },
+    {
+      "sql": "DELETE FROM pledge_payments WHERE pledge_id IN (SELECT p.pledge_id FROM pledges AS p WHERE p.donor_id IN (SELECT donor_id FROM pledges GROUP BY donor_id HAVING COUNT(*) <= 2))",
+      "ordered": true
+    },
+    {
+      "sql": "COMMIT",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT donor_id, donor_name FROM pledge_donors ORDER BY donor_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT pledge_id, donor_id, pledge_label FROM pledges ORDER BY pledge_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT payment_id, pledge_id, payment_method, amount FROM pledge_payments ORDER BY payment_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT label_id, pledge_id, label_text FROM pledge_labels ORDER BY label_id",
+      "ordered": true
+    }
+  ]
+}
