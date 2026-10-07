@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "id": "recursive_subscriber_guarded_upsert",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "multica-ai/multica",
+      "commit": "bb14e8763ced1cfd7a640375563e0daa6fc31153",
+      "path": "server/pkg/db/queries/subscriber.sql",
+      "url": "https://github.com/multica-ai/multica/blob/bb14e8763ced1cfd7a640375563e0daa6fc31153/server/pkg/db/queries/subscriber.sql",
+      "sha256": "28962c68d00920f56fbee504af1ab5af0a144404d718e006b28b4bd4107ae407",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "server/pkg/db/queries/subscriber.sql:85-111",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A recursive ancestor walk and an active-membership CTE guard an INSERT ... SELECT; a NOT EXISTS check blocks inherited subtree opt-outs, while the conflict path upgrades an existing delegated subscription without reviving a tombstone.",
+      "mysql_mariadb_translation": "Reauthored as a workspace issue tree with integer identifiers. PostgreSQL FOR SHARE, ON CONFLICT, EXCLUDED, UUID parameters, and timestamp state are translated to a MariaDB recursive CTE, INSERT ... SELECT, NOT EXISTS ancestor guard, and ON DUPLICATE KEY UPDATE CASE using VALUES(). The fixture separately exercises an inherited opt-out, a delegated-row upgrade, and a non-member no-op."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "recursive-cte",
+    "recursive-parent-walk",
+    "recursive-insert-select",
+    "insert-select-upsert",
+    "duplicate-key-update",
+    "conditional-upsert",
+    "not-exists-ancestor-guard",
+    "active-membership-guard",
+    "subtree-opt-out",
+    "upsert-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Issue 702 is a grandchild of issue 700. User 7 is an active member but has a subtree opt-out at the root, so the recursive guard must suppress insertion. User 8 is an active member with an existing delegated subscription on issue 702, so the same statement must upgrade its reason to assigned. User 9 is not a member, so no row is inserted.",
+  "determinism_notes": "Issue hierarchy, workspace membership, subscriber state, literal reasons, recursive anchor, conflict key, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE issue_tree (issue_id INT PRIMARY KEY, parent_issue_id INT NULL, workspace_id INT NOT NULL)",
+    "CREATE TABLE workspace_members (workspace_id INT NOT NULL, user_id INT NOT NULL, PRIMARY KEY (workspace_id, user_id))",
+    "CREATE TABLE issue_subscribers (issue_id INT NOT NULL, user_id INT NOT NULL, reason VARCHAR(16) NOT NULL, unsubscribed TINYINT NOT NULL, opt_out_scope VARCHAR(16) NULL, PRIMARY KEY (issue_id, user_id))",
+    "INSERT INTO issue_tree VALUES (700, NULL, 42), (701, 700, 42), (702, 701, 42), (703, 700, 42), (704, NULL, 42)",
+    "INSERT INTO workspace_members VALUES (42, 7), (42, 8)",
+    "INSERT INTO issue_subscribers VALUES (700, 7, 'manual', 1, 'subtree'), (702, 8, 'delegated', 0, NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO issue_subscribers (issue_id, user_id, reason, unsubscribed, opt_out_scope) WITH RECURSIVE ancestors (issue_id, parent_issue_id, depth) AS (SELECT root.issue_id, root.parent_issue_id, 0 FROM issue_tree AS root WHERE root.issue_id = 702 UNION ALL SELECT child.issue_id, child.parent_issue_id, a.depth + 1 FROM issue_tree AS child JOIN ancestors AS a ON child.issue_id = a.parent_issue_id), active_member AS (SELECT user_id FROM workspace_members WHERE workspace_id = 42 AND user_id = 7) SELECT 702, am.user_id, 'assigned', 0, NULL FROM active_member AS am WHERE NOT EXISTS (SELECT 1 FROM issue_subscribers AS existing JOIN ancestors AS a ON a.issue_id = existing.issue_id WHERE existing.user_id = 7 AND existing.unsubscribed = 1 AND (a.depth = 0 OR existing.opt_out_scope = 'subtree')) ON DUPLICATE KEY UPDATE reason = CASE WHEN unsubscribed = 0 AND reason = 'delegated' AND VALUES(reason) <> 'delegated' THEN VALUES(reason) ELSE reason END",
+      "ordered": false
+    },
+    {
+      "sql": "INSERT INTO issue_subscribers (issue_id, user_id, reason, unsubscribed, opt_out_scope) WITH RECURSIVE ancestors (issue_id, parent_issue_id, depth) AS (SELECT root.issue_id, root.parent_issue_id, 0 FROM issue_tree AS root WHERE root.issue_id = 702 UNION ALL SELECT child.issue_id, child.parent_issue_id, a.depth + 1 FROM issue_tree AS child JOIN ancestors AS a ON child.issue_id = a.parent_issue_id), active_member AS (SELECT user_id FROM workspace_members WHERE workspace_id = 42 AND user_id = 8) SELECT 702, am.user_id, 'assigned', 0, NULL FROM active_member AS am WHERE NOT EXISTS (SELECT 1 FROM issue_subscribers AS existing JOIN ancestors AS a ON a.issue_id = existing.issue_id WHERE existing.user_id = 8 AND existing.unsubscribed = 1 AND (a.depth = 0 OR existing.opt_out_scope = 'subtree')) ON DUPLICATE KEY UPDATE reason = CASE WHEN unsubscribed = 0 AND reason = 'delegated' AND VALUES(reason) <> 'delegated' THEN VALUES(reason) ELSE reason END",
+      "ordered": false
+    },
+    {
+      "sql": "INSERT INTO issue_subscribers (issue_id, user_id, reason, unsubscribed, opt_out_scope) WITH RECURSIVE ancestors (issue_id, parent_issue_id, depth) AS (SELECT root.issue_id, root.parent_issue_id, 0 FROM issue_tree AS root WHERE root.issue_id = 702 UNION ALL SELECT child.issue_id, child.parent_issue_id, a.depth + 1 FROM issue_tree AS child JOIN ancestors AS a ON child.issue_id = a.parent_issue_id), active_member AS (SELECT user_id FROM workspace_members WHERE workspace_id = 42 AND user_id = 9) SELECT 702, am.user_id, 'assigned', 0, NULL FROM active_member AS am WHERE NOT EXISTS (SELECT 1 FROM issue_subscribers AS existing JOIN ancestors AS a ON a.issue_id = existing.issue_id WHERE existing.user_id = 9 AND existing.unsubscribed = 1 AND (a.depth = 0 OR existing.opt_out_scope = 'subtree')) ON DUPLICATE KEY UPDATE reason = CASE WHEN unsubscribed = 0 AND reason = 'delegated' AND VALUES(reason) <> 'delegated' THEN VALUES(reason) ELSE reason END",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT issue_id, user_id, reason, unsubscribed, opt_out_scope FROM issue_subscribers ORDER BY issue_id, user_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT issue_id, user_id, reason, unsubscribed, opt_out_scope FROM issue_subscribers ORDER BY issue_id, user_id",
+      "ordered": true
+    }
+  ]
+}
