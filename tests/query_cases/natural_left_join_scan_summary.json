@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "id": "natural_left_join_scan_summary",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "yippee-fun/plume",
+      "commit": "c3b899bae4f6be4f3e2001272c3823cc35d0dc7f",
+      "path": "fixtures/sqlite/sql/select6-51.sql",
+      "url": "https://github.com/yippee-fun/plume/blob/c3b899bae4f6be4f3e2001272c3823cc35d0dc7f/fixtures/sqlite/sql/select6-51.sql",
+      "sha256": "ae8c51d1b3d16b6d9d298f0c1559ec1c74616d461ad048a3f8d976378f9c5b49",
+      "source_dialect": "sqlite"
+    },
+    "inspiration": {
+      "source_location": "fixtures/sqlite/sql/select6-51.sql:1-11",
+      "source_dialect": "sqlite",
+      "observed_pattern": "A SQLite fixture creates two relations sharing a column name and uses NATURAL JOIN so the shared column supplies the equality condition without an explicit ON clause.",
+      "mysql_mariadb_translation": "Reauthored as an open-batch scan report using NATURAL LEFT JOIN on a shared batch_id, preserving unmatched open batches while filtering accepted scans and aggregating their counts and units. The source schema, identifiers, values, and test purpose are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "natural-left-join",
+    "natural-join-shared-key",
+    "left-join-unmatched-preservation",
+    "filtered-left-join-aggregate",
+    "coalesced-aggregate",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Batch 10 has two accepted scans and one rejected scan; batch 20 has one accepted scan; batch 40 has no scans and must remain with zero totals; closed batch 30 is excluded.",
+  "determinism_notes": "Fixed integer IDs, explicit batch and scan states, stable grouping and ordering, and no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE batch_manifest (batch_id INT PRIMARY KEY, batch_label VARCHAR(16) NOT NULL, batch_status VARCHAR(16) NOT NULL)",
+    "CREATE TABLE scan_events (scan_id INT PRIMARY KEY, batch_id INT NOT NULL, scan_state VARCHAR(16) NOT NULL, units INT NOT NULL)",
+    "INSERT INTO batch_manifest VALUES (10, 'alpha', 'open'), (20, 'beta', 'open'), (30, 'gamma', 'closed'), (40, 'delta', 'open')",
+    "INSERT INTO scan_events VALUES (1001, 10, 'accepted', 7), (1002, 10, 'accepted', 5), (1003, 10, 'rejected', 3), (2001, 20, 'accepted', 4), (3001, 30, 'accepted', 9)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT b.batch_id, b.batch_label, COUNT(s.scan_id) AS accepted_scans, COALESCE(SUM(s.units), 0) AS accepted_units FROM batch_manifest AS b NATURAL LEFT JOIN scan_events AS s WHERE b.batch_status = 'open' AND (s.scan_state = 'accepted' OR s.scan_id IS NULL) GROUP BY b.batch_id, b.batch_label ORDER BY b.batch_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT batch_id, batch_label, batch_status FROM batch_manifest ORDER BY batch_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT scan_id, batch_id, scan_state, units FROM scan_events ORDER BY scan_id",
+      "ordered": true
+    }
+  ]
+}
