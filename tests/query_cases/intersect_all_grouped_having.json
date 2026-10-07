@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "intersect_all_grouped_having",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "ila/openivm",
+      "commit": "9f657576d1e47440d7e62de1befd47bf76b4a83e",
+      "path": "benchmark/queries/tpcc/query_2050.sql",
+      "url": "https://github.com/ila/openivm/blob/9f657576d1e47440d7e62de1befd47bf76b4a83e/benchmark/queries/tpcc/query_2050.sql",
+      "sha256": "645ae8fa54a709810a079f4eb74fa947d74856466ee17edf9e9ede8d564aaf0b",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "benchmark/queries/tpcc/query_2050.sql:2",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A TPC-C benchmark query groups and filters positive quantities independently on two relations, then combines the qualifying key pairs with INTERSECT ALL.",
+      "mysql_mariadb_translation": "Reauthored as a warehouse/item availability check over order-line and stock-entry facts, preserving grouped SUM/HAVING predicates on both branches and INTERSECT ALL over the resulting key pairs. The source tables, identifiers, values, TPC-C domain, and SQL text are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "intersect-all-grouped-having",
+    "aggregate-set-operation",
+    "grouped-intersect",
+    "having-set-branch",
+    "positive-sum-filter"
+  ],
+  "fixture_notes": "Warehouse/item (1,10) and (2,30) have positive totals in both relations. (1,20) appears only in stock, (2,50) has a non-positive stock total, and (3,40) has a non-positive order total, so all are excluded from the intersection.",
+  "determinism_notes": "Fixed integer IDs and quantities, grouped key pairs, explicit HAVING predicates, no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE order_lines (line_id INT PRIMARY KEY, warehouse_id INT NOT NULL, item_id INT NOT NULL, quantity INT NOT NULL)",
+    "CREATE TABLE stock_entries (entry_id INT PRIMARY KEY, warehouse_id INT NOT NULL, item_id INT NOT NULL, quantity INT NOT NULL)",
+    "INSERT INTO order_lines VALUES (1, 1, 10, 2), (2, 1, 10, -1), (3, 1, 20, 0), (4, 2, 30, 3), (5, 3, 40, -2)",
+    "INSERT INTO stock_entries VALUES (1, 1, 10, 5), (2, 1, 20, 4), (3, 2, 30, 1), (4, 2, 50, -1)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT warehouse_id, item_id FROM order_lines GROUP BY warehouse_id, item_id HAVING SUM(quantity) > 0 INTERSECT ALL SELECT warehouse_id, item_id FROM stock_entries GROUP BY warehouse_id, item_id HAVING SUM(quantity) > 0",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT line_id, warehouse_id, item_id, quantity FROM order_lines ORDER BY line_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT entry_id, warehouse_id, item_id, quantity FROM stock_entries ORDER BY entry_id",
+      "ordered": true
+    }
+  ]
+}
