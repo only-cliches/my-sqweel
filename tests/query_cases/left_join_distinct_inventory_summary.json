@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "id": "left_join_distinct_inventory_summary",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "r4ulcl/wifi_db",
+      "commit": "c79cf760c8e24d6682320ce88f033c21ccc514f0",
+      "path": "utils/view.sql",
+      "url": "https://github.com/r4ulcl/wifi_db/blob/c79cf760c8e24d6682320ce88f033c21ccc514f0/utils/view.sql",
+      "sha256": "66bd5c89d8a78469d7289a21c594cef3233db5f437f77c340c1f67822321392b",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "utils/view.sql:60-73",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A filtered parent relation is LEFT JOINed to child observations, grouped by parent labels, and summarized with multiple COUNT(DISTINCT) and GROUP_CONCAT(DISTINCT) aggregates before ordering by an aggregate alias.",
+      "mysql_mariadb_translation": "Reauthored as a wireless site inventory summary. Protected sites are grouped by site name and security mode, duplicate device observations are collapsed through distinct device and vendor/protocol aggregates, sites without observations remain through the LEFT JOIN, and the result orders by distinct-site count before name. The source tables, identifiers, labels, and view definition are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "left-join-distinct-aggregates",
+    "multiple-distinct-group-concat",
+    "null-preserving-grouping",
+    "aggregate-alias-order",
+    "filtered-parent-summary",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Two Harbor sites share one name and security mode and therefore form one group with two distinct site IDs. Repeated device MAC data must collapse in COUNT(DISTINCT), while Ridge remains with zero devices through the LEFT JOIN and Plain is excluded by the security filter.",
+  "determinism_notes": "Site IDs, site labels, security modes, device IDs, MAC addresses, vendor/protocol values, filter, aggregate orderings, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE inventory_sites (site_id INT PRIMARY KEY, site_name VARCHAR(32) NOT NULL, security_mode VARCHAR(16) NOT NULL)",
+    "CREATE TABLE inventory_devices (device_id INT PRIMARY KEY, site_id INT NOT NULL, device_mac VARCHAR(32) NOT NULL, vendor_name VARCHAR(32) NOT NULL, protocol_name VARCHAR(16) NOT NULL)",
+    "INSERT INTO inventory_sites VALUES (101, 'Harbor', 'WPA2'), (102, 'Harbor', 'WPA2'), (103, 'Ridge', 'WPA3'), (104, 'Plain', 'OPEN')",
+    "INSERT INTO inventory_devices VALUES (1, 101, 'aa:aa', 'Acme', '11ax'), (2, 101, 'aa:aa', 'Acme', '11ax'), (3, 101, 'bb:bb', 'Bravo', '11n'), (4, 102, 'cc:cc', 'Acme', '11ax')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT s.site_name, s.security_mode, COUNT(DISTINCT s.site_id) AS site_count, GROUP_CONCAT(DISTINCT d.vendor_name ORDER BY d.vendor_name ASC SEPARATOR ',') AS vendors, GROUP_CONCAT(DISTINCT d.protocol_name ORDER BY d.protocol_name ASC SEPARATOR ',') AS protocols, COUNT(DISTINCT d.device_mac) AS device_count FROM inventory_sites AS s LEFT JOIN inventory_devices AS d ON d.site_id = s.site_id WHERE s.security_mode <> 'OPEN' GROUP BY s.site_name, s.security_mode ORDER BY site_count DESC, s.site_name ASC",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT site_id, site_name, security_mode FROM inventory_sites ORDER BY site_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT device_id, site_id, device_mac, vendor_name, protocol_name FROM inventory_devices ORDER BY device_id",
+      "ordered": true
+    }
+  ]
+}
