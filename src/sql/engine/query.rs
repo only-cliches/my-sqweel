@@ -3073,6 +3073,24 @@ impl RawEngine {
                             MysqlColumnType::Integer
                         }
                     }
+                    "NULLIF" => {
+                        if let Some(argument) = function_argument(function, 0) {
+                            let argument_metadata = self.expression_metadata(
+                                select,
+                                argument,
+                                String::new(),
+                                first_row,
+                            );
+                            metadata.nullable = true;
+                            metadata.unsigned = argument_metadata.unsigned;
+                            metadata.decimals = argument_metadata.decimals;
+                            metadata.character_set = argument_metadata.character_set;
+                            metadata.collation = argument_metadata.collation;
+                            argument_metadata.column_type
+                        } else {
+                            metadata.column_type
+                        }
+                    }
                     "COALESCE" | "IFNULL" | "NVL" | "NVL2" => {
                         let has_derived_plain_group_concat = select.from.iter().any(|table| {
                             std::iter::once(&table.relation)

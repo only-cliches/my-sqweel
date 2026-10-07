@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "nullif_timestamp_rollup_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "nullif_timestamp_rollup",
+    "source": {
+      "kind": "github",
+      "repository": "mariadb-corporation/mariadb-qa",
+      "commit": "1bd169e44678639e2f82ab9097bfadc78aa7174e",
+      "path": "BUGS/MDEV-22885.sql",
+      "url": "https://github.com/mariadb-corporation/mariadb-qa/blob/1bd169e44678639e2f82ab9097bfadc78aa7174e/BUGS/MDEV-22885.sql",
+      "sha256": "0d75b0b68f9ada2cc9684c6a5634e27ae1b8b7669cce90983905d08c3258ce6a",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "BUGS/MDEV-22885.sql:1-3",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "The smallest preserved mismatch is a NULLIF projection over a TIMESTAMP column, retaining the source type while allowing a NULL result.",
+      "mysql_mariadb_translation": "Reduced to one fixed timestamp row and one NULLIF(timestamp, NULL) projection so the result value and wire metadata isolate the regression."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "nullif-metadata",
+    "timestamp-function-metadata",
+    "nullable-timestamp",
+    "minimized-regression",
+    "deterministic-select"
+  ],
+  "fixture_notes": "One non-null timestamp isolates NULLIF result metadata from grouping and rollup behavior.",
+  "determinism_notes": "The timestamp literal and projection are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE timestamp_marks (mark_id INT PRIMARY KEY, marked_at TIMESTAMP NOT NULL)",
+    "INSERT INTO timestamp_marks VALUES (21, '2033-02-03 04:05:06')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT NULLIF(marked_at, NULL) AS normalized_mark FROM timestamp_marks",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT mark_id, marked_at FROM timestamp_marks ORDER BY mark_id",
+      "ordered": true
+    }
+  ]
+}

@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "id": "nullif_timestamp_rollup",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "mariadb-corporation/mariadb-qa",
+      "commit": "1bd169e44678639e2f82ab9097bfadc78aa7174e",
+      "path": "BUGS/MDEV-22885.sql",
+      "url": "https://github.com/mariadb-corporation/mariadb-qa/blob/1bd169e44678639e2f82ab9097bfadc78aa7174e/BUGS/MDEV-22885.sql",
+      "sha256": "0d75b0b68f9ada2cc9684c6a5634e27ae1b8b7669cce90983905d08c3258ce6a",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "BUGS/MDEV-22885.sql:1-3",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL/MariaDB grouped report projects a nullable timestamp through NULLIF(expr, NULL) and appends a WITH ROLLUP summary row.",
+      "mysql_mariadb_translation": "Reauthored as a checkpoint-time report. Fixed audit checkpoints are grouped by their nullable timestamp, NULLIF preserves each timestamp while producing NULL for the rollup row, and the summary row is ordered deterministically after the timestamp groups. The schema, data, names, and operational domain are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "nullif-rollup",
+    "timestamp-rollup",
+    "nullif-null-comparison",
+    "group-by-rollup",
+    "rollup-ordering",
+    "nullable-timestamp",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Two fixed checkpoint timestamps form detail groups and the appended rollup row supplies the total count. The nullable column is intentionally populated only with fixed timestamps so the NULL output identifies the rollup row.",
+  "determinism_notes": "Checkpoint timestamps, grouping expression, NULLIF expression, count, and outer ordering of the rollup relation are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE audit_checkpoints (checkpoint_id INT PRIMARY KEY, checkpoint_at TIMESTAMP NULL, checkpoint_label VARCHAR(32) NOT NULL)",
+    "INSERT INTO audit_checkpoints VALUES (11, '2033-06-06 08:15:00', 'morning'), (12, '2015-09-10 17:45:00', 'evening'), (13, '2033-06-06 08:15:00', 'morning-retry')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT NULLIF(checkpoint_at, NULL) AS normalized_checkpoint, checkpoint_count FROM (SELECT checkpoint_at, COUNT(*) AS checkpoint_count FROM audit_checkpoints GROUP BY checkpoint_at WITH ROLLUP) AS grouped_checkpoints ORDER BY checkpoint_at",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT checkpoint_id, checkpoint_at, checkpoint_label FROM audit_checkpoints ORDER BY checkpoint_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT checkpoint_id, checkpoint_at, checkpoint_label FROM audit_checkpoints ORDER BY checkpoint_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT checkpoint_at, COUNT(*) AS checkpoint_count FROM audit_checkpoints GROUP BY checkpoint_at ORDER BY checkpoint_at",
+      "ordered": true
+    }
+  ]
+}
