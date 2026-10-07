@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "id": "update_scalar_json_objectagg_metrics",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "open-metadata/OpenMetadata",
+      "commit": "9675c6d845a68fe742245bdff0ec3e2f54d54016",
+      "path": "bootstrap/sql/migrations/native/1.6.0/mysql/schemaChanges.sql",
+      "url": "https://github.com/open-metadata/OpenMetadata/blob/9675c6d845a68fe742245bdff0ec3e2f54d54016/bootstrap/sql/migrations/native/1.6.0/mysql/schemaChanges.sql",
+      "sha256": "8a971fe3eff2fdae3bf0b97a1b20060aeb47634b9f710fa0c500e3f9a475d057",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "bootstrap/sql/migrations/native/1.6.0/mysql/schemaChanges.sql:1284-1294",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL migration updates a JSON document with a scalar JSON_OBJECTAGG subquery assembled from related key/value rows.",
+      "mysql_mariadb_translation": "Reauthored as a service health profile refresh. One profile receives a JSON metrics object built by a correlated JSON_OBJECTAGG over its metric rows, while another profile remains unchanged; the source schema, identifiers, values, and metadata domain are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "update",
+    "scalar-subquery",
+    "scalar-aggregate-update",
+    "json-objectagg",
+    "correlated-subquery",
+    "json-object",
+    "filtered-source",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Profile 800 receives a JSON object containing `latency_ms: 42` and `error_rate: 3`; profile 801 retains its existing JSON document because the update targets only profile 800. Metric rows for another profile are excluded by the correlated key.",
+  "determinism_notes": "Fixed profile IDs, metric keys, integer values, correlated profile filter, and final profile/metric ordering are used; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE service_health_profiles (profile_id INT PRIMARY KEY, profile_name VARCHAR(32) NOT NULL, metrics JSON NOT NULL)",
+    "CREATE TABLE service_health_metrics (metric_id INT PRIMARY KEY, profile_id INT NOT NULL, metric_name VARCHAR(32) NOT NULL, metric_value INT NOT NULL)",
+    "INSERT INTO service_health_profiles VALUES (800, 'checkout', '{\"stale\":true}'), (801, 'search', '{\"baseline\":true}')",
+    "INSERT INTO service_health_metrics VALUES (1, 800, 'latency_ms', 42), (2, 800, 'error_rate', 3), (3, 801, 'latency_ms', 18)"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE service_health_profiles AS p SET metrics = (SELECT JSON_OBJECTAGG(m.metric_name, m.metric_value) FROM service_health_metrics AS m WHERE m.profile_id = p.profile_id) WHERE p.profile_id = 800",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT profile_id, profile_name, metrics FROM service_health_profiles ORDER BY profile_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT metric_id, profile_id, metric_name, metric_value FROM service_health_metrics ORDER BY metric_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT profile_id, profile_name, metrics FROM service_health_profiles ORDER BY profile_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT metric_id, profile_id, metric_name, metric_value FROM service_health_metrics ORDER BY metric_id",
+      "ordered": true
+    }
+  ]
+}
