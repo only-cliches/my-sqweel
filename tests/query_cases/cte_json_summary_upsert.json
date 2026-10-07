@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "id": "cte_json_summary_upsert",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "open-metadata/OpenMetadata",
+      "commit": "78dbacf26243a2776c808bb78863c8ece19a8eb5",
+      "path": "bootstrap/sql/migrations/native/2.1.0/mysql/postDataMigrationSQLScript.sql",
+      "url": "https://github.com/open-metadata/OpenMetadata/blob/78dbacf26243a2776c808bb78863c8ece19a8eb5/bootstrap/sql/migrations/native/2.1.0/mysql/postDataMigrationSQLScript.sql",
+      "sha256": "cf996a5063c8861caba80e56447f9b2a9b5b6fd530f1f0038ff954dd4a5b26d6",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "bootstrap/sql/migrations/native/2.1.0/mysql/postDataMigrationSQLScript.sql:4-28",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL migration folds timestamped status history with common table expressions, extracts a JSON severity from the latest row, and upserts one summary row per logical key while preserving the earliest timestamp.",
+      "mysql_mariadb_translation": "Reauthored as a tenant event-summary refresh. Fixed event rows are grouped by tenant and stream, the latest event is joined back to its group, severity is extracted from a JSON payload, and a composite-key summary is inserted or refreshed through one CTE-backed upsert. The schema, rows, names, and business domain are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "common-table-expression",
+    "cte-json-upsert",
+    "grouped-latest-record",
+    "json-extract-unquote",
+    "json-upsert",
+    "composite-primary-key",
+    "least-preserving-upsert",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The north/alpha summary already exists and is refreshed from its latest critical event while retaining its earlier summary timestamp; south/beta and north/gamma are newly inserted from grouped source rows.",
+  "determinism_notes": "All event timestamps, JSON payloads, grouping keys, summary counters, joins, and final ordering are fixed. Each tenant/stream has one latest timestamp, with no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE event_log (event_id INT PRIMARY KEY, tenant_code VARCHAR(16) NOT NULL, stream_code VARCHAR(16) NOT NULL, event_state VARCHAR(16) NOT NULL, payload JSON NOT NULL, observed_at DATETIME NOT NULL)",
+    "CREATE TABLE event_summary (tenant_code VARCHAR(16) NOT NULL, stream_code VARCHAR(16) NOT NULL, latest_state VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, first_seen DATETIME NOT NULL, last_seen DATETIME NOT NULL, refreshes INT NOT NULL, PRIMARY KEY (tenant_code, stream_code))",
+    "INSERT INTO event_log VALUES (1, 'north', 'alpha', 'queued', '{\"severity\":\"low\",\"source\":\"api\"}', '2026-10-01 09:00:00'), (2, 'north', 'alpha', 'processed', '{\"severity\":\"high\",\"source\":\"worker\"}', '2026-10-01 10:00:00'), (3, 'south', 'beta', 'queued', '{\"severity\":\"medium\",\"source\":\"api\"}', '2026-10-01 09:30:00'), (4, 'north', 'alpha', 'verified', '{\"severity\":\"critical\",\"source\":\"review\"}', '2026-10-01 11:00:00'), (5, 'north', 'gamma', 'opened', '{\"severity\":\"low\",\"source\":\"batch\"}', '2026-10-01 08:00:00')",
+    "INSERT INTO event_summary VALUES ('north', 'alpha', 'processed', 'medium', '2026-09-30 12:00:00', '2026-09-30 12:00:00', 2)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO event_summary (tenant_code, stream_code, latest_state, severity, first_seen, last_seen, refreshes) WITH grouped_events AS (SELECT tenant_code, stream_code, MIN(observed_at) AS first_seen, MAX(observed_at) AS last_seen FROM event_log GROUP BY tenant_code, stream_code), latest_events AS (SELECT g.tenant_code, g.stream_code, g.first_seen, g.last_seen, e.event_state, JSON_UNQUOTE(JSON_EXTRACT(e.payload, '$.severity')) AS severity FROM grouped_events g INNER JOIN event_log e ON e.tenant_code = g.tenant_code AND e.stream_code = g.stream_code AND e.observed_at = g.last_seen) SELECT tenant_code, stream_code, event_state, severity, first_seen, last_seen, 1 FROM latest_events ON DUPLICATE KEY UPDATE latest_state = VALUES(latest_state), severity = VALUES(severity), first_seen = LEAST(event_summary.first_seen, VALUES(first_seen)), last_seen = VALUES(last_seen), refreshes = event_summary.refreshes + 1",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT tenant_code, stream_code, latest_state, severity, first_seen, last_seen, refreshes FROM event_summary ORDER BY tenant_code, stream_code",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT event_id, tenant_code, stream_code, event_state, JSON_UNQUOTE(JSON_EXTRACT(payload, '$.severity')) AS severity, observed_at FROM event_log ORDER BY event_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT tenant_code, stream_code, latest_state, severity, first_seen, last_seen, refreshes FROM event_summary ORDER BY tenant_code, stream_code",
+      "ordered": true
+    }
+  ]
+}
