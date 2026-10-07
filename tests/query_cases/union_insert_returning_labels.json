@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "id": "union_insert_returning_labels",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "PacktPublishing/Learn-PostgreSQL",
+      "commit": "221cc200e5d0e44d3292ad1fabdba6c2eb7ae6e0",
+      "path": "Chapter05/chapter5_script.sql",
+      "url": "https://github.com/PacktPublishing/Learn-PostgreSQL/blob/221cc200e5d0e44d3292ad1fabdba6c2eb7ae6e0/Chapter05/chapter5_script.sql",
+      "sha256": "23202cb3d302f0b1fae57ee99fcf81a59fa59ef0b890867ddf58d66917eb8adb",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "Chapter05/chapter5_script.sql:131,155",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A UNION ALL combines labels from two source relations, while an INSERT statement uses RETURNING to expose inserted rows.",
+      "mysql_mariadb_translation": "Reauthored as an active-label registry: category and tag sources are filtered independently, combined with UNION ALL, ordered by label and origin, and inserted into a registry whose inserted rows are returned. PostgreSQL conflict syntax, schemas, identifiers, and values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "union-all-insert-returning",
+    "insert-select-returning",
+    "multi-source-insert",
+    "ordered-union-input",
+    "generated-key-returning",
+    "conditional-source-filter",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Active category 1 and active tag 11 both contribute the label 'apple' and remain separate UNION ALL rows. Active category 3 contributes 'citrus', active tag 10 contributes 'green', and inactive category 2 and tag 12 are excluded.",
+  "determinism_notes": "Fixed source IDs, explicit active predicates, a stable label/origin order before insertion, and ordered final-state checks; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE label_categories (category_id INT PRIMARY KEY, label_text VARCHAR(32) NOT NULL, active TINYINT NOT NULL)",
+    "CREATE TABLE label_tags (tag_id INT PRIMARY KEY, label_text VARCHAR(32) NOT NULL, active TINYINT NOT NULL)",
+    "CREATE TABLE label_registry (registry_id INT AUTO_INCREMENT PRIMARY KEY, label_text VARCHAR(32) NOT NULL, label_origin VARCHAR(16) NOT NULL)",
+    "INSERT INTO label_categories VALUES (1, 'apple', 1), (2, 'pear', 0), (3, 'citrus', 1)",
+    "INSERT INTO label_tags VALUES (10, 'green', 1), (11, 'apple', 1), (12, 'blue', 0)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO label_registry (label_text, label_origin) SELECT label_text, label_origin FROM (SELECT label_text, 'category' AS label_origin FROM label_categories WHERE active = 1 UNION ALL SELECT label_text, 'tag' AS label_origin FROM label_tags WHERE active = 1) AS sources ORDER BY label_text, label_origin RETURNING registry_id, label_text, label_origin",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT registry_id, label_text, label_origin FROM label_registry ORDER BY registry_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT category_id, label_text, active FROM label_categories ORDER BY category_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT tag_id, label_text, active FROM label_tags ORDER BY tag_id",
+      "ordered": true
+    }
+  ]
+}
