@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "id": "replace_ordered_limit",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "mondoohq/cnspec",
+      "commit": "be93af0a598af66d4fd90aadc3ceeed8e219a812",
+      "path": "policy/scandb/query.sql",
+      "url": "https://github.com/mondoohq/cnspec/blob/be93af0a598af66d4fd90aadc3ceeed8e219a812/policy/scandb/query.sql",
+      "sha256": "43e7beb11ef7d65a7694e466c27b2fa78c8c7885b1b24aaf5e424a4c91c4a297",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "policy/scandb/query.sql:16-26",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A scan database query file uses replacement writes for score and data records and deterministic ORDER BY streams for stored records.",
+      "mysql_mariadb_translation": "Reauthored as one deterministic batch replacement that selects active scores in explicit rank order, limits the batch, inserts a new score, and replaces an existing conflicting score. The source tables, identifiers, values, scan domain, SQL text, and separate operation layout are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "replace-ordered-limit",
+    "replace-select",
+    "ordered-replacement",
+    "replacement-semantics",
+    "active-source-filter",
+    "dml-final-state"
+  ],
+  "fixture_notes": "The top two active incoming scores are Beta (95) and Alpha (90). Beta replaces an existing stale scoreboard row with the same primary key; Alpha is inserted. Gamma is outside the LIMIT and Delta is inactive.",
+  "determinism_notes": "Fixed IDs and scores, explicit ORDER BY score descending and score ID ascending, explicit LIMIT, stable final ordering, and no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE incoming_scores (score_id INT PRIMARY KEY, label VARCHAR(32) NOT NULL, points INT NOT NULL, active TINYINT NOT NULL)",
+    "CREATE TABLE scoreboard (score_id INT PRIMARY KEY, label VARCHAR(32) NOT NULL, points INT NOT NULL)",
+    "INSERT INTO incoming_scores VALUES (1, 'Alpha', 90, 1), (2, 'Beta', 95, 1), (3, 'Gamma', 80, 1), (4, 'Delta', 100, 0)",
+    "INSERT INTO scoreboard VALUES (2, 'Beta stale', 1)"
+  ],
+  "steps": [
+    {
+      "sql": "REPLACE INTO scoreboard (score_id, label, points) SELECT score_id, label, points FROM incoming_scores WHERE active = 1 ORDER BY points DESC, score_id LIMIT 2",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT score_id, label, points FROM scoreboard ORDER BY score_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT score_id, label, points, active FROM incoming_scores ORDER BY score_id",
+      "ordered": true
+    }
+  ]
+}
