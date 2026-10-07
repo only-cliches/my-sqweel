@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "id": "recursive_cycle_rank_summary",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "kamyu104/LeetCode-Solutions",
+      "commit": "e2b2693fb4905a9693d6e337d1fbba867d04c46e",
+      "path": "MySQL/find-circular-gift-exchange-chains.sql",
+      "url": "https://github.com/kamyu104/LeetCode-Solutions/blob/e2b2693fb4905a9693d6e337d1fbba867d04c46e/MySQL/find-circular-gift-exchange-chains.sql",
+      "sha256": "8026543f3a115821413bd08dc1a753bbc77372073cc38c218baf933c04bcbf9a",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/find-circular-gift-exchange-chains.sql:5-31",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A recursive CTE follows directed exchange edges with UNION DISTINCT, aggregates each discovered chain by ordinal grouping, deduplicates equal length/value pairs, and ranks the unique summaries with RANK().",
+      "mysql_mariadb_translation": "Reauthored as an independently authored warehouse transfer-cycle report. A recursive CTE follows fixed transfer edges from each origin, UNION DISTINCT terminates cyclic paths, grouped ordinal summaries collapse duplicate cycle totals, and RANK orders the unique length/value results. The source schema, participants, values, and gift-exchange context are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "recursive-cte",
+    "union-distinct",
+    "cycle-termination",
+    "recursive-chain-aggregation",
+    "ordinal-grouping",
+    "duplicate-summary-elimination",
+    "rank-window",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Transfer edges form one three-step cycle and two distinct two-step cycles with the same total, so grouped ordinal summaries retain one row for the repeated two-step total while RANK assigns deterministic ranks by length and value.",
+  "determinism_notes": "Transfer IDs, participants, values, recursive joins, ordinal grouping, ranking keys, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE transfer_cycles (transfer_id INT PRIMARY KEY, sender_id INT NOT NULL, receiver_id INT NOT NULL, transfer_value INT NOT NULL)",
+    "INSERT INTO transfer_cycles VALUES (1, 1001, 1002, 7), (2, 1002, 1003, 5), (3, 1003, 1001, 9), (4, 2001, 2002, 4), (5, 2002, 2001, 6), (6, 3001, 3002, 4), (7, 3002, 3001, 6)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH RECURSIVE transfer_paths (sender_id, receiver_id, transfer_value, start_id) AS (SELECT sender_id, receiver_id, transfer_value, sender_id FROM transfer_cycles UNION SELECT t.sender_id, t.receiver_id, t.transfer_value, p.start_id FROM transfer_cycles AS t INNER JOIN transfer_paths AS p ON t.sender_id = p.receiver_id AND t.sender_id <> p.start_id), cycle_totals AS (SELECT start_id, COUNT(*) AS chain_length, SUM(transfer_value) AS total_transfer_value FROM transfer_paths GROUP BY 1 ORDER BY NULL), unique_cycle_totals AS (SELECT chain_length, total_transfer_value FROM cycle_totals GROUP BY 1, 2 ORDER BY NULL) SELECT RANK() OVER (ORDER BY chain_length DESC, total_transfer_value DESC) AS cycle_rank, chain_length, total_transfer_value FROM unique_cycle_totals ORDER BY cycle_rank, chain_length DESC, total_transfer_value DESC",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT transfer_id, sender_id, receiver_id, transfer_value FROM transfer_cycles ORDER BY transfer_id",
+      "ordered": true
+    }
+  ]
+}

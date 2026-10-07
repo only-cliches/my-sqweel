@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "id": "recursive_cycle_rank_summary_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "recursive_cycle_rank_summary",
+    "source": {
+      "kind": "github",
+      "repository": "kamyu104/LeetCode-Solutions",
+      "commit": "e2b2693fb4905a9693d6e337d1fbba867d04c46e",
+      "path": "MySQL/find-circular-gift-exchange-chains.sql",
+      "url": "https://github.com/kamyu104/LeetCode-Solutions/blob/e2b2693fb4905a9693d6e337d1fbba867d04c46e/MySQL/find-circular-gift-exchange-chains.sql",
+      "sha256": "8026543f3a115821413bd08dc1a753bbc77372073cc38c218baf933c04bcbf9a",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "MySQL/find-circular-gift-exchange-chains.sql:5-31",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A recursive CTE follows directed exchange edges with UNION DISTINCT, aggregates each discovered chain by ordinal grouping, deduplicates equal length/value pairs, and ranks the unique summaries with RANK().",
+      "mysql_mariadb_translation": "Minimized to two two-step transfer cycles with distinct totals. The recursive relation, ordinal GROUP BY expressions, duplicate-summary elimination, and RANK output remain while unrelated cycle rows are removed."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "minimized-regression",
+    "recursive-cte",
+    "union-distinct",
+    "cycle-termination",
+    "ordinal-grouping",
+    "rank-window",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Two fixed two-step cycles produce one summary for total 12 and one for total 10; the final result must retain both ranked summaries rather than collapsing them into one literal-group row.",
+  "determinism_notes": "Transfer IDs, participants, values, recursive joins, ordinal grouping, ranking keys, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE transfer_cycle_probe (transfer_id INT PRIMARY KEY, sender_id INT NOT NULL, receiver_id INT NOT NULL, transfer_value INT NOT NULL)",
+    "INSERT INTO transfer_cycle_probe VALUES (1, 4101, 4102, 7), (2, 4102, 4101, 5), (3, 4201, 4202, 4), (4, 4202, 4201, 6)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH RECURSIVE transfer_paths (sender_id, receiver_id, transfer_value, start_id) AS (SELECT sender_id, receiver_id, transfer_value, sender_id FROM transfer_cycle_probe UNION SELECT t.sender_id, t.receiver_id, t.transfer_value, p.start_id FROM transfer_cycle_probe AS t INNER JOIN transfer_paths AS p ON t.sender_id = p.receiver_id AND t.sender_id <> p.start_id), cycle_totals AS (SELECT start_id, COUNT(*) AS chain_length, SUM(transfer_value) AS total_transfer_value FROM transfer_paths GROUP BY 1 ORDER BY NULL), unique_cycle_totals AS (SELECT chain_length, total_transfer_value FROM cycle_totals GROUP BY 1, 2 ORDER BY NULL) SELECT RANK() OVER (ORDER BY chain_length DESC, total_transfer_value DESC) AS cycle_rank, chain_length, total_transfer_value FROM unique_cycle_totals ORDER BY cycle_rank, chain_length DESC, total_transfer_value DESC",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT transfer_id, sender_id, receiver_id, transfer_value FROM transfer_cycle_probe ORDER BY transfer_id",
+      "ordered": true
+    }
+  ]
+}

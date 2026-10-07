@@ -683,10 +683,32 @@ pub(super) fn aggregate_select_result(
 }
 
 pub(super) fn group_by_exprs(select: &Select) -> Vec<Expr> {
-    rollup_exprs(select).unwrap_or_else(|| match &select.group_by {
+    let expressions = rollup_exprs(select).unwrap_or_else(|| match &select.group_by {
         sqlparser::ast::GroupByExpr::Expressions(exprs, _) => exprs.clone(),
         sqlparser::ast::GroupByExpr::All(_) => Vec::new(),
-    })
+    });
+    expressions
+        .into_iter()
+        .map(|expr| {
+            let Expr::Value(SqlValue::Number(number, _)) = &expr else {
+                return expr;
+            };
+            let Ok(position) = number.parse::<usize>() else {
+                return expr;
+            };
+            let Some(position) = position
+                .checked_sub(1)
+                .filter(|position| *position < select.projection.len())
+            else {
+                return expr;
+            };
+            match select.projection.get(position) {
+                Some(SelectItem::ExprWithAlias { expr, .. })
+                | Some(SelectItem::UnnamedExpr(expr)) => expr.clone(),
+                _ => expr,
+            }
+        })
+        .collect()
 }
 
 fn rollup_exprs(select: &Select) -> Option<Vec<Expr>> {
