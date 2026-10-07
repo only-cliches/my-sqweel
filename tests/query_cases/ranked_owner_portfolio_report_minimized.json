@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "id": "ranked_owner_portfolio_report_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "ranked_owner_portfolio_report",
+    "source": {
+      "kind": "github",
+      "repository": "zli12321/LHTB",
+      "commit": "52381e7d747b03e6f6af1953a4c7ff5dad78112e",
+      "path": "harbor/adapters/bird_bench/parity/bird_eval_inputs/dev_gold.sql",
+      "url": "https://github.com/zli12321/LHTB/blob/52381e7d747b03e6f6af1953a4c7ff5dad78112e/harbor/adapters/bird_bench/parity/bird_eval_inputs/dev_gold.sql",
+      "sha256": "febb91e4804833e69d318167272166a85ba02a088ae25bcde83a279415028692",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from ranked_owner_portfolio_report",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "The grouped owner label derived relation is passed through a COALESCE fallback in the outer report, and DISTINCT GROUP_CONCAT changes the result metadata from the plain aggregate case.",
+      "mysql_mariadb_translation": "Reduced to one derived DISTINCT GROUP_CONCAT, a one-row marker CTE/CROSS JOIN, and one literal COALESCE fallback, removing ranking, payment totals, joins, and source-specific schema while retaining the metadata mismatch."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "group-concat",
+    "group-concat-distinct",
+    "ordered-distinct-group-concat",
+    "coalesce-fallback",
+    "derived-table",
+    "metadata-regression"
+  ],
+  "fixture_notes": "Two labels make the ordered DISTINCT aggregate deterministic. The one-row marker CTE/CROSS JOIN preserves the minimized outer relation shape; the outer fallback is retained solely to expose the derived DISTINCT GROUP_CONCAT metadata resolution.",
+  "determinism_notes": "IDs, labels, aggregate ordering, and fallback text are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE portfolio_label_fragments (fragment_id INT PRIMARY KEY, fragment_text VARCHAR(32) NOT NULL)",
+    "INSERT INTO portfolio_label_fragments VALUES (1, 'priority'), (2, 'priority'), (3, 'review')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH label_lists AS (SELECT GROUP_CONCAT(DISTINCT fragment_text ORDER BY fragment_text ASC SEPARATOR ', ') AS labels FROM portfolio_label_fragments), marker AS (SELECT 1 AS marker_value) SELECT COALESCE(label_lists.labels, '(none)') AS labels FROM label_lists CROSS JOIN marker",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT fragment_id, fragment_text FROM portfolio_label_fragments ORDER BY fragment_id",
+      "ordered": true
+    }
+  ]
+}

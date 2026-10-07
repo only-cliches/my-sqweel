@@ -14,6 +14,70 @@ fn merge_set_column_type(left: MysqlColumnType, right: MysqlColumnType) -> Mysql
     }
 }
 
+struct PlainGroupConcatVisitor {
+    found: bool,
+    distinct: bool,
+}
+
+impl Visitor for PlainGroupConcatVisitor {
+    type Break = ();
+
+    fn pre_visit_expr(&mut self, expr: &Expr) -> ControlFlow<Self::Break> {
+        let Expr::Function(function) = expr else {
+            return ControlFlow::Continue(());
+        };
+        let name = function
+            .name
+            .0
+            .last()
+            .map(|name| name.value.as_str())
+            .unwrap_or_default();
+        if !name.eq_ignore_ascii_case("GROUP_CONCAT") {
+            return ControlFlow::Continue(());
+        }
+        let is_distinct = matches!(
+            &function.args,
+            FunctionArguments::List(arguments)
+                if arguments.duplicate_treatment.is_some()
+        );
+        if is_distinct {
+            self.distinct = true;
+            return ControlFlow::Continue(());
+        }
+        if let FunctionArguments::List(arguments) = &function.args
+            && arguments.duplicate_treatment.is_none()
+        {
+            self.found = true;
+            return ControlFlow::Break(());
+        }
+        ControlFlow::Continue(())
+    }
+}
+
+fn derived_factor_has_plain_group_concat(factor: &TableFactor) -> bool {
+    let TableFactor::Derived { subquery, .. } = factor else {
+        return false;
+    };
+    let mut visitor = PlainGroupConcatVisitor {
+        found: false,
+        distinct: false,
+    };
+    let _ = sqlparser::ast::Visit::visit(subquery.as_ref(), &mut visitor);
+    visitor.found
+}
+
+fn derived_factor_has_distinct_group_concat(factor: &TableFactor) -> bool {
+    let TableFactor::Derived { subquery, .. } = factor else {
+        return false;
+    };
+    let mut visitor = PlainGroupConcatVisitor {
+        found: false,
+        distinct: false,
+    };
+    let _ = sqlparser::ast::Visit::visit(subquery.as_ref(), &mut visitor);
+    visitor.distinct
+}
+
 fn boolean_fulltext_match(haystack: &str, query: &str) -> bool {
     let tokens = haystack
         .split(|character: char| !character.is_alphanumeric())
@@ -2999,11 +3063,23 @@ impl RawEngine {
                         }
                     }
                     "COALESCE" | "IFNULL" | "NVL" | "NVL2" => {
-                        let has_derived_source = select.from.iter().any(|table| {
+                        let has_derived_plain_group_concat = select.from.iter().any(|table| {
                             std::iter::once(&table.relation)
                                 .chain(table.joins.iter().map(|join| &join.relation))
-                                .any(|factor| matches!(factor, TableFactor::Derived { .. }))
+                                .any(derived_factor_has_plain_group_concat)
                         });
+                        let has_derived_distinct_group_concat = select.from.iter().any(|table| {
+                            std::iter::once(&table.relation)
+                                .chain(table.joins.iter().map(|join| &join.relation))
+                                .any(derived_factor_has_distinct_group_concat)
+                        });
+                        let has_derived_distinct_group_concat_in_left_join =
+                            select.from.iter().any(|table| {
+                                table.joins.iter().any(|join| {
+                                    matches!(join.join_operator, JoinOperator::LeftOuter(_))
+                                        && derived_factor_has_distinct_group_concat(&join.relation)
+                                })
+                            });
                         let argument_type = self.widest_function_argument_type(
                             function,
                             select,
@@ -3014,8 +3090,18 @@ impl RawEngine {
                             metadata.decimals =
                                 self.widest_function_argument_decimals(function, select, first_row);
                         }
-                        // MariaDB promotes COALESCE over a derived aggregate BLOB to LONG_BLOB.
-                        if has_derived_source && argument_type == MysqlColumnType::MediumBlob {
+                        // MariaDB promotes COALESCE over a derived plain GROUP_CONCAT BLOB.
+                        if has_derived_plain_group_concat
+                            && argument_type == MysqlColumnType::MediumBlob
+                        {
+                            MysqlColumnType::LongBlob
+                        } else if has_derived_distinct_group_concat_in_left_join
+                            && argument_type == MysqlColumnType::MediumBlob
+                        {
+                            MysqlColumnType::Blob
+                        } else if has_derived_distinct_group_concat
+                            && argument_type == MysqlColumnType::MediumBlob
+                        {
                             MysqlColumnType::LongBlob
                         } else {
                             argument_type

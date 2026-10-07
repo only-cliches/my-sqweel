@@ -1,0 +1,73 @@
+{
+  "version": 1,
+  "id": "ranked_owner_portfolio_report",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "zli12321/LHTB",
+      "commit": "52381e7d747b03e6f6af1953a4c7ff5dad78112e",
+      "path": "harbor/adapters/bird_bench/parity/bird_eval_inputs/dev_gold.sql",
+      "url": "https://github.com/zli12321/LHTB/blob/52381e7d747b03e6f6af1953a4c7ff5dad78112e/harbor/adapters/bird_bench/parity/bird_eval_inputs/dev_gold.sql",
+      "sha256": "febb91e4804833e69d318167272166a85ba02a088ae25bcde83a279415028692",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "harbor/adapters/bird_bench/parity/bird_eval_inputs/dev_gold.sql:16",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A multi-CTE financial report ranks districts with a window function, groups owner labels with DISTINCT GROUP_CONCAT, and preserves optional district, transaction, owner, and loan information through multiple LEFT JOINs.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored portfolio report. A district CTE ranks tied income bands, an owner CTE produces an ordered distinct label list, and payment totals plus open-loan data are attached through multiple LEFT JOINs with deterministic COALESCE fallbacks. Source schemas, names, values, date arithmetic, and application context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "cte",
+    "rank-window",
+    "partitioned-ranking",
+    "group-concat",
+    "group-concat-distinct",
+    "ordered-distinct-group-concat",
+    "multiple-left-joins",
+    "left-join-null-preservation",
+    "coalesce-fallback",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Districts 10 and 20 tie for the top rank and remain visible; district 30 is rank 3 and is filtered. Account 103 has no active owner or open loan, while account 100 has duplicate owner source rows that DISTINCT GROUP_CONCAT collapses. Closed loans do not satisfy the open-loan LEFT JOIN.",
+  "determinism_notes": "All IDs, income values, owner names, loan states, payment amounts, aggregate ordering, rank filtering, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE portfolio_districts (district_id INT PRIMARY KEY, district_name VARCHAR(32) NOT NULL, region_code VARCHAR(8) NOT NULL, median_income INT NOT NULL)",
+    "CREATE TABLE portfolio_accounts (account_id INT PRIMARY KEY, district_id INT NOT NULL, account_label VARCHAR(32) NOT NULL)",
+    "CREATE TABLE portfolio_account_owners (owner_row_id INT PRIMARY KEY, account_id INT NOT NULL, owner_name VARCHAR(32) NOT NULL, owner_state VARCHAR(16) NOT NULL)",
+    "CREATE TABLE portfolio_loans (loan_id INT PRIMARY KEY, account_id INT NOT NULL, loan_status VARCHAR(16) NOT NULL, principal_amount INT NOT NULL)",
+    "CREATE TABLE portfolio_payments (payment_id INT PRIMARY KEY, loan_id INT NOT NULL, payment_amount INT NOT NULL)",
+    "INSERT INTO portfolio_districts VALUES (10, 'North Ridge', 'NR', 90000), (20, 'South Ridge', 'SR', 90000), (30, 'West Ridge', 'WR', 70000)",
+    "INSERT INTO portfolio_accounts VALUES (100, 10, 'Alpha'), (101, 20, 'Beta'), (102, 30, 'Gamma'), (103, 10, 'Delta')",
+    "INSERT INTO portfolio_account_owners VALUES (1, 100, 'Avery', 'active'), (2, 100, 'Avery', 'active'), (3, 100, 'Morgan', 'inactive'), (4, 101, 'Jordan', 'active')",
+    "INSERT INTO portfolio_loans VALUES (500, 100, 'open', 1200), (501, 101, 'closed', 800), (502, 102, 'open', 1500), (503, 103, 'open', 600)",
+    "INSERT INTO portfolio_payments VALUES (900, 500, 300), (901, 500, 200), (902, 502, 1000)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH district_rank AS (SELECT district_id, district_name, region_code, median_income, RANK() OVER (ORDER BY median_income DESC) AS income_rank FROM portfolio_districts), owner_labels AS (SELECT account_id, GROUP_CONCAT(DISTINCT owner_name ORDER BY owner_name ASC SEPARATOR ', ') AS owners FROM portfolio_account_owners WHERE owner_state = 'active' GROUP BY account_id), payment_totals AS (SELECT l.account_id, SUM(p.payment_amount) AS total_paid FROM portfolio_loans AS l INNER JOIN portfolio_payments AS p ON p.loan_id = l.loan_id GROUP BY l.account_id) SELECT a.account_id, a.account_label, d.district_name, d.region_code, d.income_rank, COALESCE(o.owners, '(unassigned)') AS owners, COALESCE(l.principal_amount, 0) AS open_principal, COALESCE(t.total_paid, 0) AS total_paid, CASE WHEN l.loan_id IS NULL THEN 'No open loan' ELSE 'Open loan' END AS loan_state FROM portfolio_accounts AS a INNER JOIN district_rank AS d ON d.district_id = a.district_id LEFT JOIN owner_labels AS o ON o.account_id = a.account_id LEFT JOIN portfolio_loans AS l ON l.account_id = a.account_id AND l.loan_status = 'open' LEFT JOIN payment_totals AS t ON t.account_id = a.account_id WHERE d.income_rank <= 2 ORDER BY d.income_rank ASC, a.account_id ASC",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT account_id, district_id, account_label FROM portfolio_accounts ORDER BY account_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT owner_row_id, account_id, owner_name, owner_state FROM portfolio_account_owners ORDER BY owner_row_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT loan_id, account_id, loan_status, principal_amount FROM portfolio_loans ORDER BY loan_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT payment_id, loan_id, payment_amount FROM portfolio_payments ORDER BY payment_id",
+      "ordered": true
+    }
+  ]
+}
