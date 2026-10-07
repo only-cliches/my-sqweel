@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "json_arrayagg_upsert_snapshot",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "icecreamovo147/smart-recruit",
+      "commit": "ea6f18a8199d480a8be361d5f746829b5a08c63d",
+      "path": "db.sql",
+      "url": "https://github.com/icecreamovo147/smart-recruit/blob/ea6f18a8199d480a8be361d5f746829b5a08c63d/db.sql",
+      "sha256": "1ad1237c5689f20e0b731c798b8b259f5c65d7cfc7acfe4288c827506c787e03",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "db.sql:2726-2773,2800-2803",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "An application seed materializes related capability identifiers with JSON_ARRAYAGG while its surrounding idempotent seed writes use ON DUPLICATE KEY UPDATE to refresh existing configuration rows.",
+      "mysql_mariadb_translation": "Reauthored as a team roster snapshot. Active member names are deterministically aggregated into JSON arrays and inserted or refreshed per team through ON DUPLICATE KEY UPDATE. The source schema, identifiers, values, timestamps, LATERAL query, and recruitment configuration are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "json-arrayagg-upsert",
+    "ordered-json-array-aggregate",
+    "insert-select-upsert",
+    "active-source-filter",
+    "stale-snapshot-refresh",
+    "dml-final-state"
+  ],
+  "fixture_notes": "The existing red snapshot is stale and is refreshed to active members Ava and Bo in member_id order. Blue is inserted from its active member Dee; inactive member Cy is excluded.",
+  "determinism_notes": "Fixed member IDs, explicit active predicates, ORDER BY inside JSON_ARRAYAGG, stable team grouping, and ordered final-state checks are used; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE roster_members (member_id INT PRIMARY KEY, team_code VARCHAR(16) NOT NULL, member_name VARCHAR(32) NOT NULL, active TINYINT NOT NULL)",
+    "CREATE TABLE team_snapshots (team_code VARCHAR(16) PRIMARY KEY, member_names JSON NOT NULL, member_count INT NOT NULL)",
+    "INSERT INTO roster_members VALUES (1, 'red', 'Ava', 1), (2, 'red', 'Bo', 1), (3, 'red', 'Cy', 0), (4, 'blue', 'Dee', 1)",
+    "INSERT INTO team_snapshots VALUES ('red', '[\"stale\"]', 99)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO team_snapshots (team_code, member_names, member_count) SELECT team_code, JSON_ARRAYAGG(member_name ORDER BY member_id), COUNT(*) FROM roster_members WHERE active = 1 GROUP BY team_code ON DUPLICATE KEY UPDATE member_names = VALUES(member_names), member_count = VALUES(member_count)"
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT team_code, member_names, member_count FROM team_snapshots ORDER BY team_code",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT member_id, team_code, member_name, active FROM roster_members ORDER BY member_id",
+      "ordered": true
+    }
+  ]
+}
