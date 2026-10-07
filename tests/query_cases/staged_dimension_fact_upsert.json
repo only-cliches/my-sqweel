@@ -1,0 +1,94 @@
+{
+  "version": 1,
+  "id": "staged_dimension_fact_upsert",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "sisovin/monthly-progress-report",
+      "commit": "bfb2df1422939cd3b824ccbf9d97bc9fbb2b790e",
+      "path": "docs/etl_upsert.sql",
+      "url": "https://github.com/sisovin/monthly-progress-report/blob/bfb2df1422939cd3b824ccbf9d97bc9fbb2b790e/docs/etl_upsert.sql",
+      "sha256": "68ea3ff4f7c35a567cb27fbaf04c2be2a2c3aad7845d21b680c64dc2736f8d60",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "docs/etl_upsert.sql:53-215",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A transactional ETL load derives normalized dimension rows with SELECT DISTINCT from staging, refreshes dimensions through ON DUPLICATE KEY UPDATE, upserts fact rows through joined dimension lookups, and updates a batch summary through an aggregate UPDATE JOIN.",
+      "mysql_mariadb_translation": "Reauthored as a work-item load. Trimmed staging names refresh pre-seeded team and category dimensions, a joined fact INSERT ... SELECT refreshes one existing source row and adds new rows, and an aggregate UPDATE JOIN marks the batch loaded with its final fact count. Source schemas, names, values, and application context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "transaction",
+    "staging-driven-dimension-upsert",
+    "distinct-source-upsert",
+    "multi-stage-upsert",
+    "joined-fact-upsert",
+    "duplicate-key-refresh",
+    "trim-normalization",
+    "case-derived-status",
+    "aggregate-update-join",
+    "commit-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "The staging rows contain whitespace variants of the same dimension names, so each SELECT DISTINCT produces one normalized dimension row. Existing dimension slugs and source row 10 are deliberately stale; duplicate-key updates must refresh them while rows 20, 30, and 40 are inserted. The batch summary must count all four fact rows after COMMIT.",
+  "determinism_notes": "Batch IDs, source rows, dimension names, status mapping, transaction statements, and final ordering are fixed; there are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE etl_batches (batch_id INT PRIMARY KEY, etl_status VARCHAR(16) NOT NULL, records_detected INT NOT NULL)",
+    "CREATE TABLE etl_stage (stage_id INT PRIMARY KEY, batch_id INT NOT NULL, source_row INT NOT NULL, team_name VARCHAR(64) NOT NULL, category_name VARCHAR(64) NOT NULL, status_name VARCHAR(32) NOT NULL, work_title VARCHAR(128) NOT NULL, score INT NOT NULL, UNIQUE KEY batch_source (batch_id, source_row))",
+    "CREATE TABLE etl_teams (team_id INT AUTO_INCREMENT PRIMARY KEY, team_name VARCHAR(64) NOT NULL UNIQUE, team_slug VARCHAR(64) NOT NULL)",
+    "CREATE TABLE etl_categories (category_id INT AUTO_INCREMENT PRIMARY KEY, category_name VARCHAR(64) NOT NULL UNIQUE, category_slug VARCHAR(64) NOT NULL)",
+    "CREATE TABLE etl_facts (batch_id INT NOT NULL, source_row INT NOT NULL, team_id INT NOT NULL, category_id INT NOT NULL, status_bucket VARCHAR(16) NOT NULL, work_title VARCHAR(128) NOT NULL, score INT NOT NULL, PRIMARY KEY (batch_id, source_row))",
+    "INSERT INTO etl_batches VALUES (700, 'loading', 0)",
+    "INSERT INTO etl_stage VALUES (1, 700, 10, ' Data Platform ', ' Revenue Forecast ', 'done', 'Revenue model', 8), (2, 700, 20, 'Data Platform', 'Revenue Forecast', 'in progress', 'Pipeline model', 5), (3, 700, 30, 'Customer Care', ' Onboarding', 'planned', 'Welcome flow', 3), (4, 700, 40, ' Customer Care ', 'Onboarding', 'planned', 'Welcome flow follow-up', 4)",
+    "INSERT INTO etl_teams (team_id, team_name, team_slug) VALUES (1, 'Data Platform', 'stale-team')",
+    "INSERT INTO etl_categories (category_id, category_name, category_slug) VALUES (1, 'Revenue Forecast', 'old-revenue')",
+    "INSERT INTO etl_facts VALUES (700, 10, 1, 1, 'old', 'stale title', 99)"
+  ],
+  "steps": [
+    {
+      "sql": "START TRANSACTION",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO etl_teams (team_name, team_slug) SELECT DISTINCT TRIM(team_name), LOWER(REPLACE(TRIM(team_name), ' ', '-')) FROM etl_stage WHERE batch_id = 700 AND TRIM(team_name) <> '' ON DUPLICATE KEY UPDATE team_slug = VALUES(team_slug)",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO etl_categories (category_name, category_slug) SELECT DISTINCT TRIM(category_name), LOWER(REPLACE(TRIM(category_name), ' ', '-')) FROM etl_stage WHERE batch_id = 700 AND TRIM(category_name) <> '' ON DUPLICATE KEY UPDATE category_slug = VALUES(category_slug)",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO etl_facts (batch_id, source_row, team_id, category_id, status_bucket, work_title, score) SELECT s.batch_id, s.source_row, t.team_id, c.category_id, CASE WHEN LOWER(TRIM(s.status_name)) IN ('done', 'complete') THEN 'completed' WHEN LOWER(TRIM(s.status_name)) IN ('in progress', 'started') THEN 'active' ELSE 'planned' END, TRIM(s.work_title), s.score FROM etl_stage AS s INNER JOIN etl_teams AS t ON t.team_name = TRIM(s.team_name) INNER JOIN etl_categories AS c ON c.category_name = TRIM(s.category_name) WHERE s.batch_id = 700 ON DUPLICATE KEY UPDATE team_id = VALUES(team_id), category_id = VALUES(category_id), status_bucket = VALUES(status_bucket), work_title = VALUES(work_title), score = VALUES(score)",
+      "ordered": true
+    },
+    {
+      "sql": "UPDATE etl_batches AS b INNER JOIN (SELECT batch_id, COUNT(*) AS fact_count FROM etl_facts GROUP BY batch_id) AS counts ON counts.batch_id = b.batch_id SET b.records_detected = counts.fact_count, b.etl_status = 'loaded' WHERE b.batch_id = 700",
+      "ordered": true
+    },
+    {
+      "sql": "COMMIT",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT team_id, team_name, team_slug FROM etl_teams ORDER BY team_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT category_id, category_name, category_slug FROM etl_categories ORDER BY category_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT f.batch_id, f.source_row, t.team_name, c.category_name, f.status_bucket, f.work_title, f.score FROM etl_facts AS f INNER JOIN etl_teams AS t ON t.team_id = f.team_id INNER JOIN etl_categories AS c ON c.category_id = f.category_id ORDER BY f.batch_id, f.source_row",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT batch_id, etl_status, records_detected FROM etl_batches ORDER BY batch_id",
+      "ordered": true
+    }
+  ]
+}
