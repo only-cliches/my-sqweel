@@ -1060,11 +1060,7 @@ impl RawEngine {
             let (row_id, new_key) = self.updated_row_identity(&table_name, current_row, &data);
             let mut updated_row = current_row.clone();
             updated_row.id = row_id;
-            if current_row.data != data
-                && self
-                    .schemas
-                    .get(&table_name)
-                    .is_some_and(|schema| schema.system_versioned)
+            if self.system_versioned_update_requires_history(&table_name, &current_row.data, &data)
             {
                 updated_row.history.push(current_row.data.clone());
             }
@@ -1318,12 +1314,11 @@ impl RawEngine {
 
             let mut updated_row = current_row.clone();
             updated_row.id = row_id;
-            if current_row.data != updated_data
-                && self
-                    .schemas
-                    .get(&table_name)
-                    .is_some_and(|schema| schema.system_versioned)
-            {
+            if self.system_versioned_update_requires_history(
+                &table_name,
+                &current_row.data,
+                &updated_data,
+            ) {
                 updated_row.history.push(current_row.data.clone());
             }
             updated_row.data = updated_data;

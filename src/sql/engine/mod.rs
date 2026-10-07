@@ -827,8 +827,8 @@ pub(super) struct RawEngine {
     database_charsets: BTreeMap<String, (String, String)>,
     cfg: EngineConfig,
     schemas: DashMap<String, SharedValue<TableSchemaHint>>,
+    unversioned_columns: DashMap<String, BTreeSet<String>>,
     rows: DashMap<String, SharedTable<StoredRow>>,
-    // Native RocksDB sessions keep a shared baseline for row-level commit diffs.
     baseline_rows: DashMap<String, SharedTable<StoredRow>>,
     auto_inc: DashMap<String, i64>,
     indexes: DashMap<String, SharedTable<BTreeMap<String, BTreeSet<String>>>>,
@@ -894,6 +894,7 @@ impl RawEngine {
             // requires at least two shards; CPU-scaled defaults multiply the
             // locks and allocations copied on every statement fork.
             schemas: DashMap::with_shard_amount(2),
+            unversioned_columns: DashMap::with_shard_amount(2),
             rows: DashMap::with_shard_amount(2),
             baseline_rows: DashMap::with_shard_amount(2),
             auto_inc: DashMap::with_shard_amount(2),
@@ -938,6 +939,32 @@ impl RawEngine {
             .lock()
             .to_ascii_uppercase()
             .contains("TRADITIONAL")
+    }
+    pub(super) fn system_versioned_update_requires_history(
+        &self,
+        table: &str,
+        before: &Map<String, Value>,
+        after: &Map<String, Value>,
+    ) -> bool {
+        if !self
+            .schemas
+            .get(table)
+            .is_some_and(|schema| schema.system_versioned)
+        {
+            return false;
+        }
+        let unversioned = self.unversioned_columns.get(table);
+        before.iter().any(|(column, value)| {
+            after.get(column) != Some(value)
+                && !unversioned
+                    .as_ref()
+                    .is_some_and(|columns| columns.contains(&column.to_ascii_lowercase()))
+        }) || after.iter().any(|(column, value)| {
+            before.get(column) != Some(value)
+                && !unversioned
+                    .as_ref()
+                    .is_some_and(|columns| columns.contains(&column.to_ascii_lowercase()))
+        })
     }
 
     pub(super) fn user_variable(&self, name: &str) -> Value {
@@ -1515,6 +1542,7 @@ impl RawEngine {
             parse_sql = strip_unsigned_for_parser(&parse_sql);
             parse_sql = strip_create_table_charset(&parse_sql);
             parse_sql = strip_create_table_unsupported_options(&parse_sql);
+            parse_sql = strip_without_system_versioning_columns(&parse_sql);
             parse_sql = strip_create_table_tablespace(&parse_sql);
             parse_sql = strip_create_table_index_prefixes(&parse_sql);
         }
@@ -2611,6 +2639,11 @@ impl RawEngine {
                 .map(|schema| schema.clone())
                 .ok_or_else(|| anyhow!("unknown table: {table}"))?;
             schema.system_versioned = true;
+            if let Some((_, columns)) = parse_without_system_versioning_columns(trimmed) {
+                self.unversioned_columns.insert(table.clone(), columns);
+            } else {
+                self.unversioned_columns.remove(&table);
+            }
             self.schemas.insert(table, schema.into());
             return Ok(Some(results.drain(..).next().unwrap_or_default()));
         }
@@ -6777,6 +6810,51 @@ fn duplicate_insert_column(sql: &str) -> Option<String> {
         }
     }
     None
+}
+
+fn parse_without_system_versioning_columns(sql: &str) -> Option<(String, BTreeSet<String>)> {
+    let trimmed = sql.trim().trim_end_matches(';').trim();
+    let upper = trimmed.to_ascii_uppercase();
+    if !upper.starts_with("CREATE TABLE ") {
+        return None;
+    }
+    let open = trimmed.find('(')?;
+    let mut table_part = trimmed["CREATE TABLE ".len()..open].trim();
+    if table_part
+        .to_ascii_uppercase()
+        .starts_with("IF NOT EXISTS ")
+    {
+        table_part = table_part["IF NOT EXISTS ".len()..].trim();
+    }
+    let table = table_part
+        .split_whitespace()
+        .last()?
+        .trim_matches('`')
+        .to_ascii_lowercase();
+    let close = matching_parenthesis(trimmed, open)?;
+    let marker = " WITHOUT SYSTEM VERSIONING";
+    let mut columns = BTreeSet::new();
+    for definition in eval::split_sql_args(&trimmed[open + 1..close]) {
+        if definition.to_ascii_uppercase().contains(marker) {
+            if let Some(column) = definition.split_whitespace().next() {
+                columns.insert(column.trim_matches('`').to_ascii_lowercase());
+            }
+        }
+    }
+    Some((table, columns))
+}
+
+fn strip_without_system_versioning_columns(sql: &str) -> String {
+    let marker = " WITHOUT SYSTEM VERSIONING";
+    let mut output = sql.to_string();
+    loop {
+        let upper = output.to_ascii_uppercase();
+        let Some(start) = upper.find(marker) else {
+            break;
+        };
+        output.replace_range(start..start + marker.len(), "");
+    }
+    output
 }
 
 fn strip_create_table_charset(sql: &str) -> String {

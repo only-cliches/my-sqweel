@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "id": "system_versioned_unversioned_column",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "gliatti/squishy",
+      "commit": "f32e2c3d0a369acc1bae907d8955fbd6b39049f6",
+      "path": "test/fixtures/mariadb_sysver_history.sql",
+      "url": "https://github.com/gliatti/squishy/blob/f32e2c3d0a369acc1bae907d8955fbd6b39049f6/test/fixtures/mariadb_sysver_history.sql",
+      "sha256": "51b418b3b7e60ec2428f58144de0885e6aa50296cd8cffe2ac459aad61c9948d",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "test/fixtures/mariadb_sysver_history.sql:90-120",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A system-versioned table declares a counter column WITHOUT SYSTEM VERSIONING, so counter-only updates do not create history while mixed updates still preserve a historical version.",
+      "mysql_mariadb_translation": "Reauthored as an inventory table with a non-versioned view counter and a versioned price. A counter-only update is checked before a later mixed update creates one retained product version. The table, columns, values, and assertions are newly authored without sleeps, generated-column projections, or source application schema."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "system-versioned-table",
+    "without-system-versioning-column",
+    "column-selective-history",
+    "mixed-update-history",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Product 3101 receives a counter-only update with no historical row, then a price-plus-counter update that creates one historical version. Product 3102 remains an unchanged control row.",
+  "determinism_notes": "The schema, values, update increments, and explicit ordering are fixed; generated temporal timestamps are not projected, and there are no clocks, randomness, sleeps, or concurrent schedules in fixture SQL.",
+  "setup": [
+    "CREATE TABLE inventory_versioned (product_id INT PRIMARY KEY, product_name VARCHAR(32) NOT NULL, unit_price DECIMAL(8,2) NOT NULL, view_count INT NOT NULL DEFAULT 0 WITHOUT SYSTEM VERSIONING) ENGINE=InnoDB WITH SYSTEM VERSIONING",
+    "INSERT INTO inventory_versioned VALUES (3101, 'edge-sensor', 19.99, 0), (3102, 'core-sensor', 24.50, 4)"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE inventory_versioned SET view_count = view_count + 2"
+    },
+    {
+      "sql": "SELECT product_id, product_name, unit_price, view_count FROM inventory_versioned FOR SYSTEM_TIME ALL ORDER BY product_id, unit_price, view_count",
+      "ordered": true
+    },
+    {
+      "sql": "UPDATE inventory_versioned SET unit_price = unit_price + 1.00, view_count = view_count + 5 WHERE product_id = 3101"
+    },
+    {
+      "sql": "SELECT product_id, product_name, unit_price, view_count FROM inventory_versioned FOR SYSTEM_TIME ALL ORDER BY product_id, unit_price, view_count",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT product_id, product_name, unit_price, view_count FROM inventory_versioned ORDER BY product_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT product_id, product_name, unit_price, view_count FROM inventory_versioned FOR SYSTEM_TIME ALL ORDER BY product_id, unit_price, view_count",
+      "ordered": true
+    }
+  ]
+}

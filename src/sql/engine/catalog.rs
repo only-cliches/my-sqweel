@@ -830,7 +830,10 @@ pub(super) fn parse_session_statement(sql: &str) -> Result<Vec<Statement>> {
     let upper = trimmed.to_ascii_uppercase();
     if upper.starts_with("CREATE TABLE ") && upper.ends_with("WITH SYSTEM VERSIONING") {
         let end = upper.rfind("WITH SYSTEM VERSIONING").unwrap();
-        return Ok(crate::sql::parse(trimmed[..end].trim_end())?);
+        let normalized = trimmed[..end]
+            .replace(" WITHOUT SYSTEM VERSIONING", "")
+            .replace(" without system versioning", "");
+        return Ok(crate::sql::parse(normalized.trim_end())?);
     }
     if (upper.starts_with("CREATE VIEW ") || upper.starts_with("CREATE OR REPLACE VIEW "))
         && upper.ends_with("WITH CHECK OPTION")

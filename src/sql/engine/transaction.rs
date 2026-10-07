@@ -2054,6 +2054,7 @@ fn projected_read_columns(statement: Option<&Statement>) -> Option<BTreeSet<Stri
 impl RawEngine {
     fn copy_table_from(&self, source: &Self, table: &str) {
         self.schemas.remove(table);
+        self.unversioned_columns.remove(table);
         self.rows.remove(table);
         self.baseline_rows.remove(table);
         self.indexes.remove(table);
@@ -2063,6 +2064,10 @@ impl RawEngine {
             .retain(|key, _| !key.starts_with(&prefix));
         if let Some(schema) = source.schemas.get(table) {
             self.schemas.insert(table.into(), schema.clone());
+        }
+        if let Some(columns) = source.unversioned_columns.get(table) {
+            self.unversioned_columns
+                .insert(table.into(), columns.clone());
         }
         if let Some(rows) = source.rows.get(table) {
             self.rows.insert(table.into(), rows.clone());
@@ -2115,6 +2120,8 @@ impl RawEngine {
         columns: Option<&BTreeSet<String>>,
     ) -> bool {
         self.schemas.get(table).as_deref() == other.schemas.get(table).as_deref()
+            && self.unversioned_columns.get(table).as_deref()
+                == other.unversioned_columns.get(table).as_deref()
             && match (self.rows.get(table), other.rows.get(table), columns) {
                 (Some(before), Some(after), _) if before.ptr_eq(&after) => true,
                 (Some(before), Some(after), Some(columns)) => {
@@ -2156,6 +2163,7 @@ impl RawEngine {
             database_charsets: self.database_charsets.clone(),
             cfg: self.cfg.clone(),
             schemas: self.schemas.clone(),
+            unversioned_columns: self.unversioned_columns.clone(),
             rows: self.rows.clone(),
             baseline_rows: self.baseline_rows.clone(),
             auto_inc: self.auto_inc.clone(),
