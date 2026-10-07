@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "id": "lateral_dual_top_one_summary",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "JiveGroup/JiveDBApp",
+      "commit": "8bc3a21d721115ebf262dfae3c45a580494b5ace",
+      "path": "db/seeds/mysql/queries.sql",
+      "url": "https://github.com/JiveGroup/JiveDBApp/blob/8bc3a21d721115ebf262dfae3c45a580494b5ace/db/seeds/mysql/queries.sql",
+      "sha256": "42387d26d3b503ce4b1fb0957502778e50ed80cb9d43e43c48058175362e920b",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "db/seeds/mysql/queries.sql:212-237",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "An active-parent report combines an inner per-parent LATERAL LIMIT-one lookup for the latest child with a left per-parent LATERAL grouped-and-ranked lookup for the most frequent related label, preserving parents whose latest child has no related items.",
+      "mysql_mariadb_translation": "Reauthored as a customer order digest. MariaDB-compatible windowed derived relations replace both correlated LATERAL subqueries: one ROW_NUMBER relation selects the latest order per active customer, and another independently ranks product totals per customer before a LEFT JOIN preserves an order with no items. The source schema, identifiers, rows, and commerce labels are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "lateral-translation",
+    "dual-partitioned-top-one",
+    "latest-per-group",
+    "grouped-aggregate",
+    "left-join-null-preservation",
+    "window-row-number",
+    "deterministic-tie-break",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Active customers 601, 602, and 605 have orders; customer 603 has no order and is excluded by the inner latest-order relation; inactive customer 604 is filtered out. Customer 605 has a latest order with no items and must remain with a NULL top product.",
+  "determinism_notes": "Customer IDs, active flags, order timestamps, order IDs, item quantities, product IDs, ranking tie-breakers, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE digest_customers (customer_id INT PRIMARY KEY, customer_email VARCHAR(64) NOT NULL, active TINYINT NOT NULL)",
+    "CREATE TABLE digest_orders (order_id INT PRIMARY KEY, customer_id INT NOT NULL, created_at DATETIME NOT NULL, order_total DECIMAL(10, 2) NOT NULL)",
+    "CREATE TABLE digest_products (product_id INT PRIMARY KEY, product_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE digest_order_items (item_id INT PRIMARY KEY, order_id INT NOT NULL, product_id INT NOT NULL, quantity INT NOT NULL)",
+    "INSERT INTO digest_customers VALUES (601, 'aster@example.test', 1), (602, 'beryl@example.test', 1), (603, 'cinder@example.test', 1), (604, 'dune@example.test', 0), (605, 'ember@example.test', 1)",
+    "INSERT INTO digest_orders VALUES (7001, 601, '2026-01-10 08:00:00', 50.00), (7002, 601, '2026-02-02 09:00:00', 80.00), (7010, 602, '2026-01-20 10:00:00', 30.00), (7020, 604, '2026-02-03 11:00:00', 45.00), (7030, 605, '2026-02-04 12:00:00', 15.00)",
+    "INSERT INTO digest_products VALUES (801, 'Alpha'), (802, 'Beta'), (803, 'Gamma'), (804, 'Delta')",
+    "INSERT INTO digest_order_items VALUES (9001, 7001, 801, 2), (9002, 7001, 802, 1), (9003, 7002, 801, 1), (9004, 7002, 803, 4), (9005, 7010, 804, 2), (9006, 7020, 801, 1)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH latest_orders AS (SELECT customer_id, order_id, created_at, order_total, ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY created_at DESC, order_id DESC) AS latest_rank FROM digest_orders), product_totals AS (SELECT o.customer_id, p.product_id, p.product_name, SUM(i.quantity) AS units, ROW_NUMBER() OVER (PARTITION BY o.customer_id ORDER BY SUM(i.quantity) DESC, p.product_id ASC) AS product_rank FROM digest_orders AS o JOIN digest_order_items AS i ON i.order_id = o.order_id JOIN digest_products AS p ON p.product_id = i.product_id GROUP BY o.customer_id, p.product_id, p.product_name) SELECT c.customer_id, c.customer_email, latest.order_id AS latest_order_id, latest.created_at AS latest_order_at, latest.order_total, top_product.product_name AS top_product, top_product.units AS top_product_units FROM digest_customers AS c JOIN latest_orders AS latest ON latest.customer_id = c.customer_id AND latest.latest_rank = 1 LEFT JOIN product_totals AS top_product ON top_product.customer_id = c.customer_id AND top_product.product_rank = 1 WHERE c.active = 1 ORDER BY c.customer_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT customer_id, active FROM digest_customers ORDER BY customer_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT customer_id, COUNT(*) AS order_count, SUM(order_total) AS lifetime_total FROM digest_orders GROUP BY customer_id ORDER BY customer_id",
+      "ordered": true
+    }
+  ]
+}
