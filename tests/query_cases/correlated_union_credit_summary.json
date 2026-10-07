@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "id": "correlated_union_credit_summary",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "allaboutduncan/clu-comics",
+      "commit": "8e6f9ba8fcd2f532b5e375fc15db7fe5ce120db3",
+      "path": "sql/issue_details.sql",
+      "url": "https://github.com/allaboutduncan/clu-comics/blob/8e6f9ba8fcd2f532b5e375fc15db7fe5ce120db3/sql/issue_details.sql",
+      "sha256": "940c97f603a8310403fbc9ac325e3284583c6552c3945c15774c00f43f723bdd",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/issue_details.sql:4-72",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A parent report uses correlated scalar subqueries for ordered fallback values and for a distinct ordered GROUP_CONCAT over a derived UNION of two filtered credit paths, with COALESCE/NULLIF precedence and nullable deletion guards.",
+      "mysql_mariadb_translation": "Reauthored as a media release credit summary. Blank release titles fall back to the first non-cover part title; writer names are collected from part credits and release-level credits through a correlated UNION-derived relation, normalized with NULLIF/COALESCE/TRIM, deduplicated and ordered inside GROUP_CONCAT, and filtered for nonblank names. The source comics schema, names, identifiers, and export placeholders are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "correlated-scalar-fallback",
+    "correlated-union-derived-aggregate",
+    "union-distinct-credit-paths",
+    "nullif-coalesce-trim-normalization",
+    "ordered-distinct-group-concat",
+    "nullable-deletion-filter",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Release 101 uses its first non-cover part title because its stored title is blank. Its duplicate Ada credit appears through both part and release paths but is emitted once; deleted credits, non-writer roles, and cover-only parts are excluded. Draft release 103 is filtered.",
+  "determinism_notes": "Release IDs, part sequence numbers, role names, credit IDs, normalized names, filters, aggregate ordering, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE media_releases (release_id INT PRIMARY KEY, release_title VARCHAR(64) NOT NULL, release_status VARCHAR(16) NOT NULL)",
+    "CREATE TABLE media_parts (part_id INT PRIMARY KEY, release_id INT NOT NULL, sequence_no INT NULL, part_title VARCHAR(64) NOT NULL)",
+    "CREATE TABLE media_people (person_id INT PRIMARY KEY, person_name VARCHAR(64) NOT NULL)",
+    "CREATE TABLE media_roles (role_id INT PRIMARY KEY, role_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE part_credits (credit_id INT PRIMARY KEY, part_id INT NOT NULL, role_id INT NOT NULL, person_id INT NULL, credited_as VARCHAR(64) NOT NULL, credit_name VARCHAR(64) NOT NULL, deleted TINYINT NULL)",
+    "CREATE TABLE release_credits (credit_id INT PRIMARY KEY, release_id INT NOT NULL, role_id INT NOT NULL, person_id INT NULL, credited_as VARCHAR(64) NOT NULL, credit_name VARCHAR(64) NOT NULL, deleted TINYINT NULL)",
+    "INSERT INTO media_releases VALUES (101, '', 'published'), (102, 'Beta Release', 'published'), (103, 'Unpublished', 'draft')",
+    "INSERT INTO media_parts VALUES (1001, 101, 1, 'Alpha Opening'), (1002, 101, 0, 'Alpha Cover'), (1003, 102, 1, 'Beta Opening'), (1004, 103, 1, 'Draft Opening')",
+    "INSERT INTO media_people VALUES (11, 'Ada North'), (12, 'Ben South'), (13, 'Cora West')",
+    "INSERT INTO media_roles VALUES (1, 'writer'), (2, 'artist')",
+    "INSERT INTO part_credits VALUES (2001, 1001, 1, 11, '', '' , 0), (2002, 1001, 1, 12, 'B. South', '', NULL), (2003, 1002, 1, 13, 'Cover Only', '', 0), (2004, 1003, 1, 11, '', '', 0), (2005, 1004, 1, 1, 'Draft Writer', '', 0), (2006, 1001, 2, 13, 'Artist Credit', '', 0)",
+    "INSERT INTO release_credits VALUES (3001, 101, 1, 11, '', '', 0), (3002, 101, 1, 12, '', 'B. South', NULL), (3003, 101, 1, 13, 'Removed Writer', '', 1), (3004, 101, 2, 13, 'Wrong Role', '', 0), (3005, 102, 1, 13, '', '', 0), (3006, 103, 1, 11, 'Draft Credit', '', 0)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT r.release_id, COALESCE(NULLIF(TRIM(r.release_title), ''), (SELECT p.part_title FROM media_parts AS p WHERE p.release_id = r.release_id AND (p.sequence_no IS NULL OR p.sequence_no <> 0) ORDER BY p.sequence_no ASC LIMIT 1)) AS display_title, (SELECT GROUP_CONCAT(DISTINCT names.credited_name ORDER BY names.credited_name ASC SEPARATOR ', ') FROM (SELECT mp.release_id AS release_id, TRIM(COALESCE(NULLIF(pc.credited_as, ''), NULLIF(pc.credit_name, ''), pe.person_name)) AS credited_name FROM media_parts AS mp INNER JOIN part_credits AS pc ON pc.part_id = mp.part_id INNER JOIN media_roles AS mr ON mr.role_id = pc.role_id LEFT JOIN media_people AS pe ON pe.person_id = pc.person_id WHERE (mp.sequence_no IS NULL OR mp.sequence_no <> 0) AND mr.role_name = 'writer' AND (pc.deleted = 0 OR pc.deleted IS NULL) UNION SELECT rc.release_id AS release_id, TRIM(COALESCE(NULLIF(rc.credited_as, ''), NULLIF(rc.credit_name, ''), pe.person_name)) AS credited_name FROM release_credits AS rc INNER JOIN media_roles AS mr ON mr.role_id = rc.role_id LEFT JOIN media_people AS pe ON pe.person_id = rc.person_id WHERE mr.role_name = 'writer' AND (rc.deleted = 0 OR rc.deleted IS NULL)) AS names WHERE names.release_id = r.release_id AND NULLIF(names.credited_name, '') IS NOT NULL) AS writer_names FROM media_releases AS r WHERE r.release_status = 'published' ORDER BY r.release_id ASC",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT release_id, release_title, release_status FROM media_releases ORDER BY release_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT part_id, release_id, sequence_no, part_title FROM media_parts ORDER BY part_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT credit_id, part_id, role_id, person_id, credited_as, credit_name, deleted FROM part_credits ORDER BY credit_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT credit_id, release_id, role_id, person_id, credited_as, credit_name, deleted FROM release_credits ORDER BY credit_id",
+      "ordered": true
+    }
+  ]
+}
