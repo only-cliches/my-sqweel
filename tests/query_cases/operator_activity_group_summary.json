@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "id": "operator_activity_group_summary",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "delimce/QuinielaFutbol",
+      "commit": "83c2a93067c578b38637ce06db18e33d5eca0a69",
+      "path": "docker/mysql/queries.sql",
+      "url": "https://github.com/delimce/QuinielaFutbol/blob/83c2a93067c578b38637ce06db18e33d5eca0a69/docker/mysql/queries.sql",
+      "sha256": "89145be9f5561575bcb2738573cd9f75820fce9c2f1371972eee71cb06d37283",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "docker/mysql/queries.sql:12-31",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A user activity report preserves users through several LEFT JOINs, aggregates distinct group names and access identifiers, formats the latest activity date, counts distinct user-item pairs, and orders by the access count.",
+      "mysql_mariadb_translation": "Reauthored as an operator dispatch summary. Operators join access events, route assignments, and group memberships; GROUP_CONCAT(DISTINCT ... ORDER BY ... SEPARATOR ...) summarizes groups, COUNT(DISTINCT ...) removes duplicate access events, DATE_FORMAT(MAX(...)) renders the latest day, and COUNT(DISTINCT operator_id, route_id) counts unique route assignments. The source schema, identifiers, values, and sports domain are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "multiple-left-joins",
+    "group-concat-distinct",
+    "aggregate-local-ordering",
+    "custom-group-concat-separator",
+    "count-distinct",
+    "count-distinct-multiple-expressions",
+    "date-format-aggregate",
+    "duplicate-event-deduplication",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Operator 41 has duplicate access events, two groups, and three distinct route assignments. Operator 42 has one access event and one group. Operator 43 has no activity and must remain visible with NULL latest activity and NULL group summary.",
+  "determinism_notes": "Operator IDs, event IDs, route IDs, group memberships, fixed timestamps, aggregate ordering, separator, and final ordering are explicit. No clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE dispatch_operators (operator_id INT PRIMARY KEY, operator_name VARCHAR(32) NOT NULL, login_name VARCHAR(32) NOT NULL, updated_on DATE NOT NULL)",
+    "CREATE TABLE dispatch_access_events (event_id INT PRIMARY KEY, operator_id INT NOT NULL, accessed_at DATETIME NOT NULL)",
+    "CREATE TABLE dispatch_operator_routes (operator_id INT NOT NULL, route_id INT NOT NULL, PRIMARY KEY (operator_id, route_id))",
+    "CREATE TABLE dispatch_operator_groups (operator_id INT NOT NULL, group_id INT NOT NULL, PRIMARY KEY (operator_id, group_id))",
+    "CREATE TABLE dispatch_groups (group_id INT PRIMARY KEY, group_name VARCHAR(32) NOT NULL)",
+    "INSERT INTO dispatch_operators VALUES (41, 'Aster', 'aster.ops', '2026-08-01'), (42, 'Beryl', 'beryl.ops', '2026-08-02'), (43, 'Cinder', 'cinder.ops', '2026-08-03')",
+    "INSERT INTO dispatch_access_events VALUES (1001, 41, '2026-08-04 08:15:00'), (1002, 41, '2026-08-04 08:15:00'), (1003, 41, '2026-08-06 17:20:00'), (2001, 42, '2026-08-05 09:30:00')",
+    "INSERT INTO dispatch_operator_routes VALUES (41, 501), (41, 502), (41, 503), (42, 501)",
+    "INSERT INTO dispatch_operator_groups VALUES (41, 10), (41, 11), (42, 12)",
+    "INSERT INTO dispatch_groups VALUES (10, 'night'), (11, 'priority'), (12, 'regional')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT o.operator_id, o.operator_name, o.login_name, GROUP_CONCAT(DISTINCT g.group_name ORDER BY g.group_name ASC SEPARATOR '|') AS group_names, o.updated_on, COUNT(DISTINCT a.event_id) AS access_count, DATE_FORMAT(MAX(a.accessed_at), '%a %d-%m') AS last_access, COUNT(DISTINCT r.operator_id, r.route_id) AS route_count FROM dispatch_operators AS o LEFT JOIN dispatch_access_events AS a ON a.operator_id = o.operator_id LEFT JOIN dispatch_operator_routes AS r ON r.operator_id = o.operator_id LEFT JOIN dispatch_operator_groups AS og ON og.operator_id = o.operator_id LEFT JOIN dispatch_groups AS g ON g.group_id = og.group_id GROUP BY o.operator_id ORDER BY access_count DESC, o.operator_id ASC",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT operator_id, operator_name, login_name, updated_on FROM dispatch_operators ORDER BY operator_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT event_id, operator_id, accessed_at FROM dispatch_access_events ORDER BY event_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT operator_id, route_id FROM dispatch_operator_routes ORDER BY operator_id, route_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT operator_id, group_id FROM dispatch_operator_groups ORDER BY operator_id, group_id",
+      "ordered": true
+    }
+  ]
+}
