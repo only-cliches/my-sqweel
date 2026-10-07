@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "group_concat_json_objectagg_team",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "princeKris/mysqlProgram",
+      "commit": "c84b0678843999ce9545ded6dd6a18ed76730163",
+      "path": "06_grouping_aggregation/05_group_concat_json.sql",
+      "url": "https://github.com/princeKris/mysqlProgram/blob/c84b0678843999ce9545ded6dd6a18ed76730163/06_grouping_aggregation/05_group_concat_json.sql",
+      "sha256": "7fe4c6a0add8faafb9e6b6d22325c2b0d8cf9c74ac5ec757acdc57960b0c88ae",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "06_grouping_aggregation/05_group_concat_json.sql:9-26",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL aggregation lesson demonstrates ordered GROUP_CONCAT for grouped names and JSON_OBJECTAGG for key/value totals as adjacent reporting patterns.",
+      "mysql_mariadb_translation": "Reauthored as one team activity report that combines ordered distinct member-name concatenation, JSON_OBJECTAGG project-hour mappings, and numeric totals per team. The source tables, identifiers, values, course framing, and separate example queries are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "group-concat-json-objectagg",
+    "ordered-distinct-group-concat",
+    "grouped-json-objectagg",
+    "mixed-aggregate-projection",
+    "derived-ordered-input",
+    "dml-final-state"
+  ],
+  "fixture_notes": "Red has Ava on two projects and Bo on one, so DISTINCT GROUP_CONCAT returns Ava and Bo once each while JSON_OBJECTAGG retains one entry per project. Blue has Dee and Eli on separate projects; all rows are active.",
+  "determinism_notes": "Fixed activity IDs, explicit derived-input ordering, member-name ordering inside GROUP_CONCAT, unique project keys per team, stable team ordering, and no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE team_activity (activity_id INT PRIMARY KEY, team_code VARCHAR(16) NOT NULL, member_name VARCHAR(32) NOT NULL, project_code VARCHAR(16) NOT NULL, hours INT NOT NULL, active TINYINT NOT NULL)",
+    "INSERT INTO team_activity VALUES (1, 'red', 'Ava', 'atlas', 6, 1), (2, 'red', 'Ava', 'beacon', 4, 1), (3, 'red', 'Bo', 'canyon', 2, 1), (4, 'blue', 'Dee', 'delta', 8, 1), (5, 'blue', 'Eli', 'ember', 3, 1)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT team_code, GROUP_CONCAT(DISTINCT member_name ORDER BY member_name SEPARATOR '|') AS member_names, JSON_OBJECTAGG(project_code, hours) AS project_hours, SUM(hours) AS total_hours FROM (SELECT activity_id, team_code, member_name, project_code, hours FROM team_activity WHERE active = 1 ORDER BY team_code, activity_id) AS ordered_activity GROUP BY team_code ORDER BY team_code",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT activity_id, team_code, member_name, project_code, hours, active FROM team_activity ORDER BY activity_id",
+      "ordered": true
+    }
+  ]
+}
