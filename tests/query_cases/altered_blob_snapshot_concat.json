@@ -1,0 +1,78 @@
+{
+  "version": 1,
+  "id": "altered_blob_snapshot_concat",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "mariadb-corporation/mariadb-qa",
+      "commit": "1bd169e44678639e2f82ab9097bfadc78aa7174e",
+      "path": "BUGS/MDEV-28384.sql",
+      "url": "https://github.com/mariadb-corporation/mariadb-qa/blob/1bd169e44678639e2f82ab9097bfadc78aa7174e/BUGS/MDEV-28384.sql",
+      "sha256": "2c63a263898ddc9bdfa5e28db67ad51767f74dca4d573987fe23a1f9ed454985",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "BUGS/MDEV-28384.sql:11-19",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "An existing nullable row is extended with a required BLOB column, copied through CREATE TABLE ... SELECT, deleted and reinserted, then compared through a scalar DISTINCT GROUP_CONCAT over the BLOB values.",
+      "mysql_mariadb_translation": "Reauthored as an audit-row snapshot round trip. A required BLOB payload is added to a pre-existing row, a post-alter snapshot table is created, the source is rebuilt with an explicit payload, and the snapshot row is inserted back before ordered distinct concatenation. Source tables, names, values, and bug-report context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "alter-add-non-null-blob",
+    "alter-existing-row-default",
+    "ctas-after-alter",
+    "snapshot-reinsert",
+    "blob-distinct-group-concat",
+    "scalar-aggregate-subquery",
+    "deterministic-final-state"
+  ],
+  "fixture_notes": "The original row has no payload before the required BLOB column is added, so MariaDB materializes an empty payload for the altered row. The snapshot preserves that value; the rebuilt row has payload 'seed', and the final scalar DISTINCT GROUP_CONCAT must retain both BLOB values in deterministic order.",
+  "determinism_notes": "Row identifiers, nullable amount, DDL/DML sequence, payload values, payload ordering, and final checks are fixed; there are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE audit_rows (row_code INT NOT NULL, amount INT NULL)",
+    "INSERT INTO audit_rows (row_code) VALUES (7)"
+  ],
+  "steps": [
+    {
+      "sql": "ALTER TABLE audit_rows ADD COLUMN payload BLOB NOT NULL",
+      "ordered": true
+    },
+    {
+      "sql": "CREATE TABLE audit_snapshot AS SELECT * FROM audit_rows",
+      "ordered": true
+    },
+    {
+      "sql": "DELETE FROM audit_rows",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO audit_rows (row_code, amount, payload) VALUES (7, 0, 'seed')",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO audit_rows SELECT * FROM audit_snapshot",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT row_code, amount, HEX(payload) AS payload_hex, OCTET_LENGTH(payload) AS payload_bytes FROM audit_rows ORDER BY row_code, amount IS NOT NULL, amount, HEX(payload)",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT (SELECT GROUP_CONCAT(DISTINCT payload ORDER BY payload SEPARATOR '|') FROM audit_rows) AS payloads",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT row_code, amount, HEX(payload) AS payload_hex, OCTET_LENGTH(payload) AS payload_bytes FROM audit_rows ORDER BY row_code, amount IS NOT NULL, amount, HEX(payload)",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT COUNT(*) AS snapshot_rows FROM audit_snapshot",
+      "ordered": true
+    }
+  ]
+}

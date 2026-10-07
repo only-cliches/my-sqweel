@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "id": "altered_blob_snapshot_concat_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "altered_blob_snapshot_concat",
+    "source": {
+      "kind": "github",
+      "repository": "mariadb-corporation/mariadb-qa",
+      "commit": "1bd169e44678639e2f82ab9097bfadc78aa7174e",
+      "path": "BUGS/MDEV-28384.sql",
+      "url": "https://github.com/mariadb-corporation/mariadb-qa/blob/1bd169e44678639e2f82ab9097bfadc78aa7174e/BUGS/MDEV-28384.sql",
+      "sha256": "2c63a263898ddc9bdfa5e28db67ad51767f74dca4d573987fe23a1f9ed454985",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Minimized from altered_blob_snapshot_concat",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "Adding a required BLOB column to an existing row materializes an implicit empty value whose bytes and expression metadata flow into HEX and DISTINCT GROUP_CONCAT.",
+      "mysql_mariadb_translation": "Reduced to one existing integer row, one ALTER TABLE ADD BLOB NOT NULL, and two reads of the implicit payload. CTAS, deletion, reinsertion, and the explicit seed payload are removed while retaining the default-value and metadata mismatch."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "alter-add-non-null-blob",
+    "implicit-empty-blob-default",
+    "hex-blob-metadata",
+    "blob-distinct-group-concat",
+    "metadata-regression"
+  ],
+  "fixture_notes": "The only pre-alter row has an integer value and no payload column. MariaDB supplies an empty BLOB when the required column is added; the minimized reads expose both the empty byte value and the aggregate ordering/metadata consequence.",
+  "determinism_notes": "The row identifier, ALTER statement, payload ordering, and final reads are fixed; there are no clocks, randomness, sleeps, or concurrent schedules.",
+  "setup": [
+    "CREATE TABLE blob_defaults (entry_id INT NOT NULL)",
+    "INSERT INTO blob_defaults VALUES (7)"
+  ],
+  "steps": [
+    {
+      "sql": "ALTER TABLE blob_defaults ADD COLUMN payload BLOB NOT NULL",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT entry_id, HEX(payload) AS payload_hex, OCTET_LENGTH(payload) AS payload_bytes FROM blob_defaults ORDER BY entry_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT GROUP_CONCAT(DISTINCT payload ORDER BY payload SEPARATOR '|') AS payloads FROM blob_defaults",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT entry_id, HEX(payload) AS payload_hex, OCTET_LENGTH(payload) AS payload_bytes FROM blob_defaults ORDER BY entry_id",
+      "ordered": true
+    }
+  ]
+}

@@ -2161,6 +2161,17 @@ impl RawEngine {
                         MysqlColumnType::BigInt
                     }
                     "ASCII" | "ORD" => MysqlColumnType::Integer,
+                    "HEX" => {
+                        let argument_type = function_argument(function, 0).map(|argument| {
+                            self.expression_metadata(select, argument, String::new(), first_row)
+                                .column_type
+                        });
+                        if argument_type == Some(MysqlColumnType::Blob) {
+                            MysqlColumnType::MediumBlob
+                        } else {
+                            MysqlColumnType::VarChar
+                        }
+                    }
                     "BIT_AND" | "BIT_OR" | "BIT_XOR" => MysqlColumnType::BigInt,
                     "GET_LOCK" | "RELEASE_LOCK" | "IS_FREE_LOCK" | "COERCIBILITY" => {
                         MysqlColumnType::Integer
@@ -4614,6 +4625,7 @@ impl RawEngine {
         if sql_type.contains("CHAR")
             || sql_type.contains("TEXT")
             || sql_type.contains("BINARY")
+            || sql_type.contains("BLOB")
             || sql_type.contains("ENUM")
             || sql_type.contains("SET")
         {
