@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "id": "ordinal_rollup_join_sales",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "ptyadana/SQL-Data-Analysis-and-Visualization-Projects",
+      "commit": "df39adb0d36d961759ef14e654a6a1efca917585",
+      "path": "Complete SQL Mastery - Mosh/05.Summarizing Data.sql",
+      "url": "https://github.com/ptyadana/SQL-Data-Analysis-and-Visualization-Projects/blob/df39adb0d36d961759ef14e654a6a1efca917585/Complete%20SQL%20Mastery%20-%20Mosh/05.Summarizing%20Data.sql",
+      "sha256": "a94acf84c2936a1707334e41ed21e79494251a072bc868c1f44814500bc0170f",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "Complete SQL Mastery - Mosh/05.Summarizing Data.sql:65-74",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A joined sales summary groups by ordinal projection positions with GROUP BY 1,2 WITH ROLLUP, retaining city detail rows, regional subtotals, and a grand total.",
+      "mysql_mariadb_translation": "Reauthored as an independently authored service-invoice report. Client regions join invoice rows, GROUP BY 1,2 WITH ROLLUP produces city, region, and grand-total revenue rows, and the unordered rollup result is compared as a deterministic multiset. The source tables, names, values, and retail-sales context are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "ordinal-grouping",
+    "with-rollup",
+    "join-rollup",
+    "grouped-join",
+    "aggregate-sum",
+    "grand-total",
+    "regional-subtotal",
+    "deterministic-multiset"
+  ],
+  "fixture_notes": "North has two service cities and South has one; detail invoices yield regional subtotals and one grand total. The final state checks both source tables remain unchanged.",
+  "determinism_notes": "Region codes, city names, invoice identifiers, amounts, grouping ordinals, and fixed join keys are all explicit. The rollup result is intentionally unordered and compared as a multiset; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE service_regions (region_id INT PRIMARY KEY, region_code VARCHAR(16) NOT NULL, city_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE service_invoices (invoice_id INT PRIMARY KEY, region_id INT NOT NULL, invoice_total DECIMAL(10,2) NOT NULL)",
+    "INSERT INTO service_regions VALUES (1, 'north', 'harbor'), (2, 'north', 'inland'), (3, 'south', 'harbor')",
+    "INSERT INTO service_invoices VALUES (101, 1, 120.00), (102, 1, 80.00), (103, 2, 50.00), (104, 3, 200.00), (105, 3, 30.00)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT r.region_code, r.city_name, SUM(i.invoice_total) AS total_sales FROM service_invoices AS i INNER JOIN service_regions AS r ON r.region_id = i.region_id GROUP BY 1, 2 WITH ROLLUP",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT region_id, region_code, city_name FROM service_regions ORDER BY region_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT invoice_id, region_id, invoice_total FROM service_invoices ORDER BY invoice_id",
+      "ordered": true
+    }
+  ]
+}
