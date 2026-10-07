@@ -838,6 +838,16 @@ pub(super) fn parse_session_statement(sql: &str) -> Result<Vec<Statement>> {
         let end = upper.rfind("WITH CHECK OPTION").unwrap();
         return Ok(crate::sql::parse(trimmed[..end].trim_end())?);
     }
+    if upper.starts_with("DELETE HISTORY FROM ") {
+        let remainder = trimmed["DELETE HISTORY FROM ".len()..].trim_start();
+        let table = remainder
+            .split_whitespace()
+            .next()
+            .unwrap_or_default()
+            .trim_matches('`');
+        ensure!(!table.is_empty(), "DELETE HISTORY requires a table");
+        return Ok(crate::sql::parse(&format!("DELETE FROM {table}"))?);
+    }
     if upper.starts_with("SELECT ") && upper.contains(" FOR SYSTEM_TIME ALL") {
         let start = upper.rfind(" FOR SYSTEM_TIME ALL").unwrap();
         let end = start + " FOR SYSTEM_TIME ALL".len();

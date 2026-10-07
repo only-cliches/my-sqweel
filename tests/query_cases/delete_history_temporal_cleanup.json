@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "id": "delete_history_temporal_cleanup",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "mariadb-corporation/mariadb-qa",
+      "commit": "1bd169e44678639e2f82ab9097bfadc78aa7174e",
+      "path": "BUGS/MDEV-24905.sql",
+      "url": "https://github.com/mariadb-corporation/mariadb-qa/blob/1bd169e44678639e2f82ab9097bfadc78aa7174e/BUGS/MDEV-24905.sql",
+      "sha256": "ab9f747c4d11f16d34d1500fac4c49bca46715eb911fd31ed60a78ccf2285fff",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "BUGS/MDEV-24905.sql:1-4",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A system-versioned InnoDB table is populated and DELETE HISTORY removes retained versions before a fixed SYSTEM_TIME boundary.",
+      "mysql_mariadb_translation": "Reauthored as an asset lifecycle history cleanup. One asset is updated to create a retained version, then DELETE HISTORY with a future boundary removes only that historical version while a second asset verifies current rows remain visible. The table, columns, values, and assertions are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "system-versioned-table",
+    "delete-history",
+    "before-system-time",
+    "historical-row-purge",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Asset 2401 changes from queued to archived, then DELETE HISTORY purges the retained queued version. Asset 2402 remains unchanged as a current-row control.",
+  "determinism_notes": "The schema, values, and future SYSTEM_TIME boundary are fixed; generated temporal timestamps are not projected, and there are no clocks, randomness, sleeps, or concurrent schedules in fixture SQL.",
+  "setup": [
+    "CREATE TABLE asset_lifecycle_history (asset_id INT PRIMARY KEY, asset_label VARCHAR(32) NOT NULL, asset_state VARCHAR(16) NOT NULL) ENGINE=InnoDB WITH SYSTEM VERSIONING",
+    "INSERT INTO asset_lifecycle_history VALUES (2401, 'edge-cache', 'queued'), (2402, 'api-gateway', 'ready')"
+  ],
+  "steps": [
+    {
+      "sql": "UPDATE asset_lifecycle_history SET asset_state = 'archived' WHERE asset_id = 2401"
+    },
+    {
+      "sql": "DELETE HISTORY FROM asset_lifecycle_history BEFORE SYSTEM_TIME '2038-01-19 05:15:07.999999'"
+    },
+    {
+      "sql": "SELECT asset_id, asset_label, asset_state FROM asset_lifecycle_history ORDER BY asset_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT asset_id, asset_label, asset_state FROM asset_lifecycle_history FOR SYSTEM_TIME ALL ORDER BY asset_id, asset_state",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT asset_id, asset_label, asset_state FROM asset_lifecycle_history ORDER BY asset_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT asset_id, asset_label, asset_state FROM asset_lifecycle_history FOR SYSTEM_TIME ALL ORDER BY asset_id, asset_state",
+      "ordered": true
+    }
+  ]
+}

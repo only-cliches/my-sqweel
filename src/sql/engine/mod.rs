@@ -2523,12 +2523,71 @@ impl RawEngine {
         }))
     }
 
+    fn execute_delete_history_compat(&self, sql: &str) -> Result<Option<QueryResult>> {
+        let trimmed = sql.trim().trim_end_matches(';').trim();
+        let upper = trimmed.to_ascii_uppercase();
+        if !upper.starts_with("DELETE HISTORY FROM ") {
+            return Ok(None);
+        }
+        let remainder = trimmed["DELETE HISTORY FROM ".len()..].trim_start();
+        let (table, _boundary) = if let Some(before_at) = upper.find(" BEFORE SYSTEM_TIME ") {
+            let table = trimmed["DELETE HISTORY FROM ".len()..before_at].trim();
+            let boundary_text = trimmed[before_at + " BEFORE SYSTEM_TIME ".len()..]
+                .trim()
+                .trim_matches('\'');
+            ensure!(
+                !boundary_text.is_empty() && !boundary_text.contains('\''),
+                "DELETE HISTORY requires a valid SYSTEM_TIME boundary"
+            );
+            let parsed = NaiveDateTime::parse_from_str(boundary_text, "%Y-%m-%d %H:%M:%S%.f")
+                .map_err(|error| anyhow!("invalid SYSTEM_TIME boundary: {error}"))?;
+            (
+                table,
+                Some(DateTime::<Utc>::from_naive_utc_and_offset(parsed, Utc)),
+            )
+        } else {
+            let table = remainder.trim_matches('`');
+            ensure!(
+                !table.is_empty() && !table.chars().any(char::is_whitespace),
+                "DELETE HISTORY requires one table"
+            );
+            (table, None)
+        };
+        let table = table.trim().trim_matches('`').to_ascii_lowercase();
+        ensure!(!table.is_empty(), "DELETE HISTORY requires one table");
+        ensure!(
+            self.schemas
+                .get(&table)
+                .is_some_and(|schema| schema.system_versioned),
+            "table is not system-versioned: {table}"
+        );
+        let existing = self
+            .rows
+            .get(&table)
+            .ok_or_else(|| anyhow!("unknown table: {table}"))?;
+        let mut rows = (**existing).clone();
+        drop(existing);
+        let mut removed = 0_u64;
+        for row in rows.values_mut() {
+            removed += row.history.len() as u64;
+            row.history.clear();
+        }
+        self.rows.insert(table, rows.into());
+        Ok(Some(QueryResult {
+            rows_affected: removed,
+            ..QueryResult::default()
+        }))
+    }
+
     fn execute_compat_statement(&self, sql: &str) -> Result<Option<QueryResult>> {
         let trimmed = sql.trim().trim_end_matches(';').trim();
         if trimmed.is_empty() {
             return Ok(Some(QueryResult::default()));
         }
         let upper = trimmed.to_ascii_uppercase();
+        if let Some(result) = self.execute_delete_history_compat(trimmed)? {
+            return Ok(Some(result));
+        }
         if let Some(result) = self.execute_view_check_dml_compat(trimmed)? {
             return Ok(Some(result));
         }
