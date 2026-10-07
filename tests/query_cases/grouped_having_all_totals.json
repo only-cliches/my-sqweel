@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "grouped_having_all_totals",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Helias/Database-Exercise-System",
+      "commit": "9019c7dbef39bd947fb1993bc3580d457bbe8ea5",
+      "path": "sql/1 - banca.sql",
+      "url": "https://github.com/Helias/Database-Exercise-System/blob/9019c7dbef39bd947fb1993bc3580d457bbe8ea5/sql/1%20-%20banca.sql",
+      "sha256": "0f7399c8d449cfda5377d596a20c48e27ccdf311def48635a221df8e441909b9",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/1 - banca.sql:71",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A banking exercise groups account balances by person and keeps groups whose total is greater than or equal to ALL grouped totals from a second aggregate subquery.",
+      "mysql_mariadb_translation": "Reauthored as a customer portfolio comparison with explicit joins, selecting every customer whose portfolio total is at least every other customer's total. The source tables, identifiers, values, banking domain, and SQL text are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "grouped-having-all-totals",
+    "all-comparison-aggregate",
+    "aggregate-set-subquery",
+    "grouped-correlated-domain",
+    "maximum-group-selection"
+  ],
+  "fixture_notes": "Customers 10 and 30 tie for the maximum portfolio total of 100, so both satisfy the ALL comparison. Customers 20 and 40 have totals 55 and 90 and are excluded.",
+  "determinism_notes": "Fixed customer and account IDs, explicit joins, grouped SUM expressions, explicit result ordering, and no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE portfolio_accounts (account_id INT PRIMARY KEY, balance INT NOT NULL)",
+    "CREATE TABLE portfolio_members (customer_id INT NOT NULL, account_id INT NOT NULL, PRIMARY KEY (customer_id, account_id))",
+    "INSERT INTO portfolio_accounts VALUES (101, 70), (102, 30), (201, 55), (301, 40), (302, 60), (401, 90)",
+    "INSERT INTO portfolio_members VALUES (10, 101), (10, 102), (20, 201), (30, 301), (30, 302), (40, 401)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT pm.customer_id, SUM(pa.balance) AS portfolio_total FROM portfolio_members AS pm JOIN portfolio_accounts AS pa ON pa.account_id = pm.account_id GROUP BY pm.customer_id HAVING SUM(pa.balance) >= ALL (SELECT SUM(pa2.balance) FROM portfolio_members AS pm2 JOIN portfolio_accounts AS pa2 ON pa2.account_id = pm2.account_id GROUP BY pm2.customer_id) ORDER BY pm.customer_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT account_id, balance FROM portfolio_accounts ORDER BY account_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT customer_id, account_id FROM portfolio_members ORDER BY customer_id, account_id",
+      "ordered": true
+    }
+  ]
+}
