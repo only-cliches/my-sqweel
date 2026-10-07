@@ -1,0 +1,91 @@
+{
+  "version": 1,
+  "id": "transactional_sequence_insert_ignore",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "DeNADev/mobage-jssdk-sample-payment",
+      "commit": "54f046eb2801b3c00e60c74004839b78ab433e2c",
+      "path": "db_setting/query.sql",
+      "url": "https://github.com/DeNADev/mobage-jssdk-sample-payment/blob/54f046eb2801b3c00e60c74004839b78ab433e2c/db_setting/query.sql",
+      "sha256": "8262eb5e1a08912723d348b6635ddabdec340cfd989db1813face06038c2e7e4",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "db_setting/query.sql:11-19",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL payment flow locks a sequence row, increments it through LAST_INSERT_ID(expr), and uses INSERT IGNORE to make a subsequent order creation idempotent.",
+      "mysql_mariadb_translation": "Reauthored as two sequential order-token allocations. Each transaction locks and advances an independent sequence row through LAST_INSERT_ID(expr); the first token inserts a registry row, while a repeated unique token is ignored without rolling back the sequence increment. The source schema, identifiers, values, comments, and payment workflow are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "transactional-sequence-allocation",
+    "select-for-update",
+    "last-insert-id-expression",
+    "insert-ignore",
+    "unique-idempotency-key",
+    "duplicate-skip-final-state",
+    "explicit-commit"
+  ],
+  "fixture_notes": "The sequence starts at 100. The first transaction allocates 101 and inserts token-alpha; the second allocates 102 but repeats token-alpha, so INSERT IGNORE skips the duplicate registry row while the sequence remains advanced to 102.",
+  "determinism_notes": "Fixed sequence values, explicit transaction boundaries, stable unique tokens, ordered final-state checks, and no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE order_sequence (sequence_name VARCHAR(16) PRIMARY KEY, next_order_id INT NOT NULL)",
+    "CREATE TABLE order_registry (order_id INT PRIMARY KEY, request_token VARCHAR(32) NOT NULL UNIQUE, customer_code VARCHAR(16) NOT NULL)",
+    "INSERT INTO order_sequence VALUES ('orders', 100)"
+  ],
+  "steps": [
+    {
+      "sql": "START TRANSACTION"
+    },
+    {
+      "sql": "SELECT next_order_id FROM order_sequence WHERE sequence_name = 'orders' FOR UPDATE",
+      "ordered": true
+    },
+    {
+      "sql": "UPDATE order_sequence SET next_order_id = LAST_INSERT_ID(next_order_id + 1) WHERE sequence_name = 'orders'"
+    },
+    {
+      "sql": "SELECT LAST_INSERT_ID() AS allocated_order_id",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT IGNORE INTO order_registry (order_id, request_token, customer_code) VALUES (LAST_INSERT_ID(), 'token-alpha', 'customer-a')"
+    },
+    {
+      "sql": "COMMIT"
+    },
+    {
+      "sql": "START TRANSACTION"
+    },
+    {
+      "sql": "SELECT next_order_id FROM order_sequence WHERE sequence_name = 'orders' FOR UPDATE",
+      "ordered": true
+    },
+    {
+      "sql": "UPDATE order_sequence SET next_order_id = LAST_INSERT_ID(next_order_id + 1) WHERE sequence_name = 'orders'"
+    },
+    {
+      "sql": "SELECT LAST_INSERT_ID() AS allocated_order_id",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT IGNORE INTO order_registry (order_id, request_token, customer_code) VALUES (LAST_INSERT_ID(), 'token-alpha', 'customer-a-retry')"
+    },
+    {
+      "sql": "COMMIT"
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT sequence_name, next_order_id FROM order_sequence ORDER BY sequence_name",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT order_id, request_token, customer_code FROM order_registry ORDER BY order_id",
+      "ordered": true
+    }
+  ]
+}
