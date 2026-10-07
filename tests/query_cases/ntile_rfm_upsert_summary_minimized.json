@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "id": "ntile_rfm_upsert_summary_minimized",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "hemanthkavula/E-commerce-Customer-Lifetime-Value-CLV-Churn-Analysis",
+      "commit": "bf167bfd6948b73f332c27354117f03accf3f20c",
+      "path": "sql/4_rfm_segmentation_mysql.sql",
+      "url": "https://github.com/hemanthkavula/E-commerce-Customer-Lifetime-Value-CLV-Churn-Analysis/blob/bf167bfd6948b73f332c27354117f03accf3f20c/sql/4_rfm_segmentation_mysql.sql",
+      "sha256": "7967cc57884c3bcac40fc099b03c5a6b7ccde6162e314f9e786e67814dc6fddc",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/4_rfm_segmentation_mysql.sql:1-50",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "An INSERT ... SELECT upsert computes several independent NTILE buckets from chained CTE metrics, including a scalar maximum-date lookup, and refreshes an existing keyed feature row through ON DUPLICATE KEY UPDATE.",
+      "mysql_mariadb_translation": "Minimized to one date-derived metric row per activity over three fixed rows, retaining the max-date CTE, a cross-joined DATEDIFF input, wildcard metrics projection, three independent NTILE expressions, CTE-backed INSERT ... SELECT, and keyed upsert while removing the full RFM report."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "insert-cte-select",
+    "scalar-cte-lookup",
+    "datediff",
+    "wildcard-cte-projection",
+    "multiple-ntile-windows",
+    "on-duplicate-key-update",
+    "dml-final-state"
+  ],
+  "fixture_notes": "Activity 701 already has a stale destination row and must be refreshed; activities 702 and 703 must be inserted. The latest fixed date is derived by a scalar CTE lookup, and customer IDs break every NTILE tie deterministically.",
+  "determinism_notes": "Activity IDs, customer IDs, dates, and amounts are fixed, every NTILE ordering is unique, and final output is ordered by customer ID; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE mini_activity (event_id INT PRIMARY KEY, customer_id INT NOT NULL, activity_day DATE NOT NULL, amount INT NOT NULL)",
+    "CREATE TABLE mini_scoreboard (customer_id INT PRIMARY KEY, recency_days INT NOT NULL, r_bucket INT NOT NULL, f_bucket INT NOT NULL, m_bucket INT NOT NULL, label VARCHAR(16) NOT NULL)",
+    "INSERT INTO mini_activity VALUES (7001, 701, '2026-01-01', 10), (7002, 702, '2026-01-02', 20), (7003, 703, '2026-01-03', 30)",
+    "INSERT INTO mini_scoreboard VALUES (701, 999, 9, 9, 9, 'stale')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO mini_scoreboard (customer_id, recency_days, r_bucket, f_bucket, m_bucket, label) WITH max_day_cte AS (SELECT MAX(activity_day) AS max_day FROM mini_activity), metrics AS (SELECT customer_id, DATEDIFF(max_day, MAX(activity_day)) AS recency_days, MAX(amount) AS amount, COUNT(*) AS event_count FROM mini_activity CROSS JOIN max_day_cte GROUP BY customer_id), scored AS (SELECT *, NTILE(2) OVER (ORDER BY recency_days DESC, customer_id ASC) AS r_bucket, NTILE(2) OVER (ORDER BY amount ASC, customer_id ASC) AS f_bucket, NTILE(2) OVER (ORDER BY event_count ASC, customer_id ASC) AS m_bucket FROM metrics) SELECT customer_id, recency_days, r_bucket, f_bucket, m_bucket, CASE WHEN r_bucket = 1 THEN 'lower' ELSE 'upper' END FROM scored ON DUPLICATE KEY UPDATE recency_days = VALUES(recency_days), r_bucket = VALUES(r_bucket), f_bucket = VALUES(f_bucket), m_bucket = VALUES(m_bucket), label = VALUES(label)",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT customer_id, recency_days, r_bucket, f_bucket, m_bucket, label FROM mini_scoreboard ORDER BY customer_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT customer_id, recency_days, r_bucket, f_bucket, m_bucket, label FROM mini_scoreboard ORDER BY customer_id",
+      "ordered": true
+    }
+  ]
+}

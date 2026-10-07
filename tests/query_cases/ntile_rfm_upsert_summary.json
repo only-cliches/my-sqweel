@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "id": "ntile_rfm_upsert_summary",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "hemanthkavula/E-commerce-Customer-Lifetime-Value-CLV-Churn-Analysis",
+      "commit": "bf167bfd6948b73f332c27354117f03accf3f20c",
+      "path": "sql/4_rfm_segmentation_mysql.sql",
+      "url": "https://github.com/hemanthkavula/E-commerce-Customer-Lifetime-Value-CLV-Churn-Analysis/blob/bf167bfd6948b73f332c27354117f03accf3f20c/sql/4_rfm_segmentation_mysql.sql",
+      "sha256": "7967cc57884c3bcac40fc099b03c5a6b7ccde6162e314f9e786e67814dc6fddc",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/4_rfm_segmentation_mysql.sql:1-50",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "An INSERT ... SELECT upsert computes customer metrics through chained CTEs, assigns three independent NTILE scores, classifies the combined score, and refreshes an existing keyed customer feature row through ON DUPLICATE KEY UPDATE.",
+      "mysql_mariadb_translation": "Reauthored as a fixed-date activity-score refresh. A max-day CTE and grouped customer metrics feed deterministic recency, frequency, and monetary NTILE buckets; the max-day relation is cross-joined into the metrics CTE rather than referenced through a scalar subquery, preserving MariaDB semantics while remaining portable to MySqweel. A CASE classification and concatenated score are inserted or overwrite the existing customer scoreboard row through MariaDB ON DUPLICATE KEY UPDATE. The source schema, identifiers, labels, and values are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "insert-cte-select",
+    "multi-cte",
+    "ntile-window",
+    "multiple-ntile-windows",
+    "on-duplicate-key-update",
+    "conditional-classification",
+    "deterministic-tie-break",
+    "dml-final-state"
+  ],
+  "fixture_notes": "Five customers have fixed activity histories. Customer 901 and customer 904 already have stale scoreboard rows and must be refreshed; customers 902, 903, and 905 are inserted. The latest activity day is derived from the source rows, and customer IDs break every NTILE tie deterministically.",
+  "determinism_notes": "Activity dates, IDs, amounts, customer ordering, three NTILE orderings, score labels, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE activity_events (event_id INT PRIMARY KEY, customer_id INT NOT NULL, activity_day DATE NOT NULL, amount DECIMAL(10, 2) NOT NULL, region VARCHAR(16) NOT NULL)",
+    "CREATE TABLE customer_scoreboard (customer_id INT PRIMARY KEY, recency_days INT NOT NULL, purchase_count INT NOT NULL, monetary_total DECIMAL(10, 2) NOT NULL, region VARCHAR(16) NOT NULL, r_score INT NOT NULL, f_score INT NOT NULL, m_score INT NOT NULL, score_code VARCHAR(8) NOT NULL, segment VARCHAR(16) NOT NULL)",
+    "INSERT INTO activity_events VALUES (1001, 901, '2026-01-20', 50.00, 'north'), (1002, 901, '2026-01-30', 70.00, 'north'), (2001, 902, '2026-02-15', 300.00, 'east'), (3001, 903, '2025-12-01', 60.00, 'west'), (3002, 903, '2026-01-05', 40.00, 'west'), (3003, 903, '2026-02-20', 50.00, 'west'), (4001, 904, '2025-11-11', 20.00, 'south'), (5001, 905, '2026-02-01', 200.00, 'east'), (5002, 905, '2026-02-10', 300.00, 'east')",
+    "INSERT INTO customer_scoreboard VALUES (901, 999, 99, 9999.00, 'old', 9, 9, 9, 'stale', 'stale'), (904, 888, 88, 8888.00, 'old', 8, 8, 8, 'stale', 'stale')"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO customer_scoreboard (customer_id, recency_days, purchase_count, monetary_total, region, r_score, f_score, m_score, score_code, segment) WITH max_day_cte AS (SELECT MAX(activity_day) AS max_day FROM activity_events), metrics_cte AS (SELECT customer_id, DATEDIFF(max_day, MAX(activity_day)) AS recency_days, COUNT(*) AS purchase_count, SUM(amount) AS monetary_total, MAX(region) AS region FROM activity_events CROSS JOIN max_day_cte GROUP BY customer_id), scored_cte AS (SELECT *, NTILE(3) OVER (ORDER BY recency_days DESC, customer_id ASC) AS r_score, NTILE(3) OVER (ORDER BY purchase_count ASC, customer_id ASC) AS f_score, NTILE(3) OVER (ORDER BY monetary_total ASC, customer_id ASC) AS m_score FROM metrics_cte) SELECT customer_id, recency_days, purchase_count, monetary_total, region, r_score, f_score, m_score, CONCAT(r_score, f_score, m_score) AS score_code, CASE WHEN r_score = 3 AND f_score >= 2 THEN 'champion' WHEN r_score = 2 AND m_score = 3 THEN 'high_value' WHEN r_score = 1 AND f_score = 1 AND m_score = 1 THEN 'dormant' ELSE 'developing' END AS segment FROM scored_cte ON DUPLICATE KEY UPDATE recency_days = VALUES(recency_days), purchase_count = VALUES(purchase_count), monetary_total = VALUES(monetary_total), region = VALUES(region), r_score = VALUES(r_score), f_score = VALUES(f_score), m_score = VALUES(m_score), score_code = VALUES(score_code), segment = VALUES(segment)",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT customer_id, recency_days, purchase_count, monetary_total, region, r_score, f_score, m_score, score_code, segment FROM customer_scoreboard ORDER BY customer_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT customer_id, score_code, segment FROM customer_scoreboard ORDER BY customer_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT customer_id, COUNT(*) AS event_count, SUM(amount) AS event_total FROM activity_events GROUP BY customer_id ORDER BY customer_id",
+      "ordered": true
+    }
+  ]
+}
