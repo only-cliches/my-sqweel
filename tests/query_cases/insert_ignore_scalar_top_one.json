@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "id": "insert_ignore_scalar_top_one",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "Mininglamp-OSS/octo-server",
+      "commit": "5cf83f5725a6ce71f4944a9ce1a17038268375cf",
+      "path": "scripts/migrate-to-space.sql",
+      "url": "https://github.com/Mininglamp-OSS/octo-server/blob/5cf83f5725a6ce71f4944a9ce1a17038268375cf/scripts/migrate-to-space.sql",
+      "sha256": "cd02cf6e1305805417786c4361600ace5fa2dab796ae097fbfe18d260e9024a6",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "scripts/migrate-to-space.sql:24-37",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL migration inserts active users with INSERT IGNORE, then selects the earliest active user through an ordered scalar subquery with LIMIT 1 for a follow-up role update.",
+      "mysql_mariadb_translation": "Reauthored as a deterministic workspace membership load. Active people are inserted with INSERT IGNORE, then the earliest active person by fixed sequence is promoted through an ordered scalar subquery; session variables, clocks, schema, identifiers, and application context are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "insert-ignore-select",
+    "duplicate-key-ignore",
+    "scalar-subquery",
+    "scalar-subquery-order-limit",
+    "ordered-insert-selection",
+    "update",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "People 11, 12, and 14 are active and are loaded into workspace 9001; person 12 already exists and is skipped by INSERT IGNORE. The earliest active person is 12 by joined_seq and is promoted to role 2; inactive person 13 is excluded.",
+  "determinism_notes": "Fixed person IDs, active flags, join sequence values, composite membership key, explicit scalar-subquery ordering, and final membership ordering are used; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE workspace_people (person_id INT PRIMARY KEY, person_name VARCHAR(32) NOT NULL, active TINYINT NOT NULL, joined_seq INT NOT NULL)",
+    "CREATE TABLE workspace_memberships (workspace_id INT NOT NULL, person_id INT NOT NULL, role_code INT NOT NULL, PRIMARY KEY (workspace_id, person_id))",
+    "INSERT INTO workspace_people VALUES (11, 'Ava', 1, 20), (12, 'Bo', 1, 10), (13, 'Cy', 0, 5), (14, 'Dee', 1, 30)",
+    "INSERT INTO workspace_memberships VALUES (9001, 12, 0)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT IGNORE INTO workspace_memberships (workspace_id, person_id, role_code) SELECT 9001, person_id, 0 FROM workspace_people WHERE active = 1",
+      "ordered": false
+    },
+    {
+      "sql": "UPDATE workspace_memberships SET role_code = 2 WHERE workspace_id = 9001 AND person_id = (SELECT person_id FROM workspace_people WHERE active = 1 ORDER BY joined_seq ASC, person_id ASC LIMIT 1)",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT workspace_id, person_id, role_code FROM workspace_memberships ORDER BY workspace_id, person_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT person_id, person_name, active, joined_seq FROM workspace_people ORDER BY person_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT workspace_id, person_id, role_code FROM workspace_memberships ORDER BY workspace_id, person_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT person_id, person_name, active, joined_seq FROM workspace_people ORDER BY person_id",
+      "ordered": true
+    }
+  ]
+}
