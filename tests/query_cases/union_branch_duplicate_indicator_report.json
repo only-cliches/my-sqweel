@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "id": "union_branch_duplicate_indicator_report",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "pobocks/uconn_aspace_scripts",
+      "commit": "e4872fb760b244a3e78d194f368660ce5767a5aa",
+      "path": "sql/1e_top_containers_with_duplicate_indicators.sql",
+      "url": "https://github.com/pobocks/uconn_aspace_scripts/blob/e4872fb760b244a3e78d194f368660ce5767a5aa/sql/1e_top_containers_with_duplicate_indicators.sql",
+      "sha256": "14e7226098fa1cbe61b869eb6ccffea2056b87376e2caf43a40ce9a09838d8dd",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "sql/1e_top_containers_with_duplicate_indicators.sql:2-35",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "Two independent join paths are UNION ALLed after branch-local DISTINCT projection, then grouped by an entity and indicator to count distinct containers, concatenate distinct identifiers and linked records, filter duplicate indicators with HAVING, and order the surviving report rows deterministically.",
+      "mysql_mariadb_translation": "Reauthored as a warehouse asset duplicate-indicator report. Direct and delegated storage paths independently resolve asset, indicator, and container URI rows; the UNION ALL preserves both paths, branch DISTINCT removes repeated links, grouped COUNT(DISTINCT) and ordered GROUP_CONCAT expose duplicate indicators, and HAVING keeps only indicators assigned to multiple containers. The source archival schema, identifiers, labels, and URI construction are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "union-all-join",
+    "branch-distinct",
+    "multi-join-union",
+    "count-distinct-grouping",
+    "group-concat-distinct",
+    "having-alias-filter",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Asset 11 has duplicate direct path rows that must collapse, then shares indicator rack-A across two direct containers and one delegated container; rack-B and rack-C occur once and are filtered. Asset 12 has only single-container indicators and contributes no report row.",
+  "determinism_notes": "Asset IDs, path IDs, container IDs, indicators, URI labels, grouping columns, aggregate orderings, and final ordering are fixed. No clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE warehouse_assets (asset_id INT PRIMARY KEY, asset_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE direct_asset_paths (path_id INT PRIMARY KEY, asset_id INT NOT NULL, container_id INT NOT NULL)",
+    "CREATE TABLE delegated_asset_paths (path_id INT PRIMARY KEY, asset_id INT NOT NULL, container_id INT NOT NULL)",
+    "CREATE TABLE warehouse_containers (container_id INT PRIMARY KEY, indicator VARCHAR(16) NOT NULL, container_uri VARCHAR(64) NOT NULL)",
+    "INSERT INTO warehouse_assets VALUES (11, 'Atlas'), (12, 'Boreal')",
+    "INSERT INTO direct_asset_paths VALUES (1, 11, 101), (2, 11, 101), (3, 11, 102), (4, 11, 103), (5, 12, 104)",
+    "INSERT INTO delegated_asset_paths VALUES (6, 11, 201), (7, 11, 202), (8, 12, 203)",
+    "INSERT INTO warehouse_containers VALUES (101, 'rack-A', '/direct/101'), (102, 'rack-A', '/direct/102'), (103, 'rack-B', '/direct/103'), (104, 'rack-X', '/direct/104'), (201, 'rack-A', '/delegated/201'), (202, 'rack-C', '/delegated/202'), (203, 'rack-X', '/delegated/203')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT asset_name, asset_id, indicator, COUNT(DISTINCT container_id) AS container_count, GROUP_CONCAT(DISTINCT container_id ORDER BY container_id ASC SEPARATOR ',') AS container_ids, GROUP_CONCAT(DISTINCT container_uri ORDER BY container_uri ASC SEPARATOR '|') AS container_uris FROM (SELECT DISTINCT a.asset_name, a.asset_id, c.indicator, c.container_id, c.container_uri FROM warehouse_assets AS a INNER JOIN direct_asset_paths AS p ON p.asset_id = a.asset_id INNER JOIN warehouse_containers AS c ON c.container_id = p.container_id UNION ALL SELECT DISTINCT a.asset_name, a.asset_id, c.indicator, c.container_id, c.container_uri FROM warehouse_assets AS a INNER JOIN delegated_asset_paths AS p ON p.asset_id = a.asset_id INNER JOIN warehouse_containers AS c ON c.container_id = p.container_id) AS asset_containers GROUP BY asset_name, asset_id, indicator HAVING container_count > 1 ORDER BY asset_id ASC, indicator ASC",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT asset_id, asset_name FROM warehouse_assets ORDER BY asset_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT path_id, asset_id, container_id FROM direct_asset_paths ORDER BY path_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT path_id, asset_id, container_id FROM delegated_asset_paths ORDER BY path_id",
+      "ordered": true
+    }
+  ]
+}
