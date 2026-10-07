@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "id": "filtered_cte_union_summary",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "shreelasapkota/sql-sales-analytics",
+      "commit": "18d6c66e8ee9467737c4e0c74cb2e1a57c71f1a6",
+      "path": "queries/04_ctes.sql",
+      "url": "https://github.com/shreelasapkota/sql-sales-analytics/blob/18d6c66e8ee9467737c4e0c74cb2e1a57c71f1a6/queries/04_ctes.sql",
+      "sha256": "1ab36a8ba909d52513458ee6103112ffd7a19d3ed42e93ba83914ab1cba5a7fc",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "queries/04_ctes.sql:64-116",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A reusable order-revenue CTE feeds two differently keyed customer summaries, and a final UNION ALL compares population counts, average and maximum lifetime value, average order count, and a conditional repeat-rate aggregate.",
+      "mysql_mariadb_translation": "Reauthored as a buyer-account reconciliation report. MariaDB-compatible CTEs aggregate line totals once, produce person-keyed and per-order-account summaries, and combine them with UNION ALL; PostgreSQL FILTER aggregates become SUM(CASE ...) expressions, while all source tables, identifiers, labels, and values are newly authored."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "cte-chain",
+    "cte-reuse",
+    "grouped-aggregate",
+    "conditional-aggregate",
+    "filtered-aggregate-translation",
+    "union-all",
+    "decimal-arithmetic",
+    "percentage-within-population",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Buyers 701 and 703 each have two delivered orders, while buyer 702 has one. Each order has a distinct account reference, so the person-keyed summary reports repeat purchasing and the account-keyed comparison intentionally does not. A cancelled order and its line are excluded from both summaries.",
+  "determinism_notes": "Buyer IDs, order IDs, account references, order statuses, line amounts, aggregation keys, labels, and UNION output ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE buyer_directory (buyer_id INT PRIMARY KEY, buyer_label VARCHAR(32) NOT NULL)",
+    "CREATE TABLE sales_orders (order_id INT PRIMARY KEY, buyer_id INT NOT NULL, account_ref INT NOT NULL, order_status VARCHAR(16) NOT NULL)",
+    "CREATE TABLE sales_lines (line_id INT PRIMARY KEY, order_id INT NOT NULL, line_total DECIMAL(10, 2) NOT NULL)",
+    "INSERT INTO buyer_directory VALUES (701, 'Aster'), (702, 'Beryl'), (703, 'Cinder')",
+    "INSERT INTO sales_orders VALUES (8101, 701, 9101, 'delivered'), (8102, 701, 9102, 'delivered'), (8103, 702, 9103, 'delivered'), (8104, 703, 9104, 'delivered'), (8105, 703, 9105, 'delivered'), (8106, 703, 9106, 'cancelled')",
+    "INSERT INTO sales_lines VALUES (9201, 8101, 120.00), (9202, 8102, 80.00), (9203, 8102, 40.00), (9204, 8103, 600.00), (9205, 8104, 70.00), (9206, 8105, 90.00), (9207, 8106, 999.00)"
+  ],
+  "steps": [
+    {
+      "sql": "WITH order_revenue AS (SELECT o.buyer_id, o.account_ref, o.order_id, SUM(l.line_total) AS order_value FROM sales_orders AS o JOIN sales_lines AS l ON l.order_id = o.order_id WHERE o.order_status = 'delivered' GROUP BY o.buyer_id, o.account_ref, o.order_id), per_buyer AS (SELECT buyer_id, COUNT(*) AS order_count, SUM(order_value) AS lifetime_value FROM order_revenue GROUP BY buyer_id), per_account AS (SELECT account_ref, COUNT(*) AS order_count, SUM(order_value) AS lifetime_value FROM order_revenue GROUP BY account_ref) SELECT 'buyer_key' AS summary_key, COUNT(*) AS population, ROUND(AVG(lifetime_value), 2) AS average_value, ROUND(MAX(lifetime_value), 2) AS maximum_value, ROUND(AVG(order_count), 3) AS average_orders, ROUND(100.0 * SUM(CASE WHEN order_count > 1 THEN 1 ELSE 0 END) / COUNT(*), 2) AS repeat_rate FROM per_buyer UNION ALL SELECT 'account_key', COUNT(*), ROUND(AVG(lifetime_value), 2), ROUND(MAX(lifetime_value), 2), ROUND(AVG(order_count), 3), ROUND(100.0 * SUM(CASE WHEN order_count > 1 THEN 1 ELSE 0 END) / COUNT(*), 2) FROM per_account ORDER BY summary_key",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "WITH order_revenue AS (SELECT o.buyer_id, o.account_ref, o.order_id, SUM(l.line_total) AS order_value FROM sales_orders AS o JOIN sales_lines AS l ON l.order_id = o.order_id WHERE o.order_status = 'delivered' GROUP BY o.buyer_id, o.account_ref, o.order_id), per_buyer AS (SELECT buyer_id, COUNT(*) AS order_count, SUM(order_value) AS lifetime_value FROM order_revenue GROUP BY buyer_id), per_account AS (SELECT account_ref, COUNT(*) AS order_count, SUM(order_value) AS lifetime_value FROM order_revenue GROUP BY account_ref) SELECT 'buyer_key' AS summary_key, COUNT(*) AS population, ROUND(100.0 * SUM(CASE WHEN order_count > 1 THEN 1 ELSE 0 END) / COUNT(*), 2) AS repeat_rate FROM per_buyer UNION ALL SELECT 'account_key', COUNT(*), ROUND(100.0 * SUM(CASE WHEN order_count > 1 THEN 1 ELSE 0 END) / COUNT(*), 2) FROM per_account ORDER BY summary_key",
+      "ordered": true
+    }
+  ]
+}
