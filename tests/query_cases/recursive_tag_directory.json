@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "id": "recursive_tag_directory",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "moneymanagerex/android-money-manager-ex",
+      "commit": "866062b4dbecab72e6b922794c82c2f61f4b7c06",
+      "path": "app/src/main/res/raw/query_alldata.sql",
+      "url": "https://github.com/moneymanagerex/android-money-manager-ex/blob/866062b4dbecab72e6b922794c82c2f61f4b7c06/app/src/main/res/raw/query_alldata.sql",
+      "sha256": "4abae2242736c5cfb177fd6d10d62461008d20db484130a17ab68d1f24e7beaa",
+      "source_dialect": "sqlite"
+    },
+    "inspiration": {
+      "source_location": "app/src/main/res/raw/query_alldata.sql:2-93",
+      "source_dialect": "sqlite",
+      "observed_pattern": "An account listing query builds a recursive category path, preserves account rows through several LEFT JOINs, and attaches a derived ordered GROUP_CONCAT tag list whose inputs combine multiple sources with UNION.",
+      "mysql_mariadb_translation": "Reauthored as a navigation directory report. A recursive CTE builds a rooted node path, a UNION combines active catalog tags with manually assigned aliases, a grouped derived relation orders those labels with GROUP_CONCAT, and a LEFT JOIN preserves directory nodes with no active labels. SQLite concatenation, date functions, source tables, and application names are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "recursive-hierarchy",
+    "recursive-union-all",
+    "recursive-cte-cross-reference",
+    "union-distinct-derived-source",
+    "group-concat-derived-source",
+    "ordered-group-concat",
+    "left-join-null-preservation",
+    "multi-cte-report",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Directory nodes 1 through 4 form a rooted tree; node 5 points outside the tree and must not appear. Active catalog tags and manual aliases are combined with UNION, so node 2's repeated external label appears once. Node 3 has only an inactive catalog tag and must remain with '(none)'.",
+  "determinism_notes": "Node IDs, parent links, tag IDs, active flags, label text, recursive path order, UNION deduplication, GROUP_CONCAT ordering, and final ordering are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE directory_nodes (node_id INT PRIMARY KEY, parent_id INT NULL, node_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE directory_tag_catalog (tag_id INT PRIMARY KEY, tag_name VARCHAR(32) NOT NULL, active TINYINT NOT NULL)",
+    "CREATE TABLE directory_node_tags (node_id INT NOT NULL, tag_id INT NOT NULL, PRIMARY KEY (node_id, tag_id))",
+    "CREATE TABLE directory_node_aliases (node_id INT NOT NULL, alias_name VARCHAR(32) NOT NULL)",
+    "INSERT INTO directory_nodes VALUES (1, NULL, 'Operations'), (2, 1, 'Reports'), (3, 1, 'Drafts'), (4, 2, 'Sales'), (5, 99, 'Detached')",
+    "INSERT INTO directory_tag_catalog VALUES (10, 'urgent', 1), (20, 'external', 1), (30, 'archived', 1), (40, 'internal-only', 0)",
+    "INSERT INTO directory_node_tags VALUES (2, 10), (2, 20), (3, 40), (4, 20), (4, 30)",
+    "INSERT INTO directory_node_aliases VALUES (2, 'external'), (2, 'review'), (4, 'forecast'), (5, 'detached')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH RECURSIVE directory_tree (node_id, node_name, parent_id, path_text) AS (SELECT n.node_id, n.node_name, n.parent_id, CONCAT('/', n.node_id) FROM directory_nodes AS n WHERE n.parent_id IS NULL UNION ALL SELECT child.node_id, CONCAT(parent.node_name, ' / ', child.node_name), child.parent_id, CONCAT(parent.path_text, '/', child.node_id) FROM directory_tree AS parent INNER JOIN directory_nodes AS child ON child.parent_id = parent.node_id), label_sources AS (SELECT nt.node_id, tc.tag_name AS label FROM directory_node_tags AS nt INNER JOIN directory_tag_catalog AS tc ON tc.tag_id = nt.tag_id WHERE tc.active = 1 UNION SELECT na.node_id, na.alias_name AS label FROM directory_node_aliases AS na), label_lists AS (SELECT node_id, GROUP_CONCAT(label ORDER BY label ASC SEPARATOR ', ') AS labels FROM label_sources GROUP BY node_id) SELECT tree.node_id, tree.node_name, tree.path_text, COALESCE(lists.labels, '(none)') AS labels FROM directory_tree AS tree LEFT JOIN label_lists AS lists ON lists.node_id = tree.node_id ORDER BY tree.path_text ASC",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT node_id, parent_id, node_name FROM directory_nodes ORDER BY node_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT tag_id, tag_name, active FROM directory_tag_catalog ORDER BY tag_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT node_id, tag_id FROM directory_node_tags ORDER BY node_id, tag_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT node_id, alias_name FROM directory_node_aliases ORDER BY node_id, alias_name",
+      "ordered": true
+    }
+  ]
+}

@@ -2999,6 +2999,11 @@ impl RawEngine {
                         }
                     }
                     "COALESCE" | "IFNULL" | "NVL" | "NVL2" => {
+                        let has_derived_source = select.from.iter().any(|table| {
+                            std::iter::once(&table.relation)
+                                .chain(table.joins.iter().map(|join| &join.relation))
+                                .any(|factor| matches!(factor, TableFactor::Derived { .. }))
+                        });
                         let argument_type = self.widest_function_argument_type(
                             function,
                             select,
@@ -3009,7 +3014,12 @@ impl RawEngine {
                             metadata.decimals =
                                 self.widest_function_argument_decimals(function, select, first_row);
                         }
-                        argument_type
+                        // MariaDB promotes COALESCE over a derived aggregate BLOB to LONG_BLOB.
+                        if has_derived_source && argument_type == MysqlColumnType::MediumBlob {
+                            MysqlColumnType::LongBlob
+                        } else {
+                            argument_type
+                        }
                     }
                     "LAG" | "LEAD" | "FIRST_VALUE" | "LAST_VALUE" | "NTH_VALUE" => {
                         // MariaDB returns the type of the first argument

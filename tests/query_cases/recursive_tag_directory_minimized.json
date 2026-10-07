@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "recursive_tag_directory_minimized",
+  "provenance": {
+    "kind": "minimized-regression",
+    "parent_case": "recursive_tag_directory",
+    "source": {
+      "kind": "github",
+      "repository": "moneymanagerex/android-money-manager-ex",
+      "commit": "866062b4dbecab72e6b922794c82c2f61f4b7c06",
+      "path": "app/src/main/res/raw/query_alldata.sql",
+      "url": "https://github.com/moneymanagerex/android-money-manager-ex/blob/866062b4dbecab72e6b922794c82c2f61f4b7c06/app/src/main/res/raw/query_alldata.sql",
+      "sha256": "4abae2242736c5cfb177fd6d10d62461008d20db484130a17ab68d1f24e7beaa",
+      "source_dialect": "sqlite"
+    },
+    "inspiration": {
+      "source_location": "Minimized from recursive_tag_directory",
+      "source_dialect": "sqlite",
+      "observed_pattern": "The recursive directory report's derived ordered GROUP_CONCAT is wrapped in a fallback expression for nodes without labels.",
+      "mysql_mariadb_translation": "Reduced to one ordered GROUP_CONCAT with a literal COALESCE fallback, isolating the result-metadata difference without the recursive tree, UNION, joins, or source schema."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "group-concat",
+    "ordered-group-concat",
+    "coalesce-fallback",
+    "metadata-regression"
+  ],
+  "fixture_notes": "Two fixed labels produce one deterministic aggregate; the COALESCE fallback remains present in the projection to exercise MariaDB's aggregate metadata resolution.",
+  "determinism_notes": "Label IDs, text, aggregate ordering, and fallback text are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE directory_label_fragments (fragment_id INT PRIMARY KEY, fragment_text VARCHAR(32) NOT NULL)",
+    "INSERT INTO directory_label_fragments VALUES (1, 'external'), (2, 'review')"
+  ],
+  "steps": [
+    {
+      "sql": "WITH label_lists AS (SELECT GROUP_CONCAT(fragment_text ORDER BY fragment_id ASC SEPARATOR ', ') AS labels FROM directory_label_fragments) SELECT COALESCE(label_lists.labels, '(none)') AS labels FROM label_lists",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT fragment_id, fragment_text FROM directory_label_fragments ORDER BY fragment_id",
+      "ordered": true
+    }
+  ]
+}
