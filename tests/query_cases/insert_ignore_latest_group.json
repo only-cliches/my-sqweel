@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "id": "insert_ignore_latest_group",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "chenditc/investment_data",
+      "commit": "b8c129b4d9b838f050eac8b1135111b3b79fc894",
+      "path": "tushare/regular_update.sql",
+      "url": "https://github.com/chenditc/investment_data/blob/b8c129b4d9b838f050eac8b1135111b3b79fc894/tushare/regular_update.sql",
+      "sha256": "7f20840bb2b1ea9623a1281cfaf4e36bed0d241e2aabd3bae7972e2544d725ae",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "tushare/regular_update.sql:2-5",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A stock-data refresh inserts grouped rows only for records on the globally latest date, using a scalar MAX subquery, GROUP BY, and INSERT IGNORE to avoid replacing an existing link.",
+      "mysql_mariadb_translation": "Reauthored as a latest-quote summary that groups same-day volume by symbol, filters to the global maximum quote date through a scalar aggregate subquery, and ignores a duplicate summary key. The source tables, identifiers, values, stock-domain columns, and SQL text are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "insert-ignore-latest-group",
+    "insert-ignore-grouped-select",
+    "scalar-max-date-filter",
+    "grouped-aggregate-insert",
+    "duplicate-key-ignore",
+    "dml-final-state"
+  ],
+  "fixture_notes": "The latest global quote date is 2024-01-03. BBB has two rows on that date and is inserted with total volume 25; CCC is older and excluded. An existing AAA summary remains unchanged because INSERT IGNORE skips its duplicate primary key.",
+  "determinism_notes": "Fixed integer IDs, literal dates, deterministic GROUP BY output, explicit final ordering, and no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE daily_quotes (quote_id INT PRIMARY KEY, symbol VARCHAR(16) NOT NULL, quote_date DATE NOT NULL, volume INT NOT NULL)",
+    "CREATE TABLE latest_quote_summary (symbol VARCHAR(16) PRIMARY KEY, quote_date DATE NOT NULL, total_volume INT NOT NULL)",
+    "INSERT INTO daily_quotes VALUES (1, 'AAA', '2024-01-01', 10), (2, 'AAA', '2024-01-03', 12), (3, 'BBB', '2024-01-03', 20), (4, 'BBB', '2024-01-03', 5), (5, 'CCC', '2024-01-02', 7)",
+    "INSERT INTO latest_quote_summary VALUES ('AAA', '2023-12-31', 999)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT IGNORE INTO latest_quote_summary (symbol, quote_date, total_volume) SELECT symbol, quote_date, SUM(volume) FROM daily_quotes WHERE quote_date = (SELECT MAX(quote_date) FROM daily_quotes) GROUP BY symbol, quote_date",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT symbol, quote_date, total_volume FROM latest_quote_summary ORDER BY symbol",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT quote_id, symbol, quote_date, volume FROM daily_quotes ORDER BY quote_id",
+      "ordered": true
+    }
+  ]
+}
