@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "id": "natural_left_grouped_delete",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "GoesToEleven/postgresql-course",
+      "commit": "e50dc7cd80bd153eb04e7b57eafcbb5bbccaa507",
+      "path": "209/n17e2.sql",
+      "url": "https://github.com/GoesToEleven/postgresql-course/blob/e50dc7cd80bd153eb04e7b57eafcbb5bbccaa507/209/n17e2.sql",
+      "sha256": "1913d51e6c654e8852be80b89d0ccb1cbda72642bf4fc5e50354b4a3a73d307a",
+      "source_dialect": "postgresql"
+    },
+    "inspiration": {
+      "source_location": "209/n17e2.sql:1-13",
+      "source_dialect": "postgresql",
+      "observed_pattern": "A natural left join counts related list rows per parent, filters grouped parents with HAVING, and deletes the qualifying parent rows through a correlated membership subquery.",
+      "mysql_mariadb_translation": "Reauthored as a retired-project cleanup. NATURAL LEFT JOIN preserves projects with no tasks, grouped HAVING identifies retired projects with at most one task, and a joined DELETE removes those projects while preserving active, busy, and taskless-but-protected projects. The source schema, names, values, and list domain are newly authored; the PostgreSQL membership subquery is translated to a MariaDB-compatible derived DELETE target."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "natural-left-join",
+    "grouped-having",
+    "joined-delete",
+    "left-join-count",
+    "threshold-filter",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Retired project 6101 has one task and is deleted; active project 6102, busy retired project 6103, and protected retired project 6104 with no tasks remain. The protected project is excluded before counting.",
+  "determinism_notes": "Project IDs, lifecycle states, task IDs, task project keys, and the count threshold are fixed. All final checks are explicitly ordered; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE project_catalog (project_id INT PRIMARY KEY, project_name VARCHAR(32) NOT NULL, lifecycle VARCHAR(16) NOT NULL, protected_flag TINYINT NOT NULL)",
+    "CREATE TABLE project_tasks (task_id INT PRIMARY KEY, project_id INT NOT NULL, task_state VARCHAR(16) NOT NULL)",
+    "INSERT INTO project_catalog VALUES (6101, 'amber', 'retired', 0), (6102, 'bravo', 'active', 0), (6103, 'cobalt', 'retired', 0), (6104, 'delta', 'retired', 1)",
+    "INSERT INTO project_tasks VALUES (8101, 6101, 'open'), (8102, 6102, 'open'), (8103, 6102, 'done'), (8104, 6103, 'open'), (8105, 6103, 'done'), (8106, 6103, 'blocked'), (8107, 6104, 'open')"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT p.project_id, COUNT(t.task_id) AS task_count FROM project_catalog AS p NATURAL LEFT JOIN project_tasks AS t WHERE p.lifecycle = 'retired' AND p.protected_flag = 0 GROUP BY p.project_id HAVING COUNT(t.task_id) <= 1 ORDER BY p.project_id",
+      "ordered": true
+    },
+    {
+      "sql": "DELETE p FROM project_catalog AS p INNER JOIN (SELECT project_id FROM project_catalog NATURAL LEFT JOIN project_tasks WHERE lifecycle = 'retired' AND protected_flag = 0 GROUP BY project_id HAVING COUNT(task_id) <= 1) AS candidates ON candidates.project_id = p.project_id",
+      "ordered": false
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT project_id, project_name, lifecycle, protected_flag FROM project_catalog ORDER BY project_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT task_id, project_id, task_state FROM project_tasks ORDER BY task_id",
+      "ordered": true
+    }
+  ]
+}
