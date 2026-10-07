@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "id": "bounded_joined_delete_returning",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "boringcollege/postgres-by-example",
+      "commit": "ffde0d358722498e37982b57bdbd711871a61c43",
+      "path": "source/delete.sql",
+      "url": "https://github.com/boringcollege/postgres-by-example/blob/ffde0d358722498e37982b57bdbd711871a61c43/source/delete.sql",
+      "sha256": "fb8661e29bf5195e1ae979c627f0e0a1f2a66f06657459ba0ee9ee51489dbbc5",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "source/delete.sql:11-19",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A cleanup script returns deleted rows and uses DELETE ... USING to remove target rows selected through a separate keep relation, with a bounded INSERT ... SELECT supplying the relation.",
+      "mysql_mariadb_translation": "Reauthored as an incident-retention cleanup: a temporary relation materializes the two highest-severity closed incidents joined to enabled purge rules, DELETE ... RETURNING removes exactly those IDs, and final reads verify disabled, open, and lower-ranked incidents. The source tables, names, values, and application domain are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "bounded-joined-candidate",
+    "temporary-selection",
+    "delete-returning",
+    "joined-filter",
+    "order-by-limit",
+    "multi-step-dml",
+    "dml-final-state",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Incidents 1001 and 1002 are the two highest-severity closed incidents under enabled team rules and are deleted and returned. Incident 1003 is lower ranked, 1004 has a disabled purge rule, and 1005 is open; all three remain.",
+  "determinism_notes": "Fixed incident IDs, severities, team rules, explicit descending severity and ascending ID selection, and ordered final-state reads; no clocks, randomness, sleeps, or concurrent connections are used.",
+  "setup": [
+    "CREATE TABLE incident_log (incident_id INT PRIMARY KEY, team_id INT NOT NULL, severity INT NOT NULL, incident_state VARCHAR(16) NOT NULL, incident_text VARCHAR(64) NOT NULL)",
+    "CREATE TABLE purge_rules (team_id INT PRIMARY KEY, purge_enabled TINYINT NOT NULL)",
+    "INSERT INTO purge_rules VALUES (7, 1), (8, 0)",
+    "INSERT INTO incident_log VALUES (1001, 7, 90, 'closed', 'database lag'), (1002, 7, 80, 'closed', 'queue delay'), (1003, 7, 70, 'closed', 'cache warning'), (1004, 8, 100, 'closed', 'protected outage'), (1005, 7, 110, 'open', 'active outage')"
+  ],
+  "steps": [
+    {
+      "sql": "CREATE TEMPORARY TABLE purge_candidates (incident_id INT PRIMARY KEY)",
+      "ordered": true
+    },
+    {
+      "sql": "INSERT INTO purge_candidates (incident_id) SELECT i.incident_id FROM incident_log AS i INNER JOIN purge_rules AS r ON r.team_id = i.team_id WHERE i.incident_state = 'closed' AND r.purge_enabled = 1 ORDER BY i.severity DESC, i.incident_id ASC LIMIT 2",
+      "ordered": true
+    },
+    {
+      "sql": "DELETE FROM incident_log WHERE incident_id IN (SELECT incident_id FROM purge_candidates) RETURNING incident_id, team_id, severity, incident_state",
+      "ordered": false
+    },
+    {
+      "sql": "DROP TEMPORARY TABLE purge_candidates",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT incident_id, team_id, severity, incident_state, incident_text FROM incident_log ORDER BY incident_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT team_id, purge_enabled FROM purge_rules ORDER BY team_id",
+      "ordered": true
+    }
+  ]
+}
