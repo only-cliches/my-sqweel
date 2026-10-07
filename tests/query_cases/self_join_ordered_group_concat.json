@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "self_join_ordered_group_concat",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "mariadb-corporation/mariadb-qa",
+      "commit": "596059956ab6fb5b7e696bf698ba2373dad948b7",
+      "path": "BUGS/MDEV-33162.sql",
+      "url": "https://github.com/mariadb-corporation/mariadb-qa/blob/596059956ab6fb5b7e696bf698ba2373dad948b7/BUGS/MDEV-33162.sql",
+      "sha256": "a14162c1991f3677211936efcc07660158b94d0ae8dde7d5df6b2ffd561f1c2c",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "BUGS/MDEV-33162.sql:44-46",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MariaDB regression query self-joins one table, groups by a column from the left alias, and applies ordered GROUP_CONCAT to the grouped values.",
+      "mysql_mariadb_translation": "Reauthored as an organizational reporting query. A member table self-joins managers to their direct reports, and each manager's report names are ordered within GROUP_CONCAT using a fixed separator; all schema, identifiers, values, and business context are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "self-join",
+    "inner-join",
+    "grouping",
+    "group-concat",
+    "ordered-group-concat",
+    "custom-group-concat-separator",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Manager 100 has reports 101 and 102, whose names must be alphabetized inside one pipe-delimited GROUP_CONCAT value. Manager 200 has one report; member 300 has no manager and must be absent from the self-join result.",
+  "determinism_notes": "Fixed member IDs, manager links, explicit report-name ordering, fixed GROUP_CONCAT separator, and final manager ordering are used; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE org_members (member_id INT PRIMARY KEY, member_name VARCHAR(32) NOT NULL, manager_id INT NULL)",
+    "INSERT INTO org_members VALUES (100, 'Mira', NULL), (101, 'Zane', 100), (102, 'Asha', 100), (200, 'Noel', NULL), (201, 'Iris', 200), (300, 'Solo', NULL)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT manager.member_id, manager.member_name, GROUP_CONCAT(report.member_name ORDER BY report.member_name ASC SEPARATOR '|') AS direct_reports FROM org_members AS manager INNER JOIN org_members AS report ON report.manager_id = manager.member_id GROUP BY manager.member_id, manager.member_name ORDER BY manager.member_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT member_id, member_name, manager_id FROM org_members ORDER BY member_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT member_id, member_name, manager_id FROM org_members ORDER BY member_id",
+      "ordered": true
+    }
+  ]
+}
