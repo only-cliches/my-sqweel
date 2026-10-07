@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "id": "grouped_max_insert_upsert",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "fivenet-app/fivenet",
+      "commit": "9df25f0fa7604a37438fcd6e6f29f3f3653af8c2",
+      "path": "query/migrations/1781603550_qualifications_result_success_map.up.sql",
+      "url": "https://github.com/fivenet-app/fivenet/blob/9df25f0fa7604a37438fcd6e6f29f3f3653af8c2/query/migrations/1781603550_qualifications_result_success_map.up.sql",
+      "sha256": "db99669d57c9615ea492514b8d75598fa03b397347e4d37534c47cfdce501374",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "query/migrations/1781603550_qualifications_result_success_map.up.sql:52-68",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL/MariaDB migration inserts the maximum grouped source identifier into a map and refreshes an existing composite-key row with ON DUPLICATE KEY UPDATE.",
+      "mysql_mariadb_translation": "Reauthored as a candidate assessment index. Submitted, non-deleted attempts are grouped by candidate and exam, the latest attempt ID is selected with MAX, and a composite-key latest-attempt map is inserted or refreshed; the schema, identifiers, values, and application context are new."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "insert-select-upsert",
+    "insert-on-duplicate-key-update",
+    "grouping",
+    "aggregate-max",
+    "grouped-max-latest-row",
+    "filtered-insert-select",
+    "composite-key-upsert",
+    "duplicate-key-refresh",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Candidate 41's submitted non-deleted exam-alpha attempts select attempt 2 and refresh a stale map row. Candidate 42 exam-alpha and candidate 41 exam-beta insert new map rows; a deleted high-numbered attempt is excluded.",
+  "determinism_notes": "Fixed attempt IDs, candidate/exam grouping keys, status and deletion filters, composite target key, MAX selection, and final ordering are used; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE assessment_attempts (attempt_id INT PRIMARY KEY, candidate_id INT NOT NULL, exam_code VARCHAR(16) NOT NULL, attempt_status VARCHAR(16) NOT NULL, deleted_flag TINYINT NOT NULL)",
+    "CREATE TABLE candidate_latest_attempts (candidate_id INT NOT NULL, exam_code VARCHAR(16) NOT NULL, attempt_id INT NOT NULL, PRIMARY KEY (candidate_id, exam_code))",
+    "INSERT INTO assessment_attempts VALUES (1001, 41, 'exam-alpha', 'submitted', 0), (1002, 41, 'exam-alpha', 'submitted', 0), (1003, 41, 'exam-alpha', 'submitted', 1), (1010, 42, 'exam-alpha', 'submitted', 0), (1020, 41, 'exam-beta', 'submitted', 0), (1030, 43, 'exam-alpha', 'draft', 0)",
+    "INSERT INTO candidate_latest_attempts VALUES (41, 'exam-alpha', 1001)"
+  ],
+  "steps": [
+    {
+      "sql": "INSERT INTO candidate_latest_attempts (candidate_id, exam_code, attempt_id) SELECT candidate_id, exam_code, MAX(attempt_id) AS attempt_id FROM assessment_attempts WHERE attempt_status = 'submitted' AND deleted_flag = 0 GROUP BY candidate_id, exam_code ON DUPLICATE KEY UPDATE attempt_id = VALUES(attempt_id)",
+      "ordered": false
+    },
+    {
+      "sql": "SELECT candidate_id, exam_code, attempt_id FROM candidate_latest_attempts ORDER BY candidate_id, exam_code",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT attempt_id, candidate_id, exam_code, attempt_status, deleted_flag FROM assessment_attempts ORDER BY attempt_id",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT candidate_id, exam_code, attempt_id FROM candidate_latest_attempts ORDER BY candidate_id, exam_code",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT attempt_id, candidate_id, exam_code, attempt_status, deleted_flag FROM assessment_attempts ORDER BY attempt_id",
+      "ordered": true
+    }
+  ]
+}
