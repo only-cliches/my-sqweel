@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "id": "json_table_grouped_membership_summary",
+  "provenance": {
+    "kind": "inspired-by-public-query",
+    "source": {
+      "kind": "github",
+      "repository": "sqlpage/SQLPage",
+      "commit": "c12c15434af6b87a3847c30923e9e83d4cacae8a",
+      "path": "examples/mysql json handling/index.sql",
+      "url": "https://github.com/sqlpage/SQLPage/blob/c12c15434af6b87a3847c30923e9e83d4cacae8a/examples/mysql%20json%20handling/index.sql",
+      "sha256": "16f67337a9ec37ca41add1775c89f262a6048aa1e6d65197814c772991da3280",
+      "source_dialect": "mysql-mariadb"
+    },
+    "inspiration": {
+      "source_location": "examples/mysql json handling/index.sql:11-35",
+      "source_dialect": "mysql-mariadb",
+      "observed_pattern": "A MySQL application expands a JSON array with JSON_TABLE, builds JSON_ARRAYAGG/JSON_OBJECT option data, and separately preserves parent users through LEFT JOIN membership tables with grouped GROUP_CONCAT labels.",
+      "mysql_mariadb_translation": "Reauthored as a catalog membership report. One ordered query builds JSON options for selected group IDs from a literal JSON array; another expands a requested-group JSON array, joins group memberships and member labels through LEFT JOINs, groups the results, and preserves an empty requested group with a NULL concatenation. The source application tables, bind parameters, UI component rows, and names are not copied."
+    },
+    "independently_authored": true
+  },
+  "features": [
+    "json-table-array-input",
+    "json-arrayagg-json-object",
+    "json-table-filtered-options",
+    "json-table-grouped-left-join",
+    "null-preserving-group-concat",
+    "multiple-ordered-reports",
+    "deterministic-order"
+  ],
+  "fixture_notes": "Groups 10 and 20 are selected for JSON options; group 30 is also requested for the membership report but has no members and must remain with a NULL GROUP_CONCAT value; group 40 is never requested. Group 10 has two members and group 20 has one.",
+  "determinism_notes": "Group IDs, member IDs, JSON arrays, join keys, aggregate orderings, selected IDs, and final orderings are fixed; no clocks, randomness, sleeps, or concurrent schedules are used.",
+  "setup": [
+    "CREATE TABLE catalog_groups (group_id INT PRIMARY KEY, group_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE catalog_members (member_id INT PRIMARY KEY, member_name VARCHAR(32) NOT NULL)",
+    "CREATE TABLE catalog_group_members (group_id INT NOT NULL, member_id INT NOT NULL)",
+    "INSERT INTO catalog_groups VALUES (10, 'Alpha'), (20, 'Beta'), (30, 'Empty'), (40, 'Unselected')",
+    "INSERT INTO catalog_members VALUES (101, 'Ada'), (102, 'Ben'), (103, 'Cora')",
+    "INSERT INTO catalog_group_members VALUES (10, 101), (10, 102), (20, 103)"
+  ],
+  "steps": [
+    {
+      "sql": "SELECT JSON_ARRAYAGG(JSON_OBJECT('label', g.group_name, 'value', g.group_id) ORDER BY g.group_id ASC) AS group_options FROM catalog_groups AS g WHERE g.group_id IN (SELECT requested.group_id FROM JSON_TABLE('[10,20]', '$[*]' COLUMNS (group_id INT PATH '$')) AS requested)",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT g.group_id, g.group_name, GROUP_CONCAT(m.member_name ORDER BY m.member_name ASC SEPARATOR ', ') AS member_names FROM JSON_TABLE('[10,20,30]', '$[*]' COLUMNS (group_id INT PATH '$')) AS requested INNER JOIN catalog_groups AS g ON g.group_id = requested.group_id LEFT JOIN catalog_group_members AS gm ON gm.group_id = g.group_id LEFT JOIN catalog_members AS m ON m.member_id = gm.member_id GROUP BY g.group_id, g.group_name ORDER BY g.group_id ASC",
+      "ordered": true
+    }
+  ],
+  "checks": [
+    {
+      "sql": "SELECT group_id, group_name FROM catalog_groups ORDER BY group_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT member_id, member_name FROM catalog_members ORDER BY member_id",
+      "ordered": true
+    },
+    {
+      "sql": "SELECT group_id, member_id FROM catalog_group_members ORDER BY group_id, member_id",
+      "ordered": true
+    }
+  ]
+}
