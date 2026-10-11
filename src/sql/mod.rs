@@ -69,18 +69,27 @@ pub fn parse(sql: &str) -> Result<Vec<Statement>, sqlparser::parser::ParserError
         None
     };
     let parse_sql = rewritten_assignments.as_deref().unwrap_or(&parser_sql);
-    match Parser::parse_sql(&MySqlDialect {}, parse_sql) {
+    match parse_sql_without_panic(parse_sql) {
         Ok(statements) => Ok(statements),
         Err(err) => {
             if let Some(rewritten) = rewrite_user_variable_assignments(&parser_sql)
                 .or_else(|| rewrite_drop_index_on_table(&parser_sql))
             {
-                Parser::parse_sql(&MySqlDialect {}, &rewritten)
+                parse_sql_without_panic(&rewritten)
             } else {
                 Err(err)
             }
         }
     }
+}
+
+fn parse_sql_without_panic(sql: &str) -> Result<Vec<Statement>, sqlparser::parser::ParserError> {
+    // sqlparser's MySQL DIV handler can panic on malformed right-hand expressions.
+    std::panic::catch_unwind(|| Parser::parse_sql(&MySqlDialect {}, sql)).unwrap_or_else(|_| {
+        Err(sqlparser::parser::ParserError::ParserError(
+            "invalid SQL syntax".to_owned(),
+        ))
+    })
 }
 
 fn rewrite_mysql_compound_intervals(sql: &str) -> String {
@@ -506,5 +515,10 @@ mod tests {
             parse("SELECT EXTRACT(YEAR_MONTH FROM '2026-01-05 08:00:00') AS month_key")
                 .expect("YEAR_MONTH should parse through the MySQL compatibility rewrite");
         assert_eq!(statements.len(), 1);
+    }
+
+    #[test]
+    fn malformed_mysql_div_returns_error() {
+        assert!(parse("SELECT ECT a, COUNT(*) DIV=01 OJDEY e ").is_err());
     }
 }
