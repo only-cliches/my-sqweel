@@ -277,7 +277,7 @@ fn rewrite_mysql_extract_year_month(sql: &str) -> String {
         while cursor < bytes.len() {
             let byte = bytes[cursor];
             if (in_single || in_double) && byte == b'\\' {
-                cursor = cursor.saturating_add(2);
+                cursor = cursor.saturating_add(2).min(bytes.len());
                 continue;
             }
             if in_single {
@@ -568,5 +568,10 @@ mod tests {
         assert!(parse("SELECT ECT a, COUNT(*) DIV=01 OJDEY e ").is_err());
         assert_eq!(parse("SELECT 8 DIV 2").unwrap().len(), 1);
         assert_eq!(parse("LOCK TABLES t READ").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn trailing_extract_escape_returns_error() {
+        assert!(parse("SELECT EXTRACT(YEAR_MONTH FROM '2024-\\").is_err());
     }
 }
