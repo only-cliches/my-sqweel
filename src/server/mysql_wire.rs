@@ -2117,9 +2117,9 @@ mod tests {
     use serde_json::{Map, json};
 
     use super::{
-        Authentication, Backend, canonicalize_information_schema_columns,
-        format_decimal_text, parse_mysql_datetime_value, prepared_result_columns,
-        references_information_schema, validate_wire_rows,
+        Authentication, Backend, canonicalize_information_schema_columns, format_decimal_text,
+        parse_mysql_datetime_value, prepared_result_columns, references_information_schema,
+        validate_wire_rows,
     };
     use crate::sql::engine::{Engine, EngineConfig, QueryResult};
 

@@ -12,6 +12,7 @@ from unittest.mock import patch
 import urllib.error
 
 from tools import query_coverage as coverage
+from tools.sql_coverage import build_report
 from tools.mariadb_mtr_core import TestCase as MtrCase, merge_manifests
 
 
@@ -30,6 +31,19 @@ def fixture(case_id="example"):
 
 
 class QueueTests(unittest.TestCase):
+    def test_worker_reads_declared_coverage_gaps(self):
+        report = build_report()
+        expected = [gap for dimension in report["dimensions"].values() for gap in dimension["uncovered"]]
+        self.assertEqual(coverage.coverage_gaps(coverage.ROOT), expected)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "summary.json"
+            path.write_text(json.dumps(report))
+            self.assertEqual(coverage.coverage_gaps(coverage.ROOT, path), expected)
+            report["spec_sha256"] = "stale"
+            path.write_text(json.dumps(report))
+            with self.assertRaises(coverage.InfrastructureError):
+                coverage.coverage_gaps(coverage.ROOT, path)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

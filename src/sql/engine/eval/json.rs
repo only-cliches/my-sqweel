@@ -807,6 +807,18 @@ pub(super) fn eval_json_merge(
 }
 
 pub(super) fn eval_json_merge_values(values: &[Value], patch: bool) -> Result<Value> {
+    // Aggregate JSON text is kept in a sentinel string until it reaches a JSON
+    // consumer. Function-expression evaluation passes that value directly here.
+    let values: Vec<_> = values
+        .iter()
+        .cloned()
+        .map(|value| match &value {
+            Value::String(text) if text.starts_with(JSON_AGGREGATE_TEXT_SENTINEL) => {
+                parse_json_document_value(value)
+            }
+            _ => value,
+        })
+        .collect();
     if values.iter().any(|value| *value == Value::Null) {
         return Ok(Value::Null);
     }

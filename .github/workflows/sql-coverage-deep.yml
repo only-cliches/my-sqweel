@@ -1,0 +1,257 @@
+name: Deep SQL coverage
+
+on:
+  schedule:
+    - cron: '41 4 * * 6'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sql-coverage-deep-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  llvm-coverage:
+    name: LLVM region and branch coverage
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    services:
+      mariadb:
+        image: mariadb:10.11.7
+        env:
+          MARIADB_ROOT_PASSWORD: my-sqweel
+          MARIADB_DATABASE: test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mariadb-admin ping --silent -h 127.0.0.1 -pmy-sqweel"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+    env:
+      CARGO_BUILD_JOBS: 2
+      MARIADB_COMPARE_URL: mysql://root:my-sqweel@127.0.0.1:3306/test
+      MARIADB_PARITY_REQUIRED: 1
+      COVERAGE_PATH_REPORT: artifacts/sql-coverage/paths
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install nightly Rust with LLVM tools
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: llvm-tools-preview
+      - name: Install native and coverage tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev
+          cargo install --locked cargo-llvm-cov
+      - name: Collect region and branch coverage
+        run: |
+          mkdir -p artifacts/sql-coverage/llvm
+          cargo llvm-cov --locked --branch --json \
+            --output-path artifacts/sql-coverage/llvm/coverage.json \
+            --lib \
+            --test coverage_execution_paths \
+            --test coverage_interleavings \
+            --test typed_sql_generator \
+            --test metamorphic_oracles \
+            --test stateful_differential
+      - name: Summarize SQL implementation coverage
+        if: always()
+        run: |
+          python3 tools/sql_deep_coverage_report.py llvm \
+            --input artifacts/sql-coverage/llvm/coverage.json \
+            --output artifacts/sql-coverage/code-coverage.json
+      - name: Upload LLVM coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sql-deep-coverage-evidence
+          path: |
+            artifacts/sql-coverage/code-coverage.json
+            artifacts/sql-coverage/paths/
+          if-no-files-found: warn
+      - name: Upload raw LLVM coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sql-llvm-region-branch-raw
+          path: artifacts/sql-coverage/llvm/
+          if-no-files-found: warn
+
+  fuzz:
+    name: Bounded libFuzzer targets
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      CARGO_BUILD_JOBS: 2
+      FUZZ_SECONDS: 45
+      FUZZ_MAX_SECONDS: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install nightly Rust
+        uses: dtolnay/rust-toolchain@nightly
+      - name: Install native tools and cargo-fuzz
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev
+          cargo install --locked cargo-fuzz
+      - name: Build all six fuzz targets
+        working-directory: fuzz
+        run: |
+          set -euo pipefail
+          for target in parser binding expression_eval query_execution dml_transactions mysql_wire; do
+            cargo fuzz build "$target"
+          done
+      - name: Fuzz all six targets with fixed time and input bounds
+        working-directory: fuzz
+        run: |
+          set -uo pipefail
+          mkdir -p ../artifacts/sql-coverage/fuzz/corpus ../artifacts/sql-coverage/fuzz/crashes ../artifacts/sql-coverage/fuzz/status
+          failed=0
+          for target in parser binding expression_eval query_execution dml_transactions mysql_wire; do
+            mkdir -p "../artifacts/sql-coverage/fuzz/corpus/$target" "../artifacts/sql-coverage/fuzz/crashes/$target"
+            if [[ -d "corpus/$target" ]]; then
+              cp -a "corpus/$target/." "../artifacts/sql-coverage/fuzz/corpus/$target/"
+            fi
+            echo "Fuzzing $target for ${FUZZ_SECONDS}s"
+            if timeout "${FUZZ_MAX_SECONDS}s" cargo fuzz run "$target" \
+              "../artifacts/sql-coverage/fuzz/corpus/$target" -- \
+              -max_total_time="$FUZZ_SECONDS" -max_len=65536 \
+              -artifact_prefix="../artifacts/sql-coverage/fuzz/crashes/$target/" \
+              >"../artifacts/sql-coverage/fuzz/$target.log" 2>&1; then
+              echo "PASS $target"
+              echo passed > "../artifacts/sql-coverage/fuzz/status/$target.txt"
+            else
+              status=$?
+              echo "FAIL $target ($status)"
+              echo failed > "../artifacts/sql-coverage/fuzz/status/$target.txt"
+              failed=1
+            fi
+          done
+          exit "$failed"
+      - name: Summarize fuzz results
+        if: always()
+        run: |
+          python3 tools/sql_deep_coverage_report.py fuzz \
+            --input artifacts/sql-coverage/fuzz \
+            --output artifacts/sql-coverage/fuzz-summary.json
+      - name: Upload fuzz corpora, crashes, and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sql-libfuzzer-results
+          path: |
+            artifacts/sql-coverage/fuzz/
+            artifacts/sql-coverage/fuzz-summary.json
+          if-no-files-found: warn
+
+  mutation-sample:
+    name: Sample SQL implementation mutants
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install native tools and cargo-mutants
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev
+          cargo install --locked cargo-mutants
+      - name: Verify focused baseline tests
+        run: cargo test --locked --test coverage_execution_paths --test coverage_interleavings
+      - name: Test a deterministic 1 percent SQL engine mutant sample
+        run: |
+          mkdir -p artifacts/sql-coverage/mutants
+          if cargo mutants --file 'src/sql/engine/**/*.rs' \
+            --shard 0/100 --sharding round-robin --no-shuffle \
+            --baseline=skip --timeout 90 --jobs 2 \
+            --output artifacts/sql-coverage/mutants \
+            --cargo-test-arg=--test \
+            --cargo-test-arg=coverage_execution_paths \
+            --cargo-test-arg=--test \
+            --cargo-test-arg=coverage_interleavings; then
+            status=0
+          else
+            status=$?
+          fi
+          echo "$status" > artifacts/sql-coverage/mutants/exit-code.txt
+          if [[ "$status" == 0 || "$status" == 2 || "$status" == 3 ]]; then
+            echo "Recorded cargo-mutants result $status as coverage evidence"
+          else
+            exit "$status"
+          fi
+      - name: Summarize mutation sample
+        if: always()
+        run: |
+          python3 tools/sql_deep_coverage_report.py mutants \
+            --input artifacts/sql-coverage/mutants/mutants.out/outcomes.json \
+            --exit-code-file artifacts/sql-coverage/mutants/exit-code.txt \
+            --output artifacts/sql-coverage/mutation-summary.json
+      - name: Upload mutation sample
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sql-deep-mutation-evidence
+          path: artifacts/sql-coverage/mutation-summary.json
+          if-no-files-found: warn
+      - name: Upload raw mutation results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sql-mutation-sample-raw
+          path: artifacts/sql-coverage/mutants/
+          if-no-files-found: warn
+
+  dashboard:
+    name: Merge deep SQL coverage evidence
+    runs-on: ubuntu-24.04
+    needs: [llvm-coverage, fuzz, mutation-sample]
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download execution and code coverage evidence
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: sql-deep-coverage-evidence
+          path: artifacts/sql-coverage
+      - name: Download mutation summary
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: sql-deep-mutation-evidence
+          path: artifacts/sql-coverage
+      - name: Download fuzz summary
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: sql-libfuzzer-results
+          path: artifacts/sql-coverage
+      - name: Render combined compatibility dashboard
+        run: |
+          mkdir -p artifacts/sql-coverage
+          python3 tools/sql_deep_coverage_report.py --self-check
+          python3 tools/sql_coverage.py \
+            --path-results artifacts/sql-coverage/paths \
+            --code-coverage artifacts/sql-coverage/code-coverage.json \
+            --mutation-results artifacts/sql-coverage/mutation-summary.json \
+            --fuzz-results artifacts/sql-coverage/fuzz-summary.json \
+            > artifacts/sql-coverage/summary.json
+          python3 tools/sql_coverage.py \
+            --path-results artifacts/sql-coverage/paths \
+            --code-coverage artifacts/sql-coverage/code-coverage.json \
+            --mutation-results artifacts/sql-coverage/mutation-summary.json \
+            --fuzz-results artifacts/sql-coverage/fuzz-summary.json \
+            --format markdown > artifacts/sql-coverage/summary.md
+      - name: Upload combined SQL coverage dashboard
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sql-deep-coverage-dashboard
+          path: artifacts/sql-coverage/
+          if-no-files-found: warn

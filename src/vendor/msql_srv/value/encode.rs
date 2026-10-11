@@ -861,48 +861,12 @@ mod tests {
         rt!(f32_one, f32, 1.0, ColumnType::MYSQL_TYPE_FLOAT, false);
         rt!(f64_one, f64, 1.0, ColumnType::MYSQL_TYPE_DOUBLE, false);
 
-        rt!(
-            u8_max,
-            u8,
-            u8::MAX,
-            ColumnType::MYSQL_TYPE_TINY,
-            false
-        );
-        rt!(
-            i8_max,
-            i8,
-            i8::MAX,
-            ColumnType::MYSQL_TYPE_TINY,
-            true
-        );
-        rt!(
-            u16_max,
-            u16,
-            u16::MAX,
-            ColumnType::MYSQL_TYPE_SHORT,
-            false
-        );
-        rt!(
-            i16_max,
-            i16,
-            i16::MAX,
-            ColumnType::MYSQL_TYPE_SHORT,
-            true
-        );
-        rt!(
-            u32_max,
-            u32,
-            u32::MAX,
-            ColumnType::MYSQL_TYPE_LONG,
-            false
-        );
-        rt!(
-            i32_max,
-            i32,
-            i32::MAX,
-            ColumnType::MYSQL_TYPE_LONG,
-            true
-        );
+        rt!(u8_max, u8, u8::MAX, ColumnType::MYSQL_TYPE_TINY, false);
+        rt!(i8_max, i8, i8::MAX, ColumnType::MYSQL_TYPE_TINY, true);
+        rt!(u16_max, u16, u16::MAX, ColumnType::MYSQL_TYPE_SHORT, false);
+        rt!(i16_max, i16, i16::MAX, ColumnType::MYSQL_TYPE_SHORT, true);
+        rt!(u32_max, u32, u32::MAX, ColumnType::MYSQL_TYPE_LONG, false);
+        rt!(i32_max, i32, i32::MAX, ColumnType::MYSQL_TYPE_LONG, true);
         rt!(
             u64_max,
             u64,

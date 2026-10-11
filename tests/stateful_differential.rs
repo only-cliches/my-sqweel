@@ -384,6 +384,36 @@ fn cleanup(conn: &mut Conn, program: &Program) {
     }
 }
 
+fn tlp_rows(conn: &mut Conn, sql: &str) -> Vec<i64> {
+    let mut rows: Vec<i64> = conn
+        .query_map(sql, |id: i64| id)
+        .unwrap_or_else(|error| panic!("TLP query {sql:?}: {error}"));
+    rows.sort_unstable();
+    rows
+}
+
+fn check_tlp(conn: &mut Conn, table: &str, seed: u64) {
+    let base = tlp_rows(conn, &format!("SELECT id FROM {table}"));
+    // shortcut: integer predicates only, expand when coverage gaps name other types.
+    for predicate in ["score < 10", "score = 10", "score > 0"] {
+        let true_rows = tlp_rows(conn, &format!("SELECT id FROM {table} WHERE {predicate}"));
+        let false_rows = tlp_rows(
+            conn,
+            &format!("SELECT id FROM {table} WHERE NOT ({predicate})"),
+        );
+        let null_rows = tlp_rows(
+            conn,
+            &format!("SELECT id FROM {table} WHERE ({predicate}) IS NULL"),
+        );
+        assert!(!true_rows.is_empty() && !false_rows.is_empty() && !null_rows.is_empty());
+        let mut partitioned = true_rows;
+        partitioned.extend(false_rows);
+        partitioned.extend(null_rows);
+        partitioned.sort_unstable();
+        assert_eq!(partitioned, base, "TLP failed for seed {seed}: {predicate}");
+    }
+}
+
 fn configured_seed_count() -> u64 {
     std::env::var("STATEFUL_DIFFERENTIAL_SEEDS")
         .map(|value| {
@@ -471,6 +501,26 @@ fn generated_stateful_programs_match_mariadb() {
         eprintln!(
             "Stateful programs ran against MySqweel only; set MARIADB_COMPARE_URL or enable Docker for differential verification."
         );
+    }
+}
+
+#[test]
+fn nullable_predicates_obey_three_valued_partitioning() {
+    let _guard = common::test_lock();
+    let target = common::mysql_compare_target();
+    let (url, _endpoint) = start_mysqweel();
+    let mut mysqweel = connect(&url);
+    let mut mariadb = target.as_ref().map(|target| connect(target.url()));
+
+    for seed in 0..12 {
+        let program = Program::generate(seed);
+        for conn in std::iter::once(&mut mysqweel).chain(mariadb.iter_mut()) {
+            for sql in &program.setup {
+                conn.query_drop(sql).unwrap();
+            }
+            check_tlp(conn, &program.parent, seed);
+            cleanup(conn, &program);
+        }
     }
 }
 

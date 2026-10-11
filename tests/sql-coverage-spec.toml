@@ -1,0 +1,454 @@
+# Initial, audited obligations from README's supported SQL surface.
+# A witness names a committed differential fixture and evidence in its SQL/data.
+# No witness means a known gap, not an unsupported feature.
+
+[[obligations]]
+id = "left_join"
+dimension = "feature"
+status = "supported"
+case = "bookmark_tag_pagination"
+sql_contains = ["LEFT JOIN bookmark_tags"]
+
+[[obligations]]
+id = "correlated_subquery"
+dimension = "feature"
+status = "supported"
+case = "correlated_grouped_scalar_lookup_minimized"
+sql_contains = ["(SELECT c.rate_code", "c.site_id = s.site_id"]
+
+[[obligations]]
+id = "cte"
+dimension = "feature"
+status = "supported"
+case = "monthly_growth_window"
+sql_contains = ["WITH monthly_revenue AS"]
+
+[[obligations]]
+id = "window_function"
+dimension = "feature"
+status = "supported"
+case = "monthly_growth_window"
+sql_contains = ["LAG(revenue) OVER"]
+
+[[obligations]]
+id = "check_constraint"
+dimension = "feature"
+status = "supported"
+case = "quality_mark_constraint_minimized"
+setup_contains = ["CHECK (ABS(mark) = 1)"]
+
+[[obligations]]
+id = "insert_select"
+dimension = "feature"
+status = "supported"
+case = "insert_ignore_left_join_coalesce_minimized"
+sql_contains = ["INSERT IGNORE INTO daily_quotes", "SELECT r.quote_day"]
+
+[[obligations]]
+id = "read_only_transaction"
+dimension = "feature"
+status = "supported"
+case = "read_only_transaction_audit"
+sql_contains = ["START TRANSACTION READ ONLY"]
+
+[[obligations]]
+id = "grouping_having"
+dimension = "feature"
+status = "supported"
+case = "three_way_left_distinct_having_minimized"
+sql_contains = ["GROUP BY b.city_name HAVING COUNT(DISTINCT"]
+
+[[obligations]]
+id = "left_join_aggregate"
+dimension = "interaction"
+status = "supported"
+case = "bookmark_tag_pagination"
+sql_contains = ["LEFT JOIN bookmark_tags", "COUNT(t.tag_id)", "GROUP BY b.bookmark_id"]
+
+[[obligations]]
+id = "left_join_window"
+dimension = "interaction"
+status = "supported"
+case = "latest_order_per_customer"
+sql_contains = ["LEFT JOIN (SELECT", "ROW_NUMBER() OVER"]
+
+[[obligations]]
+id = "grouped_window"
+dimension = "interaction"
+status = "supported"
+case = "filtered_window_region_summary"
+sql_contains = ["SUM(COUNT(*)) OVER ()", "GROUP BY region_code"]
+
+[[obligations]]
+id = "correlated_grouped_having"
+dimension = "interaction"
+status = "supported"
+case = "correlated_grouped_scalar_lookup_minimized"
+sql_contains = ["c.site_id = s.site_id", "GROUP BY c.rate_code HAVING"]
+
+[[obligations]]
+id = "nullable_boolean_truth_values"
+dimension = "data_boundary"
+status = "supported"
+case = "nullable_truth_predicates"
+sql_contains = ["enabled IS TRUE", "enabled IS FALSE", "enabled IS NULL"]
+setup_contains = ["'alerts', TRUE", "'billing', FALSE", "'search', NULL"]
+
+[[obligations]]
+id = "unmatched_left_row"
+dimension = "data_boundary"
+status = "supported"
+case = "bookmark_tag_pagination"
+sql_contains = ["LEFT JOIN bookmark_tags"]
+setup_contains = ["(103, 7, 'Untagged note'"]
+
+[[obligations]]
+id = "duplicate_join_keys"
+dimension = "data_boundary"
+status = "supported"
+case = "bookmark_tag_pagination"
+sql_contains = ["LEFT JOIN bookmark_tags", "COUNT(t.tag_id)"]
+setup_contains = ["(1, 101, 'sql'), (2, 101, 'mysql')"]
+
+[[obligations]]
+id = "null_join_key"
+dimension = "data_boundary"
+status = "supported"
+generated = "null_join_key"
+
+[[obligations]]
+id = "empty_join_inputs"
+dimension = "data_boundary"
+status = "supported"
+generated = "empty_join_inputs"
+
+[[obligations]]
+id = "check_violation"
+dimension = "error_behavior"
+status = "supported"
+case = "quality_mark_constraint_minimized"
+sql_contains = ["INSERT INTO quality_mark VALUES (511, 0)"]
+setup_contains = ["CHECK (ABS(mark) = 1)"]
+expect_error = true
+error_sql_contains = ["INSERT INTO quality_mark VALUES (511, 0)"]
+
+[[obligations]]
+id = "read_only_write"
+dimension = "error_behavior"
+status = "supported"
+case = "read_only_transaction_audit"
+sql_contains = ["START TRANSACTION READ ONLY", "INSERT INTO audit_ledger VALUES (103, 'blocked', 12)"]
+expect_error = true
+error_sql_contains = ["INSERT INTO audit_ledger VALUES (103, 'blocked', 12)"]
+
+[[obligations]]
+id = "wire_text_query"
+dimension = "execution_path"
+status = "supported"
+test = "execution_paths"
+
+[[obligations]]
+id = "embedded_sync"
+dimension = "execution_path"
+status = "supported"
+test = "execution_paths"
+
+[[obligations]]
+id = "embedded_async"
+dimension = "execution_path"
+status = "supported"
+test = "execution_paths"
+
+[[obligations]]
+id = "reopened_rocksdb"
+dimension = "execution_path"
+status = "supported"
+test = "execution_paths"
+
+# Additional supported surface from README and existing differential cases.
+
+[[obligations]]
+id = "temporary_table"
+dimension = "feature"
+status = "supported"
+case = "skip_locked_claim_delete_returning"
+setup_contains = ["CREATE TEMPORARY TABLE claimed_items"]
+
+[[obligations]]
+id = "view"
+dimension = "feature"
+status = "supported"
+case = "json_table_view_nested_lines"
+sql_contains = ["CREATE VIEW order_item_lines AS"]
+
+[[obligations]]
+id = "alter_table"
+dimension = "feature"
+status = "supported"
+case = "modify_column_default_labels"
+sql_contains = ["ALTER TABLE shipment_labels MODIFY COLUMN"]
+
+[[obligations]]
+id = "generated_column"
+dimension = "feature"
+status = "supported"
+case = "replace_generated_returning_inventory"
+setup_contains = ["GENERATED ALWAYS AS (units * unit_price) VIRTUAL"]
+
+[[obligations]]
+id = "foreign_key_cascade"
+dimension = "feature"
+status = "supported"
+case = "alter_add_foreign_key_cascade"
+sql_contains = ["FOREIGN KEY (manifest_id)", "ON DELETE CASCADE"]
+
+[[obligations]]
+id = "replace_into"
+dimension = "feature"
+status = "supported"
+case = "replace_returning_inventory"
+sql_contains = ["REPLACE INTO cache_entries"]
+
+[[obligations]]
+id = "upsert"
+dimension = "feature"
+status = "supported"
+case = "upsert_returning_set_minimized"
+sql_contains = ["ON DUPLICATE KEY UPDATE"]
+
+[[obligations]]
+id = "joined_update"
+dimension = "feature"
+status = "supported"
+case = "json_update_join_backfill"
+sql_contains = ["UPDATE asset_configs AS c INNER JOIN asset_registry"]
+
+[[obligations]]
+id = "joined_delete"
+dimension = "feature"
+status = "supported"
+case = "delete_self_join_dedup"
+sql_contains = ["DELETE later_alias FROM member_aliases", "INNER JOIN member_aliases"]
+
+[[obligations]]
+id = "returning"
+dimension = "feature"
+status = "supported"
+case = "insert_generated_returning_star"
+sql_contains = ["RETURNING *"]
+
+[[obligations]]
+id = "derived_table"
+dimension = "feature"
+status = "supported"
+case = "ranked_threshold_upsert"
+sql_contains = ["FROM (SELECT division_id"]
+
+[[obligations]]
+id = "set_operation"
+dimension = "feature"
+status = "supported"
+case = "union_all_outer_limit_minimized"
+sql_contains = ["UNION ALL SELECT"]
+
+[[obligations]]
+id = "recursive_cte"
+dimension = "feature"
+status = "supported"
+case = "recursive_title_case"
+sql_contains = ["WITH RECURSIVE positions AS"]
+
+[[obligations]]
+id = "json_expression"
+dimension = "feature"
+status = "supported"
+case = "json_null_safe_extract_comparison"
+sql_contains = ["JSON_EXTRACT(payload"]
+
+[[obligations]]
+id = "json_table"
+dimension = "feature"
+status = "supported"
+case = "json_table_grouped_threshold_join_minimized"
+sql_contains = ["JSON_TABLE(s.samples"]
+
+[[obligations]]
+id = "date_expression"
+dimension = "feature"
+status = "supported"
+case = "monthly_growth_window"
+sql_contains = ["DATE_FORMAT(posted_at"]
+
+[[obligations]]
+id = "string_expression"
+dimension = "feature"
+status = "supported"
+case = "self_join_string_toggle_update"
+sql_contains = ["CONCAT('show_'", "SUBSTRING(base.option_name"]
+
+[[obligations]]
+id = "prepared_statements"
+dimension = "feature"
+status = "supported"
+test = "execution_paths"
+
+[[obligations]]
+id = "prepared_parameters"
+dimension = "feature"
+status = "supported"
+test = "execution_paths"
+
+[[obligations]]
+id = "unique_index"
+dimension = "feature"
+status = "supported"
+case = "create_unique_index_route_versions"
+sql_contains = ["CREATE UNIQUE INDEX IF NOT EXISTS"]
+
+[[obligations]]
+id = "insert_select_window_upsert"
+dimension = "three_way_interaction"
+status = "supported"
+case = "ranked_threshold_upsert"
+sql_contains = ["INSERT INTO division_checkpoints", "ROW_NUMBER() OVER", "ON DUPLICATE KEY UPDATE"]
+
+[[obligations]]
+id = "left_join_distinct_having"
+dimension = "three_way_interaction"
+status = "supported"
+case = "three_way_left_distinct_having_minimized"
+sql_contains = ["LEFT JOIN lending_links", "COUNT(DISTINCT", "HAVING COUNT(DISTINCT"]
+
+[[obligations]]
+id = "json_table_grouping_having"
+dimension = "three_way_interaction"
+status = "supported"
+case = "json_table_grouped_threshold_join_minimized"
+sql_contains = ["JSON_TABLE(s.samples", "GROUP BY s.channel_id", "HAVING COUNT(*)"]
+
+[[obligations]]
+id = "zero_denominator"
+dimension = "data_boundary"
+status = "supported"
+case = "nullif_aggregate_upsert_minimized"
+sql_contains = ["NULLIF(SUM(total_checks), 0)", "IFNULL(SUM(refund_amount)"]
+setup_contains = ["(13, '2026-10-02', 0, 0, 2.00, 0.00)"]
+
+[[obligations]]
+id = "json_missing_and_sql_null"
+dimension = "data_boundary"
+status = "supported"
+case = "json_null_safe_extract_comparison"
+sql_contains = ["JSON_EXTRACT(payload", "<=> expected"]
+setup_contains = ["'{\"other\":1}', NULL", "(4, NULL, NULL)"]
+
+[[obligations]]
+id = "duplicate_unique_key"
+dimension = "data_boundary"
+status = "supported"
+case = "create_unique_index_route_versions"
+sql_contains = ["INSERT INTO route_versions VALUES (804"]
+setup_contains = ["(802, 21, 'dispatch', 2"]
+
+[[obligations]]
+id = "unique_violation"
+dimension = "error_behavior"
+status = "supported"
+case = "create_unique_index_route_versions"
+sql_contains = ["CREATE UNIQUE INDEX", "INSERT INTO route_versions VALUES (804"]
+error_sql_contains = ["INSERT INTO route_versions VALUES (804"]
+expect_error = true
+
+[[obligations]]
+id = "wire_prepared_query"
+dimension = "execution_path"
+status = "supported"
+test = "execution_paths"
+
+[[obligations]]
+id = "writer_read_your_writes"
+dimension = "stateful"
+status = "supported"
+test = "interleavings"
+
+[[obligations]]
+id = "other_session_cannot_read_uncommitted_insert"
+dimension = "stateful"
+status = "supported"
+test = "interleavings"
+
+[[obligations]]
+id = "repeatable_read_snapshot_before_and_after_commit"
+dimension = "stateful"
+status = "supported"
+test = "interleavings"
+
+[[obligations]]
+id = "commit_becomes_visible_after_reader_transaction_ends"
+dimension = "stateful"
+status = "supported"
+test = "interleavings"
+
+[[obligations]]
+id = "savepoint_rollback_then_transaction_rollback"
+dimension = "stateful"
+status = "supported"
+test = "interleavings"
+
+# README capabilities with concrete parity fixtures beyond the initial matrix.
+
+[[obligations]]
+id = "insert_ignore"
+dimension = "feature"
+status = "supported"
+case = "insert_ignore_distinct_grouped_bindings"
+sql_contains = ["INSERT IGNORE INTO group_route_bindings", "SELECT DISTINCT g.group_id"]
+
+[[obligations]]
+id = "secondary_index"
+dimension = "feature"
+status = "supported"
+case = "create_index_dispatch_orders"
+sql_contains = ["CREATE INDEX IF NOT EXISTS dispatch_state_priority_idx"]
+
+[[obligations]]
+id = "foreign_key_set_null"
+dimension = "feature"
+status = "supported"
+case = "alter_drop_readd_foreign_key"
+sql_contains = ["FOREIGN KEY (parcel_id) REFERENCES parcels (parcel_id) ON DELETE SET NULL"]
+
+[[obligations]]
+id = "foreign_key_restrict"
+dimension = "feature"
+status = "supported"
+case = "alter_drop_readd_foreign_key"
+setup_contains = ["FOREIGN KEY (parcel_id) REFERENCES parcels (parcel_id) ON DELETE RESTRICT"]
+
+[[obligations]]
+id = "json_object_aggregation"
+dimension = "feature"
+status = "supported"
+case = "json_objectagg_empty_nested_key"
+sql_contains = ["JSON_OBJECTAGG(CAST(reading_code AS CHAR)"]
+
+[[obligations]]
+id = "json_array_aggregation"
+dimension = "feature"
+status = "supported"
+case = "json_objectagg_correlated_lookup"
+sql_contains = ["JSON_ARRAYAGG(JSON_OBJECT('rule_id'"]
+
+[[obligations]]
+id = "show_create_table"
+dimension = "feature"
+status = "supported"
+case = "show_create_catalog_metadata"
+sql_contains = ["SHOW CREATE TABLE catalog_schema"]
+
+[[obligations]]
+id = "information_schema_statistics"
+dimension = "feature"
+status = "supported"
+case = "create_index_dispatch_orders"
+sql_contains = ["FROM information_schema.statistics", "table_name = 'dispatch_orders'"]

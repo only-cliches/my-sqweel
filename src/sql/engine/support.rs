@@ -33,8 +33,7 @@ impl Visitor for SupportValidator {
         }
         // ponytail: accept NOWAIT/SKIP LOCKED on uncontended reads; add row locks when concurrent lock conflicts are supported.
         if query.locks.iter().any(|lock| {
-            !matches!(lock.lock_type, LockType::Share | LockType::Update)
-                || lock.of.is_some()
+            !matches!(lock.lock_type, LockType::Share | LockType::Update) || lock.of.is_some()
         }) {
             return unsupported("SELECT locking clauses with OF modifiers");
         }
@@ -83,16 +82,12 @@ impl Visitor for SupportValidator {
                     || function.uses_odbc_syntax
                     || (!function.within_group.is_empty()
                         && !(function.over.is_some()
-                            && function
-                                .name
-                                .0
-                                .last()
-                                .is_some_and(|name| {
-                                    matches!(
-                                        name.value.to_ascii_uppercase().as_str(),
-                                        "PERCENTILE_CONT" | "PERCENTILE_DISC"
-                                    )
-                                }))) =>
+                            && function.name.0.last().is_some_and(|name| {
+                                matches!(
+                                    name.value.to_ascii_uppercase().as_str(),
+                                    "PERCENTILE_CONT" | "PERCENTILE_DISC"
+                                )
+                            }))) =>
             {
                 unsupported(format!("function modifier in `{function}`"))
             }

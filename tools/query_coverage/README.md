@@ -187,6 +187,61 @@ and every mutation/query interaction is represented. Increase the range with
 program, which should be minimized and retained as a JSON regression fixture
 when it exposes a defect.
 
+## Declared SQL coverage obligations
+
+`tests/sql-coverage-spec.toml` declares supported features, pairwise and targeted
+three-way interactions, data boundaries, error behavior, execution paths, and
+stateful invariants. Its witnesses point to differential fixtures, the typed SQL
+generator, or named execution tests. The runner counts a fixture only when the
+specified SQL and setup evidence exists, and counts a generated or path witness
+only after its test writes a result. Passing MariaDB observations are tracked
+separately. This is a finite audited subset of the README compatibility surface;
+add obligations as implementation and differential tests establish more support.
+
+```sh
+python3 tools/sql_coverage.py
+python3 tools/sql_coverage.py \
+  --results artifacts/sql-coverage/query-results.json \
+  --typed-results artifacts/sql-coverage/typed-results.json \
+  --path-results artifacts/sql-coverage/paths \
+  --format markdown
+```
+
+`tools/prepush.sh` and push CI run the cases against pinned MariaDB, then write
+`artifacts/sql-coverage/summary.json` and `.md`; CI uploads the directory. The
+dashboard lists both uncovered obligations and witnesses awaiting parity. The
+pre-push gate fails if either list is nonempty after the test suite passes. The
+`QUERY_COVERAGE_REPORT` comparison includes typed cells, column metadata,
+duplicate rows, error code and SQLSTATE, and affected rows. Fixture witness
+markers are reviewable audit hints; they do not infer data state from SQL text.
+Generated data boundaries use executed, typed queries and actual fixture rows.
+
+`tests/typed_sql_generator.rs` generates type-compatible, scope-valid SELECT
+shapes over joins, correlated and EXISTS subqueries, derived tables, grouping,
+aggregates, and nullable predicates. It records seeds, shape coverage, and data
+conditions, and compares each observation with MariaDB. Replay with
+`TYPED_SQL_SEED=<seed>`; use `TYPED_SQL_GAP=<id>` to focus a declared gap.
+`tests/stateful_differential.rs` also checks ternary logic partitioning (TLP).
+`tests/metamorphic_oracles.rs` checks NoREC and an explicit NULL-safe equivalent
+predicate on nonempty and empty tables. Two-session transaction schedules check
+isolation, read-your-writes, commit visibility, savepoints, and rollback.
+`tests/coverage_execution_paths.rs` checks a shared aggregate/NULL query over
+embedded sync and async calls, text and prepared wire queries, and reopened
+RocksDB, with MariaDB comparison in CI.
+
+The scheduled [deep SQL coverage workflow](../../.github/workflows/sql-coverage-deep.yml)
+runs six bounded libFuzzer targets, exports LLVM region and branch coverage for
+`src/sql/**`, and samples SQL engine mutants. It uploads corpora, crashes, raw
+tool reports, and a dashboard overlay. These implementation measurements are
+separate from SQL semantic obligations; the weekly run uses a focused test subset.
+
+Set `coverage_report` in the query worker configuration to a recent CI
+`summary.json` for gap-directed investigation. The worker checks the spec hash
+before using it, records the gaps with each attempt, and cannot change the spec
+or comparison rules during repair. An empty setting computes fixture gaps from
+the checkout. The deterministic generator and CI tests own admission and parity;
+the worker contributes reviewed regression fixtures.
+
 ## Developer verification
 
 ```sh

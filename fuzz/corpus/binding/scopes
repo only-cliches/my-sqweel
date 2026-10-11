@@ -1,0 +1,1 @@
+CASE WHEN flag THEN n ELSE id END AS value

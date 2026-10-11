@@ -1,0 +1,1 @@
+COALESCE(i, 0) / NULLIF(n, 0) IS NULL OR s = 'x'

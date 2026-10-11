@@ -364,8 +364,8 @@ MySqweel implements a growing subset of MySQL/MariaDB SQL. Compatibility tests
 target **MariaDB 10.11.7**, including engine, wire protocol, ORM, differential,
 and selected upstream MTR tests.
 
-Push CI runs at least **3,828 MariaDB comparison cases**: [2,500 query corpus
-cases](tests/mysql_compatibility_corpus.rs), [1,229 JSON differential
+Push CI runs at least **4,018 MariaDB comparison cases**: [2,500 query corpus
+cases](tests/mysql_compatibility_corpus.rs), [1,419 JSON differential
 fixtures](tests/query_cases), [64 generated stateful
 programs](tests/stateful_differential.rs), and 35 complete upstream MTR files
 across the [strict](tests/mariadb-mtr-allowlist.txt) and
@@ -373,6 +373,10 @@ across the [strict](tests/mariadb-mtr-allowlist.txt) and
 [scheduled stateful workflow](.github/workflows/stateful-differential.yml)
 increases its program count to 512. Other SQL and protocol parity checks add
 coverage beyond these counts.
+
+The [SQL coverage matrix and dashboard](tools/query_coverage/README.md#declared-sql-coverage-obligations)
+track supported features, semantic boundaries, interactions, execution paths,
+and MariaDB parity as separate dimensions.
 
 | Area | Supported surface |
 | --- | --- |

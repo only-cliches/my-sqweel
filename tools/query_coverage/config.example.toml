@@ -1,5 +1,7 @@
 # Copy outside tracked files and customize before running. Python 3.11+ required.
 state_dir = ".cache/query-coverage"
+# Optional latest CI dashboard JSON; must match the selected base spec hash.
+coverage_report = ""
 # Select a commit that contains the runner and harness. HEAD resolves once per run.
 base_ref = "HEAD"
 agent_command = ["omp"]

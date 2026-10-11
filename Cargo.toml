@@ -98,6 +98,22 @@ name = "stateful_differential"
 path = "tests/stateful_differential.rs"
 
 [[test]]
+name = "typed_sql_generator"
+path = "tests/typed_sql_generator.rs"
+
+[[test]]
+name = "coverage_execution_paths"
+path = "tests/coverage_execution_paths.rs"
+
+[[test]]
+name = "coverage_interleavings"
+path = "tests/coverage_interleavings.rs"
+
+[[test]]
+name = "metamorphic_oracles"
+path = "tests/metamorphic_oracles.rs"
+
+[[test]]
 name = "query_coverage"
 path = "tests/query_coverage.rs"
 

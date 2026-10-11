@@ -80,7 +80,33 @@ python3 -m unittest discover -s tests -p 'test_*.py'
 
 echo "Running all targets with MariaDB parity required"
 export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"
-MARIADB_PARITY_REQUIRED=1 cargo test --all-targets --locked
+mkdir -p artifacts/sql-coverage
+mkdir -p artifacts/sql-coverage/paths
+export QUERY_COVERAGE_REPORT="$PWD/artifacts/sql-coverage/query-results.json"
+export TYPED_SQL_COVERAGE_REPORT="$PWD/artifacts/sql-coverage/typed-results.json"
+export COVERAGE_PATH_REPORT="$PWD/artifacts/sql-coverage/paths"
+rm -f "$QUERY_COVERAGE_REPORT" "$TYPED_SQL_COVERAGE_REPORT" "$COVERAGE_PATH_REPORT/execution_paths.json" "$COVERAGE_PATH_REPORT/interleavings.json"
+test_status=0
+MARIADB_PARITY_REQUIRED=1 cargo test --all-targets --locked || test_status=$?
+coverage_args=()
+if [[ -f "$QUERY_COVERAGE_REPORT" ]]; then
+  coverage_args=(--results "$QUERY_COVERAGE_REPORT")
+fi
+coverage_args+=(--path-results "$COVERAGE_PATH_REPORT" --typed-results "$TYPED_SQL_COVERAGE_REPORT")
+python3 tools/sql_coverage.py "${coverage_args[@]}" > artifacts/sql-coverage/summary.json
+python3 tools/sql_coverage.py "${coverage_args[@]}" --format markdown > artifacts/sql-coverage/summary.md
+if (( test_status != 0 )); then
+  exit "$test_status"
+fi
+python3 - <<'PY'
+import json
+from pathlib import Path
+
+report = json.loads(Path("artifacts/sql-coverage/summary.json").read_text())
+totals = report["totals"]
+if totals["uncovered"] or totals["awaiting_parity"] or report["mismatched_cases"]:
+    raise SystemExit(f"SQL coverage obligations are incomplete: {totals}")
+PY
 
 # Cargo verifies an unpacked archive, catching missing files and registry/path drift.
 echo "Verifying the publishable crate"

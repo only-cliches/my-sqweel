@@ -1,0 +1,1 @@
+JSON_EXTRACT(JSON_OBJECT('a', i), '$.a') + ABS(n)

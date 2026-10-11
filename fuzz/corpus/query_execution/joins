@@ -1,0 +1,1 @@
+SELECT a.id, b.v FROM p a LEFT JOIN p b ON a.grp = b.grp WHERE a.v IS NULL ORDER BY a.id LIMIT 4

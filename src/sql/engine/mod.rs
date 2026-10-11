@@ -36,7 +36,8 @@ pub use hooks::{
 };
 mod ingest;
 pub use ingest::{
-    ImportColumn, ImportDecision, ImportMode, ImportOptions, ImportReport, ImportTable, ImportVisitor,
+    ImportColumn, ImportDecision, ImportMode, ImportOptions, ImportReport, ImportTable,
+    ImportVisitor,
 };
 mod transaction;
 pub use transaction::{Engine, EngineSession};
@@ -1699,7 +1700,10 @@ impl RawEngine {
             .ok_or_else(|| anyhow!("FOR SYSTEM_TIME ALL requires one table"))?;
         let version_at = find_top_level_keyword(&upper, "FOR SYSTEM_TIME ALL")
             .ok_or_else(|| anyhow!("invalid FOR SYSTEM_TIME ALL clause"))?;
-        ensure!(version_at > from_at, "FOR SYSTEM_TIME ALL requires one table");
+        ensure!(
+            version_at > from_at,
+            "FOR SYSTEM_TIME ALL requires one table"
+        );
         let table = sql[from_at + "FROM".len()..version_at]
             .trim()
             .trim_matches('`')
@@ -1747,7 +1751,10 @@ impl RawEngine {
         let Some(definition) = self.views.get(name).map(|definition| definition.clone()) else {
             return Ok(None);
         };
-        if !definition.to_ascii_uppercase().contains(" WITH CHECK OPTION") {
+        if !definition
+            .to_ascii_uppercase()
+            .contains(" WITH CHECK OPTION")
+        {
             return Ok(None);
         }
         let query = strip_view_check_option(&definition);
@@ -1892,7 +1899,8 @@ impl RawEngine {
                     return Err(anyhow!("checked view update requires a single table"));
                 };
                 name.0 = vec![Ident::new(table)];
-                self.execute_statement_unobserved(statements.remove(0)).map(Some)
+                self.execute_statement_unobserved(statements.remove(0))
+                    .map(Some)
             }
             _ => Ok(None),
         }
@@ -2666,7 +2674,9 @@ impl RawEngine {
         if upper.starts_with("CREATE TABLE ") && upper.contains("WITH SYSTEM VERSIONING") {
             let normalized = self.rewrite_sql_for_parser(trimmed);
             ensure!(
-                !normalized.to_ascii_uppercase().contains("WITH SYSTEM VERSIONING"),
+                !normalized
+                    .to_ascii_uppercase()
+                    .contains("WITH SYSTEM VERSIONING"),
                 "system versioning parser rewrite failed: {normalized}"
             );
             let mut results = self.execute_sql_internal(&normalized, &normalized, true, false)?;
@@ -6924,10 +6934,7 @@ fn strip_create_table_unsupported_options(sql: &str) -> String {
     };
     let prefix = &sql[..=close];
     let mut suffix = sql[close + 1..].to_string();
-    if let Some(index) = suffix
-        .to_ascii_uppercase()
-        .find("WITH SYSTEM VERSIONING")
-    {
+    if let Some(index) = suffix.to_ascii_uppercase().find("WITH SYSTEM VERSIONING") {
         suffix.truncate(index);
     }
     for option in [

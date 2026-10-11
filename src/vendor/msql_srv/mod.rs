@@ -109,6 +109,16 @@ pub use crate::vendor::msql_srv::myc::constants::{ColumnFlags, ColumnType, Statu
 mod commands;
 mod errorcodes;
 mod packet;
+
+#[cfg(feature = "fuzzing")]
+pub(crate) fn fuzz_packet(input: &[u8]) {
+    let mut conn = packet::PacketConn::new(std::io::Cursor::new(input.to_vec()));
+    for _ in 0..32 {
+        if !matches!(conn.next(), Ok(Some(_))) {
+            break;
+        }
+    }
+}
 mod params;
 mod resultset;
 #[cfg(feature = "tls")]

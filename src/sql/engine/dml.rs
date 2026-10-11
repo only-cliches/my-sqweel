@@ -558,8 +558,10 @@ impl RawEngine {
                 && let (Some(auto_increment_column), Some(auto_increment_before)) =
                     (&auto_increment_column, auto_increment_before)
             {
-                self.auto_inc
-                    .insert(format!("{table}:{auto_increment_column}"), auto_increment_before);
+                self.auto_inc.insert(
+                    format!("{table}:{auto_increment_column}"),
+                    auto_increment_before,
+                );
             }
             if !conflict_keys.is_empty() {
                 if options.on_duplicate.is_empty() && options.ignore {

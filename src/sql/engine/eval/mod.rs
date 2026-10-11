@@ -969,10 +969,7 @@ fn group_rows(
             for expr in &group_by[level..] {
                 nullify_group_expr_columns(&mut base, expr);
             }
-            let nullified_group_exprs = group_by[level..]
-                .iter()
-                .map(ToString::to_string)
-                .collect();
+            let nullified_group_exprs = group_by[level..].iter().map(ToString::to_string).collect();
             output.push(AggregateGroup {
                 rows,
                 base,

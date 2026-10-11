@@ -1400,8 +1400,8 @@ impl RawEngine {
                     .transpose()
                     .map(|value| value.unwrap_or(Value::Null))
             }
-            "COUNT" | "SUM" | "AVG" | "MIN" | "MAX" | "BIT_AND" | "BIT_OR" | "BIT_XOR"
-            | "STD" | "STDDEV" | "STDDEV_POP" | "STDDEV_SAMP" | "VAR_POP" | "MEDIAN"
+            "COUNT" | "SUM" | "AVG" | "MIN" | "MAX" | "BIT_AND" | "BIT_OR" | "BIT_XOR" | "STD"
+            | "STDDEV" | "STDDEV_POP" | "STDDEV_SAMP" | "VAR_POP" | "MEDIAN"
             | "PERCENTILE_CONT" | "PERCENTILE_DISC" => {
                 let mut aggregate_values = Vec::new();
                 for index in frame_rows {
@@ -2053,10 +2053,19 @@ impl RawEngine {
                 } else if branch_metadata.iter().any(|branch| {
                     matches!(
                         branch.column_type,
-                        MysqlColumnType::Blob | MysqlColumnType::MediumBlob | MysqlColumnType::Json
+                        MysqlColumnType::MediumBlob | MysqlColumnType::Json
                     )
                 }) {
                     metadata.column_type = MysqlColumnType::MediumBlob;
+                } else if branch_metadata
+                    .iter()
+                    .any(|branch| matches!(branch.column_type, MysqlColumnType::Blob))
+                {
+                    metadata.column_type = if branch_is_null.iter().any(|is_null| *is_null) {
+                        MysqlColumnType::MediumBlob
+                    } else {
+                        MysqlColumnType::Blob
+                    };
                 }
             }
 
@@ -2889,14 +2898,14 @@ impl RawEngine {
                         let argument_expr = function_arguments(function)
                             .ok()
                             .and_then(|arguments| arguments.into_iter().next().flatten());
-                        let static_extract = argument_expr.as_ref().is_some_and(|argument| {
-                            let Expr::Function(extract) = argument else {
-                                return false;
-                            };
-                            extract.name.0.last().is_some_and(|name| {
-                                name.value.eq_ignore_ascii_case("JSON_EXTRACT")
-                            })
-                                && function_arguments(extract)
+                        let static_extract =
+                            argument_expr.as_ref().is_some_and(|argument| {
+                                let Expr::Function(extract) = argument else {
+                                    return false;
+                                };
+                                extract.name.0.last().is_some_and(|name| {
+                                    name.value.eq_ignore_ascii_case("JSON_EXTRACT")
+                                }) && function_arguments(extract)
                                     .ok()
                                     .and_then(|arguments| arguments.into_iter().nth(1).flatten())
                                     .is_some_and(|path| {
@@ -2908,7 +2917,7 @@ impl RawEngine {
                                             )
                                         )
                                     })
-                        });
+                            });
                         let argument = argument_expr.map(|argument| {
                             self.expression_metadata(select, &argument, String::new(), first_row)
                                 .column_type
@@ -3019,13 +3028,8 @@ impl RawEngine {
                         let argument_types = arguments
                             .iter()
                             .map(|argument| {
-                                self.expression_metadata(
-                                    select,
-                                    argument,
-                                    String::new(),
-                                    first_row,
-                                )
-                                .column_type
+                                self.expression_metadata(select, argument, String::new(), first_row)
+                                    .column_type
                             })
                             .collect::<Vec<_>>();
                         let has_four_json_object_pairs = arguments.len() >= 8;

@@ -31,6 +31,12 @@ pub use sql::engine::{
     QueryHookError, QueryHookEvent, QueryHookKey, QueryHookOptions, QueryHookRow,
     QueryHookSubscription,
 };
+
+/// Entry point used by the cargo-fuzz MySQL packet target.
+#[cfg(feature = "fuzzing")]
+pub fn fuzz_mysql_packet(input: &[u8]) {
+    crate::vendor::msql_srv::fuzz_packet(input);
+}
 pub(crate) mod vendor;
 
 pub fn run_cli() -> Result<()> {

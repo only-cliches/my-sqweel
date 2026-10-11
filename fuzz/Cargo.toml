@@ -1,0 +1,58 @@
+[package]
+name = "my-sqweel-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+my-sqweel = { path = "..", default-features = false, features = ["fuzzing"] }
+
+[build-dependencies]
+# Keep RocksDB's bindgen 0.72 calls runtime-loaded when mysql_common unifies clang-sys's runtime feature.
+bindgen = { version = "0.72", default-features = false, features = ["runtime"] }
+
+[[bin]]
+name = "parser"
+path = "fuzz_targets/parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "binding"
+path = "fuzz_targets/binding.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "expression_eval"
+path = "fuzz_targets/expression_eval.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "query_execution"
+path = "fuzz_targets/query_execution.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "dml_transactions"
+path = "fuzz_targets/dml_transactions.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mysql_wire"
+path = "fuzz_targets/mysql_wire.rs"
+test = false
+doc = false
+bench = false
