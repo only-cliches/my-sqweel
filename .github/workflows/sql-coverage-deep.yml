@@ -164,12 +164,12 @@ jobs:
           cargo install --locked cargo-mutants
       - name: Verify focused baseline tests
         run: cargo test --locked --test coverage_execution_paths --test coverage_interleavings
-      - name: Test a deterministic 1 percent SQL engine mutant sample
+      - name: Test a deterministic SQL engine mutant sample
         run: |
           mkdir -p artifacts/sql-coverage/mutants
           if cargo mutants --file 'src/sql/engine/**/*.rs' \
-            --shard 0/100 --sharding round-robin --no-shuffle \
-            --baseline=skip --timeout 90 --jobs 2 \
+            --shard 0/500 --sharding round-robin --no-shuffle \
+            --baseline=skip --timeout 90 --in-place \
             --output artifacts/sql-coverage/mutants \
             --cargo-test-arg=--test \
             --cargo-test-arg=coverage_execution_paths \

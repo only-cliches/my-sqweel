@@ -83,7 +83,7 @@ def mutation_report(source: dict[str, Any], exit_code: int | None) -> dict[str, 
         "kind": "cargo_mutants_sample",
         "tool": "cargo-mutants",
         "scope": "src/sql/engine/**/*.rs",
-        "shard": "0/100",
+        "shard": "0/500",
         "status": status,
         "totals": {
             "tested": counts["total_mutants"],
