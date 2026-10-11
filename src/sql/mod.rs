@@ -1,8 +1,9 @@
 pub mod engine;
 
-use sqlparser::ast::Statement;
+use sqlparser::ast::{BinaryOperator, Expr, Statement};
 use sqlparser::dialect::{Dialect, MySqlDialect};
-use sqlparser::parser::Parser;
+use sqlparser::keywords::Keyword;
+use sqlparser::parser::{Parser, ParserError};
 use sqlparser::tokenizer::{Token, Tokenizer, TokenizerError};
 
 // Token boundaries must also work for account names like 'user'@'host'.
@@ -28,6 +29,60 @@ impl Dialect for BoundaryDialect {
     }
     fn supports_numeric_prefix(&self) -> bool {
         true
+    }
+}
+
+// shortcut: sqlparser 0.53 panics on malformed DIV, remove this dialect after upgrading sqlparser.
+#[derive(Debug)]
+struct SafeMySqlDialect;
+
+impl Dialect for SafeMySqlDialect {
+    fn dialect(&self) -> std::any::TypeId {
+        std::any::TypeId::of::<MySqlDialect>()
+    }
+    fn is_identifier_start(&self, ch: char) -> bool {
+        MySqlDialect {}.is_identifier_start(ch)
+    }
+    fn is_identifier_part(&self, ch: char) -> bool {
+        MySqlDialect {}.is_identifier_part(ch)
+    }
+    fn is_delimited_identifier_start(&self, ch: char) -> bool {
+        MySqlDialect {}.is_delimited_identifier_start(ch)
+    }
+    fn identifier_quote_style(&self, identifier: &str) -> Option<char> {
+        MySqlDialect {}.identifier_quote_style(identifier)
+    }
+    fn supports_string_literal_backslash_escape(&self) -> bool {
+        MySqlDialect {}.supports_string_literal_backslash_escape()
+    }
+    fn supports_numeric_prefix(&self) -> bool {
+        MySqlDialect {}.supports_numeric_prefix()
+    }
+    fn parse_infix(
+        &self,
+        parser: &mut Parser,
+        expr: &Expr,
+        _precedence: u8,
+    ) -> Option<Result<Expr, ParserError>> {
+        parser.parse_keyword(Keyword::DIV).then(|| {
+            parser.parse_expr().map(|right| Expr::BinaryOp {
+                left: Box::new(expr.clone()),
+                op: BinaryOperator::MyIntegerDivide,
+                right: Box::new(right),
+            })
+        })
+    }
+    fn parse_statement(&self, parser: &mut Parser) -> Option<Result<Statement, ParserError>> {
+        MySqlDialect {}.parse_statement(parser)
+    }
+    fn require_interval_qualifier(&self) -> bool {
+        MySqlDialect {}.require_interval_qualifier()
+    }
+    fn supports_limit_comma(&self) -> bool {
+        MySqlDialect {}.supports_limit_comma()
+    }
+    fn supports_create_table_select(&self) -> bool {
+        MySqlDialect {}.supports_create_table_select()
     }
 }
 
@@ -69,27 +124,18 @@ pub fn parse(sql: &str) -> Result<Vec<Statement>, sqlparser::parser::ParserError
         None
     };
     let parse_sql = rewritten_assignments.as_deref().unwrap_or(&parser_sql);
-    match parse_sql_without_panic(parse_sql) {
+    match Parser::parse_sql(&SafeMySqlDialect, parse_sql) {
         Ok(statements) => Ok(statements),
         Err(err) => {
             if let Some(rewritten) = rewrite_user_variable_assignments(&parser_sql)
                 .or_else(|| rewrite_drop_index_on_table(&parser_sql))
             {
-                parse_sql_without_panic(&rewritten)
+                Parser::parse_sql(&SafeMySqlDialect, &rewritten)
             } else {
                 Err(err)
             }
         }
     }
-}
-
-fn parse_sql_without_panic(sql: &str) -> Result<Vec<Statement>, sqlparser::parser::ParserError> {
-    // sqlparser's MySQL DIV handler can panic on malformed right-hand expressions.
-    std::panic::catch_unwind(|| Parser::parse_sql(&MySqlDialect {}, sql)).unwrap_or_else(|_| {
-        Err(sqlparser::parser::ParserError::ParserError(
-            "invalid SQL syntax".to_owned(),
-        ))
-    })
 }
 
 fn rewrite_mysql_compound_intervals(sql: &str) -> String {
@@ -520,5 +566,7 @@ mod tests {
     #[test]
     fn malformed_mysql_div_returns_error() {
         assert!(parse("SELECT ECT a, COUNT(*) DIV=01 OJDEY e ").is_err());
+        assert_eq!(parse("SELECT 8 DIV 2").unwrap().len(), 1);
+        assert_eq!(parse("LOCK TABLES t READ").unwrap().len(), 1);
     }
 }
