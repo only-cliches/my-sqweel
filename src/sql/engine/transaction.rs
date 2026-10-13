@@ -2600,13 +2600,13 @@ mod tests {
             engine.execute_sql("SELECT async_guarded() AS value")?[0].rows[0]["value"],
             json!(1)
         );
-        assert_eq!(
-            engine.execute_sql(
-                "SELECT null_host() AS value, null_sql() AS sql_value, positive(-2) AS positive"
-            )?[0]
-                .rows[0],
-            json!({"value": null, "sql_value": null, "positive": 0})
-        );
+        let nulls = &engine.execute_sql(
+            "SELECT null_host() AS value, null_sql() AS sql_value, positive(-2) AS positive",
+        )?[0]
+            .rows[0];
+        assert_eq!(nulls["value"], Value::Null);
+        assert_eq!(nulls["sql_value"], Value::Null);
+        assert_eq!(nulls["positive"], json!(0));
         assert!(engine.execute_sql("SELECT slow_host()").is_err());
         assert_eq!(
             scalar.column_metadata[0].column_type,
