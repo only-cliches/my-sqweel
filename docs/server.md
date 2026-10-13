@@ -20,7 +20,7 @@ fn main() -> anyhow::Result<()> {
 }
 ```
 
-Use `spawn_sql_async` and `shutdown_async` from Tokio tasks. SQL endpoint creation never starts HTTP. The CLI explicitly starts its debug/search HTTP server; embedded applications can explicitly call `server::spawn_debug_http`.
+Use `spawn_sql_async` and `shutdown_async` from Tokio tasks. SQL endpoint creation never starts HTTP. To expose the same tables as Meilisearch-compatible indexes, call `engine.spawn_meilisearch(MeilisearchEndpointConfig::new(addr))`; it starts a separate HTTP listener. See [search and debug HTTP](search.md) for the data mapping and search endpoint lifetime. The CLI starts its debug/search HTTP server explicitly.
 
 ## Wire authentication and scopes
 

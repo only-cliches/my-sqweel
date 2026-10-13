@@ -67,6 +67,7 @@ fn validate_function_state(state: &Committed, hosts: &HostFunctionRegistry) -> R
 
 struct Coordinator {
     hooks: Arc<HookRegistry>,
+    meili_resources: Mutex<std::sync::Weak<crate::server::MeiliResources>>,
     host_functions: Arc<HostFunctionRegistry>,
     cfg: EngineConfig,
     committed: Mutex<Committed>,
@@ -170,6 +171,16 @@ impl Default for Engine {
 }
 
 impl Engine {
+    pub(crate) fn meili_resources(&self) -> Arc<crate::server::MeiliResources> {
+        let mut active = self.shared.meili_resources.lock();
+        if let Some(resources) = active.upgrade() {
+            return resources;
+        }
+        let resources = Arc::new(crate::server::MeiliResources::default());
+        *active = Arc::downgrade(&resources);
+        resources
+    }
+
     pub fn builder(cfg: EngineConfig, storage: crate::Storage) -> EngineBuilder {
         EngineBuilder::new(cfg, storage)
     }
@@ -246,6 +257,7 @@ impl Engine {
         validate_function_state(&state, &functions)?;
         let shared = Arc::new(Coordinator {
             hooks: Arc::new(HookRegistry::default()),
+            meili_resources: Mutex::new(std::sync::Weak::new()),
             host_functions: functions,
             cfg,
             committed: Mutex::new(state),

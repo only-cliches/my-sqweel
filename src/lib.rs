@@ -13,7 +13,7 @@ pub use crate::sql::engine::{
     ImportColumn, ImportDecision, ImportMode, ImportOptions, ImportReport, ImportTable,
     ImportVisitor, MysqlColumnType, QueryResult,
 };
-pub use server::{SqlEndpoint, SqlEndpointConfig};
+pub use server::{MeilisearchEndpoint, MeilisearchEndpointConfig, SqlEndpoint, SqlEndpointConfig};
 pub use storage::Storage;
 mod runtime;
 

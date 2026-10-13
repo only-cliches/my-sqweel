@@ -78,6 +78,13 @@ Creating an engine starts no network listeners. SQL schemas are strict:
 declare tables and columns before writing, and values must satisfy their
 types and constraints. The initial database is `app`.
 
+To accept MySQL-compatible TCP connections to the same database, call
+`engine.spawn_sql(SqlEndpointConfig::new(...))`. The listener starts only when
+you call it; see [Add MySQL-compatible TCP endpoints](#add-mysql-compatible-tcp-endpoints)
+for a complete example with authentication and a MariaDB client.
+To serve a Meilisearch-compatible HTTP API over that data, call
+`engine.spawn_meilisearch(MeilisearchEndpointConfig::new(...))`.
+
 Query calls return one `QueryResult` per SQL statement, including JSON-object
 rows, column metadata, affected-row counts, the last insert ID, and warnings.
 Use parameterized queries for values supplied by an application.
@@ -243,11 +250,11 @@ conflicting transactions can return retryable MySQL error 1213. DDL and
 account administration are rejected inside active transactions.
 See [embedding and transactions](docs/embedding.md) for details.
 
-## Add SQL endpoints
+## Add MySQL-compatible TCP endpoints
 
-Use `engine.spawn_sql(config)` to accept MySQL/MariaDB clients. Call it again
-for another endpoint on the same engine. Each configuration requires an
-explicit authentication policy and can restrict access to databases or tables.
+Use `engine.spawn_sql(config)` to accept MySQL/MariaDB clients over TCP. Call
+it again for another endpoint on the same engine. Each configuration requires
+an explicit authentication policy and can restrict access to databases or tables.
 
 This server exposes only `SELECT` access to `app.tasks`:
 
@@ -297,6 +304,44 @@ for session cleanup; dropping the handle closes the listener and disconnects
 clients. Other endpoints and embedded callers remain usable. Async applications
 can use `spawn_sql_async` and `shutdown_async`. See [endpoint authentication and
 lifetime](docs/server.md) for the full behavior.
+
+## Add Meilisearch-compatible HTTP endpoints
+
+Call `spawn_meilisearch` on an `Engine` to start an HTTP endpoint. It shares
+the same `app` database as embedded SQL calls and MySQL TCP endpoints: each
+SQL table is a search index, each row is a document, and columns are document
+fields. Changes made through either API appear in the other. MySqweel uses an
+internal Tantivy text search index to emulate supported Meilisearch behavior;
+it is not a full Meilisearch server.
+
+```rust,no_run
+use my_sqweel::{Engine, MeilisearchEndpointConfig};
+
+fn main() -> anyhow::Result<()> {
+    let engine = Engine::default();
+    engine.execute_sql("CREATE TABLE books (id TEXT PRIMARY KEY, title TEXT)")?;
+    engine.execute_sql("INSERT INTO books VALUES ('1', 'Dune')")?;
+
+    let mut endpoint = engine.spawn_meilisearch(
+        MeilisearchEndpointConfig::new("127.0.0.1:7700".parse()?),
+    )?;
+    println!("Search listening on {}; press Enter to stop", endpoint.local_addr());
+    std::io::stdin().read_line(&mut String::new())?;
+    endpoint.shutdown()?;
+    Ok(())
+}
+```
+
+While running, `GET /indexes/books/documents` returns the SQL rows as
+documents, and `POST /indexes/books/search` searches them. Call
+`spawn_meilisearch` again for another endpoint on the same engine. Tantivy's
+in-memory indexes are shared while any of these endpoints are active and
+released after the last one stops. Dropping a handle also stops its listener;
+async applications can use `spawn_meilisearch_async` and `shutdown_async`.
+The HTTP API has no authentication, so bind to loopback or add your own access
+control. Non-loopback binds require `allow_remote = true`.
+
+See [search and debug HTTP](docs/search.md) for routes and behavior.
 
 ## Customize query execution
 
@@ -352,8 +397,8 @@ Use `sqwl repl` for a shell without listeners and `sqwl help` for all CLI
 options. [Maintenance APIs](docs/operations.md) are also available to embedded
 applications.
 
-The HTTP service includes a Meilisearch-shaped document and search API with
-text/vector search, filters, sorting, and facets. It provides unauthenticated
+The CLI's debug HTTP service includes the same Meilisearch-shaped document
+and search API, plus schema-drift routes. It provides unauthenticated
 administrative access to `app`; SQL authentication does not protect these
 routes. Spawning a SQL endpoint from Rust does not start HTTP. See
 [search and debug HTTP](docs/search.md) for setup and routes.

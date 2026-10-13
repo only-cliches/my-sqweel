@@ -1,10 +1,12 @@
 use std::collections::BTreeMap;
+use std::hash::{Hash, Hasher};
 use std::net::SocketAddr;
+use std::ops::Deref;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use anyhow::{Result, anyhow};
+use anyhow::{Result, anyhow, ensure};
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
@@ -27,25 +29,39 @@ const DEFAULT_LIMIT: u64 = 20;
 #[derive(Clone)]
 struct MeiliState {
     engine: SharedEngine,
-    tasks: Arc<Mutex<BTreeMap<u64, MeiliTask>>>,
-    index_settings: Arc<Mutex<BTreeMap<String, Map<String, Value>>>>,
-    search_indexes: Arc<TantivySearchManager>,
-    dumps: Arc<Mutex<BTreeMap<String, Value>>>,
-    webhooks: Arc<Mutex<BTreeMap<String, Value>>>,
-    task_seq: Arc<AtomicU64>,
+    resources: Arc<MeiliResources>,
+}
+
+pub(crate) struct MeiliResources {
+    tasks: Mutex<BTreeMap<u64, MeiliTask>>,
+    index_settings: Mutex<BTreeMap<String, Map<String, Value>>>,
+    search_indexes: TantivySearchManager,
+    dumps: Mutex<BTreeMap<String, Value>>,
+    webhooks: Mutex<BTreeMap<String, Value>>,
+    task_seq: AtomicU64,
+}
+
+impl Default for MeiliResources {
+    fn default() -> Self {
+        Self {
+            tasks: Mutex::default(),
+            index_settings: Mutex::default(),
+            search_indexes: TantivySearchManager::default(),
+            dumps: Mutex::default(),
+            webhooks: Mutex::default(),
+            task_seq: AtomicU64::new(1),
+        }
+    }
 }
 
 impl MeiliState {
+    #[cfg(test)]
     fn new(engine: SharedEngine) -> Self {
-        Self {
-            engine,
-            tasks: Arc::new(Mutex::new(BTreeMap::new())),
-            index_settings: Arc::new(Mutex::new(BTreeMap::new())),
-            search_indexes: Arc::new(TantivySearchManager::new()),
-            dumps: Arc::new(Mutex::new(BTreeMap::new())),
-            webhooks: Arc::new(Mutex::new(BTreeMap::new())),
-            task_seq: Arc::new(AtomicU64::new(1)),
-        }
+        Self::shared(engine, Arc::new(MeiliResources::default()))
+    }
+
+    fn shared(engine: SharedEngine, resources: Arc<MeiliResources>) -> Self {
+        Self { engine, resources }
     }
 
     fn next_task_uid(&self) -> u64 {
@@ -91,16 +107,20 @@ impl MeiliState {
     }
 }
 
+impl Deref for MeiliState {
+    type Target = MeiliResources;
+
+    fn deref(&self) -> &Self::Target {
+        &self.resources
+    }
+}
+
 #[derive(Default)]
 struct TantivySearchManager {
     indexes: Mutex<BTreeMap<String, TantivySearchIndex>>,
 }
 
 impl TantivySearchManager {
-    fn new() -> Self {
-        Self::default()
-    }
-
     fn rebuild(&self, uid: &str, rows: &BTreeMap<String, StoredRow>) -> Result<()> {
         let search_index = TantivySearchIndex::from_rows(rows)?;
         let mut indexes = self.indexes.lock().unwrap_or_else(|err| err.into_inner());
@@ -128,12 +148,20 @@ impl TantivySearchManager {
     fn search(
         &self,
         uid: &str,
+        rows: &BTreeMap<String, StoredRow>,
         query_text: &str,
         search_fields: Option<&[String]>,
         searchable_attributes: Option<Vec<String>>,
         limit: usize,
     ) -> Result<Option<Vec<TantivyHit>>> {
-        let indexes = self.indexes.lock().unwrap_or_else(|err| err.into_inner());
+        let revision = rows_revision(rows)?;
+        let mut indexes = self.indexes.lock().unwrap_or_else(|err| err.into_inner());
+        if indexes
+            .get(uid)
+            .is_none_or(|index| index.source_revision != revision)
+        {
+            indexes.insert(uid.to_string(), TantivySearchIndex::from_rows(rows)?);
+        }
         let Some(index) = indexes.get(uid) else {
             return Ok(None);
         };
@@ -143,6 +171,7 @@ impl TantivySearchManager {
 
 struct TantivySearchIndex {
     index: TantivyIndex,
+    source_revision: u64,
     id_field: Field,
     all_text_field: Field,
     field_map: BTreeMap<String, Field>,
@@ -203,6 +232,7 @@ impl TantivySearchIndex {
 
         Ok(Self {
             index,
+            source_revision: rows_revision(rows)?,
             id_field,
             all_text_field,
             field_map,
@@ -280,6 +310,16 @@ impl TantivySearchIndex {
             fields
         }
     }
+}
+
+fn rows_revision(rows: &BTreeMap<String, StoredRow>) -> Result<u64> {
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    for (key, row) in rows {
+        key.hash(&mut hash);
+        row.id.to_string().hash(&mut hash);
+        serde_json::to_string(&row.data)?.hash(&mut hash);
+    }
+    Ok(hash.finish())
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -559,18 +599,116 @@ pub struct DebugHttpHandle {
     join: Option<thread::JoinHandle<()>>,
 }
 
-impl Drop for DebugHttpHandle {
-    fn drop(&mut self) {
+impl DebugHttpHandle {
+    fn stop(&mut self) {
         if let Some(stop) = self.stop.take() {
             let _ = stop.send(());
         }
+    }
+
+    fn shutdown(&mut self) -> Result<()> {
+        self.stop();
         if let Some(join) = self.join.take() {
-            let _ = join.join();
+            join.join().map_err(|_| anyhow!("HTTP endpoint panicked"))?;
+        }
+        Ok(())
+    }
+
+    async fn shutdown_async(&mut self) -> Result<()> {
+        self.stop();
+        if let Some(join) = self.join.take() {
+            tokio::task::spawn_blocking(move || join.join())
+                .await?
+                .map_err(|_| anyhow!("HTTP endpoint panicked"))?;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for DebugHttpHandle {
+    fn drop(&mut self) {
+        let _ = self.shutdown();
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct MeilisearchEndpointConfig {
+    pub bind_addr: SocketAddr,
+    pub allow_remote: bool,
+}
+
+impl MeilisearchEndpointConfig {
+    pub fn new(bind_addr: SocketAddr) -> Self {
+        Self {
+            bind_addr,
+            allow_remote: false,
         }
     }
 }
 
+/// Owns a Meilisearch-compatible HTTP listener and its in-memory search index.
+pub struct MeilisearchEndpoint {
+    address: SocketAddr,
+    http: DebugHttpHandle,
+}
+
+impl MeilisearchEndpoint {
+    pub fn local_addr(&self) -> SocketAddr {
+        self.address
+    }
+
+    pub fn shutdown(&mut self) -> Result<()> {
+        self.http.shutdown()
+    }
+
+    pub async fn shutdown_async(&mut self) -> Result<()> {
+        self.http.shutdown_async().await
+    }
+}
+
+impl crate::sql::engine::Engine {
+    pub fn spawn_meilisearch(
+        &self,
+        config: MeilisearchEndpointConfig,
+    ) -> Result<MeilisearchEndpoint> {
+        ensure!(
+            config.allow_remote || config.bind_addr.ip().is_loopback(),
+            "non-loopback Meilisearch endpoints require allow_remote"
+        );
+        let listener = std::net::TcpListener::bind(config.bind_addr)?;
+        listener.set_nonblocking(true)?;
+        let address = listener.local_addr()?;
+        let http = spawn_with_resources(
+            config.bind_addr,
+            Arc::new(self.clone()),
+            self.meili_resources(),
+            Some(listener),
+            false,
+        );
+        Ok(MeilisearchEndpoint { address, http })
+    }
+
+    pub async fn spawn_meilisearch_async(
+        &self,
+        config: MeilisearchEndpointConfig,
+    ) -> Result<MeilisearchEndpoint> {
+        let engine = self.clone();
+        tokio::task::spawn_blocking(move || engine.spawn_meilisearch(config)).await?
+    }
+}
+
 pub fn spawn(addr: SocketAddr, engine: SharedEngine) -> DebugHttpHandle {
+    let resources = engine.meili_resources();
+    spawn_with_resources(addr, engine, resources, None, true)
+}
+
+fn spawn_with_resources(
+    addr: SocketAddr,
+    engine: SharedEngine,
+    resources: Arc<MeiliResources>,
+    bound_listener: Option<std::net::TcpListener>,
+    include_debug: bool,
+) -> DebugHttpHandle {
     let (stop, stop_rx) = tokio::sync::oneshot::channel();
     let join = thread::spawn(move || {
         // Keep one engine reference outside the async runtime. The debug state's
@@ -586,16 +724,9 @@ pub fn spawn(addr: SocketAddr, engine: SharedEngine) -> DebugHttpHandle {
         };
 
         rt.block_on(async move {
-            let state = MeiliState::new(engine);
+            let state = MeiliState::shared(engine, resources);
 
             let app = Router::new()
-                .route("/_drift/health", get(drift_health))
-                .route("/_drift/report", get(drift_report))
-                .route("/_drift/tables", get(tables))
-                .route("/_drift/tables/{table}/rows", get(table_rows))
-                .route("/_drift/tables/{table}/seed", post(seed_table))
-                .route("/_drift/snapshot", post(snapshot))
-                .route("/_drift/restore", post(restore))
                 .route("/health", get(health))
                 .route("/version", get(version))
                 .route("/indexes", get(list_indexes).post(create_index))
@@ -663,10 +794,26 @@ pub fn spawn(addr: SocketAddr, engine: SharedEngine) -> DebugHttpHandle {
                 .route("/keys", get(list_keys))
                 .route("/keys/{uid}", get(get_key))
                 .route("/tasks", get(list_tasks))
-                .route("/tasks/{uid}", get(get_task))
-                .with_state(state);
+                .route("/tasks/{uid}", get(get_task));
 
-            let listener = match tokio::net::TcpListener::bind(addr).await {
+            let app = if include_debug {
+                app.route("/_drift/health", get(drift_health))
+                    .route("/_drift/report", get(drift_report))
+                    .route("/_drift/tables", get(tables))
+                    .route("/_drift/tables/{table}/rows", get(table_rows))
+                    .route("/_drift/tables/{table}/seed", post(seed_table))
+                    .route("/_drift/snapshot", post(snapshot))
+                    .route("/_drift/restore", post(restore))
+            } else {
+                app
+            }
+            .with_state(state);
+
+            let listener = match bound_listener {
+                Some(listener) => tokio::net::TcpListener::from_std(listener),
+                None => tokio::net::TcpListener::bind(addr).await,
+            };
+            let listener = match listener {
                 Ok(l) => l,
                 Err(err) => {
                     tracing::warn!(error = %err, "debug http bind failed");
@@ -1127,6 +1274,7 @@ fn list_documents_query(
     let text_hits = if let Some(query_text) = query_text {
         match state.search_indexes.search(
             &uid,
+            &rows,
             query_text,
             attributes_to_search_on.as_deref(),
             searchable_attributes.clone(),
@@ -2044,6 +2192,7 @@ fn do_search_documents_result(
     let text_hits = if request.vector.is_none() && !query_text.trim().is_empty() {
         match state.search_indexes.search(
             &uid,
+            &rows,
             &query_text,
             request.attributes_to_search_on.as_deref(),
             searchable_attributes.clone(),
@@ -4650,12 +4799,82 @@ fn validate_identifier(identifier: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpStream;
     use std::sync::Arc;
+    use std::time::Duration;
 
     use serde_json::json;
 
     use super::*;
     use crate::sql::engine::{Engine, EngineConfig};
+
+    #[test]
+    fn meilisearch_endpoints_share_and_release_search_resources() {
+        let engine = Engine::default();
+        let config = || MeilisearchEndpointConfig::new("127.0.0.1:0".parse().unwrap());
+        let mut first = engine.spawn_meilisearch(config()).unwrap();
+        let second = engine.spawn_meilisearch(config()).unwrap();
+        let resources = engine.meili_resources();
+        let weak = Arc::downgrade(&resources);
+        drop(resources);
+
+        let mut stream = TcpStream::connect(first.local_addr()).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        stream
+            .write_all(
+                b"GET /_drift/health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+            )
+            .unwrap();
+        let mut status = String::new();
+        BufReader::new(stream).read_line(&mut status).unwrap();
+        assert!(status.starts_with("HTTP/1.1 404"), "{status}");
+
+        first.shutdown().unwrap();
+        assert!(weak.upgrade().is_some());
+        drop(second);
+        assert!(weak.upgrade().is_none());
+        assert!(
+            engine
+                .spawn_meilisearch(MeilisearchEndpointConfig::new("0.0.0.0:0".parse().unwrap()))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn sql_writes_refresh_meilisearch_text_index() {
+        let engine = Arc::new(Engine::default());
+        engine
+            .execute_sql("CREATE TABLE books (id TEXT PRIMARY KEY, title TEXT); INSERT INTO books VALUES ('1', 'Dune')")
+            .unwrap();
+        let state = MeiliState::new(engine.clone());
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let search = |q: &str| {
+            rt.block_on(search_documents_post(
+                Path("books".to_string()),
+                State(state.clone()),
+                Json(SearchBody {
+                    q: Some(q.to_string()),
+                    ..Default::default()
+                }),
+            ))
+        };
+
+        assert_eq!(search("Dune").1.0["hits"].as_array().unwrap().len(), 1);
+        engine
+            .execute_sql("UPDATE books SET title = 'Foundation' WHERE id = '1'")
+            .unwrap();
+        assert!(search("Dune").1.0["hits"].as_array().unwrap().is_empty());
+        assert_eq!(
+            search("Foundation").1.0["hits"].as_array().unwrap().len(),
+            1
+        );
+    }
 
     #[test]
     fn parses_seed_payload_shapes() {

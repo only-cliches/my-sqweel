@@ -1,11 +1,38 @@
 # Search and debug HTTP
 
-The debug HTTP listener is a trusted local administrative API. It exposes
-schema-drift inspection and a Meilisearch-shaped document/search surface over
-the default `app` database. SQL tables remain the source of truth; search
-indexes are derived from committed table state.
+The Meilisearch-compatible HTTP endpoint exposes documents and search over
+the default `app` database. SQL tables are search indexes, rows are documents,
+and columns are document fields. Both the MySQL-compatible TCP endpoint and
+the search endpoint read and write the same database. MySqweel uses an internal
+Tantivy text search index to emulate supported Meilisearch behavior; SQL rows
+remain the source of truth, and the index refreshes when committed rows change.
 
-Start the server with the default debug listener at `127.0.0.1:3407`:
+An embedded application can start one or more search endpoints on its engine:
+
+```rust,no_run
+use my_sqweel::{Engine, MeilisearchEndpointConfig};
+
+fn main() -> anyhow::Result<()> {
+    let engine = Engine::default();
+    engine.execute_sql("CREATE TABLE books (id TEXT PRIMARY KEY, title TEXT)")?;
+    let mut search = engine.spawn_meilisearch(
+        MeilisearchEndpointConfig::new("127.0.0.1:7700".parse()?),
+    )?;
+    println!("Search listening on {}", search.local_addr());
+    // Keep the handle alive while clients use the endpoint.
+    search.shutdown()?;
+    Ok(())
+}
+```
+
+The engine keeps one shared in-memory Tantivy index manager while at least
+one search endpoint is active. It releases the indexes after the last endpoint
+stops. `spawn_meilisearch_async` and `shutdown_async` are available for Tokio
+applications. These routes have no authentication; the default config accepts
+only loopback binds, and `allow_remote = true` is required for other addresses.
+
+The CLI's debug HTTP listener adds schema-drift and snapshot operations to the
+same search routes. Start it at `127.0.0.1:3407` with:
 
 ```sh
 sqwl serve
@@ -32,7 +59,7 @@ curl -X POST http://127.0.0.1:3407/indexes/books/search \
   -d '{"q":"desert","filter":"genre = \"sci-fi\"","sort":["rating:desc"]}'
 ```
 
-The local surface includes index and document CRUD, filtering, sorting, facets,
+The search surface includes index and document CRUD, filtering, sorting, facets,
 facet search, multi-search, settings, stats, dumps, webhooks, keys, and
 task-shaped responses. It is useful for development and client integration,
 but does not claim production Meilisearch parity. Authentication is permissive
@@ -74,6 +101,7 @@ restore snapshots:
 | `POST /_drift/snapshot` | Export an app snapshot |
 | `POST /_drift/restore` | Restore an app snapshot |
 
-Do not expose this listener publicly without an application-owned security
-boundary. The SQL account and grant system does not protect these HTTP routes.
+The SQL account and grant system does not protect these HTTP routes. The
+`/_drift` routes are available on the CLI debug listener, not on endpoints
+started with `Engine::spawn_meilisearch`.
 
