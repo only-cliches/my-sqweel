@@ -397,6 +397,26 @@ impl Catalog {
         }
         Ok(())
     }
+
+    pub(crate) fn check_database_privilege(
+        &self,
+        identity: &Identity,
+        database: &str,
+        privilege: AuthPrivilege,
+    ) -> Result<()> {
+        ensure!(
+            identity
+                .ceiling
+                .as_ref()
+                .is_none_or(|scope| scope.permits(database, None, privilege))
+                && identity
+                    .external_access
+                    .as_ref()
+                    .is_none_or(|access| access.permits(database, None, privilege)),
+            "{privilege:?} command denied for database '{database}'"
+        );
+        self.check_privilege(identity, database, privilege)
+    }
     pub(crate) fn check_table(
         &self,
         identity: &Identity,

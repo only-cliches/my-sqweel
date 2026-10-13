@@ -44,9 +44,7 @@ fn validate_schema_function_dependencies(
 fn validate_function_state(state: &Committed, hosts: &HostFunctionRegistry) -> Result<()> {
     for name in hosts.names() {
         ensure!(
-            !eval::function_catalog::MARIADB_FUNCTION_SCOPE
-                .iter()
-                .any(|entry| entry.name == name),
+            !sql_functions::is_reserved_builtin(name),
             "host function name conflicts with built-in: {name}"
         );
     }
@@ -58,7 +56,9 @@ fn validate_function_state(state: &Committed, hosts: &HostFunctionRegistry) -> R
                 "host function name conflicts with persisted SQL function: {}",
                 definition.name
             );
-            sql_functions::validate_function_body(definition, hosts, &definitions)?;
+            sql_functions::validate_function_body(definition, hosts, &definitions).with_context(
+                || format!("SQL function {} in database {database}", definition.name),
+            )?;
         }
         validate_schema_function_dependencies(raw, hosts, &definitions)?;
     }
@@ -402,9 +402,11 @@ impl Engine {
                 snapshot.version
             ));
         }
-        self.mutate_with_events(false, |raw| {
+        let definitions = self.shared.committed.lock().catalog.function_defs("app");
+        let hosts = self.shared.host_functions.clone();
+        self.mutate_with_events(false, move |raw| {
             raw.apply_snapshot(snapshot)?;
-            Ok(())
+            validate_schema_function_dependencies(raw, &hosts, &definitions)
         })
     }
     pub fn drift_report(&self) -> Value {
@@ -492,6 +494,7 @@ impl Engine {
 
 impl Coordinator {
     fn check(&self) -> Result<()> {
+        crate::runtime::check_reentry()?;
         if self
             .persistence
             .as_ref()
@@ -1332,7 +1335,7 @@ impl SessionState {
                 }
                 let _lease = self.shared.acquire()?;
                 let mut state = self.shared.committed.lock().clone();
-                state.catalog.check_privilege(
+                state.catalog.check_database_privilege(
                     &self.identity,
                     &self.database,
                     match &command {
@@ -1344,9 +1347,7 @@ impl SessionState {
                     SqlFunctionCommand::Create(function) => {
                         let name = function.name.to_ascii_uppercase();
                         ensure!(
-                            !eval::function_catalog::MARIADB_FUNCTION_SCOPE
-                                .iter()
-                                .any(|entry| entry.name == name),
+                            !sql_functions::is_reserved_builtin(&name),
                             "function name conflicts with built-in: {name}"
                         );
                         ensure!(
@@ -2625,6 +2626,30 @@ mod tests {
         assert_eq!(
             reopened.execute_sql("SELECT positive_sql(-4) AS value")?[0].rows[0]["value"],
             json!(4)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn sql_functions_are_database_scoped_and_cannot_shadow_builtins() -> Result<()> {
+        let engine = Engine::new(EngineConfig::mysql_strict());
+        assert!(
+            engine
+                .execute_sql("CREATE FUNCTION abs(x INT) RETURNS INT RETURN x")
+                .is_err()
+        );
+        engine.execute_sql("CREATE FUNCTION local_value(x INT) RETURNS INT RETURN x + 1")?;
+        let mut session = engine.session();
+        session.execute_sql("CREATE DATABASE second; USE second")?;
+        session.execute_sql("CREATE FUNCTION local_value(x INT) RETURNS INT RETURN x + 2")?;
+        assert_eq!(
+            session.execute_sql("SELECT local_value(1) AS value")?[0].rows[0]["value"],
+            json!(3)
+        );
+        session.execute_sql("USE app")?;
+        assert_eq!(
+            session.execute_sql("SELECT local_value(1) AS value")?[0].rows[0]["value"],
+            json!(2)
         );
         Ok(())
     }

@@ -147,7 +147,7 @@ fn validate_schema_expression_inner(
     let scan = scan_expression(expression, parameters, hosts, sql, false)?;
     for call in scan.calls {
         let name = call.to_ascii_lowercase();
-        if builtin_function(&name).is_some() {
+        if builtin_function(&name).is_some() || name == "if" {
             if !allow_nondeterministic_builtins && is_nondeterministic_builtin(&name) {
                 bail!("SQL function depends on nondeterministic built-in {name}");
             }
@@ -215,6 +215,11 @@ pub(super) fn expression_calls_function(expression: &str, name: &str) -> bool {
     let mut finder = CallFinder { name, found: false };
     let _ = expr.visit(&mut finder);
     finder.found
+}
+
+pub(super) fn is_reserved_builtin(name: &str) -> bool {
+    builtin_function(name).is_some()
+        || matches!(name.to_ascii_uppercase().as_str(), "IF" | "ROW_NUMBER")
 }
 
 struct ExpressionScan {
@@ -295,6 +300,8 @@ fn scan_expression(
                         if builtin.status != "implemented" {
                             return ControlFlow::Break(format!("unsupported function: {name}"));
                         }
+                    } else if lower == "if" {
+                        // IF is a control-flow function omitted from SQL_FUNCTIONS coverage.
                     } else if let Some(host) = self.hosts.lookup(&lower) {
                         if host.is_aggregate() && !self.sql_is_aggregate_body() {
                             return ControlFlow::Break(

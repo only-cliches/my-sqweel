@@ -356,6 +356,10 @@ fn normalized_name(name: &str) -> Result<String> {
     let name = name.trim();
     ensure!(!name.is_empty(), "host function name must not be empty");
     ensure!(
+        name.as_bytes()[0].is_ascii_alphabetic() || name.as_bytes()[0] == b'_',
+        "host function name must begin with a letter or underscore"
+    );
+    ensure!(
         name.bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_'),
         "host function name must contain only letters, digits, and underscores"
