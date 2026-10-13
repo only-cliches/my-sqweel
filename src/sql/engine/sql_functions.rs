@@ -28,8 +28,14 @@ pub(super) enum SqlFunctionCommand {
 }
 
 pub(super) fn parse_function_command(sql: &str) -> Result<Option<SqlFunctionCommand>> {
-    let first = sql.trim_start().split_whitespace().next().unwrap_or("");
-    if !first.eq_ignore_ascii_case("CREATE") && !first.eq_ignore_ascii_case("DROP") {
+    let start = sql.trim_start();
+    let first = start.split_whitespace().next().unwrap_or("");
+    if !first.eq_ignore_ascii_case("CREATE")
+        && !first.eq_ignore_ascii_case("DROP")
+        && !start.starts_with("--")
+        && !start.starts_with('#')
+        && !start.starts_with("/*")
+    {
         return Ok(None);
     }
     let tokens = crate::sql::sql_tokens(sql)?;
@@ -168,6 +174,9 @@ fn validate_schema_expression_inner(
         };
         if function.aggregate {
             bail!("schema expression cannot call aggregate function {name}");
+        }
+        if visiting.len() >= 32 {
+            bail!("SQL function dependency depth exceeded");
         }
         if !visiting.insert(key.to_ascii_lowercase()) {
             bail!("cyclic SQL function dependency: {name}");
@@ -713,6 +722,10 @@ mod tests {
     fn ignores_non_function_statements() -> Result<()> {
         assert!(parse_function_command("CREATE TABLE t (id INT)")?.is_none());
         assert!(parse_function_command("SELECT 1")?.is_none());
+        assert!(matches!(
+            parse_function_command("/* comment */ CREATE FUNCTION f(x INT) RETURNS INT RETURN x")?,
+            Some(SqlFunctionCommand::Create(_))
+        ));
         Ok(())
     }
 
@@ -731,6 +744,11 @@ mod tests {
         let hosts = super::super::HostFunctionRegistry::new();
         let sql = BTreeMap::new();
         validate_function_body(&definition("f", "ABS(x) + 1", false), &hosts, &sql)?;
+        validate_function_body(
+            &definition("f", "IF(x > 0, LEFT('ok', 1), 'n')", false),
+            &hosts,
+            &sql,
+        )?;
         assert!(
             validate_function_body(&definition("f", "x + outer_col", false), &hosts, &sql).is_err()
         );

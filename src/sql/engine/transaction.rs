@@ -2509,6 +2509,15 @@ mod tests {
             },
             |args| Ok(json!(args[0].as_i64().unwrap() * 2)),
         )?;
+        builder.functions().register_scalar(
+            "null_host",
+            FunctionSignature {
+                args: vec![],
+                returns: MysqlColumnType::Null,
+                deterministic: true,
+            },
+            |_| Ok(json!(7)),
+        )?;
         builder.functions().register_async_scalar(
             "async_add_one",
             FunctionSignature {
@@ -2562,12 +2571,20 @@ mod tests {
             "CREATE AGGREGATE FUNCTION square_sum(x INT) RETURNS INT RETURN SUM(x*x)",
         )?;
         engine.execute_sql(
+            "CREATE AGGREGATE FUNCTION typed_total(x INT) RETURNS INT RETURN SUM(x)",
+        )?;
+        engine.execute_sql("CREATE FUNCTION positive(x INT) RETURNS INT RETURN IF(x > 0, x, 0)")?;
+        engine.execute_sql(
             "CREATE TABLE t (id INT PRIMARY KEY); INSERT INTO t VALUES (1), (2), (3)",
         )?;
         let scalar =
             &engine.execute_sql("SELECT plus_two(3) AS value, async_add_one(4) AS next")?[0];
         assert_eq!(scalar.rows[0]["value"], json!(8));
         assert_eq!(scalar.rows[0]["next"], json!(5));
+        assert_eq!(
+            engine.execute_sql("SELECT null_host() AS value, positive(-2) AS positive")?[0].rows[0],
+            json!({"value": null, "positive": 0})
+        );
         assert!(engine.execute_sql("SELECT slow_host()").is_err());
         assert_eq!(
             scalar.column_metadata[0].column_type,
@@ -2579,6 +2596,13 @@ mod tests {
         assert_eq!(aggregate.rows[0]["squares"], json!(14));
         assert_eq!(aggregate.rows[0]["total"], json!(6));
         assert_eq!(aggregate.rows[0]["async_sum"], json!(6));
+        engine.execute_sql(
+            "CREATE TABLE labels (label VARCHAR(8)); INSERT INTO labels VALUES ('1.6'), ('2.6')",
+        )?;
+        assert_eq!(
+            engine.execute_sql("SELECT typed_total(label) AS total FROM labels")?[0].rows[0]["total"],
+            json!(5)
+        );
         assert!(engine.execute_sql("DROP FUNCTION plus_two").is_ok());
         assert!(engine.execute_sql("SELECT plus_two(3)").is_err());
         Ok(())

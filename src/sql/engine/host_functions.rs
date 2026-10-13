@@ -145,6 +145,7 @@ impl HostFunction {
             } => {
                 let timeout = *timeout;
                 let name = name.clone();
+                let timeout_name = name.clone();
                 let init = init.clone();
                 let step = step.clone();
                 let finish = finish.clone();
@@ -163,7 +164,7 @@ impl HostFunction {
                             .with_context(|| format!("host aggregate {name} finish failed"))
                     })
                     .await
-                    .map_err(|_| anyhow!("host aggregate timed out"))?
+                    .map_err(|_| anyhow!("host aggregate {timeout_name} timed out"))?
                 })?
             }
             _ => return Err(anyhow!("host function is scalar")),
@@ -385,6 +386,9 @@ fn coerce_result(value: Value, ty: MysqlColumnType) -> Result<Value> {
 }
 
 fn coerce(value: Value, ty: MysqlColumnType) -> Result<Value> {
+    if ty == MysqlColumnType::Null {
+        return Ok(Value::Null);
+    }
     super::eval::cast_json_value(value, mysql_type_name(ty))
 }
 

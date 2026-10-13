@@ -4,7 +4,6 @@ use std::collections::{HashMap, HashSet};
 use std::ops::ControlFlow;
 
 use sqlparser::ast::{Function, FunctionArg, Visit, Visitor};
-use sqlparser::ast::{VisitMut, VisitorMut};
 
 #[derive(Clone)]
 struct CustomFunctions {
@@ -1932,29 +1931,47 @@ fn eval_custom_aggregate_call(
         definition.args.len(),
         arguments.len()
     );
-    let mut body = parse_scalar_expr(&definition.body)
+    let body = parse_scalar_expr(&definition.body)
         .ok_or_else(|| anyhow!("invalid persisted aggregate body: {name}"))?;
-    let bindings = definition
-        .args
+    let typed_group = group
         .iter()
-        .zip(arguments)
-        .map(|((parameter, _), arg)| (parameter.to_ascii_uppercase(), arg))
-        .collect::<HashMap<_, _>>();
-    struct BindArguments<'a>(&'a HashMap<String, Expr>);
-    impl VisitorMut for BindArguments<'_> {
-        type Break = ();
-        fn post_visit_expr(&mut self, expr: &mut Expr) -> ControlFlow<Self::Break> {
-            if let Expr::Identifier(identifier) = expr {
-                if let Some(argument) = self.0.get(&identifier.value.to_ascii_uppercase()) {
-                    *expr = argument.clone();
-                }
+        .map(|row| {
+            let values = definition
+                .args
+                .iter()
+                .zip(&arguments)
+                .map(|((parameter, ty), arg)| {
+                    Ok((
+                        parameter,
+                        cast_json_value(
+                            eval(arg, row, last_insert_id)?,
+                            host_functions::mysql_type_name(*ty),
+                        )?,
+                    ))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let mut typed = row.clone();
+            typed.retain(|key, _| {
+                !definition
+                    .args
+                    .iter()
+                    .any(|(parameter, _)| key.eq_ignore_ascii_case(parameter))
+            });
+            for (parameter, value) in values {
+                typed.insert(parameter.clone(), value);
             }
-            ControlFlow::Continue(())
-        }
-    }
-    let _ = VisitMut::visit(&mut body, &mut BindArguments(&bindings));
-    let base = group.first().cloned().unwrap_or_default();
-    let value = eval_aggregate_expr(&body, group, &base, last_insert_id, order_hints, eval)?;
+            Ok(typed)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let base = typed_group.first().cloned().unwrap_or_default();
+    let value = eval_aggregate_expr(
+        &body,
+        &typed_group,
+        &base,
+        last_insert_id,
+        order_hints,
+        eval,
+    )?;
     cast_json_value(
         value,
         host_functions::mysql_type_name(definition.return_type),
