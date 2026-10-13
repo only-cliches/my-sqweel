@@ -143,12 +143,17 @@ impl Persistence {
         )
     }
 
-    pub(super) fn load(&self, cfg: &EngineConfig) -> Result<Option<Committed>> {
+    pub(super) fn load(
+        &self,
+        cfg: &EngineConfig,
+        functions: &Arc<HostFunctionRegistry>,
+        runtime: &Arc<crate::runtime::EngineRuntime>,
+    ) -> Result<Option<Committed>> {
         if let Some((storage, runtime)) = &self.custom {
             let storage = storage.0.clone();
             return runtime
                 .run(async move { crate::storage::delta::load_state(storage.as_ref()).await })?
-                .map(|image| committed_from_image(image, cfg))
+                .map(|image| committed_from_image(image, cfg, functions, runtime))
                 .transpose();
         }
         let metadata = self.store.as_ref().unwrap().hgetall(META)?;
@@ -174,6 +179,9 @@ impl Persistence {
             };
             let mut raw = RawEngine::new(cfg.clone());
             raw.database_name = name.clone();
+            raw.host_functions = functions.clone();
+            raw.sql_functions = catalog.function_defs(&name);
+            raw.function_runtime = Some(runtime.clone());
             raw.apply_snapshot(snapshot)?;
             databases.insert(name, Arc::new(raw));
         }
@@ -843,7 +851,12 @@ fn image(state: &Committed) -> Result<EngineState> {
             .collect(),
     })
 }
-fn committed_from_image(image: EngineState, cfg: &EngineConfig) -> Result<Committed> {
+fn committed_from_image(
+    image: EngineState,
+    cfg: &EngineConfig,
+    functions: &Arc<HostFunctionRegistry>,
+    runtime: &Arc<crate::runtime::EngineRuntime>,
+) -> Result<Committed> {
     ensure!(
         image.version == 1 && image.databases.contains_key("app"),
         "invalid custom storage catalog"
@@ -854,6 +867,9 @@ fn committed_from_image(image: EngineState, cfg: &EngineConfig) -> Result<Commit
         ensure!(snapshot.version == 1, "unsupported snapshot version");
         let mut raw = RawEngine::new(cfg.clone());
         raw.database_name = name.clone();
+        raw.host_functions = functions.clone();
+        raw.sql_functions = catalog.function_defs(&name);
+        raw.function_runtime = Some(runtime.clone());
         raw.apply_snapshot(snapshot)?;
         databases.insert(name, Arc::new(raw));
     }

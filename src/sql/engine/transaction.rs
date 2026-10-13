@@ -41,6 +41,30 @@ fn validate_schema_function_dependencies(
     Ok(())
 }
 
+fn validate_function_state(state: &Committed, hosts: &HostFunctionRegistry) -> Result<()> {
+    for name in hosts.names() {
+        ensure!(
+            !eval::function_catalog::MARIADB_FUNCTION_SCOPE
+                .iter()
+                .any(|entry| entry.name == name),
+            "host function name conflicts with built-in: {name}"
+        );
+    }
+    for (database, raw) in &state.databases {
+        let definitions = state.catalog.function_defs(database);
+        for definition in definitions.values() {
+            ensure!(
+                !hosts.contains(&definition.name),
+                "host function name conflicts with persisted SQL function: {}",
+                definition.name
+            );
+            sql_functions::validate_function_body(definition, hosts, &definitions)?;
+        }
+        validate_schema_function_dependencies(raw, hosts, &definitions)?;
+    }
+    Ok(())
+}
+
 struct Coordinator {
     hooks: Arc<HookRegistry>,
     host_functions: Arc<HostFunctionRegistry>,
@@ -191,6 +215,7 @@ impl Engine {
             }
         }
         let runtime = Arc::new(crate::runtime::EngineRuntime::new()?);
+        let functions = Arc::new(functions);
         let persistence = match storage {
             crate::Storage::Memory => None,
             crate::Storage::RocksDb(path) => Some(Persistence::open(
@@ -201,39 +226,27 @@ impl Engine {
         };
         let recovered = persistence
             .as_ref()
-            .map(|store| store.load(&cfg))
+            .map(|store| store.load(&cfg, &functions, &runtime))
             .transpose()?
             .flatten();
-        let state = match recovered {
+        let mut state = match recovered {
             Some(state) => state,
             None => Committed {
                 catalog: Catalog::default(),
                 databases: BTreeMap::from([("app".into(), Arc::new(RawEngine::new(cfg.clone())))]),
             },
         };
-        for name in functions.names() {
-            ensure!(
-                !eval::function_catalog::MARIADB_FUNCTION_SCOPE
-                    .iter()
-                    .any(|entry| entry.name == name),
-                "host function name conflicts with built-in: {name}"
-            );
+        for (database, raw) in &mut state.databases {
+            let mut configured = raw.fork()?;
+            configured.host_functions = functions.clone();
+            configured.sql_functions = state.catalog.function_defs(database);
+            configured.function_runtime = Some(runtime.clone());
+            *raw = Arc::new(configured);
         }
-        for (database, raw) in &state.databases {
-            let definitions = state.catalog.function_defs(database);
-            for definition in definitions.values() {
-                ensure!(
-                    !functions.contains(&definition.name),
-                    "host function name conflicts with persisted SQL function: {}",
-                    definition.name
-                );
-                sql_functions::validate_function_body(definition, &functions, &definitions)?;
-            }
-            validate_schema_function_dependencies(raw, &functions, &definitions)?;
-        }
+        validate_function_state(&state, &functions)?;
         let shared = Arc::new(Coordinator {
             hooks: Arc::new(HookRegistry::default()),
-            host_functions: Arc::new(functions),
+            host_functions: functions,
             cfg,
             committed: Mutex::new(state),
             writer: Mutex::new(Writers::default()),
@@ -371,10 +384,14 @@ impl Engine {
             }
             let mut raw = RawEngine::new(self.shared.cfg.clone());
             raw.database_name = name.clone();
+            raw.host_functions = self.shared.host_functions.clone();
+            raw.sql_functions = catalog.function_defs(&name);
+            raw.function_runtime = Some(self.shared.runtime.clone());
             raw.apply_snapshot(snapshot)?;
             databases.insert(name, Arc::new(raw));
         }
         let committed = Committed { catalog, databases };
+        validate_function_state(&committed, &self.shared.host_functions)?;
         self.shared.publish_quietly(committed)?;
         Ok(())
     }
@@ -1313,7 +1330,7 @@ impl SessionState {
                 if self.is_in_transaction() || !self.autocommit {
                     return Err(anyhow!("DDL is not supported inside an active transaction"));
                 }
-                let _lease = self.shared.acquire_database(&self.database)?;
+                let _lease = self.shared.acquire()?;
                 let mut state = self.shared.committed.lock().clone();
                 state.catalog.check_privilege(
                     &self.identity,
@@ -1416,6 +1433,13 @@ impl SessionState {
                         }
                     }
                 }
+                let mut raw = state
+                    .databases
+                    .get(&self.database)
+                    .ok_or_else(|| anyhow!("Unknown database: {}", self.database))?
+                    .fork()?;
+                raw.sql_functions = state.catalog.function_defs(&self.database);
+                state.databases.insert(self.database.clone(), Arc::new(raw));
                 self.shared.publish(state)?;
                 results.push(QueryResult::default());
                 continue;
@@ -2504,6 +2528,19 @@ mod tests {
             |state, args| Ok(json!(state.as_i64().unwrap() + args[0].as_i64().unwrap())),
             Ok,
         )?;
+        builder.functions().register_async_aggregate(
+            "async_total",
+            FunctionSignature {
+                args: vec![MysqlColumnType::Integer],
+                returns: MysqlColumnType::Integer,
+                deterministic: false,
+            },
+            || async { Ok(json!(0)) },
+            |state, args| async move {
+                Ok(json!(state.as_i64().unwrap() + args[0].as_i64().unwrap()))
+            },
+            |state| async move { Ok(state) },
+        )?;
         let engine = builder.open()?;
         engine
             .execute_sql("CREATE FUNCTION plus_two(x INT) RETURNS INT RETURN double_host(x) + 2")?;
@@ -2521,10 +2558,12 @@ mod tests {
             scalar.column_metadata[0].column_type,
             MysqlColumnType::Integer
         );
-        let aggregate = &engine
-            .execute_sql("SELECT square_sum(id) AS squares, host_total(id) AS total FROM t")?[0];
+        let aggregate = &engine.execute_sql(
+            "SELECT square_sum(id) AS squares, host_total(id) AS total, async_total(id) AS async_sum FROM t",
+        )?[0];
         assert_eq!(aggregate.rows[0]["squares"], json!(14));
         assert_eq!(aggregate.rows[0]["total"], json!(6));
+        assert_eq!(aggregate.rows[0]["async_sum"], json!(6));
         assert!(engine.execute_sql("DROP FUNCTION plus_two").is_ok());
         assert!(engine.execute_sql("SELECT plus_two(3)").is_err());
         Ok(())

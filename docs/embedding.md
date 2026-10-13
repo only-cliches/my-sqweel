@@ -76,6 +76,55 @@ Each `QueryResult` contains `rows_affected`, `last_insert_id`, column names and
 metadata, JSON-object rows, and MySQL-style warnings. One API call can return
 multiple results for a multi-statement SQL string.
 
+## Custom functions
+
+Register host functions before opening the engine. Callbacks receive and return
+`serde_json::Value`; their declared SQL types control argument conversion and
+result metadata. A deterministic, synchronous scalar can be used in stored
+schema expressions.
+
+```rust
+use my_sqweel::{Engine, EngineConfig, FunctionSignature, MysqlColumnType, Storage};
+use serde_json::json;
+
+let mut builder = Engine::builder(EngineConfig::default(), Storage::Memory);
+builder.functions().register_scalar(
+    "twice",
+    FunctionSignature {
+        args: vec![MysqlColumnType::Integer],
+        returns: MysqlColumnType::Integer,
+        deterministic: true,
+    },
+    |args| Ok(json!(args[0].as_i64().unwrap() * 2)),
+)?;
+let engine = builder.open()?;
+engine.execute_sql("SELECT twice(5) AS value")?;
+# Ok::<(), anyhow::Error>(())
+```
+
+`register_async_scalar`, `register_aggregate`, and
+`register_async_aggregate` cover asynchronous calls and grouped stateful
+calculations. Async callbacks have a 30 second timeout by default; the
+`*_with_timeout` registrations accept a `Duration`. Synchronous callbacks
+cannot be interrupted by a timeout. Callbacks cannot call back into the same
+engine. Host registrations are shared by all SQL sessions and must be supplied
+again when reopening persistent storage.
+
+SQL definitions persist with the database catalog:
+
+```sql
+CREATE FUNCTION add_two(x INT) RETURNS INT RETURN x + 2;
+CREATE AGGREGATE FUNCTION mean_square(x DOUBLE) RETURNS DOUBLE RETURN SUM(x*x) / COUNT(x);
+DROP FUNCTION add_two;
+DROP AGGREGATE FUNCTION mean_square;
+```
+
+SQL aggregate bodies compose built-in aggregates. Definitions are scoped to
+the current database and require its `CREATE` or `DROP` privilege. Custom
+aggregate `DISTINCT`, ordering, and window modifiers are unsupported. Stored
+schema expressions can call only deterministic synchronous scalar functions;
+opening storage fails if a required host callback is missing.
+
 ## Databases, accounts, and events
 
 The provisioning SQL subset supports logical databases, users, and
