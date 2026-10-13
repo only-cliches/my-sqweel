@@ -127,7 +127,7 @@ impl Persistence {
             let rows: SharedTable<StoredRow> = rows.into();
             raw.baseline_rows.insert(table.clone(), rows.clone());
             raw.rows.insert(table.clone(), rows);
-            raw.rebuild_indexes(&table);
+            raw.rebuild_indexes(&table)?;
         }
         Ok(())
     }
@@ -174,7 +174,7 @@ impl Persistence {
             };
             let mut raw = RawEngine::new(cfg.clone());
             raw.database_name = name.clone();
-            raw.apply_snapshot(snapshot);
+            raw.apply_snapshot(snapshot)?;
             databases.insert(name, Arc::new(raw));
         }
         if !databases.contains_key("app") {
@@ -854,7 +854,7 @@ fn committed_from_image(image: EngineState, cfg: &EngineConfig) -> Result<Commit
         ensure!(snapshot.version == 1, "unsupported snapshot version");
         let mut raw = RawEngine::new(cfg.clone());
         raw.database_name = name.clone();
-        raw.apply_snapshot(snapshot);
+        raw.apply_snapshot(snapshot)?;
         databases.insert(name, Arc::new(raw));
     }
     Ok(Committed { catalog, databases })

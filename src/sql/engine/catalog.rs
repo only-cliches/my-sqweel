@@ -183,6 +183,8 @@ pub(crate) struct Catalog {
     users: BTreeMap<String, Account>,
     #[serde(default)]
     database_charsets: BTreeMap<String, (String, String)>,
+    #[serde(default)]
+    sql_functions: BTreeMap<String, BTreeMap<String, super::sql_functions::SqlFunctionDef>>,
 }
 
 impl Default for Catalog {
@@ -191,6 +193,7 @@ impl Default for Catalog {
             databases: BTreeSet::from(["app".into()]),
             users: BTreeMap::new(),
             database_charsets: BTreeMap::new(),
+            sql_functions: BTreeMap::new(),
         };
         catalog.set_admin_credentials("root", "");
         catalog
@@ -278,6 +281,48 @@ impl Catalog {
         &self.database_charsets
     }
 
+    pub(crate) fn function_defs(
+        &self,
+        database: &str,
+    ) -> BTreeMap<String, super::sql_functions::SqlFunctionDef> {
+        self.sql_functions
+            .get(database)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn all_function_defs(
+        &self,
+    ) -> impl Iterator<Item = &super::sql_functions::SqlFunctionDef> {
+        self.sql_functions.values().flat_map(BTreeMap::values)
+    }
+
+    pub(crate) fn insert_function(
+        &mut self,
+        database: &str,
+        function: super::sql_functions::SqlFunctionDef,
+    ) -> Result<()> {
+        let functions = self.sql_functions.entry(database.to_string()).or_default();
+        let key = function.name.to_ascii_uppercase();
+        ensure!(
+            !functions.contains_key(&key),
+            "function already exists: {}",
+            function.name
+        );
+        functions.insert(key, function);
+        Ok(())
+    }
+
+    pub(crate) fn remove_function(
+        &mut self,
+        database: &str,
+        name: &str,
+    ) -> Option<super::sql_functions::SqlFunctionDef> {
+        self.sql_functions
+            .get_mut(database)
+            .and_then(|functions| functions.remove(&name.to_ascii_uppercase()))
+    }
+
     pub(crate) fn check_database(&self, identity: &Identity, database: &str) -> Result<()> {
         ensure!(
             self.databases.contains(database),
@@ -316,7 +361,7 @@ impl Catalog {
         Ok(())
     }
 
-    fn check_privilege(
+    pub(crate) fn check_privilege(
         &self,
         identity: &Identity,
         database: &str,
@@ -458,6 +503,7 @@ impl Catalog {
                     return Ok(CatalogEffect::None);
                 }
                 self.database_charsets.remove(&name);
+                self.sql_functions.remove(&name);
                 for account in self.users.values_mut() {
                     account.grants.remove(&name);
                 }

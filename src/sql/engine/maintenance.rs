@@ -36,7 +36,7 @@ impl RawEngine {
         }
     }
 
-    pub(super) fn apply_snapshot(&self, snapshot: Snapshot) {
+    pub(super) fn apply_snapshot(&self, snapshot: Snapshot) -> Result<()> {
         self.views.clear();
         self.index_comments.clear();
         for (k, v) in snapshot.views {
@@ -59,7 +59,8 @@ impl RawEngine {
         for (k, v) in snapshot.auto_inc {
             self.auto_inc.insert(k, v);
         }
-        self.rebuild_indexes_all();
+        self.rebuild_indexes_all()?;
+        Ok(())
     }
 
     pub fn drift_report(&self) -> Value {
@@ -110,12 +111,13 @@ impl RawEngine {
         if !self.schemas.contains_key(table) {
             return Err(anyhow!("unknown table: {table}"));
         }
-        self.rebuild_indexes(table);
-        Ok(())
+        self.rebuild_indexes(table)
     }
 
     pub fn rebuild_indexes_for_all_tables(&self) {
-        self.rebuild_indexes_all();
+        if let Err(error) = self.rebuild_indexes_all() {
+            tracing::warn!(%error, "could not rebuild indexes for all tables");
+        }
     }
 
     pub fn reset_all_rows(&self) -> Result<()> {
@@ -128,7 +130,7 @@ impl RawEngine {
             self.rows.insert(table.clone(), SharedTable::default());
             self.indexes.remove(&table);
             self.clear_auto_inc(&table);
-            self.rebuild_indexes(&table);
+            self.rebuild_indexes(&table)?;
         }
         Ok(())
     }
@@ -140,7 +142,7 @@ impl RawEngine {
         self.rows.insert(table.to_string(), SharedTable::default());
         self.indexes.remove(table);
         self.clear_auto_inc(table);
-        self.rebuild_indexes(table);
+        self.rebuild_indexes(table)?;
 
         Ok(())
     }

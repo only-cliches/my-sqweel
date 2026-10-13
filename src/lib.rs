@@ -9,8 +9,9 @@ use serde_json::{Value, json};
 use sqlparser::ast::{SetExpr, Statement, TableFactor};
 
 pub use crate::sql::engine::{
-    Engine, EngineConfig, EngineSession, ImportColumn, ImportDecision, ImportMode, ImportOptions,
-    ImportReport, ImportTable, ImportVisitor, QueryResult,
+    Engine, EngineBuilder, EngineConfig, EngineSession, FunctionSignature, HostFunctionRegistry,
+    ImportColumn, ImportDecision, ImportMode, ImportOptions, ImportReport, ImportTable,
+    ImportVisitor, MysqlColumnType, QueryResult,
 };
 pub use server::{SqlEndpoint, SqlEndpointConfig};
 pub use storage::Storage;

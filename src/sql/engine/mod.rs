@@ -34,13 +34,16 @@ pub use hooks::{
     QueryHookError, QueryHookEvent, QueryHookKey, QueryHookOptions, QueryHookRow,
     QueryHookSubscription,
 };
+mod host_functions;
 mod ingest;
+pub use host_functions::{FunctionSignature, HostFunctionRegistry};
+mod sql_functions;
 pub use ingest::{
     ImportColumn, ImportDecision, ImportMode, ImportOptions, ImportReport, ImportTable,
     ImportVisitor,
 };
 mod transaction;
-pub use transaction::{Engine, EngineSession};
+pub use transaction::{Engine, EngineBuilder, EngineSession};
 mod compat;
 mod ddl;
 mod dml;
@@ -820,6 +823,9 @@ impl<'a, T> IntoIterator for &'a SharedTable<T> {
 
 pub(super) struct RawEngine {
     database_name: String,
+    host_functions: Arc<HostFunctionRegistry>,
+    sql_functions: BTreeMap<String, sql_functions::SqlFunctionDef>,
+    function_runtime: Option<Arc<crate::runtime::EngineRuntime>>,
     system_variables: HashMap<String, Value>,
     session_user: String,
     current_user: String,
@@ -884,6 +890,9 @@ impl RawEngine {
     fn new(cfg: EngineConfig) -> Self {
         Self {
             database_name: "app".into(),
+            host_functions: Arc::new(HostFunctionRegistry::new()),
+            sql_functions: BTreeMap::new(),
+            function_runtime: None,
             system_variables: HashMap::new(),
             session_user: "root@localhost".into(),
             current_user: "root@%".into(),
@@ -1005,6 +1014,13 @@ impl RawEngine {
             &self.session_user,
             &self.current_user,
         );
+        let _function_guard = self.function_runtime.as_ref().map(|runtime| {
+            eval::install_custom_functions(
+                self.host_functions.clone(),
+                self.sql_functions.clone(),
+                runtime.clone(),
+            )
+        });
         let query_id = (emit_events && self.query_events_enabled())
             .then(|| self.next_query_id.fetch_add(1, AtomicOrdering::Relaxed));
         let metrics = query_id.map(|_| Rc::new(QueryMetricsRecorder::new(true)));
@@ -1226,15 +1242,13 @@ impl RawEngine {
             return Ok(Some(QueryResult::default()));
         };
         let columns = ordered_schema_columns(&schema);
-        let rows = self
-            .rows
-            .get(&target)
-            .map(|rows| {
-                rows.values()
-                    .map(|row| self.current_schema_row(&target, &row.data))
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
+        let rows = if let Some(rows) = self.rows.get(&target) {
+            rows.values()
+                .map(|row| self.current_schema_row(&target, &row.data))
+                .collect::<Result<Vec<_>>>()?
+        } else {
+            Vec::new()
+        };
         let column_metadata = columns
             .iter()
             .filter_map(|column| {
@@ -1861,7 +1875,7 @@ impl RawEngine {
                     .map(|rows| (**rows).clone())
                     .unwrap_or_default();
                 for stored in rows.values() {
-                    let current = self.current_schema_row(&table, &stored.data);
+                    let current = self.current_schema_row(&table, &stored.data)?;
                     if let Some(selection) = selection
                         && !matches!(
                             sql_truth(&self.eval_expr_ctx(
@@ -2509,7 +2523,7 @@ impl RawEngine {
                     ddl::drop_unique_metadata(&mut schema, key);
                     schema.updated_at = Some(Utc::now());
                     self.schemas.insert(table_name.to_string(), schema);
-                    self.rebuild_indexes(table_name);
+                    self.rebuild_indexes(table_name)?;
                 }
             } else {
                 let marker = add_markers
@@ -2596,7 +2610,7 @@ impl RawEngine {
             .map(|rows| rows.len() as u64)
             .unwrap_or(0);
         self.schemas.insert(table.to_string(), schema);
-        self.rebuild_indexes(table);
+        self.rebuild_indexes(table)?;
         Ok(Some(QueryResult {
             rows_affected,
             ..QueryResult::default()
@@ -3326,7 +3340,7 @@ impl RawEngine {
                 && upper.contains("SELECT MIN(F3)")
                 && upper.contains("A.F4 = C.F4")
             {
-                return Ok(Some(self.correlated_t1_t2_compat()));
+                return self.correlated_t1_t2_compat().map(Some);
             }
             if upper.starts_with("SELECT F1 FROM T1,T2")
                 && (upper.contains("(F1,F2) = ((1,1))")
@@ -3495,11 +3509,7 @@ impl RawEngine {
             return Ok(Some(self.explain_sql(trimmed)?));
         }
 
-        if upper.starts_with("CREATE PROCEDURE ")
-            || upper.starts_with("CREATE FUNCTION ")
-            || upper.starts_with("DROP FUNCTION ")
-            || upper.starts_with("DROP PROCEDURE ")
-        {
+        if upper.starts_with("CREATE PROCEDURE ") || upper.starts_with("DROP PROCEDURE ") {
             return Ok(Some(QueryResult::default()));
         }
         if upper.starts_with("DELETE FROM T1 ORDER BY (F1(") {
@@ -3714,7 +3724,7 @@ impl RawEngine {
                     index.name = target_name.to_string();
                     schema.updated_at = Some(Utc::now());
                     self.schemas.insert(table.to_string(), schema);
-                    self.rebuild_indexes(table);
+                    self.rebuild_indexes(table)?;
 
                     return Ok(Some(QueryResult::default()));
                 }
@@ -3992,7 +4002,7 @@ impl RawEngine {
                     self.index_comments
                         .insert(format!("{table}:{new_name}"), comment);
                 }
-                self.rebuild_indexes(table);
+                self.rebuild_indexes(table)?;
 
                 return Ok(Some(QueryResult::default()));
             }
@@ -4571,7 +4581,7 @@ impl RawEngine {
             } else {
                 vec!["t11"]
             };
-            let mut result = self.delete_ignore_subquery_compat(&tables);
+            let mut result = self.delete_ignore_subquery_compat(&tables)?;
             if !upper.contains(".*") {
                 result.warnings = vec![
                     QueryWarning {
@@ -4990,7 +5000,7 @@ impl RawEngine {
         Ok(None)
     }
 
-    fn correlated_t1_t2_compat(&self) -> QueryResult {
+    fn correlated_t1_t2_compat(&self) -> Result<QueryResult> {
         let t1_rows = self.rows.get("t1");
         let t2_rows = self.rows.get("t2");
         let mut rows = Vec::new();
@@ -4998,16 +5008,25 @@ impl RawEngine {
             let t2 = t2_rows
                 .values()
                 .map(|stored| self.current_schema_row("t2", &stored.data))
-                .collect::<Vec<_>>();
+                .collect::<Result<Vec<_>>>()?;
             let mut source_rows = t1_rows.values().collect::<Vec<_>>();
-            source_rows.sort_by_key(|stored| {
-                self.current_schema_row("t1", &stored.data)
-                    .get("f1")
-                    .and_then(Value::as_i64)
-                    .unwrap_or(i64::MAX)
-            });
+            let mut ordered_rows = source_rows
+                .drain(..)
+                .map(|stored| {
+                    let row = self.current_schema_row("t1", &stored.data)?;
+                    Ok((
+                        row.get("f1").and_then(Value::as_i64).unwrap_or(i64::MAX),
+                        stored,
+                    ))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            ordered_rows.sort_by_key(|(key, _)| *key);
+            let source_rows = ordered_rows
+                .into_iter()
+                .map(|(_, row)| row)
+                .collect::<Vec<_>>();
             for stored in source_rows {
-                let t1 = self.current_schema_row("t1", &stored.data);
+                let t1 = self.current_schema_row("t1", &stored.data)?;
                 let f1 = t1.get("f1").unwrap_or(&Value::Null);
                 let matches = t2
                     .iter()
@@ -5047,10 +5066,10 @@ impl RawEngine {
                 }
             }
         }
-        QueryResult {
+        Ok(QueryResult {
             rows,
             ..QueryResult::default()
-        }
+        })
     }
 
     fn execute_alter_add_generated_column_compat(&self, sql: &str) -> Result<Option<QueryResult>> {

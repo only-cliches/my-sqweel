@@ -7,7 +7,7 @@ struct ReturningRow {
 }
 
 impl RawEngine {
-    pub(super) fn delete_ignore_subquery_compat(&self, tables: &[&str]) -> QueryResult {
+    pub(super) fn delete_ignore_subquery_compat(&self, tables: &[&str]) -> Result<QueryResult> {
         for table in tables {
             let Some(mut table_rows) = self.rows.get(*table).map(|rows| rows.clone()) else {
                 continue;
@@ -35,9 +35,9 @@ impl RawEngine {
                 }
             }
             self.rows.insert((*table).to_string(), table_rows);
-            self.rebuild_indexes(table);
+            self.rebuild_indexes(table)?;
         }
-        QueryResult::default()
+        Ok(QueryResult::default())
     }
 
     fn parse_check_constraint_expression(expression: &str) -> Result<Expr> {
@@ -218,35 +218,28 @@ impl RawEngine {
                 let source_keys = row_keys_for_columns(&source_columns);
                 let source_contexts = if on_duplicate.is_empty() {
                     Vec::new()
+                } else if let Some((source_table, alias)) = select
+                    .from
+                    .first()
+                    .and_then(|source| table_factor_name_and_alias(&source.relation).ok())
+                {
+                    if let Some(rows) = self.rows.get(&source_table) {
+                        rows.values()
+                            .map(|stored| {
+                                let base = self.current_schema_row(&source_table, &stored.data)?;
+                                let mut context = base.clone();
+                                add_qualified_columns(&mut context, &source_table, &base);
+                                if let Some(alias) = &alias {
+                                    add_qualified_columns(&mut context, alias, &base);
+                                }
+                                Ok(context)
+                            })
+                            .collect::<Result<Vec<_>>>()?
+                    } else {
+                        Vec::new()
+                    }
                 } else {
-                    select
-                        .from
-                        .first()
-                        .and_then(|source| table_factor_name_and_alias(&source.relation).ok())
-                        .map(|(source_table, alias)| {
-                            self.rows
-                                .get(&source_table)
-                                .map(|rows| {
-                                    rows.values()
-                                        .map(|stored| {
-                                            let base = self
-                                                .current_schema_row(&source_table, &stored.data);
-                                            let mut context = base.clone();
-                                            add_qualified_columns(
-                                                &mut context,
-                                                &source_table,
-                                                &base,
-                                            );
-                                            if let Some(alias) = &alias {
-                                                add_qualified_columns(&mut context, alias, &base);
-                                            }
-                                            context
-                                        })
-                                        .collect::<Vec<_>>()
-                                })
-                                .unwrap_or_default()
-                        })
-                        .unwrap_or_default()
+                    Vec::new()
                 };
                 let source_alias = select
                     .from
@@ -692,8 +685,8 @@ impl RawEngine {
                             &final_key,
                             &stored.data,
                         );
-                        self.remove_row_from_indexes(table, conflict_key, &original_data);
-                        self.add_row_to_indexes(table, &final_key, &stored.data);
+                        self.remove_row_from_indexes(table, conflict_key, &original_data)?;
+                        self.add_row_to_indexes(table, &final_key, &stored.data)?;
                         record_query_row_write(changed_cell_count(&original_data, &stored.data));
 
                         // MySQL reports two affected rows when ON DUPLICATE KEY
@@ -712,7 +705,7 @@ impl RawEngine {
                                 &conflict_key,
                                 &removed.data,
                             );
-                            self.remove_row_from_indexes(table, &conflict_key, &removed.data);
+                            self.remove_row_from_indexes(table, &conflict_key, &removed.data)?;
                             record_query_row_write(0);
                             affected += 1;
                         }
@@ -735,7 +728,7 @@ impl RawEngine {
                 &key,
                 &stored.data,
             );
-            self.add_row_to_indexes(table, &key, &stored.data);
+            self.add_row_to_indexes(table, &key, &stored.data)?;
             pending_rows_written += 1;
             pending_cells_written += stored.data.len();
             if first_insert_id == 0 {
@@ -954,33 +947,32 @@ impl RawEngine {
                 .schemas
                 .get(&table_name)
                 .map(|schema| super::query::RowMaterializationPlan::from_schema(&schema));
-            let left_data = left_plan.as_ref().map_or_else(
-                || self.current_schema_row(&table_name, &left_row.data),
-                |plan| self.current_schema_row_with_plan(&left_row.data, plan),
-            );
+            let left_data = match left_plan.as_ref() {
+                Some(plan) => self.current_schema_row_with_plan(&left_row.data, plan)?,
+                None => self.current_schema_row(&table_name, &left_row.data)?,
+            };
             let mut left_map = left_data.clone();
             add_qualified_columns(&mut left_map, &table_name, &left_data);
             if let Some(alias) = &left_alias {
                 add_qualified_columns(&mut left_map, alias, &left_data);
             }
 
-            let Some((right_key, right_row, match_context)) =
-                current_rows.iter().find_map(|(right_key, right_row)| {
-                    let right_data = self.current_schema_row(&right_table, &right_row.data);
-                    let mut combined = left_map.clone();
-                    add_qualified_columns(&mut combined, &right_table, &right_data);
-                    if let Some(alias) = &right_alias {
-                        add_qualified_columns(&mut combined, alias, &right_data);
-                    }
-                    if self.join_matches_ctx(&join.join_operator, &combined).ok()?
-                        && self.matches_selection_ctx(selection, &combined, 0).ok()?
-                    {
-                        Some((right_key.clone(), right_row.clone(), combined))
-                    } else {
-                        None
-                    }
-                })
-            else {
+            let mut matched = None;
+            for (right_key, right_row) in &current_rows {
+                let right_data = self.current_schema_row(&right_table, &right_row.data)?;
+                let mut combined = left_map.clone();
+                add_qualified_columns(&mut combined, &right_table, &right_data);
+                if let Some(alias) = &right_alias {
+                    add_qualified_columns(&mut combined, alias, &right_data);
+                }
+                if self.join_matches_ctx(&join.join_operator, &combined)?
+                    && self.matches_selection_ctx(selection, &combined, 0)?
+                {
+                    matched = Some((right_key.clone(), right_row.clone(), combined));
+                    break;
+                }
+            }
+            let Some((right_key, right_row, match_context)) = matched else {
                 continue;
             };
 
@@ -1095,14 +1087,14 @@ impl RawEngine {
         self.rows.insert(table_name.clone(), next_rows.into());
         for key in &deleted_keys {
             if let Some(row) = current_rows.get(key) {
-                self.remove_row_from_indexes(&table_name, key, &row.data);
+                self.remove_row_from_indexes(&table_name, key, &row.data)?;
             }
         }
         for (key, row) in &changed_rows {
             if let Some(previous) = current_rows.get(key) {
-                self.remove_row_from_indexes(&table_name, key, &previous.data);
+                self.remove_row_from_indexes(&table_name, key, &previous.data)?;
             }
-            self.add_row_to_indexes(&table_name, key, &row.data);
+            self.add_row_to_indexes(&table_name, key, &row.data)?;
         }
         record_query_writes(updated as usize, pending_cells_written);
         Ok(Some(self.returning_result(
@@ -1361,14 +1353,14 @@ impl RawEngine {
         self.rows.insert(table_name.clone(), next_rows.into());
         for key in &deleted_keys {
             if let Some(row) = current_rows.get(key) {
-                self.remove_row_from_indexes(&table_name, key, &row.data);
+                self.remove_row_from_indexes(&table_name, key, &row.data)?;
             }
         }
         for (key, row) in &changed_rows {
             if let Some(previous) = current_rows.get(key) {
-                self.remove_row_from_indexes(&table_name, key, &previous.data);
+                self.remove_row_from_indexes(&table_name, key, &previous.data)?;
             }
-            self.add_row_to_indexes(&table_name, key, &row.data);
+            self.add_row_to_indexes(&table_name, key, &row.data)?;
         }
 
         record_query_writes(pending_rows_written, pending_cells_written);
@@ -1405,8 +1397,8 @@ impl RawEngine {
             (previous, row.clone(), changed)
         };
         self.rows.insert(table.to_string(), rows);
-        self.remove_row_from_indexes(table, &key, &previous);
-        self.add_row_to_indexes(table, &key, &updated.data);
+        self.remove_row_from_indexes(table, &key, &previous)?;
+        self.add_row_to_indexes(table, &key, &updated.data)?;
 
         record_query_writes(usize::from(changed > 0), changed);
         Ok(QueryResult {
@@ -1442,10 +1434,10 @@ impl RawEngine {
             .schemas
             .get(table_name)
             .map(|schema| super::query::RowMaterializationPlan::from_schema(&schema));
-        let left_data = left_plan.as_ref().map_or_else(
-            || self.current_schema_row(table_name, &row.data),
-            |plan| self.current_schema_row_with_plan(&row.data, plan),
-        );
+        let left_data = match left_plan.as_ref() {
+            Some(plan) => self.current_schema_row_with_plan(&row.data, plan)?,
+            None => self.current_schema_row(table_name, &row.data)?,
+        };
         let mut left_map = left_data.clone();
         add_qualified_columns(&mut left_map, table_name, &left_data);
         if let Some(alias) = &left_alias {
@@ -1497,7 +1489,7 @@ impl RawEngine {
         let (_, alias) = table_factor_name_and_alias(relation)?;
         let mut context = match_context.clone();
         self.inject_user_variables(std::slice::from_mut(&mut context), None);
-        let base_data = self.current_schema_row(table_name, updated_data);
+        let base_data = self.current_schema_row(table_name, updated_data)?;
         for (key, value) in &base_data {
             context.insert(key.clone(), value.clone());
         }
@@ -1546,10 +1538,10 @@ impl RawEngine {
         let (_, table_alias) = table_factor_name_and_alias(&root.relation)?;
         let mut candidates = Vec::new();
         for (k, row) in &current_rows {
-            let base_view = materialization_plan.as_ref().map_or_else(
-                || self.current_schema_row(&table_name, &row.data),
-                |plan| self.current_schema_row_with_plan(&row.data, plan),
-            );
+            let base_view = match materialization_plan.as_ref() {
+                Some(plan) => self.current_schema_row_with_plan(&row.data, plan)?,
+                None => self.current_schema_row(&table_name, &row.data)?,
+            };
             let mut view = base_view.clone();
             add_qualified_columns(&mut view, &table_name, &base_view);
             if let Some(alias) = &table_alias {
@@ -1617,7 +1609,7 @@ impl RawEngine {
             self.rows.insert(table_name.clone(), next_rows.into());
             for key in &deleted_keys {
                 if let Some(row) = current_rows.get(key) {
-                    self.remove_row_from_indexes(&table_name, key, &row.data);
+                    self.remove_row_from_indexes(&table_name, key, &row.data)?;
                 }
             }
 
@@ -1808,7 +1800,7 @@ impl RawEngine {
                 }
             }
             self.rows.insert(target.table.clone(), table_rows);
-            self.rebuild_indexes(&target.table);
+            self.rebuild_indexes(&target.table)?;
         }
 
         if targets.len() == 1 {
@@ -1856,10 +1848,10 @@ impl RawEngine {
         let rows = rows
             .into_iter()
             .map(|returning_row| {
-                let mut row = materialization_plan.as_ref().map_or_else(
-                    || self.current_schema_row(table, &returning_row.data),
-                    |plan| self.current_schema_row_with_plan(&returning_row.data, plan),
-                );
+                let mut row = match materialization_plan.as_ref() {
+                    Some(plan) => self.current_schema_row_with_plan(&returning_row.data, plan)?,
+                    None => self.current_schema_row(table, &returning_row.data)?,
+                };
                 if let Some(incoming) = returning_row.incoming {
                     for (column, value) in incoming {
                         row.insert(
@@ -1929,7 +1921,14 @@ impl RawEngine {
                 continue;
             }
             if let Some(default) = &hint.default {
-                data.insert(column.clone(), eval_default_value(default)?);
+                let value = eval::eval_default_value_with(default, |expr| {
+                    self.eval_expr_ctx(
+                        expr,
+                        data,
+                        self.last_insert_id.load(AtomicOrdering::Relaxed),
+                    )
+                })?;
+                data.insert(column.clone(), value);
             } else if explicitly_default {
                 // MySQL treats DEFAULT on a nullable column without a declared
                 // default as its implicit NULL default. Removing it for a
@@ -2071,12 +2070,12 @@ impl RawEngine {
             let parent_plan = parent_schema
                 .as_ref()
                 .map(|schema| super::query::RowMaterializationPlan::from_schema(schema));
-            let matches_parent = |parent: &StoredRow| {
-                let parent = parent_plan.as_ref().map_or_else(
-                    || self.current_schema_row(&foreign_key.referenced_table, &parent.data),
-                    |plan| self.current_schema_row_with_plan(&parent.data, plan),
-                );
-                foreign_key
+            let matches_parent = |parent: &StoredRow| -> Result<bool> {
+                let parent = match parent_plan.as_ref() {
+                    Some(plan) => self.current_schema_row_with_plan(&parent.data, plan)?,
+                    None => self.current_schema_row(&foreign_key.referenced_table, &parent.data)?,
+                };
+                Ok(foreign_key
                     .referenced_columns
                     .iter()
                     .zip(&local_values)
@@ -2084,7 +2083,7 @@ impl RawEngine {
                         parent
                             .get(column)
                             .is_some_and(|referenced| mysql_eq(referenced, local))
-                    })
+                    }))
             };
             // Stored row keys encode the primary-key value(s). Exact hits avoid
             // materializing every parent for each row in a bulk INSERT. A miss
@@ -2100,11 +2099,21 @@ impl RawEngine {
                         Value::Array(local_values.clone()).to_string()
                     }
                 });
-            let matched = primary_key
-                .as_ref()
-                .and_then(|key| parent_rows.get(key))
-                .is_some_and(&matches_parent)
-                || parent_rows.values().any(matches_parent);
+            let matched =
+                if let Some(parent) = primary_key.as_ref().and_then(|key| parent_rows.get(key)) {
+                    matches_parent(parent)?
+                } else {
+                    false
+                } || {
+                    let mut matched = false;
+                    for parent in parent_rows.values() {
+                        if matches_parent(parent)? {
+                            matched = true;
+                            break;
+                        }
+                    }
+                    matched
+                };
             if !matched {
                 return Err(anyhow!(
                     "foreign key constraint fails: {}",
@@ -2216,7 +2225,7 @@ impl RawEngine {
                         }
                     }
                     self.rows.insert(child_table.clone(), next_rows);
-                    self.rebuild_indexes(&child_table);
+                    self.rebuild_indexes(&child_table)?;
                 }
                 "SET NULL" => {
                     let mut next_rows = child_rows;
@@ -2232,7 +2241,7 @@ impl RawEngine {
                         }
                     }
                     self.rows.insert(child_table.clone(), next_rows);
-                    self.rebuild_indexes(&child_table);
+                    self.rebuild_indexes(&child_table)?;
                 }
                 "RESTRICT" | "NO ACTION" => {
                     return Err(anyhow!(
@@ -2363,7 +2372,7 @@ impl RawEngine {
         }
         for (table, rows) in by_table {
             self.rows.insert(table.clone(), rows);
-            self.rebuild_indexes(&table);
+            self.rebuild_indexes(&table)?;
         }
         Ok(())
     }
@@ -2567,18 +2576,24 @@ impl RawEngine {
         }
     }
 
-    pub(super) fn rebuild_indexes_all(&self) {
+    pub(super) fn rebuild_indexes_all(&self) -> Result<()> {
         let tables: Vec<String> = self.rows.iter().map(|r| r.key().clone()).collect();
         for t in tables {
-            self.rebuild_indexes(&t);
+            self.rebuild_indexes(&t)?;
         }
+        Ok(())
     }
 
-    pub(super) fn add_row_to_indexes(&self, table: &str, key: &str, data: &Map<String, Value>) {
+    pub(super) fn add_row_to_indexes(
+        &self,
+        table: &str,
+        key: &str,
+        data: &Map<String, Value>,
+    ) -> Result<()> {
         let Some(schema) = self.schemas.get(table).map(|schema| schema.clone()) else {
-            return;
+            return Ok(());
         };
-        let view = self.current_schema_row(table, data);
+        let view = self.current_schema_row(table, data)?;
         let mut table_indexes = self.indexes.entry(table.to_string()).or_default();
         for index in &schema.indexes {
             if index.columns.len() != 1 {
@@ -2593,6 +2608,7 @@ impl RawEngine {
                 .or_default()
                 .insert(key.to_string());
         }
+        Ok(())
     }
 
     pub(super) fn remove_row_from_indexes(
@@ -2600,13 +2616,13 @@ impl RawEngine {
         table: &str,
         key: &str,
         data: &Map<String, Value>,
-    ) {
+    ) -> Result<()> {
         let Some(schema) = self.schemas.get(table).map(|schema| schema.clone()) else {
-            return;
+            return Ok(());
         };
-        let view = self.current_schema_row(table, data);
+        let view = self.current_schema_row(table, data)?;
         let Some(mut table_indexes) = self.indexes.get_mut(table) else {
-            return;
+            return Ok(());
         };
         for index in &schema.indexes {
             if index.columns.len() != 1 {
@@ -2623,14 +2639,15 @@ impl RawEngine {
                 }
             }
         }
+        Ok(())
     }
 
-    pub(super) fn rebuild_indexes(&self, table: &str) {
+    pub(super) fn rebuild_indexes(&self, table: &str) -> Result<()> {
         let Some(schema) = self.schemas.get(table).map(|s| s.clone()) else {
-            return;
+            return Ok(());
         };
         let Some(rows) = self.rows.get(table).map(|r| r.clone()) else {
-            return;
+            return Ok(());
         };
         let materialization_plan = super::query::RowMaterializationPlan::from_schema(&schema);
         let mut table_index: BTreeMap<String, BTreeMap<String, BTreeSet<String>>> = BTreeMap::new();
@@ -2642,13 +2659,14 @@ impl RawEngine {
             let col = index.columns[0].clone();
             let mut map: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
             for (pk, row) in &rows {
-                let view = self.current_schema_row_with_plan(&row.data, &materialization_plan);
+                let view = self.current_schema_row_with_plan(&row.data, &materialization_plan)?;
                 let key = view.get(&col).cloned().unwrap_or(Value::Null).to_string();
                 map.entry(key).or_default().insert(pk.clone());
             }
             table_index.insert(col, map);
         }
         self.indexes.insert(table.to_string(), table_index.into());
+        Ok(())
     }
 }
 

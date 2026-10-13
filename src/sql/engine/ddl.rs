@@ -45,7 +45,7 @@ impl RawEngine {
             table_rows.insert(key, stored);
         }
         self.rows.insert(table.to_string(), table_rows.into());
-        self.rebuild_indexes(table);
+        self.rebuild_indexes(table)?;
 
         Ok(QueryResult {
             rows_affected: affected_rows,
@@ -134,7 +134,7 @@ impl RawEngine {
         self.schemas.insert(table.clone(), schema.into());
         self.rows.insert(table.clone(), BTreeMap::new().into());
         self.clear_auto_inc(&table);
-        self.rebuild_indexes(&table);
+        self.rebuild_indexes(&table)?;
         // Aggregate results can retain evaluation fields outside the projection.
         for row in &mut result.rows {
             row.retain(|column, _| seen.contains(&column.to_ascii_lowercase()));
@@ -182,7 +182,7 @@ impl RawEngine {
         self.schemas.insert(table.clone(), incoming.into());
         self.rows.insert(table.clone(), BTreeMap::new().into());
         self.clear_auto_inc(&table);
-        self.rebuild_indexes(&table);
+        self.rebuild_indexes(&table)?;
 
         Ok(QueryResult::default())
     }
@@ -218,7 +218,7 @@ impl RawEngine {
         self.schemas.insert(table.clone(), schema.into());
         self.rows.insert(table.clone(), BTreeMap::new().into());
         self.clear_auto_inc(&table);
-        self.rebuild_indexes(&table);
+        self.rebuild_indexes(&table)?;
 
         Ok(QueryResult::default())
     }
@@ -286,7 +286,7 @@ impl RawEngine {
         }
         self.schemas.insert(table.clone(), schema.into());
         self.rows.entry(table.clone()).or_default();
-        self.rebuild_indexes(&table);
+        self.rebuild_indexes(&table)?;
 
         Ok(QueryResult {
             rows_affected,
@@ -546,7 +546,7 @@ impl RawEngine {
         schema.updated_at = Some(Utc::now());
         self.schemas.insert(schema.table.clone(), schema.clone());
         self.rows.entry(schema.table.clone()).or_default();
-        self.rebuild_indexes(&schema.table);
+        self.rebuild_indexes(&schema.table)?;
 
         Ok(QueryResult::default())
     }
@@ -667,7 +667,7 @@ impl RawEngine {
             schema.updated_at = Some(Utc::now());
             self.schemas.insert(table.to_string(), schema.into());
             self.index_comments.remove(&format!("{table}:{index_name}"));
-            self.rebuild_indexes(table);
+            self.rebuild_indexes(table)?;
         }
         Ok(QueryResult::default())
     }
@@ -689,7 +689,7 @@ impl RawEngine {
             self.rows.insert(table.clone(), SharedTable::default());
             self.indexes.remove(&table);
             self.clear_auto_inc(&table);
-            self.rebuild_indexes(&table);
+            self.rebuild_indexes(&table)?;
         }
 
         Ok(QueryResult::default())
