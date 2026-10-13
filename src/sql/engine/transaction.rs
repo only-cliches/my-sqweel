@@ -1458,6 +1458,8 @@ impl SessionState {
                     CatalogEffect::CreateDatabase(name) => {
                         let mut raw = RawEngine::new(self.shared.cfg.clone());
                         raw.database_name = name.clone();
+                        raw.host_functions = self.shared.host_functions.clone();
+                        raw.function_runtime = Some(self.shared.runtime.clone());
                         state.databases.insert(name, Arc::new(raw));
                     }
                     CatalogEffect::DropDatabase(name) => {
@@ -2660,7 +2662,17 @@ mod tests {
 
     #[test]
     fn sql_functions_are_database_scoped_and_cannot_shadow_builtins() -> Result<()> {
-        let engine = Engine::new(EngineConfig::mysql_strict());
+        let mut builder = Engine::builder(EngineConfig::mysql_strict(), crate::Storage::Memory);
+        builder.functions().register_scalar(
+            "host_identity",
+            FunctionSignature {
+                args: vec![MysqlColumnType::Integer],
+                returns: MysqlColumnType::Integer,
+                deterministic: true,
+            },
+            |args| Ok(args[0].clone()),
+        )?;
+        let engine = builder.open()?;
         assert!(
             engine
                 .execute_sql("CREATE FUNCTION abs(x INT) RETURNS INT RETURN x")
@@ -2669,6 +2681,10 @@ mod tests {
         engine.execute_sql("CREATE FUNCTION local_value(x INT) RETURNS INT RETURN x + 1")?;
         let mut session = engine.session();
         session.execute_sql("CREATE DATABASE second; USE second")?;
+        assert_eq!(
+            session.execute_sql("SELECT host_identity(3) AS value")?[0].rows[0]["value"],
+            json!(3)
+        );
         session.execute_sql("CREATE FUNCTION local_value(x INT) RETURNS INT RETURN x + 2")?;
         assert_eq!(
             session.execute_sql("SELECT local_value(1) AS value")?[0].rows[0]["value"],
