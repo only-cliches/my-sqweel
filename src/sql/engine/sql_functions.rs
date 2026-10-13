@@ -147,7 +147,7 @@ fn validate_schema_expression_inner(
     let scan = scan_expression(expression, parameters, hosts, sql, false)?;
     for call in scan.calls {
         let name = call.to_ascii_lowercase();
-        if builtin_function(&name).is_some() || name == "if" {
+        if is_reserved_builtin(&name) {
             if !allow_nondeterministic_builtins && is_nondeterministic_builtin(&name) {
                 bail!("SQL function depends on nondeterministic built-in {name}");
             }
@@ -192,9 +192,6 @@ fn validate_schema_expression_inner(
 }
 
 pub(super) fn expression_calls_function(expression: &str, name: &str) -> bool {
-    let Ok(expr) = parse_function_expression(expression) else {
-        return false;
-    };
     struct CallFinder<'a> {
         name: &'a str,
         found: bool,
@@ -213,13 +210,78 @@ pub(super) fn expression_calls_function(expression: &str, name: &str) -> bool {
         }
     }
     let mut finder = CallFinder { name, found: false };
-    let _ = expr.visit(&mut finder);
+    if let Ok(expr) = parse_function_expression(expression) {
+        let _ = expr.visit(&mut finder);
+    } else if let Ok(statements) = crate::sql::parse(expression) {
+        for statement in statements {
+            let _ = statement.visit(&mut finder);
+        }
+    }
     finder.found
 }
 
 pub(super) fn is_reserved_builtin(name: &str) -> bool {
     builtin_function(name).is_some()
-        || matches!(name.to_ascii_uppercase().as_str(), "IF" | "ROW_NUMBER")
+        || extra_builtin(name)
+        || matches!(
+            name.to_ascii_uppercase().as_str(),
+            "ROW_NUMBER" | "INTERVAL_CAST" | "INTERVAL_FUNC" | "USER_VAR_ASSIGN"
+        )
+}
+
+fn extra_builtin(name: &str) -> bool {
+    matches!(
+        name.to_ascii_uppercase().as_str(),
+        "ASCII"
+            | "AVG"
+            | "CHAR"
+            | "CURRENT_DATE"
+            | "CURRENT_TIME"
+            | "CURRENT_TIMESTAMP"
+            | "CURRENT_USER"
+            | "DATE"
+            | "DAY"
+            | "DEFAULT"
+            | "EXTRACT_YEAR_MONTH"
+            | "GET_FORMAT"
+            | "HOUR"
+            | "IF"
+            | "INET6_ATON"
+            | "INET6_NTOA"
+            | "INET_ATON"
+            | "INET_NTOA"
+            | "INSERT"
+            | "IS_IPV4"
+            | "IS_IPV4_COMPAT"
+            | "IS_IPV4_MAPPED"
+            | "IS_IPV6"
+            | "JSON_SCHEMA_VALID"
+            | "JSON_SCHEMA_VALIDATION_REPORT"
+            | "JSON_STORAGE_FREE"
+            | "JSON_STORAGE_SIZE"
+            | "LEFT"
+            | "MINUTE"
+            | "LOCALTIME"
+            | "LOCALTIMESTAMP"
+            | "MONTH"
+            | "REPEAT"
+            | "REPLACE"
+            | "RIGHT"
+            | "ROW"
+            | "SECOND"
+            | "TIME"
+            | "TIMESTAMPADD"
+            | "TIMESTAMPDIFF"
+            | "TRUNCATE"
+            | "USER"
+            | "UTC_DATE"
+            | "UTC_TIME"
+            | "UTC_TIMESTAMP"
+            | "UUID"
+            | "VALUE"
+            | "VALUES"
+            | "YEAR"
+    )
 }
 
 struct ExpressionScan {
@@ -291,7 +353,7 @@ fn scan_expression(
                     if let Some(builtin) = builtin_function(&lower) {
                         if is_builtin_aggregate(&lower) {
                             self.has_builtin_aggregate = true;
-                            if !self.sql_is_aggregate_body() {
+                            if !self.aggregate_body {
                                 return ControlFlow::Break(
                                     "scalar SQL function cannot call an aggregate function".into(),
                                 );
@@ -300,15 +362,22 @@ fn scan_expression(
                         if builtin.status != "implemented" {
                             return ControlFlow::Break(format!("unsupported function: {name}"));
                         }
-                    } else if lower == "if" {
-                        // IF is a control-flow function omitted from SQL_FUNCTIONS coverage.
+                    } else if extra_builtin(&lower) {
+                        if is_builtin_aggregate(&lower) {
+                            self.has_builtin_aggregate = true;
+                            if !self.aggregate_body {
+                                return ControlFlow::Break(
+                                    "scalar SQL function cannot call an aggregate function".into(),
+                                );
+                            }
+                        }
                     } else if let Some(host) = self.hosts.lookup(&lower) {
-                        if host.is_aggregate() && !self.sql_is_aggregate_body() {
+                        if host.is_aggregate() && !self.aggregate_body {
                             return ControlFlow::Break(
                                 "scalar SQL function cannot call an aggregate function".into(),
                             );
                         }
-                        if self.sql_is_aggregate_body() && host.is_aggregate() {
+                        if self.aggregate_body && host.is_aggregate() {
                             return ControlFlow::Break(
                                 "SQL aggregate function cannot call a custom aggregate".into(),
                             );
@@ -319,7 +388,7 @@ fn scan_expression(
                         .find(|(key, _)| key.eq_ignore_ascii_case(&name))
                     {
                         if function.aggregate {
-                            return ControlFlow::Break(if self.sql_is_aggregate_body() {
+                            return ControlFlow::Break(if self.aggregate_body {
                                 "SQL aggregate function cannot call a custom aggregate".into()
                             } else {
                                 "scalar SQL function cannot call an aggregate function".into()
@@ -332,13 +401,6 @@ fn scan_expression(
                 _ => {}
             }
             ControlFlow::Continue(())
-        }
-    }
-
-    impl Scanner<'_> {
-        // The caller communicates aggregate context by setting this small flag below.
-        fn sql_is_aggregate_body(&self) -> bool {
-            self.aggregate_body
         }
     }
 
@@ -418,6 +480,13 @@ fn is_nondeterministic_builtin(name: &str) -> bool {
             | "CURRENT_TIMESTAMP"
             | "CURRENT_TIME"
             | "CURRENT_DATE"
+            | "CURRENT_USER"
+            | "USER"
+            | "LOCALTIME"
+            | "LOCALTIMESTAMP"
+            | "UTC_DATE"
+            | "UTC_TIME"
+            | "UTC_TIMESTAMP"
     )
 }
 
@@ -674,6 +743,9 @@ mod tests {
             validate_function_body(&definition("f", "(SELECT x)", false), &hosts, &sql).is_err()
         );
         validate_function_body(&definition("f", "SUM(x)", true), &hosts, &sql)?;
+        validate_function_body(&definition("f", "AVG(x)", true), &hosts, &sql)?;
+        assert!(is_reserved_builtin("IF"));
+        assert!(is_reserved_builtin("AVG"));
         assert!(validate_function_body(&definition("f", "ABS(x)", true), &hosts, &sql).is_err());
 
         let custom_aggregate =
@@ -704,6 +776,7 @@ mod tests {
         ]);
         assert!(validate_schema_expression("f(1)", &hosts, &cyclic).is_err());
         assert!(expression_calls_function("ABS(f(1))", "f"));
+        assert!(expression_calls_function("SELECT f(1)", "f"));
         assert!(!expression_calls_function("ABS(1)", "f"));
         Ok(())
     }

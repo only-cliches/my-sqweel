@@ -291,12 +291,6 @@ impl Catalog {
             .unwrap_or_default()
     }
 
-    pub(crate) fn all_function_defs(
-        &self,
-    ) -> impl Iterator<Item = &super::sql_functions::SqlFunctionDef> {
-        self.sql_functions.values().flat_map(BTreeMap::values)
-    }
-
     pub(crate) fn insert_function(
         &mut self,
         database: &str,

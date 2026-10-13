@@ -1572,7 +1572,9 @@ fn aggregate_call(expr: &Expr) -> Option<AggregateCall> {
         let custom_modifier = match expr {
             Expr::Function(function) => match &function.args {
                 FunctionArguments::List(arguments) => {
-                    arguments.duplicate_treatment.is_some() || !arguments.clauses.is_empty()
+                    function.name.0.len() != 1
+                        || arguments.duplicate_treatment.is_some()
+                        || !arguments.clauses.is_empty()
                 }
                 _ => true,
             },
