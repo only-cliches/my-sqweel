@@ -5979,7 +5979,7 @@ fn eval_interval_cast(value: Value) -> Result<Value> {
 
 pub(super) fn cast_json_value(value: Value, data_type: &str) -> Result<Value> {
     let data_type = data_type.to_ascii_lowercase();
-    if value == Value::Null {
+    if value == Value::Null || data_type == "null" {
         return Ok(Value::Null);
     }
     if data_type.contains("int") || data_type == "signed" || data_type == "unsigned" {

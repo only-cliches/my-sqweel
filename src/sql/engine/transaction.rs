@@ -2574,6 +2574,7 @@ mod tests {
             "CREATE AGGREGATE FUNCTION typed_total(x INT) RETURNS INT RETURN SUM(x)",
         )?;
         engine.execute_sql("CREATE FUNCTION positive(x INT) RETURNS INT RETURN IF(x > 0, x, 0)")?;
+        engine.execute_sql("CREATE FUNCTION null_sql() RETURNS NULL RETURN 7")?;
         engine.execute_sql(
             "CREATE TABLE t (id INT PRIMARY KEY); INSERT INTO t VALUES (1), (2), (3)",
         )?;
@@ -2582,8 +2583,11 @@ mod tests {
         assert_eq!(scalar.rows[0]["value"], json!(8));
         assert_eq!(scalar.rows[0]["next"], json!(5));
         assert_eq!(
-            engine.execute_sql("SELECT null_host() AS value, positive(-2) AS positive")?[0].rows[0],
-            json!({"value": null, "positive": 0})
+            engine.execute_sql(
+                "SELECT null_host() AS value, null_sql() AS sql_value, positive(-2) AS positive"
+            )?[0]
+                .rows[0],
+            json!({"value": null, "sql_value": null, "positive": 0})
         );
         assert!(engine.execute_sql("SELECT slow_host()").is_err());
         assert_eq!(

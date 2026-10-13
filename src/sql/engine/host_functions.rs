@@ -386,9 +386,6 @@ fn coerce_result(value: Value, ty: MysqlColumnType) -> Result<Value> {
 }
 
 fn coerce(value: Value, ty: MysqlColumnType) -> Result<Value> {
-    if ty == MysqlColumnType::Null {
-        return Ok(Value::Null);
-    }
     super::eval::cast_json_value(value, mysql_type_name(ty))
 }
 
