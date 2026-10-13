@@ -2529,6 +2529,18 @@ mod tests {
             },
             |args| async move { Ok(json!(args[0].as_i64().unwrap() + 1)) },
         )?;
+        builder.functions().register_async_scalar(
+            "async_guarded",
+            FunctionSignature {
+                args: vec![],
+                returns: MysqlColumnType::Integer,
+                deterministic: false,
+            },
+            |_| {
+                assert!(crate::runtime::check_reentry().is_err());
+                async { Ok(json!(1)) }
+            },
+        )?;
         builder.functions().register_async_scalar_with_timeout(
             "slow_host",
             FunctionSignature {
@@ -2584,6 +2596,10 @@ mod tests {
             &engine.execute_sql("SELECT plus_two(3) AS value, async_add_one(4) AS next")?[0];
         assert_eq!(scalar.rows[0]["value"], json!(8));
         assert_eq!(scalar.rows[0]["next"], json!(5));
+        assert_eq!(
+            engine.execute_sql("SELECT async_guarded() AS value")?[0].rows[0]["value"],
+            json!(1)
+        );
         assert_eq!(
             engine.execute_sql(
                 "SELECT null_host() AS value, null_sql() AS sql_value, positive(-2) AS positive"

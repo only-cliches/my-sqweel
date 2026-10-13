@@ -94,11 +94,11 @@ impl HostFunction {
                 timeout,
                 ..
             } => {
-                let future = callback(args);
+                let callback = callback.clone();
                 let timeout = *timeout;
                 let name = name.clone();
                 runtime.run(async move {
-                    tokio::time::timeout(timeout, future)
+                    tokio::time::timeout(timeout, callback(args))
                         .await
                         .map_err(|_| anyhow!("host function {name} timed out"))?
                 })
