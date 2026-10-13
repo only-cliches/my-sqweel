@@ -69,7 +69,7 @@ pub(super) fn parse_function_command(sql: &str) -> Result<Option<SqlFunctionComm
     }
 
     parser.expect_char('(')?;
-    let mut args = Vec::new();
+    let mut args: Vec<(String, MysqlColumnType)> = Vec::new();
     if !parser.take_char(')') {
         loop {
             let arg_name = parser.take_identifier()?;
