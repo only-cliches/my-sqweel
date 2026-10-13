@@ -2517,6 +2517,19 @@ mod tests {
             },
             |args| async move { Ok(json!(args[0].as_i64().unwrap() + 1)) },
         )?;
+        builder.functions().register_async_scalar_with_timeout(
+            "slow_host",
+            FunctionSignature {
+                args: vec![],
+                returns: MysqlColumnType::Integer,
+                deterministic: false,
+            },
+            StdDuration::from_millis(10),
+            |_| async {
+                tokio::time::sleep(StdDuration::from_millis(100)).await;
+                Ok(json!(1))
+            },
+        )?;
         builder.functions().register_aggregate(
             "host_total",
             FunctionSignature {
@@ -2554,6 +2567,7 @@ mod tests {
             &engine.execute_sql("SELECT plus_two(3) AS value, async_add_one(4) AS next")?[0];
         assert_eq!(scalar.rows[0]["value"], json!(8));
         assert_eq!(scalar.rows[0]["next"], json!(5));
+        assert!(engine.execute_sql("SELECT slow_host()").is_err());
         assert_eq!(
             scalar.column_metadata[0].column_type,
             MysqlColumnType::Integer

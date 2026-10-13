@@ -3510,7 +3510,7 @@ impl RawEngine {
         }
 
         if upper.starts_with("CREATE PROCEDURE ") || upper.starts_with("DROP PROCEDURE ") {
-            return Ok(Some(QueryResult::default()));
+            return Err(anyhow!("stored procedures are not supported"));
         }
         if upper.starts_with("DELETE FROM T1 ORDER BY (F1(") {
             return Err(anyhow!("too few arguments"));

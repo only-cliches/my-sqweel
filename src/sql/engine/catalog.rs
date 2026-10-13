@@ -365,7 +365,7 @@ impl Catalog {
         &self,
         identity: &Identity,
         database: &str,
-        privilege: Privilege,
+        privilege: AuthPrivilege,
     ) -> Result<()> {
         self.check_database(identity, database)?;
         let permits = |access: &ExternalAccess| {

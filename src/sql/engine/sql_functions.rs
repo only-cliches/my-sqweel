@@ -28,6 +28,10 @@ pub(super) enum SqlFunctionCommand {
 }
 
 pub(super) fn parse_function_command(sql: &str) -> Result<Option<SqlFunctionCommand>> {
+    let first = sql.trim_start().split_whitespace().next().unwrap_or("");
+    if !first.eq_ignore_ascii_case("CREATE") && !first.eq_ignore_ascii_case("DROP") {
+        return Ok(None);
+    }
     let tokens = crate::sql::sql_tokens(sql)?;
     let mut parser = FunctionTokens {
         tokens: &tokens,
@@ -268,6 +272,12 @@ fn scan_expression(
                     );
                 }
                 Expr::Function(function) => {
+                    if function.name.0.len() != 1 {
+                        return ControlFlow::Break(
+                            "qualified function calls are not supported in SQL function expressions"
+                                .into(),
+                        );
+                    }
                     let Some(name) = function_name(function) else {
                         return ControlFlow::Break("invalid function name".into());
                     };
@@ -354,12 +364,7 @@ fn parse_function_expression(expression: &str) -> Result<Expr> {
 }
 
 fn function_name(function: &Function) -> Option<&str> {
-    function
-        .name
-        .0
-        .last()?
-        .as_ident()
-        .map(|ident| ident.value.as_str())
+    function.name.0.last().map(|ident| ident.value.as_str())
 }
 
 fn builtin_function(

@@ -4792,6 +4792,10 @@ impl RawEngine {
             return Ok(None);
         }
         ensure!(
+            function.name.0.len() == 1,
+            "qualified custom function calls are not supported"
+        );
+        ensure!(
             function.over.is_none(),
             "custom function windows are not supported"
         );

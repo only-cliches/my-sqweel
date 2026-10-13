@@ -85,7 +85,8 @@ impl HostFunction {
         let args = coerce_args(args, &self.signature().args)?;
         let value = match self {
             Self::Scalar { name, callback, .. } => {
-                callback(args).with_context(|| format!("host function {name}"))
+                crate::runtime::run_sync_callback(|| callback(args))
+                    .with_context(|| format!("host function {name}"))
             }
             Self::AsyncScalar {
                 name,
@@ -125,15 +126,15 @@ impl HostFunction {
                 step,
                 finish,
                 ..
-            } => {
+            } => crate::runtime::run_sync_callback(|| {
                 let mut state =
                     init().with_context(|| format!("host aggregate {name} init failed"))?;
                 for args in rows {
                     state = step(state, args)
                         .with_context(|| format!("host aggregate {name} step failed"))?;
                 }
-                finish(state).with_context(|| format!("host aggregate {name} finish failed"))?
-            }
+                finish(state).with_context(|| format!("host aggregate {name} finish failed"))
+            })?,
             Self::AsyncAggregate {
                 name,
                 init,
@@ -144,28 +145,25 @@ impl HostFunction {
             } => {
                 let timeout = *timeout;
                 let name = name.clone();
-                let init = init();
-                let function_name = name.clone();
-                let mut state = runtime.run(async move {
-                    tokio::time::timeout(timeout, init)
-                        .await
-                        .map_err(|_| anyhow!("host aggregate {function_name} init timed out"))?
-                })?;
-                for args in rows {
-                    let next = step(state, args);
-                    let function_name = name.clone();
-                    state = runtime.run(async move {
-                        tokio::time::timeout(timeout, next)
-                            .await
-                            .map_err(|_| anyhow!("host aggregate {function_name} step timed out"))?
-                    })?;
-                }
-                let final_value = finish(state);
-                let function_name = name;
+                let init = init.clone();
+                let step = step.clone();
+                let finish = finish.clone();
                 runtime.run(async move {
-                    tokio::time::timeout(timeout, final_value)
-                        .await
-                        .map_err(|_| anyhow!("host aggregate {function_name} finish timed out"))?
+                    tokio::time::timeout(timeout, async move {
+                        let mut state = init()
+                            .await
+                            .with_context(|| format!("host aggregate {name} init failed"))?;
+                        for args in rows {
+                            state = step(state, args)
+                                .await
+                                .with_context(|| format!("host aggregate {name} step failed"))?;
+                        }
+                        finish(state)
+                            .await
+                            .with_context(|| format!("host aggregate {name} finish failed"))
+                    })
+                    .await
+                    .map_err(|_| anyhow!("host aggregate timed out"))?
                 })?
             }
             _ => return Err(anyhow!("host function is scalar")),

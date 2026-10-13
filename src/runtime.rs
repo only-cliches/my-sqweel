@@ -1,5 +1,6 @@
 //! Callback executor, started only when this engine needs it.
 use anyhow::{Result, anyhow};
+use std::cell::Cell;
 use std::{
     future::Future,
     sync::{
@@ -11,12 +12,26 @@ use std::{
 };
 
 tokio::task_local! { static IN_CALLBACK: bool; }
+thread_local! { static SYNC_IN_CALLBACK: Cell<bool> = const { Cell::new(false) }; }
 pub(crate) fn check_reentry() -> Result<()> {
     anyhow::ensure!(
-        !IN_CALLBACK.try_with(|active| *active).unwrap_or(false),
+        !IN_CALLBACK.try_with(|active| *active).unwrap_or(false)
+            && !SYNC_IN_CALLBACK.with(Cell::get),
         "database calls from query/storage callbacks are not supported"
     );
     Ok(())
+}
+
+pub(crate) fn run_sync_callback<T>(callback: impl FnOnce() -> Result<T>) -> Result<T> {
+    struct Guard(bool);
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            SYNC_IN_CALLBACK.with(|active| active.set(self.0));
+        }
+    }
+    let previous = SYNC_IN_CALLBACK.with(|active| active.replace(true));
+    let _guard = Guard(previous);
+    callback()
 }
 
 pub(crate) struct EngineRuntime(parking_lot::Mutex<Option<tokio::runtime::Runtime>>);
@@ -79,5 +94,14 @@ impl Drop for EngineRuntime {
         if let Some(runtime) = self.0.get_mut().take() {
             runtime.shutdown_background();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn synchronous_callback_reentry_is_rejected() {
+        assert!(super::run_sync_callback(super::check_reentry).is_err());
+        assert!(super::check_reentry().is_ok());
     }
 }
