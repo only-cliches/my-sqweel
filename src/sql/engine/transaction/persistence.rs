@@ -861,7 +861,7 @@ fn committed_from_image(
         image.version == 1 && image.databases.contains_key("app"),
         "invalid custom storage catalog"
     );
-    let catalog = serde_json::from_value(image.metadata)?;
+    let catalog: Catalog = serde_json::from_value(image.metadata)?;
     let mut databases = BTreeMap::new();
     for (name, snapshot) in image.databases {
         ensure!(snapshot.version == 1, "unsupported snapshot version");
