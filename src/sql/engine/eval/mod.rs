@@ -6187,10 +6187,6 @@ fn split_date_components(raw: &str) -> Option<(i32, u32, u32)> {
     None
 }
 
-pub(super) fn eval_default_value(default: &str) -> Result<Value> {
-    eval_default_value_with(default, |expr| eval_expr(expr, &Map::new(), 0))
-}
-
 pub(super) fn eval_default_value_with(
     default: &str,
     eval: impl FnOnce(&Expr) -> Result<Value>,
@@ -6207,30 +6203,4 @@ pub(super) fn eval_default_value_with(
         return eval(&expr);
     }
     Ok(Value::String(trimmed.trim_matches('\'').to_string()))
-}
-
-pub(super) fn read_default_value(hint: &ColumnHint) -> Option<Value> {
-    let default = hint.default.as_deref()?;
-    if is_volatile_default(default) {
-        return None;
-    }
-    eval_default_value(default).ok()
-}
-
-pub(super) fn is_volatile_default(default: &str) -> bool {
-    let normalized = default
-        .trim()
-        .trim_matches(|ch| ch == '(' || ch == ')')
-        .to_ascii_uppercase();
-    matches!(
-        normalized.as_str(),
-        "CURRENT_TIMESTAMP"
-            | "CURRENT_DATE"
-            | "NOW"
-            | "NOW()"
-            | "CURDATE"
-            | "CURDATE()"
-            | "UUID"
-            | "UUID()"
-    )
 }
