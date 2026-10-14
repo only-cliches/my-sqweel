@@ -113,7 +113,8 @@ transaction behavior.
 
 ### Track query performance
 
-Subscribe before running a query to read its elapsed time and logical row counts:
+Subscribe before running a query to read its SQL execution time and logical
+row counts. A tracked call returns the event ID even if the query fails:
 
 ```rust
 use my_sqweel::sql::engine::{Engine, QueryEvent, QueryEventOptions};
@@ -121,16 +122,20 @@ use my_sqweel::sql::engine::{Engine, QueryEvent, QueryEventOptions};
 fn main() -> anyhow::Result<()> {
     let engine = Engine::default();
     let events = engine.subscribe_query_events(QueryEventOptions::metadata_only());
-    engine.execute_sql("SELECT 1")?;
+    let (query_id, result) = engine.execute_sql_tracked("SELECT 1");
+    result?;
     let _received = events.recv()?;
     if let QueryEvent::Completed(done) = events.recv()? {
+        assert_eq!(done.query_id, query_id);
         println!("elapsed: {:?}, rows read: {}", done.duration, done.metrics.rows_read);
     }
     Ok(())
 }
 ```
 
-See [query events](docs/embedding.md#databases-accounts-and-events) for result
+Tracked methods also support parameters, sessions, and async calls. Query and
+result filters can log the same ID via `request.query_id()`. See
+[query events](docs/embedding.md#databases-accounts-and-events) for result
 sizes and write counters.
 
 ### Import CSV or JSON

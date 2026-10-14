@@ -133,20 +133,36 @@ connect with `engine.set_admin_credentials(username, password)`.
 
 Subscribe to query lifecycle events when an application needs execution
 metrics. These metrics describe logical rows/cells read and written; they are
-not storage I/O or durable commit notifications.
+not storage I/O or durable commit notifications. Use a tracked query method to
+match a caller to its timing and cost event, even when other callers execute
+the same SQL concurrently:
 
 ```rust
 use my_sqweel::sql::engine::{Engine, QueryEvent, QueryEventOptions};
 
 let engine = Engine::default();
 let events = engine.subscribe_query_events(QueryEventOptions::metadata_only());
-engine.execute_sql("SELECT 1")?;
+let (query_id, outcome) = engine.execute_sql_tracked("SELECT 1");
+outcome?;
 let _received = events.recv()?;
 if let QueryEvent::Completed(completed) = events.recv()? {
+    assert_eq!(completed.query_id, query_id);
     println!("rows read: {}", completed.metrics.rows_read);
 }
 # Ok::<(), anyhow::Error>(())
 ```
+
+`execute_sql_tracked` and `execute_sql_with_params_tracked` are available on
+both `Engine` and `EngineSession`, with `_async` variants. They return
+`(QueryId, Result<Vec<QueryResult>>)` so failures still carry an ID. One call,
+including a multi-statement call, has one ID. Query and result filters see it
+through `QueryRequest::query_id()`; MySQL TCP calls also have IDs in filters
+and events, although the wire protocol does not return them to clients.
+The event duration covers SQL execution only. A call rejected before SQL or
+answered synthetically reports zero SQL duration and zero logical cost. If a
+result filter rejects a successful SQL execution, the execution event still
+reports success and its measured cost. Events require an active subscription;
+IDs are unique within an engine's lifetime.
 
 Continue with [persistence and maintenance](operations.md) for snapshots,
 drift reporting, seeding, and durable local storage.

@@ -1,5 +1,5 @@
 //! Shared query filters and execution context.
-use crate::sql::engine::QueryResult;
+use crate::sql::engine::{QueryId, QueryResult};
 use anyhow::{Result, anyhow};
 use serde_json::Value;
 use std::{future::Future, pin::Pin, sync::Arc};
@@ -15,6 +15,11 @@ impl QueryRequest {
     pub fn context(&self) -> &QueryContext {
         &self.context
     }
+
+    /// ID shared with the caller's tracked result and query lifecycle events.
+    pub fn query_id(&self) -> QueryId {
+        self.query_id
+    }
 }
 /// A SQL request at the filter boundary.
 ///
@@ -25,6 +30,7 @@ pub struct QueryRequest {
     pub sql: String,
     pub parameters: Vec<Value>,
     pub prepared: bool,
+    pub(crate) query_id: QueryId,
     pub(crate) context: QueryContext,
 }
 

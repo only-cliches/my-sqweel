@@ -303,6 +303,17 @@ impl Engine {
     pub fn execute_sql_with_params(&self, sql: &str, params: &[Value]) -> Result<Vec<QueryResult>> {
         self.session().execute_sql_with_params(sql, params)
     }
+    /// Return the query event ID alongside the result, including on error.
+    pub fn execute_sql_tracked(&self, sql: &str) -> (QueryId, Result<Vec<QueryResult>>) {
+        self.session().execute_sql_tracked(sql)
+    }
+    pub fn execute_sql_with_params_tracked(
+        &self,
+        sql: &str,
+        params: &[Value],
+    ) -> (QueryId, Result<Vec<QueryResult>>) {
+        self.session().execute_sql_with_params_tracked(sql, params)
+    }
     pub async fn execute_sql_async(&self, sql: impl Into<String>) -> Result<Vec<QueryResult>> {
         self.session().execute_sql_async(sql).await
     }
@@ -313,6 +324,21 @@ impl Engine {
     ) -> Result<Vec<QueryResult>> {
         self.session()
             .execute_sql_with_params_async(sql, params)
+            .await
+    }
+    pub async fn execute_sql_tracked_async(
+        &self,
+        sql: impl Into<String>,
+    ) -> (QueryId, Result<Vec<QueryResult>>) {
+        self.session().execute_sql_tracked_async(sql).await
+    }
+    pub async fn execute_sql_with_params_tracked_async(
+        &self,
+        sql: impl Into<String>,
+        params: Vec<Value>,
+    ) -> (QueryId, Result<Vec<QueryResult>>) {
+        self.session()
+            .execute_sql_with_params_tracked_async(sql, params)
             .await
     }
     pub fn execute_statement(&self, statement: Statement) -> Result<QueryResult> {
@@ -895,9 +921,10 @@ impl SessionState {
         event_sql: &str,
         execution: Result<String>,
         normalize: bool,
+        query_id: QueryId,
     ) -> Result<Vec<QueryResult>> {
         self.last_query_read = false;
-        self.run_observed(event_sql, execution, normalize)
+        self.run_observed(event_sql, execution, normalize, query_id)
     }
 
     fn run_observed(
@@ -905,19 +932,19 @@ impl SessionState {
         event_sql: &str,
         execution: Result<String>,
         normalize: bool,
+        query_id: QueryId,
     ) -> Result<Vec<QueryResult>> {
         let observer = self.shared.committed.lock().databases["app"].clone();
         if !observer.query_events_enabled() {
             return execution.and_then(|sql| self.execute(&sql, normalize, false));
         }
-        let query_id = observer.next_query_id.fetch_add(1, AtomicOrdering::Relaxed);
         let metrics = Rc::new(QueryMetricsRecorder::new(true));
         let _guard = QueryMetricsGuard::install(metrics.clone());
-        let started = Instant::now();
         observer.publish_query_event(QueryEvent::Received(QueryReceivedEvent {
             query_id,
             query: event_sql.into(),
         }));
+        let started = Instant::now();
         let outcome = execution.and_then(|sql| self.execute(&sql, normalize, false));
         match &outcome {
             Ok(results) => observer.publish_query_completed(

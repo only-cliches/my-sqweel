@@ -325,6 +325,7 @@ pub struct QueryMetrics {
     pub cells_written: u64,
 }
 
+/// Unique within one engine lifetime, including its sessions and endpoints.
 pub type QueryId = u64;
 
 impl QueryEventOptions {
@@ -1025,13 +1026,13 @@ impl RawEngine {
             .then(|| self.next_query_id.fetch_add(1, AtomicOrdering::Relaxed));
         let metrics = query_id.map(|_| Rc::new(QueryMetricsRecorder::new(true)));
         let _metrics_guard = metrics.clone().map(QueryMetricsGuard::install);
-        let started = query_id.map(|_| Instant::now());
         if let Some(query_id) = query_id {
             self.publish_query_event(QueryEvent::Received(QueryReceivedEvent {
                 query_id,
                 query: event_sql.to_string(),
             }));
         }
+        let started = query_id.map(|_| Instant::now());
 
         tracing::debug!(sql = execution_sql, "sql.execute");
         let mut out = Vec::new();
