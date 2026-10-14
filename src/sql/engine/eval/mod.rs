@@ -5,6 +5,154 @@ use std::ops::ControlFlow;
 
 use sqlparser::ast::{Function, FunctionArg, Visit, Visitor};
 
+#[derive(Clone)]
+struct CustomFunctions {
+    hosts: Arc<HostFunctionRegistry>,
+    sql: BTreeMap<String, sql_functions::SqlFunctionDef>,
+    runtime: Arc<crate::runtime::EngineRuntime>,
+}
+
+thread_local! {
+    static CUSTOM_FUNCTIONS: RefCell<Option<CustomFunctions>> = const { RefCell::new(None) };
+    static PLAIN_SQL_FUNCTION_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+pub(super) struct CustomFunctionsGuard(Option<CustomFunctions>);
+
+pub(super) fn install_custom_functions(
+    hosts: Arc<HostFunctionRegistry>,
+    sql: BTreeMap<String, sql_functions::SqlFunctionDef>,
+    runtime: Arc<crate::runtime::EngineRuntime>,
+) -> CustomFunctionsGuard {
+    CustomFunctionsGuard(CUSTOM_FUNCTIONS.with(|active| {
+        active.replace(Some(CustomFunctions {
+            hosts,
+            sql,
+            runtime,
+        }))
+    }))
+}
+
+impl Drop for CustomFunctionsGuard {
+    fn drop(&mut self) {
+        CUSTOM_FUNCTIONS.with(|active| {
+            active.replace(self.0.take());
+        });
+    }
+}
+
+fn custom_aggregate(name: &str) -> bool {
+    CUSTOM_FUNCTIONS.with(|active| {
+        active.borrow().as_ref().is_some_and(|context| {
+            context
+                .hosts
+                .lookup(name)
+                .is_some_and(|function| function.is_aggregate())
+                || context
+                    .sql
+                    .get(name)
+                    .is_some_and(|function| function.aggregate)
+        })
+    })
+}
+
+fn eval_custom_scalar_plain(
+    function: &Function,
+    data: &Map<String, Value>,
+    last_insert_id: u64,
+) -> Result<Option<Value>> {
+    let name = function
+        .name
+        .0
+        .last()
+        .map(|part| part.value.to_ascii_uppercase())
+        .unwrap_or_default();
+    let Some(context) = CUSTOM_FUNCTIONS.with(|active| active.borrow().clone()) else {
+        return Ok(None);
+    };
+    let host = context.hosts.lookup(&name);
+    let definition = context.sql.get(&name);
+    if host.is_none() && definition.is_none() {
+        return Ok(None);
+    }
+    ensure!(
+        function.name.0.len() == 1,
+        "qualified custom function calls are not supported"
+    );
+    ensure!(
+        function.over.is_none(),
+        "custom function windows are not supported"
+    );
+    let FunctionArguments::List(arguments) = &function.args else {
+        return Err(anyhow!(
+            "custom function {name} requires a plain argument list"
+        ));
+    };
+    ensure!(
+        arguments.duplicate_treatment.is_none() && arguments.clauses.is_empty(),
+        "custom function DISTINCT, ORDER BY, and modifiers are not supported"
+    );
+    let args = arguments
+        .args
+        .iter()
+        .map(|argument| {
+            let arg = match argument {
+                FunctionArg::Named { arg, .. }
+                | FunctionArg::ExprNamed { arg, .. }
+                | FunctionArg::Unnamed(arg) => arg,
+            };
+            let FunctionArgExpr::Expr(expr) = arg else {
+                return Err(anyhow!("custom function {name} cannot use *"));
+            };
+            eval_expr(expr, data, last_insert_id)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if let Some(host) = host {
+        ensure!(
+            !host.is_aggregate(),
+            "aggregate function {name} requires a group"
+        );
+        return host.invoke_scalar(args, &context.runtime).map(Some);
+    }
+    let definition = definition.expect("function exists");
+    ensure!(
+        !definition.aggregate,
+        "aggregate function {name} requires a group"
+    );
+    ensure!(
+        args.len() == definition.args.len(),
+        "function {name} expects {} arguments, got {}",
+        definition.args.len(),
+        args.len()
+    );
+    PLAIN_SQL_FUNCTION_DEPTH.with(|depth| {
+        ensure!(depth.get() < 32, "SQL function recursion limit exceeded");
+        depth.set(depth.get() + 1);
+        Ok::<_, anyhow::Error>(())
+    })?;
+    struct DepthGuard;
+    impl Drop for DepthGuard {
+        fn drop(&mut self) {
+            PLAIN_SQL_FUNCTION_DEPTH.with(|depth| depth.set(depth.get() - 1));
+        }
+    }
+    let _guard = DepthGuard;
+    let mut bindings = Map::new();
+    for ((parameter, ty), value) in definition.args.iter().zip(args) {
+        bindings.insert(
+            parameter.clone(),
+            cast_json_value(value, host_functions::mysql_type_name(*ty))?,
+        );
+    }
+    let body = parse_scalar_expr(&definition.body)
+        .ok_or_else(|| anyhow!("invalid persisted function body: {name}"))?;
+    let value = eval_expr(&body, &bindings, last_insert_id)?;
+    Ok(Some(cast_json_value(
+        value,
+        host_functions::mysql_type_name(definition.return_type),
+    )?))
+}
+
 thread_local! {
     static EVAL_SYSTEM_VARIABLES: RefCell<HashMap<String, Value>> = RefCell::new(HashMap::new());
     static EVAL_IDENTITY: RefCell<(String, String)> = RefCell::new(("root@localhost".into(), "root@%".into()));
@@ -62,7 +210,7 @@ mod datetime;
 mod json;
 mod scalar;
 
-mod function_catalog;
+pub(super) mod function_catalog;
 pub(crate) fn soundex_text(value: &str) -> String {
     scalar::mysql_soundex(value)
 }
@@ -1363,6 +1511,7 @@ pub(super) fn materialize_aggregate_exprs(
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AggregateKind {
+    Custom,
     Count,
     Sum,
     Avg,
@@ -1383,6 +1532,8 @@ enum AggregateKind {
 #[derive(Debug, Clone)]
 struct AggregateCall {
     kind: AggregateKind,
+    custom_name: Option<String>,
+    custom_modifier: bool,
     args: Vec<CompiledScalarExpr>,
     distinct: bool,
     order_by: Vec<GroupConcatOrder>,
@@ -1416,6 +1567,30 @@ fn aggregate_call(expr: &Expr) -> Option<AggregateCall> {
         return None;
     }
     let (name, args) = split_function_call(&expr.to_string())?;
+    if custom_aggregate(&name) {
+        let custom_modifier = match expr {
+            Expr::Function(function) => match &function.args {
+                FunctionArguments::List(arguments) => {
+                    function.name.0.len() != 1
+                        || arguments.duplicate_treatment.is_some()
+                        || !arguments.clauses.is_empty()
+                }
+                _ => true,
+            },
+            _ => false,
+        };
+        return Some(AggregateCall {
+            kind: AggregateKind::Custom,
+            custom_name: Some(name),
+            custom_modifier,
+            args: args.into_iter().map(CompiledScalarExpr::new).collect(),
+            distinct: false,
+            order_by: Vec::new(),
+            separator: ",".into(),
+            limit: None,
+            offset: None,
+        });
+    }
     let kind = match name.as_str() {
         "COUNT" => AggregateKind::Count,
         "SUM" => AggregateKind::Sum,
@@ -1454,6 +1629,8 @@ fn aggregate_call(expr: &Expr) -> Option<AggregateCall> {
 
     Some(AggregateCall {
         kind,
+        custom_name: None,
+        custom_modifier: false,
         args: args.into_iter().map(CompiledScalarExpr::new).collect(),
         distinct,
         order_by: Vec::new(),
@@ -1568,6 +1745,8 @@ fn parse_group_concat_call(args: Vec<String>) -> AggregateCall {
 
     AggregateCall {
         kind: AggregateKind::GroupConcat,
+        custom_name: None,
+        custom_modifier: false,
         args: args.into_iter().map(CompiledScalarExpr::new).collect(),
         distinct,
         order_by,
@@ -1642,6 +1821,8 @@ fn parse_json_arrayagg_call(args: Vec<String>) -> AggregateCall {
     }
     AggregateCall {
         kind: AggregateKind::JsonArrayAgg,
+        custom_name: None,
+        custom_modifier: false,
         args: args.into_iter().map(CompiledScalarExpr::new).collect(),
         distinct,
         order_by,
@@ -1658,6 +1839,9 @@ fn eval_aggregate_call(
     order_hints: &BTreeMap<String, ColumnHint>,
     eval: &dyn Fn(&Expr, &Map<String, Value>, u64) -> Result<Value>,
 ) -> Result<Value> {
+    if call.kind == AggregateKind::Custom {
+        return eval_custom_aggregate_call(call, group, last_insert_id, order_hints, eval);
+    }
     if matches!(
         call.kind,
         AggregateKind::GroupConcat | AggregateKind::JsonArrayAgg
@@ -1694,6 +1878,104 @@ fn eval_aggregate_call(
     }
 
     eval_aggregate_call_rows(call, group.iter(), last_insert_id, eval)
+}
+
+fn eval_custom_aggregate_call(
+    call: &AggregateCall,
+    group: &[Map<String, Value>],
+    last_insert_id: u64,
+    order_hints: &BTreeMap<String, ColumnHint>,
+    eval: &dyn Fn(&Expr, &Map<String, Value>, u64) -> Result<Value>,
+) -> Result<Value> {
+    ensure!(
+        !call.custom_modifier,
+        "custom aggregate DISTINCT, ORDER BY, and modifiers are not supported"
+    );
+    let name = call
+        .custom_name
+        .as_deref()
+        .ok_or_else(|| anyhow!("missing aggregate name"))?;
+    let context = CUSTOM_FUNCTIONS
+        .with(|active| active.borrow().clone())
+        .ok_or_else(|| anyhow!("function context unavailable"))?;
+    let arguments = call
+        .args
+        .iter()
+        .map(|arg| {
+            arg.parsed
+                .clone()
+                .ok_or_else(|| anyhow!("unsupported custom aggregate argument: {}", arg.text))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if let Some(host) = context.hosts.lookup(name) {
+        ensure!(host.is_aggregate(), "function {name} is not an aggregate");
+        let rows = group
+            .iter()
+            .map(|row| {
+                arguments
+                    .iter()
+                    .map(|arg| eval(arg, row, last_insert_id))
+                    .collect::<Result<Vec<_>>>()
+            })
+            .collect::<Result<Vec<_>>>()?;
+        return host.invoke_aggregate(rows, &context.runtime);
+    }
+    let definition = context
+        .sql
+        .get(name)
+        .ok_or_else(|| anyhow!("unknown aggregate function: {name}"))?;
+    ensure!(definition.aggregate, "function {name} is not an aggregate");
+    ensure!(
+        arguments.len() == definition.args.len(),
+        "function {name} expects {} arguments, got {}",
+        definition.args.len(),
+        arguments.len()
+    );
+    let body = parse_scalar_expr(&definition.body)
+        .ok_or_else(|| anyhow!("invalid persisted aggregate body: {name}"))?;
+    let typed_group = group
+        .iter()
+        .map(|row| {
+            let values = definition
+                .args
+                .iter()
+                .zip(&arguments)
+                .map(|((parameter, ty), arg)| {
+                    Ok((
+                        parameter,
+                        cast_json_value(
+                            eval(arg, row, last_insert_id)?,
+                            host_functions::mysql_type_name(*ty),
+                        )?,
+                    ))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let mut typed = row.clone();
+            typed.retain(|key, _| {
+                !definition
+                    .args
+                    .iter()
+                    .any(|(parameter, _)| key.eq_ignore_ascii_case(parameter))
+            });
+            for (parameter, value) in values {
+                typed.insert(parameter.clone(), value);
+            }
+            Ok(typed)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let base = typed_group.first().cloned().unwrap_or_default();
+    let value = eval_aggregate_expr(
+        &body,
+        &typed_group,
+        &base,
+        last_insert_id,
+        order_hints,
+        eval,
+    )?;
+    cast_json_value(
+        value,
+        host_functions::mysql_type_name(definition.return_type),
+    )
 }
 
 fn eval_aggregate_call_rows<'a>(
@@ -1799,6 +2081,7 @@ fn eval_aggregate_call_rows<'a>(
     }
 
     match call.kind {
+        AggregateKind::Custom => unreachable!("custom aggregates return before row reduction"),
         AggregateKind::Count => Ok(Value::Number(Number::from(values.len() as u64))),
         AggregateKind::Sum => {
             if values.is_empty() {
@@ -3430,6 +3713,9 @@ pub(super) fn eval_expr(
             Ok(eval_trim_values(value, trim_what, *trim_where))
         }
         Expr::Function(func) => {
+            if let Some(value) = eval_custom_scalar_plain(func, data, last_insert_id)? {
+                return Ok(value);
+            }
             if func.over.is_some()
                 && let Some(value) = data.get(&projection_expr_column_name(expr))
             {
@@ -5693,7 +5979,7 @@ fn eval_interval_cast(value: Value) -> Result<Value> {
 
 pub(super) fn cast_json_value(value: Value, data_type: &str) -> Result<Value> {
     let data_type = data_type.to_ascii_lowercase();
-    if value == Value::Null {
+    if value == Value::Null || data_type == "null" {
         return Ok(Value::Null);
     }
     if data_type.contains("int") || data_type == "signed" || data_type == "unsigned" {
@@ -5902,6 +6188,13 @@ fn split_date_components(raw: &str) -> Option<(i32, u32, u32)> {
 }
 
 pub(super) fn eval_default_value(default: &str) -> Result<Value> {
+    eval_default_value_with(default, |expr| eval_expr(expr, &Map::new(), 0))
+}
+
+pub(super) fn eval_default_value_with(
+    default: &str,
+    eval: impl FnOnce(&Expr) -> Result<Value>,
+) -> Result<Value> {
     let trimmed = default.trim();
     let upper = trimmed.to_ascii_uppercase();
     if upper == "CURRENT_TIMESTAMP" || upper == "NOW()" || upper == "CURRENT_TIMESTAMP()" {
@@ -5911,7 +6204,7 @@ pub(super) fn eval_default_value(default: &str) -> Result<Value> {
         return Ok(Value::String(Utc::now().date_naive().to_string()));
     }
     if let Some(expr) = parse_scalar_expr(trimmed) {
-        return eval_expr(&expr, &Map::new(), 0);
+        return eval(&expr);
     }
     Ok(Value::String(trimmed.trim_matches('\'').to_string()))
 }

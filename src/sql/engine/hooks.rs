@@ -319,10 +319,10 @@ impl HookRegistry {
         &self,
         before: &BTreeMap<String, Arc<RawEngine>>,
         after: &BTreeMap<String, Arc<RawEngine>>,
-    ) {
+    ) -> Result<()> {
         let options = self.options();
         if !options.changes() {
-            return;
+            return Ok(());
         }
         // Feed materialization must not inflate the originating query's metrics.
         let _metrics = QueryMetricsGuard::install(Rc::new(QueryMetricsRecorder::new(false)));
@@ -399,9 +399,11 @@ impl HookRegistry {
                 // ponytail: materialize changed tables linearly; track dirty row keys if this becomes costly.
                 let previous = old
                     .map(|raw| hook_rows(raw, &table, a.as_deref().map(|s| &**s)))
+                    .transpose()?
                     .unwrap_or_default();
                 let current = new
                     .map(|raw| hook_rows(raw, &table, b.as_deref().map(|s| &**s)))
+                    .transpose()?
                     .unwrap_or_default();
                 let removed = if options.delete {
                     previous
@@ -445,6 +447,7 @@ impl HookRegistry {
         {
             self.emit(event);
         }
+        Ok(())
     }
 }
 
@@ -460,15 +463,15 @@ fn hook_rows(
     raw: &RawEngine,
     table: &str,
     schema: Option<&TableSchemaHint>,
-) -> BTreeMap<String, QueryHookRow> {
+) -> Result<BTreeMap<String, QueryHookRow>> {
     let Some(rows) = raw.rows.get(table) else {
-        return BTreeMap::new();
+        return Ok(BTreeMap::new());
     };
     rows.iter()
-        .map(|(id, stored)| {
-            let row = hook_row(raw, table, schema, id, stored);
+        .map(|(id, stored)| -> Result<_> {
+            let row = hook_row(raw, table, schema, id, stored)?;
             let identity = serde_json::to_string(&row.key).expect("JSON row key serialization");
-            (identity, row)
+            Ok((identity, row))
         })
         .collect()
 }
@@ -479,8 +482,8 @@ fn hook_row(
     schema: Option<&TableSchemaHint>,
     id: &str,
     stored: &StoredRow,
-) -> QueryHookRow {
-    let mut row = raw.current_schema_row(table, &stored.data);
+) -> Result<QueryHookRow> {
+    let mut row = raw.current_schema_row(table, &stored.data)?;
     // The SQL evaluator adds internal markers for dropped columns. A feed exposes
     // only the complete current row, including defaults and generated values.
     if let Some(schema) = schema.filter(|s| !s.columns.is_empty()) {
@@ -496,5 +499,5 @@ fn hook_row(
         ),
         None => QueryHookKey::Opaque(id.into()),
     };
-    QueryHookRow { key, row }
+    Ok(QueryHookRow { key, row })
 }

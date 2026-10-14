@@ -2,8 +2,9 @@
 use super::catalog::{
     AdminCommand, Catalog, CatalogEffect, Identity, PreparedCommand, PreparedSource, parse_use,
 };
+use super::sql_functions::{SqlFunctionCommand, parse_function_command};
 use super::*;
-use anyhow::ensure;
+use anyhow::{Context, ensure};
 use sqlparser::ast::LockType;
 mod persistence;
 mod session;
@@ -17,8 +18,57 @@ struct Committed {
     databases: BTreeMap<String, Arc<RawEngine>>,
 }
 
+fn validate_schema_function_dependencies(
+    raw: &RawEngine,
+    hosts: &HostFunctionRegistry,
+    definitions: &BTreeMap<String, sql_functions::SqlFunctionDef>,
+) -> Result<()> {
+    for schema in raw.schemas.iter() {
+        for column in schema.columns.values() {
+            for expression in [column.default.as_deref(), column.generated.as_deref()]
+                .into_iter()
+                .flatten()
+            {
+                sql_functions::validate_schema_expression(expression, hosts, definitions)
+                    .with_context(|| format!("table {} schema expression", schema.table))?;
+            }
+        }
+        for check in &schema.check_constraints {
+            sql_functions::validate_schema_expression(&check.expression, hosts, definitions)
+                .with_context(|| format!("table {} CHECK {}", schema.table, check.name))?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_function_state(state: &Committed, hosts: &HostFunctionRegistry) -> Result<()> {
+    for name in hosts.names() {
+        ensure!(
+            !sql_functions::is_reserved_builtin(name),
+            "host function name conflicts with built-in: {name}"
+        );
+    }
+    for (database, raw) in &state.databases {
+        let definitions = state.catalog.function_defs(database);
+        for definition in definitions.values() {
+            ensure!(
+                !hosts.contains(&definition.name),
+                "host function name conflicts with persisted SQL function: {}",
+                definition.name
+            );
+            sql_functions::validate_function_body(definition, hosts, &definitions).with_context(
+                || format!("SQL function {} in database {database}", definition.name),
+            )?;
+        }
+        validate_schema_function_dependencies(raw, hosts, &definitions)?;
+    }
+    Ok(())
+}
+
 struct Coordinator {
     hooks: Arc<HookRegistry>,
+    meili_resources: Mutex<std::sync::Weak<crate::server::MeiliResources>>,
+    host_functions: Arc<HostFunctionRegistry>,
     cfg: EngineConfig,
     committed: Mutex<Committed>,
     writer: Mutex<Writers>,
@@ -59,6 +109,35 @@ pub struct Engine {
     shared: Arc<Coordinator>,
 }
 
+/// Registers host functions before opening an engine.
+pub struct EngineBuilder {
+    cfg: EngineConfig,
+    storage: crate::Storage,
+    functions: HostFunctionRegistry,
+}
+
+impl EngineBuilder {
+    pub fn new(cfg: EngineConfig, storage: crate::Storage) -> Self {
+        Self {
+            cfg,
+            storage,
+            functions: HostFunctionRegistry::new(),
+        }
+    }
+
+    pub fn functions(&mut self) -> &mut HostFunctionRegistry {
+        &mut self.functions
+    }
+
+    pub fn open(self) -> Result<Engine> {
+        Engine::open_with_functions(self.cfg, self.storage, self.functions)
+    }
+
+    pub async fn open_async(self) -> Result<Engine> {
+        tokio::task::spawn_blocking(move || self.open()).await?
+    }
+}
+
 /// Connection-owned state. Dropping a session rolls back uncommitted changes.
 pub(crate) struct SessionState {
     pub(crate) last_query_read: bool,
@@ -92,6 +171,20 @@ impl Default for Engine {
 }
 
 impl Engine {
+    pub(crate) fn meili_resources(&self) -> Arc<crate::server::MeiliResources> {
+        let mut active = self.shared.meili_resources.lock();
+        if let Some(resources) = active.upgrade() {
+            return resources;
+        }
+        let resources = Arc::new(crate::server::MeiliResources::default());
+        *active = Arc::downgrade(&resources);
+        resources
+    }
+
+    pub fn builder(cfg: EngineConfig, storage: crate::Storage) -> EngineBuilder {
+        EngineBuilder::new(cfg, storage)
+    }
+
     pub fn new(cfg: EngineConfig) -> Self {
         Self::open(cfg, crate::Storage::Memory).expect("failed to open MySqweel")
     }
@@ -100,6 +193,14 @@ impl Engine {
         tokio::task::spawn_blocking(move || Self::open(cfg, storage)).await?
     }
     pub fn open(cfg: EngineConfig, storage: crate::Storage) -> Result<Self> {
+        Self::open_with_functions(cfg, storage, HostFunctionRegistry::new())
+    }
+
+    fn open_with_functions(
+        cfg: EngineConfig,
+        storage: crate::Storage,
+        functions: HostFunctionRegistry,
+    ) -> Result<Self> {
         if let Some(zone) = &cfg.default_time_zone {
             let bytes = zone.as_bytes();
             let valid = bytes.len() == 6
@@ -125,6 +226,7 @@ impl Engine {
             }
         }
         let runtime = Arc::new(crate::runtime::EngineRuntime::new()?);
+        let functions = Arc::new(functions);
         let persistence = match storage {
             crate::Storage::Memory => None,
             crate::Storage::RocksDb(path) => Some(Persistence::open(
@@ -135,18 +237,28 @@ impl Engine {
         };
         let recovered = persistence
             .as_ref()
-            .map(|store| store.load(&cfg))
+            .map(|store| store.load(&cfg, &functions, &runtime))
             .transpose()?
             .flatten();
-        let state = match recovered {
+        let mut state = match recovered {
             Some(state) => state,
             None => Committed {
                 catalog: Catalog::default(),
                 databases: BTreeMap::from([("app".into(), Arc::new(RawEngine::new(cfg.clone())))]),
             },
         };
+        for (database, raw) in &mut state.databases {
+            let mut configured = raw.fork()?;
+            configured.host_functions = functions.clone();
+            configured.sql_functions = state.catalog.function_defs(database);
+            configured.function_runtime = Some(runtime.clone());
+            *raw = Arc::new(configured);
+        }
+        validate_function_state(&state, &functions)?;
         let shared = Arc::new(Coordinator {
             hooks: Arc::new(HookRegistry::default()),
+            meili_resources: Mutex::new(std::sync::Weak::new()),
+            host_functions: functions,
             cfg,
             committed: Mutex::new(state),
             writer: Mutex::new(Writers::default()),
@@ -191,6 +303,17 @@ impl Engine {
     pub fn execute_sql_with_params(&self, sql: &str, params: &[Value]) -> Result<Vec<QueryResult>> {
         self.session().execute_sql_with_params(sql, params)
     }
+    /// Return the query event ID alongside the result, including on error.
+    pub fn execute_sql_tracked(&self, sql: &str) -> (QueryId, Result<Vec<QueryResult>>) {
+        self.session().execute_sql_tracked(sql)
+    }
+    pub fn execute_sql_with_params_tracked(
+        &self,
+        sql: &str,
+        params: &[Value],
+    ) -> (QueryId, Result<Vec<QueryResult>>) {
+        self.session().execute_sql_with_params_tracked(sql, params)
+    }
     pub async fn execute_sql_async(&self, sql: impl Into<String>) -> Result<Vec<QueryResult>> {
         self.session().execute_sql_async(sql).await
     }
@@ -201,6 +324,21 @@ impl Engine {
     ) -> Result<Vec<QueryResult>> {
         self.session()
             .execute_sql_with_params_async(sql, params)
+            .await
+    }
+    pub async fn execute_sql_tracked_async(
+        &self,
+        sql: impl Into<String>,
+    ) -> (QueryId, Result<Vec<QueryResult>>) {
+        self.session().execute_sql_tracked_async(sql).await
+    }
+    pub async fn execute_sql_with_params_tracked_async(
+        &self,
+        sql: impl Into<String>,
+        params: Vec<Value>,
+    ) -> (QueryId, Result<Vec<QueryResult>>) {
+        self.session()
+            .execute_sql_with_params_tracked_async(sql, params)
             .await
     }
     pub fn execute_statement(&self, statement: Statement) -> Result<QueryResult> {
@@ -284,10 +422,14 @@ impl Engine {
             }
             let mut raw = RawEngine::new(self.shared.cfg.clone());
             raw.database_name = name.clone();
-            raw.apply_snapshot(snapshot);
+            raw.host_functions = self.shared.host_functions.clone();
+            raw.sql_functions = catalog.function_defs(&name);
+            raw.function_runtime = Some(self.shared.runtime.clone());
+            raw.apply_snapshot(snapshot)?;
             databases.insert(name, Arc::new(raw));
         }
         let committed = Committed { catalog, databases };
+        validate_function_state(&committed, &self.shared.host_functions)?;
         self.shared.publish_quietly(committed)?;
         Ok(())
     }
@@ -298,9 +440,11 @@ impl Engine {
                 snapshot.version
             ));
         }
-        self.mutate_with_events(false, |raw| {
-            raw.apply_snapshot(snapshot);
-            Ok(())
+        let definitions = self.shared.committed.lock().catalog.function_defs("app");
+        let hosts = self.shared.host_functions.clone();
+        self.mutate_with_events(false, move |raw| {
+            raw.apply_snapshot(snapshot)?;
+            validate_schema_function_dependencies(raw, &hosts, &definitions)
         })
     }
     pub fn drift_report(&self) -> Value {
@@ -388,6 +532,7 @@ impl Engine {
 
 impl Coordinator {
     fn check(&self) -> Result<()> {
+        crate::runtime::check_reentry()?;
         if self
             .persistence
             .as_ref()
@@ -498,8 +643,12 @@ impl Coordinator {
         };
         *self.committed.lock() = published;
         if emit {
-            self.hooks
-                .changes(&hook_before.databases, &hook_after.databases);
+            if let Err(error) = self
+                .hooks
+                .changes(&hook_before.databases, &hook_after.databases)
+            {
+                tracing::warn!(%error, "could not materialize SQL change hook events");
+            }
         }
         Ok(())
     }
@@ -702,7 +851,10 @@ impl SessionState {
             )
         };
     }
-    fn configure_executor(&self, raw: &mut RawEngine) {
+    fn configure_executor(&self, raw: &mut RawEngine, catalog: &Catalog) {
+        raw.host_functions = self.shared.host_functions.clone();
+        raw.sql_functions = catalog.function_defs(&self.database);
+        raw.function_runtime = Some(self.shared.runtime.clone());
         if let Some(session) = &self.session_state {
             raw.copy_session_from(session);
         } else {
@@ -755,7 +907,7 @@ impl SessionState {
         raw.database_charsets = state.catalog.database_charsets().clone();
         self.configure_visibility(&mut raw, &state.catalog);
         self.authorize_views(&state, &self.database, &sql, &mut BTreeSet::new())?;
-        self.configure_executor(&mut raw);
+        self.configure_executor(&mut raw, &state.catalog);
         raw.execute_sql_internal(&sql, &sql, false, false)
     }
     pub fn is_in_transaction(&self) -> bool {
@@ -769,9 +921,10 @@ impl SessionState {
         event_sql: &str,
         execution: Result<String>,
         normalize: bool,
+        query_id: QueryId,
     ) -> Result<Vec<QueryResult>> {
         self.last_query_read = false;
-        self.run_observed(event_sql, execution, normalize)
+        self.run_observed(event_sql, execution, normalize, query_id)
     }
 
     fn run_observed(
@@ -779,19 +932,19 @@ impl SessionState {
         event_sql: &str,
         execution: Result<String>,
         normalize: bool,
+        query_id: QueryId,
     ) -> Result<Vec<QueryResult>> {
         let observer = self.shared.committed.lock().databases["app"].clone();
         if !observer.query_events_enabled() {
             return execution.and_then(|sql| self.execute(&sql, normalize, false));
         }
-        let query_id = observer.next_query_id.fetch_add(1, AtomicOrdering::Relaxed);
         let metrics = Rc::new(QueryMetricsRecorder::new(true));
         let _guard = QueryMetricsGuard::install(metrics.clone());
-        let started = Instant::now();
         observer.publish_query_event(QueryEvent::Received(QueryReceivedEvent {
             query_id,
             query: event_sql.into(),
         }));
+        let started = Instant::now();
         let outcome = execution.and_then(|sql| self.execute(&sql, normalize, false));
         match &outcome {
             Ok(results) => observer.publish_query_completed(
@@ -1215,6 +1368,122 @@ impl SessionState {
                 }
                 continue;
             }
+            if let Some(command) = parse_function_command(text)? {
+                if self.is_in_transaction() || !self.autocommit {
+                    return Err(anyhow!("DDL is not supported inside an active transaction"));
+                }
+                let _lease = self.shared.acquire()?;
+                let mut state = self.shared.committed.lock().clone();
+                state.catalog.check_database_privilege(
+                    &self.identity,
+                    &self.database,
+                    match &command {
+                        SqlFunctionCommand::Create(_) => AuthPrivilege::Create,
+                        SqlFunctionCommand::Drop { .. } => AuthPrivilege::Drop,
+                    },
+                )?;
+                match command {
+                    SqlFunctionCommand::Create(function) => {
+                        let name = function.name.to_ascii_uppercase();
+                        ensure!(
+                            !sql_functions::is_reserved_builtin(&name),
+                            "function name conflicts with built-in: {name}"
+                        );
+                        ensure!(
+                            !self.shared.host_functions.contains(&name),
+                            "function name conflicts with host callback: {name}"
+                        );
+                        sql_functions::validate_function_body(
+                            &function,
+                            &self.shared.host_functions,
+                            &state.catalog.function_defs(&self.database),
+                        )?;
+                        state.catalog.insert_function(&self.database, function)?;
+                    }
+                    SqlFunctionCommand::Drop {
+                        name,
+                        aggregate,
+                        if_exists,
+                    } => {
+                        let name = name.to_ascii_uppercase();
+                        let existing = state
+                            .catalog
+                            .function_defs(&self.database)
+                            .get(&name)
+                            .cloned();
+                        if let Some(existing) = existing {
+                            ensure!(
+                                existing.aggregate == aggregate,
+                                "function kind does not match: {name}"
+                            );
+                            let raw = state
+                                .databases
+                                .get(&self.database)
+                                .ok_or_else(|| anyhow!("Unknown database: {}", self.database))?;
+                            for definition in state.catalog.function_defs(&self.database).values() {
+                                if definition.name.eq_ignore_ascii_case(&name) {
+                                    continue;
+                                }
+                                ensure!(
+                                    !sql_functions::expression_calls_function(
+                                        &definition.body,
+                                        &name
+                                    ),
+                                    "function {name} is used by function {}",
+                                    definition.name
+                                );
+                            }
+                            for schema in raw.schemas.iter() {
+                                for column in schema.columns.values() {
+                                    for expression in
+                                        [column.default.as_deref(), column.generated.as_deref()]
+                                            .into_iter()
+                                            .flatten()
+                                    {
+                                        ensure!(
+                                            !sql_functions::expression_calls_function(
+                                                expression, &name
+                                            ),
+                                            "function {name} is used by table {}",
+                                            schema.table
+                                        );
+                                    }
+                                }
+                                for check in &schema.check_constraints {
+                                    ensure!(
+                                        !sql_functions::expression_calls_function(
+                                            &check.expression,
+                                            &name
+                                        ),
+                                        "function {name} is used by table {}",
+                                        schema.table
+                                    );
+                                }
+                            }
+                            for view in raw.views.iter() {
+                                ensure!(
+                                    !sql_functions::expression_calls_function(view.value(), &name),
+                                    "function {name} is used by view {}",
+                                    view.key()
+                                );
+                            }
+                            state.catalog.remove_function(&self.database, &name);
+                        } else {
+                            ensure!(if_exists, "unknown function: {name}");
+                        }
+                    }
+                }
+                let mut raw = state
+                    .databases
+                    .get(&self.database)
+                    .ok_or_else(|| anyhow!("Unknown database: {}", self.database))?
+                    .fork()?;
+                raw.sql_functions = state.catalog.function_defs(&self.database);
+                state.databases.insert(self.database.clone(), Arc::new(raw));
+                self.shared.publish(state)?;
+                results.push(QueryResult::default());
+                continue;
+            }
             if let Some(command) = AdminCommand::parse(text)? {
                 if self.is_in_transaction() {
                     return Err(anyhow!(
@@ -1228,6 +1497,8 @@ impl SessionState {
                     CatalogEffect::CreateDatabase(name) => {
                         let mut raw = RawEngine::new(self.shared.cfg.clone());
                         raw.database_name = name.clone();
+                        raw.host_functions = self.shared.host_functions.clone();
+                        raw.function_runtime = Some(self.shared.runtime.clone());
                         state.databases.insert(name, Arc::new(raw));
                     }
                     CatalogEffect::DropDatabase(name) => {
@@ -1767,9 +2038,16 @@ impl SessionState {
                 }
                 normalized = format!("DROP TABLE {}", targets.join(", "));
             }
-            self.configure_executor(&mut raw);
+            self.configure_executor(&mut raw, &state.catalog);
             self.authorize_views(&state, &self.database, &normalized, &mut BTreeSet::new())?;
             let mut out = raw.execute_sql_internal(text, &normalized, normalize, emit)?;
+            if ddl {
+                validate_schema_function_dependencies(
+                    &raw,
+                    &self.shared.host_functions,
+                    &state.catalog.function_defs(&self.database),
+                )?;
+            }
             if !read && !ddl && !state.catalog.is_admin(&self.identity) {
                 // Check the actual row changes too: cascades and writable views can
                 // affect tables that do not appear in the original statement.
@@ -2175,6 +2453,9 @@ impl RawEngine {
         // sharing only if large single-table write workloads justify it.
         let raw = Self {
             database_name: self.database_name.clone(),
+            host_functions: self.host_functions.clone(),
+            sql_functions: self.sql_functions.clone(),
+            function_runtime: self.function_runtime.clone(),
             system_variables: self.system_variables.clone(),
             session_user: self.session_user.clone(),
             current_user: self.current_user.clone(),
@@ -2256,6 +2537,221 @@ impl RawEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn custom_scalar_and_aggregate_functions() -> Result<()> {
+        let mut builder = Engine::builder(EngineConfig::mysql_strict(), crate::Storage::Memory);
+        builder.functions().register_scalar(
+            "double_host",
+            FunctionSignature {
+                args: vec![MysqlColumnType::Integer],
+                returns: MysqlColumnType::Integer,
+                deterministic: true,
+            },
+            |args| Ok(json!(args[0].as_i64().unwrap() * 2)),
+        )?;
+        builder.functions().register_scalar(
+            "null_host",
+            FunctionSignature {
+                args: vec![],
+                returns: MysqlColumnType::Null,
+                deterministic: true,
+            },
+            |_| Ok(json!(7)),
+        )?;
+        builder.functions().register_async_scalar(
+            "async_add_one",
+            FunctionSignature {
+                args: vec![MysqlColumnType::Integer],
+                returns: MysqlColumnType::Integer,
+                deterministic: false,
+            },
+            |args| async move { Ok(json!(args[0].as_i64().unwrap() + 1)) },
+        )?;
+        builder.functions().register_async_scalar(
+            "async_guarded",
+            FunctionSignature {
+                args: vec![],
+                returns: MysqlColumnType::Integer,
+                deterministic: false,
+            },
+            |_| {
+                assert!(crate::runtime::check_reentry().is_err());
+                async { Ok(json!(1)) }
+            },
+        )?;
+        builder.functions().register_async_scalar_with_timeout(
+            "slow_host",
+            FunctionSignature {
+                args: vec![],
+                returns: MysqlColumnType::Integer,
+                deterministic: false,
+            },
+            StdDuration::from_millis(10),
+            |_| async {
+                tokio::time::sleep(StdDuration::from_millis(100)).await;
+                Ok(json!(1))
+            },
+        )?;
+        builder.functions().register_aggregate(
+            "host_total",
+            FunctionSignature {
+                args: vec![MysqlColumnType::Integer],
+                returns: MysqlColumnType::Integer,
+                deterministic: true,
+            },
+            || Ok(json!(0)),
+            |state, args| Ok(json!(state.as_i64().unwrap() + args[0].as_i64().unwrap())),
+            Ok,
+        )?;
+        builder.functions().register_async_aggregate(
+            "async_total",
+            FunctionSignature {
+                args: vec![MysqlColumnType::Integer],
+                returns: MysqlColumnType::Integer,
+                deterministic: false,
+            },
+            || async { Ok(json!(0)) },
+            |state, args| async move {
+                Ok(json!(state.as_i64().unwrap() + args[0].as_i64().unwrap()))
+            },
+            |state| async move { Ok(state) },
+        )?;
+        let engine = builder.open()?;
+        engine
+            .execute_sql("CREATE FUNCTION plus_two(x INT) RETURNS INT RETURN double_host(x) + 2")?;
+        engine.execute_sql(
+            "CREATE AGGREGATE FUNCTION square_sum(x INT) RETURNS INT RETURN SUM(x*x)",
+        )?;
+        engine.execute_sql(
+            "CREATE AGGREGATE FUNCTION typed_total(x INT) RETURNS INT RETURN SUM(x)",
+        )?;
+        engine.execute_sql("CREATE FUNCTION positive(x INT) RETURNS INT RETURN IF(x > 0, x, 0)")?;
+        engine.execute_sql("CREATE FUNCTION null_sql() RETURNS NULL RETURN 7")?;
+        engine.execute_sql(
+            "CREATE TABLE t (id INT PRIMARY KEY); INSERT INTO t VALUES (1), (2), (3)",
+        )?;
+        let scalar =
+            &engine.execute_sql("SELECT plus_two(3) AS value, async_add_one(4) AS next")?[0];
+        assert_eq!(scalar.rows[0]["value"], json!(8));
+        assert_eq!(scalar.rows[0]["next"], json!(5));
+        assert_eq!(
+            engine.execute_sql("SELECT async_guarded() AS value")?[0].rows[0]["value"],
+            json!(1)
+        );
+        let nulls = &engine.execute_sql(
+            "SELECT null_host() AS value, null_sql() AS sql_value, positive(-2) AS positive",
+        )?[0]
+            .rows[0];
+        assert_eq!(nulls["value"], Value::Null);
+        assert_eq!(nulls["sql_value"], Value::Null);
+        assert_eq!(nulls["positive"], json!(0));
+        assert!(engine.execute_sql("SELECT slow_host()").is_err());
+        assert_eq!(
+            scalar.column_metadata[0].column_type,
+            MysqlColumnType::Integer
+        );
+        let aggregate = &engine.execute_sql(
+            "SELECT square_sum(id) AS squares, host_total(id) AS total, async_total(id) AS async_sum FROM t",
+        )?[0];
+        assert_eq!(aggregate.rows[0]["squares"], json!(14));
+        assert_eq!(aggregate.rows[0]["total"], json!(6));
+        assert_eq!(aggregate.rows[0]["async_sum"], json!(6));
+        engine.execute_sql(
+            "CREATE TABLE labels (label VARCHAR(8)); INSERT INTO labels VALUES ('1.6'), ('2.6')",
+        )?;
+        assert_eq!(
+            engine.execute_sql("SELECT typed_total(label) AS total FROM labels")?[0].rows[0]["total"],
+            json!(5)
+        );
+        assert!(engine.execute_sql("DROP FUNCTION plus_two").is_ok());
+        assert!(engine.execute_sql("SELECT plus_two(3)").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn custom_function_schema_dependency_survives_reopen() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("functions");
+        let cfg = EngineConfig::mysql_strict();
+        let mut builder = Engine::builder(cfg.clone(), crate::Storage::RocksDb(path.clone()));
+        builder.functions().register_scalar(
+            "positive_host",
+            FunctionSignature {
+                args: vec![MysqlColumnType::Integer],
+                returns: MysqlColumnType::Integer,
+                deterministic: true,
+            },
+            |args| Ok(json!(args[0].as_i64().unwrap().abs())),
+        )?;
+        let engine = builder.open()?;
+        engine.execute_sql(
+            "CREATE FUNCTION positive_sql(x INT) RETURNS INT RETURN positive_host(x)",
+        )?;
+        engine.execute_sql("CREATE TABLE checked (id INT PRIMARY KEY, CONSTRAINT positive_check CHECK (positive_sql(id) > 0))")?;
+        assert!(engine.execute_sql("DROP FUNCTION positive_sql").is_err());
+        assert!(
+            engine
+                .execute_sql("INSERT INTO checked VALUES (-1)")
+                .is_ok()
+        );
+        drop(engine);
+        assert!(Engine::open(cfg.clone(), crate::Storage::RocksDb(path.clone())).is_err());
+        let mut builder = Engine::builder(cfg, crate::Storage::RocksDb(path));
+        builder.functions().register_scalar(
+            "positive_host",
+            FunctionSignature {
+                args: vec![MysqlColumnType::Integer],
+                returns: MysqlColumnType::Integer,
+                deterministic: true,
+            },
+            |args| Ok(json!(args[0].as_i64().unwrap().abs())),
+        )?;
+        let reopened = builder.open()?;
+        assert_eq!(
+            reopened.execute_sql("SELECT positive_sql(-4) AS value")?[0].rows[0]["value"],
+            json!(4)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn sql_functions_are_database_scoped_and_cannot_shadow_builtins() -> Result<()> {
+        let mut builder = Engine::builder(EngineConfig::mysql_strict(), crate::Storage::Memory);
+        builder.functions().register_scalar(
+            "host_identity",
+            FunctionSignature {
+                args: vec![MysqlColumnType::Integer],
+                returns: MysqlColumnType::Integer,
+                deterministic: true,
+            },
+            |args| Ok(args[0].clone()),
+        )?;
+        let engine = builder.open()?;
+        assert!(
+            engine
+                .execute_sql("CREATE FUNCTION abs(x INT) RETURNS INT RETURN x")
+                .is_err()
+        );
+        engine.execute_sql("CREATE FUNCTION local_value(x INT) RETURNS INT RETURN x + 1")?;
+        let mut session = engine.session();
+        session.execute_sql("CREATE DATABASE second; USE second")?;
+        assert_eq!(
+            session.execute_sql("SELECT host_identity(3) AS value")?[0].rows[0]["value"],
+            json!(3)
+        );
+        session.execute_sql("CREATE FUNCTION local_value(x INT) RETURNS INT RETURN x + 2")?;
+        assert_eq!(
+            session.execute_sql("SELECT local_value(1) AS value")?[0].rows[0]["value"],
+            json!(3)
+        );
+        session.execute_sql("USE app")?;
+        assert_eq!(
+            session.execute_sql("SELECT local_value(1) AS value")?[0].rows[0]["value"],
+            json!(2)
+        );
+        Ok(())
+    }
 
     #[test]
     fn insert_buffers_preserve_returning_and_upsert_results() {

@@ -5,6 +5,28 @@ use std::ops::ControlFlow;
 
 use sqlparser::ast::{VisitMut, Visitor, VisitorMut};
 
+thread_local! {
+    static SQL_FUNCTION_DEPTH: Cell<usize> = const { Cell::new(0) };
+}
+
+struct SqlFunctionDepth;
+
+impl SqlFunctionDepth {
+    fn enter() -> Result<Self> {
+        SQL_FUNCTION_DEPTH.with(|depth| {
+            ensure!(depth.get() < 32, "SQL function recursion limit exceeded");
+            depth.set(depth.get() + 1);
+            Ok(Self)
+        })
+    }
+}
+
+impl Drop for SqlFunctionDepth {
+    fn drop(&mut self) {
+        SQL_FUNCTION_DEPTH.with(|depth| depth.set(depth.get() - 1));
+    }
+}
+
 fn merge_set_column_type(left: MysqlColumnType, right: MysqlColumnType) -> MysqlColumnType {
     match (left, right) {
         // MariaDB promotes CHAR/VARCHAR branches in a UNION to VAR_STRING.
@@ -2138,6 +2160,14 @@ impl RawEngine {
                     .last()
                     .map(|name| name.value.to_ascii_uppercase())
                     .unwrap_or_default();
+                if let Some(function) = self.host_functions.lookup(&name) {
+                    metadata.column_type = function.signature().returns;
+                    return metadata;
+                }
+                if let Some(function) = self.sql_functions.get(&name) {
+                    metadata.column_type = function.return_type;
+                    return metadata;
+                }
                 metadata.column_type = match name.as_str() {
                     "DEFAULT" => {
                         if let Some(argument) = function_argument(function, 0) {
@@ -4066,7 +4096,7 @@ impl RawEngine {
             for key in keys {
                 if let Some(row) = table_rows.get(key) {
                     let mut view =
-                        self.current_schema_row_with_plan(&row.data, &materialization_plan);
+                        self.current_schema_row_with_plan(&row.data, &materialization_plan)?;
                     if needs_qualified_columns {
                         add_qualified_columns_in_place(&mut view, &table);
                         if let Some(alias) = &alias {
@@ -4103,7 +4133,8 @@ impl RawEngine {
                 }
             }
             for row in stored_rows {
-                let mut view = self.current_schema_row_with_plan(&row.data, &materialization_plan);
+                let mut view =
+                    self.current_schema_row_with_plan(&row.data, &materialization_plan)?;
                 if needs_qualified_columns {
                     add_qualified_columns_in_place(&mut view, &table);
                     if let Some(alias) = &alias {
@@ -4352,7 +4383,7 @@ impl RawEngine {
                     }
                     for stored in stored_rows {
                         let raw =
-                            self.current_schema_row_with_plan(&stored.data, &materialization_plan);
+                            self.current_schema_row_with_plan(&stored.data, &materialization_plan)?;
                         rows.push(qualified_factor_row(&raw, &table, alias_name));
                     }
                 }
@@ -4524,13 +4555,13 @@ impl RawEngine {
         &self,
         table: &str,
         data: &Map<String, Value>,
-    ) -> Map<String, Value> {
+    ) -> Result<Map<String, Value>> {
         record_query_row_read(data.len());
         let Some(schema) = self.schemas.get(table) else {
-            return data.clone();
+            return Ok(data.clone());
         };
         if schema.columns.is_empty() {
-            return data.clone();
+            return Ok(data.clone());
         }
 
         let columns = if schema.column_order.len() == schema.columns.len()
@@ -4551,9 +4582,15 @@ impl RawEngine {
             let value = data
                 .get(column)
                 .cloned()
-                .or_else(|| read_default_value(hint))
                 .or_else(|| Self::implicit_not_null_value(hint))
                 .unwrap_or(Value::Null);
+            let value = if data.contains_key(column) {
+                value
+            } else if let Some(default) = &hint.default {
+                eval::eval_default_value_with(default, |expr| self.eval_expr_ctx(expr, data, 0))?
+            } else {
+                value
+            };
             out.insert(column.clone(), coerce_value_for_column(value, hint));
         }
         let generated_columns = columns
@@ -4580,26 +4617,25 @@ impl RawEngine {
         drop(schema);
 
         for (column, expression) in generated_columns {
-            if let Some(expression) = parse_scalar_expr(&expression)
-                && let Ok(value) = self.eval_expr_ctx(&expression, &out, 0)
-            {
-                out.insert(column, value);
-            }
+            let expression = parse_scalar_expr(&expression)
+                .ok_or_else(|| anyhow!("invalid generated column expression: {expression}"))?;
+            let value = self.eval_expr_ctx(&expression, &out, 0)?;
+            out.insert(column, value);
         }
         for column in historical_columns {
             out.insert(column, Value::Null);
         }
-        out
+        Ok(out)
     }
 
     pub(super) fn current_schema_row_with_plan(
         &self,
         data: &Map<String, Value>,
         plan: &RowMaterializationPlan,
-    ) -> Map<String, Value> {
+    ) -> Result<Map<String, Value>> {
         record_query_row_read(data.len());
         if plan.passthrough {
-            return data.clone();
+            return Ok(data.clone());
         }
         if plan.direct_copy
             && data.len() == plan.columns.len()
@@ -4608,7 +4644,7 @@ impl RawEngine {
                     .is_some_and(|value| materialized_value_is_normalized(value, hint))
             })
         {
-            return data.clone();
+            return Ok(data.clone());
         }
 
         let mut out = Map::with_capacity(plan.columns.len());
@@ -4616,16 +4652,21 @@ impl RawEngine {
             let value = data
                 .get(column)
                 .cloned()
-                .or_else(|| read_default_value(hint))
                 .or_else(|| Self::implicit_not_null_value(hint))
                 .unwrap_or(Value::Null);
+            let value = if data.contains_key(column) {
+                value
+            } else if let Some(default) = &hint.default {
+                eval::eval_default_value_with(default, |expr| self.eval_expr_ctx(expr, data, 0))?
+            } else {
+                value
+            };
             out.insert(column.clone(), coerce_value_for_column(value, hint));
         }
 
         for (column, expression) in &plan.generated_columns {
-            if let Ok(value) = self.eval_expr_ctx(expression, &out, 0) {
-                out.insert(column.clone(), value);
-            }
+            let value = self.eval_expr_ctx(expression, &out, 0)?;
+            out.insert(column.clone(), value);
         }
         for column in data.keys() {
             if !plan.known_columns.contains(column)
@@ -4636,7 +4677,7 @@ impl RawEngine {
                 out.insert(historical_column_marker(column), Value::Null);
             }
         }
-        out
+        Ok(out)
     }
 
     fn implicit_not_null_value(hint: &ColumnHint) -> Option<Value> {
@@ -4733,6 +4774,83 @@ impl RawEngine {
         })
     }
 
+    fn eval_custom_scalar(
+        &self,
+        function: &sqlparser::ast::Function,
+        data: &Map<String, Value>,
+        last_insert_id: u64,
+    ) -> Result<Option<Value>> {
+        let name = function
+            .name
+            .0
+            .last()
+            .map(|name| name.value.to_ascii_uppercase())
+            .unwrap_or_default();
+        let host = self.host_functions.lookup(&name);
+        let sql = self.sql_functions.get(&name);
+        if host.is_none() && sql.is_none() {
+            return Ok(None);
+        }
+        ensure!(
+            function.name.0.len() == 1,
+            "qualified custom function calls are not supported"
+        );
+        ensure!(
+            function.over.is_none(),
+            "custom function windows are not supported"
+        );
+        let sqlparser::ast::FunctionArguments::List(arguments) = &function.args else {
+            return Err(anyhow!(
+                "custom function {name} requires a plain argument list"
+            ));
+        };
+        ensure!(
+            arguments.duplicate_treatment.is_none() && arguments.clauses.is_empty(),
+            "custom function DISTINCT, ORDER BY, and modifiers are not supported"
+        );
+        let args = function_arguments(function)?
+            .into_iter()
+            .map(|arg| {
+                let arg = arg.ok_or_else(|| anyhow!("custom function {name} cannot use *"))?;
+                self.eval_expr_ctx(&arg, data, last_insert_id)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        if let Some(host) = host {
+            ensure!(
+                !host.is_aggregate(),
+                "aggregate function {name} requires a group"
+            );
+            let runtime = self
+                .function_runtime
+                .as_ref()
+                .ok_or_else(|| anyhow!("function runtime unavailable"))?;
+            return host.invoke_scalar(args, runtime).map(Some);
+        }
+        let sql = sql.expect("function exists");
+        ensure!(!sql.aggregate, "aggregate function {name} requires a group");
+        ensure!(
+            args.len() == sql.args.len(),
+            "function {name} expects {} arguments, got {}",
+            sql.args.len(),
+            args.len()
+        );
+        let _depth = SqlFunctionDepth::enter()?;
+        let mut bindings = Map::new();
+        for ((parameter, ty), value) in sql.args.iter().zip(args) {
+            bindings.insert(
+                parameter.clone(),
+                cast_json_value(value, host_functions::mysql_type_name(*ty))?,
+            );
+        }
+        let body = parse_scalar_expr(&sql.body)
+            .ok_or_else(|| anyhow!("invalid persisted function body: {name}"))?;
+        let value = self.eval_expr_ctx(&body, &bindings, last_insert_id)?;
+        Ok(Some(cast_json_value(
+            value,
+            host_functions::mysql_type_name(sql.return_type),
+        )?))
+    }
+
     pub(super) fn eval_expr_ctx(
         &self,
         expr: &Expr,
@@ -4741,7 +4859,12 @@ impl RawEngine {
     ) -> Result<Value> {
         match expr {
             Expr::Identifier(identifier) if !identifier.value.starts_with('@') => {
-                if let Some(value) = data.get(&identifier.value) {
+                if let Some(value) = data.get(&identifier.value).or_else(|| {
+                    data.iter().find_map(|(name, value)| {
+                        name.eq_ignore_ascii_case(&identifier.value)
+                            .then_some(value)
+                    })
+                }) {
                     return Ok(value.clone());
                 }
             }
@@ -5065,6 +5188,9 @@ impl RawEngine {
                     .last()
                     .map(|name| name.value.to_ascii_uppercase())
                     .unwrap_or_default();
+                if let Some(value) = self.eval_custom_scalar(function, data, last_insert_id)? {
+                    return Ok(value);
+                }
                 if matches!(function_name.as_str(), "GREATEST" | "LEAST") {
                     let values = function_arguments(function)?
                         .into_iter()
@@ -5280,7 +5406,13 @@ impl RawEngine {
             found = hint.default.clone();
         }
         match (matched, found) {
-            (_, Some(default)) => eval::eval_default_value(&default),
+            (_, Some(default)) => eval::eval_default_value_with(&default, |expr| {
+                self.eval_expr_ctx(
+                    expr,
+                    data,
+                    self.last_insert_id.load(AtomicOrdering::Relaxed),
+                )
+            }),
             (true, None) => Ok(Value::Null),
             (false, _) => Err(anyhow!("unknown DEFAULT() column: {column}")),
         }
@@ -7315,7 +7447,7 @@ impl RawEngine {
             self.rows.insert(to.to_string(), table_rows);
         }
         self.indexes.remove(from);
-        self.rebuild_indexes(to);
+        self.rebuild_indexes(to)?;
 
         let auto_inc_updates = self
             .auto_inc

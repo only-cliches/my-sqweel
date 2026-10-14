@@ -39,7 +39,9 @@ impl QueryFilter for TenantRewrite {
 Parameterized calls bind their values before the filter runs. `request.sql` is
 therefore the exact SQL MySqweel will execute; `request.parameters` retains the
 input values for logging or policy decisions. Prepared callers are marked with
-`request.prepared`.
+`request.prepared`. `request.query_id()` gives the same ID returned by tracked
+query calls and carried by query events, so a filter can attribute its logs to
+one call even when several calls use identical SQL.
 
 ## Result filters
 
@@ -89,7 +91,7 @@ db.result_filters().push(Redact);
 
 ## Scope
 
-The same filters run for synchronous calls, asynchronous calls, and every SQL endpoint. `request.context()` exposes an immutable session ID, current database, authenticated username and optional endpoint ID. Rewritten SQL is authorized again before execution; synthetic results require the original request to be authorized.
+The same filters run for synchronous calls, asynchronous calls, and every SQL endpoint. `request.context()` exposes an immutable session ID, current database, authenticated username and optional endpoint ID. `request.query_id()` is available in both query and result filters, including for MySQL TCP calls. Rewritten SQL is authorized again before execution; synthetic results require the original request to be authorized.
 
 Filters are trusted application code. They run on the engine's callback runtime. Calling database operations from inside a query, result or storage callback is rejected to prevent reentrant deadlocks. Query-hook subscribers run separately after publication and may query the engine.
 

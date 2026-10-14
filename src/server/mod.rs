@@ -1,6 +1,7 @@
 mod endpoint;
 pub use endpoint::{SqlEndpoint, SqlEndpointConfig};
 mod debug_http;
+pub(crate) use debug_http::MeiliResources;
 mod mysql_wire;
 
 use std::net::SocketAddr;
@@ -18,7 +19,9 @@ pub use mysql_wire::{
     verify_mysql_native_password,
 };
 
-pub use debug_http::{DebugHttpHandle, spawn as spawn_debug_http};
+pub use debug_http::{
+    DebugHttpHandle, MeilisearchEndpoint, MeilisearchEndpointConfig, spawn as spawn_debug_http,
+};
 use mysql_wire::WireServer;
 
 pub(crate) struct ServerHandle {

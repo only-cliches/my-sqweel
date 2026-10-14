@@ -1,7 +1,56 @@
-use super::{Engine, EngineConfig, JSON_AGGREGATE_TEXT_SENTINEL, QueryEvent, QueryEventOptions};
+use super::{
+    Engine, EngineConfig, JSON_AGGREGATE_TEXT_SENTINEL, QueryCompletedEvent, QueryEvent,
+    QueryEventOptions, QueryEventStream, QueryId, QueryMetrics, QueryResult,
+};
+use crate::{QueryFilter, QueryFilterAction, QueryRequest, ResultFilter, ResultFilterAction};
 use chrono::{Duration, NaiveDateTime, Utc};
 use serde_json::{Value, json};
+use std::sync::Arc;
 use std::time::Duration as StdDuration;
+
+struct RecordQueryId(Arc<parking_lot::Mutex<Vec<QueryId>>>);
+
+impl QueryFilter for RecordQueryId {
+    async fn filter(&self, request: &mut QueryRequest) -> anyhow::Result<QueryFilterAction> {
+        self.0.lock().push(request.query_id());
+        match request.sql.as_str() {
+            "SELECT blocked" => Ok(QueryFilterAction::Reject("blocked".into())),
+            "SELECT cached" => Ok(QueryFilterAction::Return(vec![QueryResult::default()])),
+            _ => Ok(QueryFilterAction::Continue),
+        }
+    }
+}
+
+struct RecordResultId(Arc<parking_lot::Mutex<Vec<QueryId>>>);
+
+impl ResultFilter for RecordResultId {
+    async fn filter(
+        &self,
+        request: &QueryRequest,
+        _results: &mut Vec<QueryResult>,
+    ) -> anyhow::Result<ResultFilterAction> {
+        self.0.lock().push(request.query_id());
+        if request.sql == "SELECT 1 AS hidden" {
+            Ok(ResultFilterAction::Reject("hidden".into()))
+        } else {
+            Ok(ResultFilterAction::Continue)
+        }
+    }
+}
+
+fn tracked_completion(events: &QueryEventStream, query_id: QueryId) -> QueryCompletedEvent {
+    assert!(matches!(
+        events.recv_timeout(StdDuration::from_secs(10)).unwrap(),
+        QueryEvent::Received(event) if event.query_id == query_id
+    ));
+    match events.recv_timeout(StdDuration::from_secs(10)).unwrap() {
+        QueryEvent::Completed(event) => {
+            assert_eq!(event.query_id, query_id);
+            event
+        }
+        QueryEvent::Received(_) => panic!("expected completion"),
+    }
+}
 
 #[test]
 fn ordinary_selects_use_the_direct_parser_path() {
@@ -854,6 +903,126 @@ fn query_events_report_lifecycle_timing_size_and_optional_results() {
         }
         QueryEvent::Received(_) => panic!("completed event should follow received event"),
     }
+}
+
+#[test]
+fn tracked_query_ids_match_filters_and_events_across_callers() {
+    let engine = Engine::default();
+    let query_ids = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let result_ids = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    engine
+        .query_filters()
+        .push(RecordQueryId(query_ids.clone()));
+    engine
+        .result_filters()
+        .push(RecordResultId(result_ids.clone()));
+    let events = engine.subscribe_query_events(QueryEventOptions::metadata_only());
+
+    let (parameter_id, result) =
+        engine.execute_sql_with_params_tracked("SELECT ? AS value", &[json!(7)]);
+    assert_eq!(result.unwrap()[0].rows[0]["value"], 7);
+    assert!(tracked_completion(&events, parameter_id).error.is_none());
+
+    let mut session = engine.session();
+    let (session_id, result) = session.execute_sql_tracked("SELECT 8 AS value");
+    assert_eq!(result.unwrap()[0].rows[0]["value"], 8);
+    assert!(tracked_completion(&events, session_id).error.is_none());
+    assert_ne!(parameter_id, session_id);
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let (async_id, result) = runtime.block_on(engine.execute_sql_tracked_async("SELECT 9"));
+    assert!(result.is_ok());
+    assert!(tracked_completion(&events, async_id).error.is_none());
+    let (async_session_id, result) = runtime.block_on(
+        session.execute_sql_with_params_tracked_async("SELECT ? AS value", vec![json!(10)]),
+    );
+    assert_eq!(result.unwrap()[0].rows[0]["value"], 10);
+    assert!(
+        tracked_completion(&events, async_session_id)
+            .error
+            .is_none()
+    );
+
+    let (multi_id, result) = engine.execute_sql_tracked("SELECT 1; SELECT 2");
+    assert_eq!(result.unwrap().len(), 2);
+    assert_eq!(tracked_completion(&events, multi_id).result_set_count, 2);
+
+    let left = engine.clone();
+    let right = engine.clone();
+    let first = std::thread::spawn(move || left.execute_sql_tracked("SELECT 11"));
+    let second = std::thread::spawn(move || right.execute_sql_tracked("SELECT 11"));
+    let (first_id, first_result) = first.join().unwrap();
+    let (second_id, second_result) = second.join().unwrap();
+    assert!(first_result.is_ok() && second_result.is_ok());
+    assert_ne!(first_id, second_id);
+    let mut received = Vec::new();
+    let mut completed = Vec::new();
+    for _ in 0..4 {
+        match events.recv_timeout(StdDuration::from_secs(10)).unwrap() {
+            QueryEvent::Received(event) => received.push(event.query_id),
+            QueryEvent::Completed(event) => completed.push(event.query_id),
+        }
+    }
+    received.sort_unstable();
+    completed.sort_unstable();
+    assert_eq!(received, completed);
+    assert_eq!(
+        received,
+        vec![first_id.min(second_id), first_id.max(second_id)]
+    );
+
+    let mut expected = vec![
+        parameter_id,
+        session_id,
+        async_id,
+        async_session_id,
+        multi_id,
+        first_id,
+        second_id,
+    ];
+    expected.sort_unstable();
+    let mut filtered = query_ids.lock().clone();
+    filtered.sort_unstable();
+    assert_eq!(filtered, expected);
+    let mut filtered_results = result_ids.lock().clone();
+    filtered_results.sort_unstable();
+    assert_eq!(filtered_results, expected);
+}
+
+#[test]
+fn tracked_query_reports_no_sql_work_and_preserves_sql_outcome() {
+    let engine = Engine::default();
+    let ids = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    engine.query_filters().push(RecordQueryId(ids));
+    engine.result_filters().push(RecordResultId(Arc::new(
+        parking_lot::Mutex::new(Vec::new()),
+    )));
+    let events = engine.subscribe_query_events(QueryEventOptions::with_results());
+
+    let (blocked_id, blocked) = engine.execute_sql_tracked("SELECT blocked");
+    assert!(blocked.is_err());
+    let blocked_event = tracked_completion(&events, blocked_id);
+    assert_eq!(blocked_event.duration, StdDuration::ZERO);
+    assert_eq!(blocked_event.metrics, QueryMetrics::default());
+    assert!(blocked_event.error.is_some());
+
+    let (cached_id, cached) = engine.execute_sql_tracked("SELECT cached");
+    assert_eq!(cached.unwrap().len(), 1);
+    let cached_event = tracked_completion(&events, cached_id);
+    assert_eq!(cached_event.duration, StdDuration::ZERO);
+    assert_eq!(cached_event.metrics, QueryMetrics::default());
+    assert_eq!(cached_event.result_set_count, 1);
+
+    let (sql_error_id, sql_error) = engine.execute_sql_tracked("SELECT * FROM missing_table");
+    assert!(sql_error.is_err());
+    assert!(tracked_completion(&events, sql_error_id).error.is_some());
+
+    let (hidden_id, hidden) = engine.execute_sql_tracked("SELECT 1 AS hidden");
+    assert!(hidden.is_err());
+    assert!(tracked_completion(&events, hidden_id).error.is_none());
 }
 
 #[test]
